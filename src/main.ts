@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as morgan from 'morgan';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -20,6 +21,10 @@ async function bootstrap() {
     origin: process.env.CORS_ORIGIN ?? '*',
     credentials: true,
   });
+
+  app.use(
+    morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
+  );
 
   const config = new DocumentBuilder()
     .setTitle('TAFS API')
