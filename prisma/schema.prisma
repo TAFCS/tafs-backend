@@ -67,10 +67,10 @@ model guardians {
 
 model relatives_attending_tafs {
   id           Int      @id @default(autoincrement())
-  student_id   Int
   name         String?  @db.VarChar(100)
   class        String?  @db.VarChar(20)
   relationship String?  @db.VarChar(50)
+  student_id   Int
   students     students @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -171,12 +171,12 @@ model students {
   whatsapp_number          String?                    @db.VarChar(20)
   primary_phone            String?                    @db.VarChar(20)
   email                    String?                    @db.VarChar(100)
+  relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
   student_guardians        student_guardians[]
   student_languages        student_languages[]
   student_previous_schools student_previous_schools[]
-  relatives_attending_tafs relatives_attending_tafs[]
   campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
