@@ -66,10 +66,12 @@ model guardians {
 }
 
 model relatives_attending_tafs {
-  id           Int     @id @default(autoincrement())
-  name         String? @db.VarChar(100)
-  class        String? @db.VarChar(20)
-  relationship String? @db.VarChar(50)
+  id           Int      @id @default(autoincrement())
+  student_id   Int
+  name         String?  @db.VarChar(100)
+  class        String?  @db.VarChar(20)
+  relationship String?  @db.VarChar(50)
+  students     students @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_activities {
@@ -84,12 +86,12 @@ model student_activities {
 
 model student_admissions {
   id               Int       @id @default(autoincrement())
-  student_id       Int?
+  student_id       Int
   academic_system  String    @db.VarChar(20)
   requested_grade  String    @db.VarChar(20)
   academic_year    String?   @db.VarChar(10)
   application_date DateTime? @default(now()) @db.Timestamp(6)
-  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students         students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_guardians {
@@ -174,6 +176,7 @@ model students {
   student_guardians        student_guardians[]
   student_languages        student_languages[]
   student_previous_schools student_previous_schools[]
+  relatives_attending_tafs relatives_attending_tafs[]
   campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
