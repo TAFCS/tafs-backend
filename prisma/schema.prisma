@@ -165,6 +165,10 @@ model students {
   school_leaving_cert_url  String?
   achievements_cert_url    String?
   photo_blue_bg_url        String?
+  place_of_birth           String?                    @db.VarChar(100)
+  whatsapp_number          String?                    @db.VarChar(20)
+  primary_phone            String?                    @db.VarChar(20)
+  email                    String?                    @db.VarChar(100)
   student_activities       student_activities[]
   student_admissions       student_admissions[]
   student_guardians        student_guardians[]

@@ -125,6 +125,21 @@ export class AuthService {
       await this.generateTokenPair(payload);
     await this.storeParentRefreshToken(family.id, refreshToken);
 
+    const students = await this.prisma.students.findMany({
+      where: { family_id: family.id },
+      select: {
+        id: true,
+        first_name: true,
+        last_name: true,
+        photograph_url: true,
+        student_admissions: {
+          orderBy: { id: 'desc' },
+          take: 1,
+          select: { requested_grade: true },
+        },
+      },
+    });
+
     return {
       accessToken,
       refreshToken,
@@ -133,6 +148,13 @@ export class AuthService {
         username: family.username,
         householdName: family.household_name,
       },
+      students: students.map((student) => ({
+        id: student.id,
+        fullName: `${student.first_name} ${student.last_name}`,
+        section:
+          student.student_admissions[0]?.requested_grade ?? null,
+        profilePictureUrl: student.photograph_url,
+      })),
     };
   }
 
