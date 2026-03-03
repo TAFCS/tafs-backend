@@ -11,6 +11,7 @@ import { LoginDto, RefreshTokenDto } from './dto/login.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { createApiResponse } from '../../utils/serializer.util';
 import type {
   IJwtStaffPayload,
   IJwtParentPayload,
@@ -24,14 +25,16 @@ export class AuthController {
 
   @Post('staff/login')
   @HttpCode(HttpStatus.OK)
-  loginStaff(@Body() dto: LoginDto) {
-    return this.authService.loginStaff(dto);
+  async loginStaff(@Body() dto: LoginDto) {
+    const result = await this.authService.loginStaff(dto);
+    return createApiResponse(result, HttpStatus.OK, 'Staff login successful');
   }
 
   @Post('staff/refresh')
   @HttpCode(HttpStatus.OK)
-  refreshStaff(@Body() dto: RefreshTokenDto) {
-    return this.authService.refreshStaffToken(dto);
+  async refreshStaff(@Body() dto: RefreshTokenDto) {
+    const result = await this.authService.refreshStaffToken(dto);
+    return createApiResponse(result, HttpStatus.OK, 'Staff token refreshed');
   }
 
   @Post('staff/logout')
@@ -45,14 +48,16 @@ export class AuthController {
 
   @Post('parent/login')
   @HttpCode(HttpStatus.OK)
-  loginParent(@Body() dto: LoginDto) {
-    return this.authService.loginParent(dto);
+  async loginParent(@Body() dto: LoginDto) {
+    const result = await this.authService.loginParent(dto);
+    return createApiResponse(result, HttpStatus.OK, 'Parent login successful');
   }
 
   @Post('parent/refresh')
   @HttpCode(HttpStatus.OK)
-  refreshParent(@Body() dto: RefreshTokenDto) {
-    return this.authService.refreshParentToken(dto);
+  async refreshParent(@Body() dto: RefreshTokenDto) {
+    const result = await this.authService.refreshParentToken(dto);
+    return createApiResponse(result, HttpStatus.OK, 'Parent token refreshed');
   }
 
   @Post('parent/logout')
