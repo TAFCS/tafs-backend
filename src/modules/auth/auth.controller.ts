@@ -8,8 +8,8 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto, RefreshTokenDto } from './dto/login.dto';
-import { JwtStaffGuard } from '../../guards/jwt-staff.guard';
-import { JwtParentGuard } from '../../guards/jwt-parent.guard';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type {
   IJwtStaffPayload,

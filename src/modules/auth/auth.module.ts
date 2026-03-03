@@ -8,7 +8,7 @@ import { UsersModule } from '../users/users.module';
 import { JwtStaffStrategy } from './strategies/jwt-staff.strategy';
 import { JwtParentStrategy } from './strategies/jwt-parent.strategy';
 import { CaslAbilityFactory } from './casl/casl-ability.factory';
-import { PoliciesGuard } from '../../guards/policies.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
 
 @Module({
   imports: [

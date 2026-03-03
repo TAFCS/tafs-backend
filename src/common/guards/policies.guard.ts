@@ -3,15 +3,15 @@ import { Reflector } from '@nestjs/core';
 import {
   CaslAbilityFactory,
   AppAbility,
-} from '../modules/auth/casl/casl-ability.factory';
+} from '../../modules/auth/casl/casl-ability.factory';
 import {
   CHECK_POLICIES_KEY,
   PolicyHandler,
-} from '../decorators/check-policies.decorator';
+} from '../../decorators/check-policies.decorator';
 import {
   IJwtStaffPayload,
   IJwtParentPayload,
-} from '../modules/auth/interfaces/jwt-payload.interface';
+} from '../../modules/auth/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class PoliciesGuard implements CanActivate {
