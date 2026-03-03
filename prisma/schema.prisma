@@ -7,3 +7,167 @@ datasource db {
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
+
+model campuses {
+  id          Int        @id @default(autoincrement())
+  campus_code String     @unique @db.VarChar(10)
+  campus_name String     @db.VarChar(100)
+  students    students[]
+}
+
+model families {
+  id                Int                @id @default(autoincrement())
+  legacy_pid        String?            @db.VarChar(50)
+  household_name    String             @db.VarChar(100)
+  primary_address   String?
+  consent_publicity Boolean?           @default(false)
+  username          String?            @unique @db.VarChar(50)
+  password_hash     String?            @db.VarChar(255)
+  created_at        DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at        DateTime?          @db.Timestamp(6)
+  email             String?            @db.VarChar(100)
+  student_siblings  student_siblings[]
+  students          students[]
+}
+
+model guardians {
+  id                    Int                 @id @default(autoincrement())
+  cnic                  String?             @unique @db.VarChar(15)
+  full_name             String              @db.VarChar(100)
+  dob                   DateTime?           @db.Date
+  primary_phone         String?             @db.VarChar(20)
+  whatsapp_number       String?             @db.VarChar(20)
+  work_phone            String?             @db.VarChar(20)
+  email_address         String?             @db.VarChar(100)
+  education_level       String?             @db.VarChar(50)
+  occupation            String?             @db.VarChar(100)
+  organization          String?             @db.VarChar(100)
+  job_position          String?             @db.VarChar(100)
+  monthly_income        Decimal?            @db.Decimal(12, 2)
+  work_address          String?
+  place_of_birth        String?             @db.VarChar(100)
+  created_at            DateTime?           @default(now()) @db.Timestamp(6)
+  deleted_at            DateTime?           @db.Timestamp(6)
+  photo_url             String?
+  mailing_address       String?
+  house_appt_name       String?             @db.VarChar(100)
+  house_appt_number     String?             @db.VarChar(50)
+  area_block            String?             @db.VarChar(100)
+  country               String?             @db.VarChar(50)
+  province              String?             @db.VarChar(50)
+  city                  String?             @db.VarChar(50)
+  occupational_position String?             @db.VarChar(100)
+  cnic_pic_url          String?
+  passport_front_url    String?
+  passport_back_url     String?
+  student_guardians     student_guardians[]
+}
+
+model relatives_attending_tafs {
+  id           Int     @id @default(autoincrement())
+  name         String? @db.VarChar(100)
+  class        String? @db.VarChar(20)
+  relationship String? @db.VarChar(50)
+}
+
+model student_activities {
+  id               Int       @id @default(autoincrement())
+  student_id       Int?
+  activity_name    String?   @db.VarChar(100)
+  grade            String?   @db.VarChar(20)
+  honors_awards    String?
+  continue_at_tafs Boolean?  @default(true)
+  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_admissions {
+  id               Int       @id @default(autoincrement())
+  student_id       Int?
+  academic_system  String    @db.VarChar(20)
+  requested_grade  String    @db.VarChar(20)
+  academic_year    String?   @db.VarChar(10)
+  application_date DateTime? @default(now()) @db.Timestamp(6)
+  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_guardians {
+  student_id           Int
+  guardian_id          Int
+  relationship         String    @db.VarChar(50)
+  is_primary_contact   Boolean?  @default(false)
+  is_emergency_contact Boolean?  @default(false)
+  guardians            guardians @relation(fields: [guardian_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students             students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([student_id, guardian_id])
+}
+
+model student_languages {
+  id            Int       @id @default(autoincrement())
+  student_id    Int?
+  language_name String?   @db.VarChar(50)
+  can_speak     Boolean?
+  can_read      Boolean?
+  can_write     Boolean?
+  students      students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_previous_schools {
+  id                 Int       @id @default(autoincrement())
+  student_id         Int?
+  school_name        String?   @db.VarChar(100)
+  location           String?   @db.VarChar(100)
+  class_studied_from String?   @db.VarChar(20)
+  class_studied_to   String?   @db.VarChar(20)
+  reason_for_leaving String?
+  students           students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_siblings {
+  id                     Int       @id @default(autoincrement())
+  family_id              Int?
+  full_name              String?   @db.VarChar(100)
+  relationship           String?   @db.VarChar(50)
+  age                    Int?
+  current_school         String?   @db.VarChar(100)
+  pick_and_drop          Boolean?  @default(false)
+  numbers_among_siblings Int?
+  families               families? @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model students {
+  id                       Int                        @id @default(autoincrement())
+  family_id                Int
+  campus_id                Int?
+  cc_number                String?                    @unique @db.VarChar(50)
+  gr_number                String?                    @unique @db.VarChar(50)
+  first_name               String                     @db.VarChar(50)
+  last_name                String                     @db.VarChar(50)
+  dob                      DateTime                   @db.Date
+  gender                   String?                    @db.VarChar(10)
+  nationality              String?                    @db.VarChar(50)
+  religion                 String?                    @db.VarChar(50)
+  identification_marks     String?
+  medical_info             String?
+  interests                String?
+  admission_age_years      Int?
+  status                   String?                    @default("PENDING") @db.VarChar(20)
+  created_at               DateTime?                  @default(now()) @db.Timestamp(6)
+  deleted_at               DateTime?                  @db.Timestamp(6)
+  photograph_url           String?
+  country                  String?                    @db.VarChar(50)
+  province                 String?                    @db.VarChar(50)
+  city                     String?                    @db.VarChar(50)
+  physical_impairment      String?
+  consent_publicity        Boolean?                   @default(false)
+  school_leaving_cert_url  String?
+  achievements_cert_url    String?
+  photo_blue_bg_url        String?
+  student_activities       student_activities[]
+  student_admissions       student_admissions[]
+  student_guardians        student_guardians[]
+  student_languages        student_languages[]
+  student_previous_schools student_previous_schools[]
+  campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
