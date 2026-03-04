@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsInt, Min, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { StudentStatus } from '../../../constants/student-status.constant';
 
 export class GetStudentsDto {
@@ -27,4 +27,15 @@ export class GetStudentsDto {
   @IsOptional()
   @IsEnum(StudentStatus)
   status?: StudentStatus;
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(['core', 'academic', 'family', 'contact', 'demographic', 'medical', 'history'], { each: true })
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value.split(',').map((v) => v.trim());
+    }
+    return value;
+  })
+  fields?: ('core' | 'academic' | 'family' | 'contact' | 'demographic' | 'medical' | 'history')[];
 }
