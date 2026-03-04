@@ -77,15 +77,17 @@ export class IdentityService {
 
       // ── 5. Upsert mother ─────────────────────────────────────────────────
       const mother = await this.upsertGuardian(tx, dto.mother);
-      await tx.student_guardians.create({
-        data: {
-          student_id: student.id,
-          guardian_id: mother.id,
-          relationship: 'Mother',
-          is_primary_contact: false,
-          is_emergency_contact: false,
-        },
-      });
+      if (mother.id !== father.id) {
+        await tx.student_guardians.create({
+          data: {
+            student_id: student.id,
+            guardian_id: mother.id,
+            relationship: 'Mother',
+            is_primary_contact: false,
+            is_emergency_contact: false,
+          },
+        });
+      }
 
       // ── 6. Emergency contact ─────────────────────────────────────────────
       if (dto.emergency_contact) {
