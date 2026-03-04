@@ -31,6 +31,21 @@ export class FamiliesService {
               { email: { contains: search, mode: 'insensitive' as const } },
               { username: { contains: search, mode: 'insensitive' as const } },
               { legacy_pid: { contains: search, mode: 'insensitive' as const } },
+              // Search by guardian CNIC  →  families → students → student_guardians → guardians
+              {
+                students: {
+                  some: {
+                    deleted_at: null,
+                    student_guardians: {
+                      some: {
+                        guardians: {
+                          cnic: { contains: search, mode: 'insensitive' as const },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             ],
           }
         : {}),
