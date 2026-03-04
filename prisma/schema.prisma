@@ -143,7 +143,7 @@ model students {
   id                       Int                        @id @default(autoincrement())
   family_id                Int
   campus_id                Int?
-  cc_number                String?                    @unique @db.VarChar(50)
+  cc_number                String                     @unique @db.VarChar(50)
   gr_number                String?                    @unique @db.VarChar(50)
   first_name               String                     @db.VarChar(50)
   last_name                String                     @db.VarChar(50)
@@ -155,7 +155,7 @@ model students {
   medical_info             String?
   interests                String?
   admission_age_years      Int?
-  status                   String?                    @default("PENDING") @db.VarChar(20)
+  status                   student_status
   created_at               DateTime?                  @default(now()) @db.Timestamp(6)
   deleted_at               DateTime?                  @db.Timestamp(6)
   photograph_url           String?
@@ -224,4 +224,11 @@ enum StaffRole {
   FINANCE_CLERK
   RECEPTIONIST
   TEACHER
+}
+
+enum student_status {
+  SOFT_ADMISSION
+  ENROLLED
+  EXPELLED
+  GRADUATED
 }

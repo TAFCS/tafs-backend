@@ -59,7 +59,7 @@ export class IdentityService {
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,
           admission_age_years: this.calcAge(dob),
-          status: 'PENDING',
+          status: 'SOFT_ADMISSION',
         },
       });
 
@@ -164,19 +164,42 @@ export class IdentityService {
       // ── 9. Return full record ────────────────────────────────────────────
       return tx.students.findUnique({
         where: { id: student.id },
-        include: {
-          families: true,
-          student_admissions: true,
-          student_previous_schools: true,
-          student_guardians: {
-            include: { guardians: true },
-          },
-        },
+        include: this.defaultStudentInclude(),
       });
     });
   }
 
+  async getAdmissionByCC(cc: string) {
+    if (!cc?.trim()) {
+      throw new NotFoundException('Admission not found for empty CC');
+    }
+
+    const student = await this.prisma.students.findFirst({
+      where: {
+        cc_number: cc,
+      },
+      include: this.defaultStudentInclude(),
+    });
+
+    if (!student) {
+      throw new NotFoundException(`Admission with CC ${cc} not found`);
+    }
+
+    return student;
+  }
+
   // ─── Private helpers ───────────────────────────────────────────────────────
+
+  private defaultStudentInclude(): Prisma.studentsInclude {
+    return {
+      families: true,
+      student_admissions: true,
+      student_previous_schools: true,
+      student_guardians: {
+        include: { guardians: true },
+      },
+    };
+  }
 
   /**
    * Upsert a guardian by CNIC if provided, otherwise always create.
