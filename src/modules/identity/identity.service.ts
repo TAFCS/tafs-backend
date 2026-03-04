@@ -5,6 +5,7 @@ import {
   CreateAdmissionDto,
   GuardianDto,
 } from './dto/create-admission.dto';
+import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -173,6 +174,206 @@ export class IdentityService {
         maxWait: 5000,
         timeout: 15000,
       });
+  }
+
+  async submitAdmissionForm(dto: SubmitAdmissionFormDto) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        // 1. Find existing student
+        const student = await tx.students.findUnique({
+          where: { cc_number: dto.cc_number },
+        });
+
+        if (!student) {
+          throw new NotFoundException(`Student with CC ${dto.cc_number} not found`);
+        }
+
+        // 2. Update Student base table
+        await tx.students.update({
+          where: { id: student.id },
+          data: {
+            gr_number: dto.gr_number || undefined,
+            gender: dto.gender || undefined,
+            religion: dto.religion || undefined,
+            nationality: dto.nationality || undefined,
+            identification_marks: dto.identification_marks || undefined,
+            physical_impairment: dto.physical_impairment || undefined,
+            medical_info: dto.medical_info || undefined,
+            interests: dto.interests || undefined,
+            consent_publicity: dto.consent_publicity ?? undefined,
+            status: 'ENROLLED',
+          },
+        });
+
+        // 3. Upsert Guardians if provided
+        let fatherId: number | null = null;
+        let motherId: number | null = null;
+
+        if (dto.father) {
+          const f = await this.upsertGuardian(tx, dto.father);
+          fatherId = f.id;
+          await tx.student_guardians.upsert({
+            where: { student_id_guardian_id: { student_id: student.id, guardian_id: f.id } },
+            create: { student_id: student.id, guardian_id: f.id, relationship: 'Father', is_primary_contact: true },
+            update: { relationship: 'Father', is_primary_contact: true },
+          });
+        }
+
+        if (dto.mother) {
+          const m = await this.upsertGuardian(tx, dto.mother);
+          motherId = m.id;
+          if (motherId !== fatherId) {
+            await tx.student_guardians.upsert({
+              where: { student_id_guardian_id: { student_id: student.id, guardian_id: m.id } },
+              create: { student_id: student.id, guardian_id: m.id, relationship: 'Mother' },
+              update: { relationship: 'Mother' },
+            });
+          }
+        }
+
+        if (dto.guardian) {
+          const g = await this.upsertGuardian(tx, dto.guardian);
+          if (g.id !== fatherId && g.id !== motherId) {
+            await tx.student_guardians.upsert({
+              where: { student_id_guardian_id: { student_id: student.id, guardian_id: g.id } },
+              create: { student_id: student.id, guardian_id: g.id, relationship: 'Guardian', is_emergency_contact: true },
+              update: { is_emergency_contact: true },
+            });
+          }
+        }
+
+        // 4. Update Admission details
+        if (dto.admission) {
+          const existingAdm = await tx.student_admissions.findFirst({
+            where: { student_id: student.id },
+          });
+          if (existingAdm) {
+            await tx.student_admissions.update({
+              where: { id: existingAdm.id },
+              data: {
+                academic_system: dto.admission.academic_system,
+                requested_grade: dto.admission.requested_grade,
+                academic_year: dto.admission.academic_year,
+              },
+            });
+          } else {
+            await tx.student_admissions.create({
+              data: {
+                student_id: student.id,
+                academic_system: dto.admission.academic_system,
+                requested_grade: dto.admission.requested_grade,
+                academic_year: dto.admission.academic_year,
+              },
+            });
+          }
+        }
+
+        // 5. Replace Previous Schools
+        if (dto.previous_schools) {
+          await tx.student_previous_schools.deleteMany({ where: { student_id: student.id } });
+          if (dto.previous_schools.length > 0) {
+            await tx.student_previous_schools.createMany({
+              data: dto.previous_schools.map((s) => ({
+                student_id: student.id,
+                school_name: s.school_name,
+                location: s.location,
+                class_studied_from: s.class_studied_from,
+                class_studied_to: s.class_studied_to,
+                reason_for_leaving: s.reason_for_leaving,
+              })),
+            });
+          }
+        }
+
+        // 6. Replace Languages
+        if (dto.languages) {
+          await tx.student_languages.deleteMany({ where: { student_id: student.id } });
+          if (dto.languages.length > 0) {
+            await tx.student_languages.createMany({
+              data: dto.languages.map((l) => ({
+                student_id: student.id,
+                language_name: l.language_name,
+                can_speak: l.can_speak,
+                can_read: l.can_read,
+                can_write: l.can_write,
+              })),
+            });
+          }
+        }
+
+        // 7. Siblings
+        if (dto.siblings) {
+          // Find old siblings with this family ID to avoid duplicates?
+          // We'll just append them for now or recreate them if we know which are new
+          // But siblings are tied to Family, not Student.
+          // Since Family ID is known:
+          const existingSiblings = await tx.student_siblings.findMany({
+            where: { family_id: student.family_id }
+          });
+          const existingNames = new Set(
+            existingSiblings
+              .filter(s => s.full_name)
+              .map(s => s.full_name!.toLowerCase())
+          );
+
+          for (const sib of dto.siblings) {
+            if (!existingNames.has(sib.full_name.toLowerCase())) {
+              await tx.student_siblings.create({
+                data: {
+                  family_id: student.family_id,
+                  full_name: sib.full_name,
+                  relationship: sib.relationship,
+                  age: sib.age ? Number(sib.age) : null,
+                  current_school: sib.current_school,
+                  pick_and_drop: sib.pick_and_drop,
+                }
+              });
+            }
+          }
+        }
+
+        // 8. Relatives
+        if (dto.relatives) {
+          await tx.relatives_attending_tafs.deleteMany({ where: { student_id: student.id } });
+          if (dto.relatives.length > 0) {
+            await tx.relatives_attending_tafs.createMany({
+              data: dto.relatives.map((r) => ({
+                student_id: student.id,
+                name: r.name,
+                class: r.class,
+                relationship: r.relationship,
+              }))
+            });
+          }
+        }
+
+        // 9. Activities
+        if (dto.activities) {
+          await tx.student_activities.deleteMany({ where: { student_id: student.id } });
+          if (dto.activities.length > 0) {
+            await tx.student_activities.createMany({
+              data: dto.activities.map((a) => ({
+                student_id: student.id,
+                activity_name: a.activity_name,
+                grade: a.grade,
+                honors_awards: a.honors_awards,
+                continue_at_tafs: a.continue_at_tafs,
+              }))
+            });
+          }
+        }
+
+        // Return updated student
+        return tx.students.findUnique({
+          where: { id: student.id },
+          include: this.defaultStudentInclude(),
+        });
+      },
+      {
+        maxWait: 5000,
+        timeout: 20000,
+      }
+    );
   }
 
   async getAdmissionByCC(cc: string) {

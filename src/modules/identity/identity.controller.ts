@@ -11,6 +11,7 @@ import {
 import { IdentityService } from './identity.service';
 import { CreateAdmissionDto } from './dto/create-admission.dto';
 import { GetByCcParamsDto } from './dto/get-by-cc-params.dto';
+import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -19,7 +20,7 @@ import { Action } from '../../modules/auth/casl/actions';
 @Controller('admissions')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class IdentityController {
-  constructor(private readonly identityService: IdentityService) {}
+  constructor(private readonly identityService: IdentityService) { }
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -29,6 +30,18 @@ export class IdentityController {
     return {
       success: true,
       message: 'Admission registered successfully',
+      data: student,
+    };
+  }
+
+  @Post('admission-form')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async submitAdmissionForm(@Body() dto: SubmitAdmissionFormDto) {
+    const student = await this.identityService.submitAdmissionForm(dto);
+    return {
+      success: true,
+      message: 'Comprehensive admission form submitted successfully',
       data: student,
     };
   }
