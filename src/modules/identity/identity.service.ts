@@ -10,7 +10,7 @@ type TxClient = Prisma.TransactionClient;
 
 @Injectable()
 export class IdentityService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async registerAdmission(dto: CreateAdmissionDto) {
     return this.prisma.$transaction(async (tx) => {
@@ -166,7 +166,11 @@ export class IdentityService {
         where: { id: student.id },
         include: this.defaultStudentInclude(),
       });
-    });
+    },
+      {
+        maxWait: 5000,
+        timeout: 15000,
+      });
   }
 
   async getAdmissionByCC(cc: string) {
@@ -244,8 +248,25 @@ export class IdentityService {
    */
   private async generateCCNumber(tx: TxClient): Promise<string> {
     const year = new Date().getFullYear();
-    const count = await tx.students.count();
-    const padded = String(count + 1).padStart(5, '0');
+
+    // Find the highest CC number for the current year
+    const lastStudent = await tx.students.findFirst({
+      where: { cc_number: { startsWith: `CC-${year}-` } },
+      orderBy: { cc_number: 'desc' },
+    });
+
+    let nextNumber = 1;
+    if (lastStudent && lastStudent.cc_number) {
+      const parts = lastStudent.cc_number.split('-');
+      if (parts.length === 3) {
+        const lastCount = parseInt(parts[2], 10);
+        if (!isNaN(lastCount)) {
+          nextNumber = lastCount + 1;
+        }
+      }
+    }
+
+    const padded = String(nextNumber).padStart(5, '0');
     return `CC-${year}-${padded}`;
   }
 
