@@ -1,0 +1,6 @@
+export enum StudentStatus {
+  SOFT_ADMISSION = 'SOFT_ADMISSION',
+  ENROLLED = 'ENROLLED',
+  EXPELLED = 'EXPELLED',
+  GRADUATED = 'GRADUATED',
+}

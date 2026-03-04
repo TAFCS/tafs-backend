@@ -1,11 +1,6 @@
 import { IsOptional, IsString, IsInt, Min, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
-
-export enum StudentStatus {
-  ACTIVE = 'ACTIVE',
-  PENDING = 'PENDING',
-  ARCHIVED = 'ARCHIVED',
-}
+import { StudentStatus } from '../../../constants/student-status.constant';
 
 export class GetStudentsDto {
   @IsOptional()
