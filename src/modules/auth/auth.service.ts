@@ -61,8 +61,16 @@ export class AuthService {
     };
   }
 
-  async refreshStaffToken(dto: RefreshTokenDto) {
-    const existing = await this.findValidStaffRefreshToken(dto.refreshToken);
+  /**
+   * Refreshes a staff session.
+   * `rawToken` comes from the `tafs_refresh` httpOnly cookie (never the request body).
+   */
+  async refreshStaffToken(rawToken: string | undefined) {
+    if (!rawToken) {
+      throw new UnauthorizedException('No refresh token provided');
+    }
+
+    const existing = await this.findValidStaffRefreshToken(rawToken);
     if (!existing) {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
@@ -75,6 +83,7 @@ export class AuthService {
 
     const user = await this.prisma.users.findUnique({
       where: { id: existing.user_id },
+      include: { campus: true },
     });
     if (!user || !user.is_active) {
       throw new UnauthorizedException('Account is inactive');
@@ -92,7 +101,18 @@ export class AuthService {
       await this.generateTokenPair(payload);
     await this.storeStaffRefreshToken(user.id, refreshToken);
 
-    return { accessToken, refreshToken };
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        username: user.username,
+        fullName: user.full_name,
+        role: user.role,
+        campusId: user.campus_id,
+        campusName: user.campus?.campus_name ?? null,
+      },
+    };
   }
 
   async logoutStaff(userId: string) {
