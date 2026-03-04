@@ -29,12 +29,49 @@ export class IdentityService {
         }
         familyId = existing.id;
       } else {
-        const family = await tx.families.create({
-          data: {
-            household_name: dto.father.full_name,
-          },
-        });
-        familyId = family.id;
+        // Try to resolve family by Father's or Mother's CNIC
+        let resolvedFamilyId: number | null = null;
+
+        if (dto.father.cnic) {
+          const existingGuardian = await tx.guardians.findFirst({
+            where: { cnic: dto.father.cnic },
+            include: {
+              student_guardians: {
+                include: {
+                  students: true,
+                },
+              },
+            },
+          });
+          const family = existingGuardian?.student_guardians[0]?.students?.family_id;
+          if (family) resolvedFamilyId = family;
+        }
+
+        if (!resolvedFamilyId && dto.mother.cnic) {
+          const existingGuardian = await tx.guardians.findFirst({
+            where: { cnic: dto.mother.cnic },
+            include: {
+              student_guardians: {
+                include: {
+                  students: true,
+                },
+              },
+            },
+          });
+          const family = existingGuardian?.student_guardians[0]?.students?.family_id;
+          if (family) resolvedFamilyId = family;
+        }
+
+        if (resolvedFamilyId) {
+          familyId = resolvedFamilyId;
+        } else {
+          const family = await tx.families.create({
+            data: {
+              household_name: dto.father.full_name,
+            },
+          });
+          familyId = family.id;
+        }
       }
 
       // ── 2. Generate Computer Code ────────────────────────────────────────
@@ -399,7 +436,27 @@ export class IdentityService {
 
   private defaultStudentInclude(): Prisma.studentsInclude {
     return {
-      families: true,
+      families: {
+        include: {
+          students: {
+            where: { deleted_at: null },
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              cc_number: true,
+              status: true,
+              student_admissions: {
+                select: { requested_grade: true },
+              },
+              student_guardians: {
+                where: { relationship: 'Father' },
+                include: { guardians: { select: { full_name: true } } },
+              },
+            },
+          },
+        },
+      },
       student_admissions: true,
       student_previous_schools: true,
       student_guardians: {
