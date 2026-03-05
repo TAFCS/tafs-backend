@@ -3,12 +3,21 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import compression from 'compression';
 import { AppModule } from './app.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api/v1');
+
+  // Security headers (HSTS, X-Frame-Options, X-Content-Type-Options, etc.)
+  app.use(helmet());
+
+  // Gzip / Brotli compression — reduces JSON payload size by 60-80%
+  app.use(compression());
 
   // Required to read cookies in controllers / strategies
   app.use(cookieParser());
@@ -20,6 +29,9 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Consistent JSON error shape for all unhandled exceptions
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   app.enableCors({
     origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
