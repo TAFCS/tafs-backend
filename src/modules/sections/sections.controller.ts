@@ -15,6 +15,8 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { BulkUpdateSectionsDto } from './dto/bulk-update-sections.dto';
+import { createApiResponse } from '../../utils/serializer.util';
+import { SECTIONS_MESSAGES } from '../../constants/api-response/sections.constant';
 
 @Controller('sections')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -25,11 +27,11 @@ export class SectionsController {
   @CheckPolicies((ability) => ability.can(Action.Read, 'Section'))
   async findAll() {
     const sections = await this.sectionsService.findAll();
-    return {
-      success: true,
-      message: 'Sections list retrieved successfully',
-      data: sections,
-    };
+    return createApiResponse(
+      sections,
+      HttpStatus.OK,
+      SECTIONS_MESSAGES.LIST_SUCCESS,
+    );
   }
 
   @Post()
@@ -37,11 +39,11 @@ export class SectionsController {
   @CheckPolicies((ability) => ability.can(Action.Create, 'Section'))
   async create(@Body() dto: CreateSectionDto) {
     const section = await this.sectionsService.create(dto);
-    return {
-      success: true,
-      message: 'Section created successfully',
-      data: section,
-    };
+    return createApiResponse(
+      section,
+      HttpStatus.CREATED,
+      SECTIONS_MESSAGES.CREATE_SUCCESS,
+    );
   }
 
   @Patch('bulk')
@@ -49,11 +51,11 @@ export class SectionsController {
   @CheckPolicies((ability) => ability.can(Action.Update, 'Section'))
   async bulkUpdate(@Body() dto: BulkUpdateSectionsDto) {
     const updated = await this.sectionsService.bulkUpdate(dto);
-    return {
-      success: true,
-      message: 'Sections updated successfully',
-      data: updated,
-    };
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      SECTIONS_MESSAGES.BULK_UPDATE_SUCCESS,
+    );
   }
 }
 

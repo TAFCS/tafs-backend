@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { createPaginatedApiResponse } from '../../utils/serializer.util';
@@ -6,6 +6,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
+import { STUDENTS_MESSAGES } from '../../constants/api-response/students.constant';
 
 @Controller('students')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -19,8 +20,8 @@ export class StudentsController {
     return createPaginatedApiResponse(
       items,
       meta,
-      200,
-      'Students list retrieved successfully',
+      HttpStatus.OK,
+      STUDENTS_MESSAGES.LIST_SUCCESS,
     );
   }
 }
