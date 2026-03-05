@@ -14,7 +14,7 @@ import { createPaginationMeta } from '../../utils/serializer.util';
 
 @Injectable()
 export class FamiliesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   // ── List (paginated + search) ─────────────────────────────────────────────
 
@@ -26,27 +26,27 @@ export class FamiliesService {
       deleted_at: null,
       ...(search
         ? {
-            OR: [
-              { household_name: { contains: search, mode: 'insensitive' as const } },
-              { email: { contains: search, mode: 'insensitive' as const } },
-              { legacy_pid: { contains: search, mode: 'insensitive' as const } },
-              // Search by guardian CNIC  →  families → students → student_guardians → guardians
-              {
-                students: {
-                  some: {
-                    deleted_at: null,
-                    student_guardians: {
-                      some: {
-                        guardians: {
-                          cnic: { contains: search, mode: 'insensitive' as const },
-                        },
+          OR: [
+            { household_name: { contains: search, mode: 'insensitive' as const } },
+            { email: { contains: search, mode: 'insensitive' as const } },
+            { legacy_pid: { contains: search, mode: 'insensitive' as const } },
+            // Search by guardian CNIC  →  families → students → student_guardians → guardians
+            {
+              students: {
+                some: {
+                  deleted_at: null,
+                  student_guardians: {
+                    some: {
+                      guardians: {
+                        cnic: { contains: search, mode: 'insensitive' as const },
                       },
                     },
                   },
                 },
               },
-            ],
-          }
+            },
+          ],
+        }
         : {}),
     };
 
@@ -107,21 +107,21 @@ export class FamiliesService {
     const guardians =
       studentIds.length > 0
         ? await this.prisma.student_guardians.findMany({
-            where: { student_id: { in: studentIds } },
-            distinct: ['guardian_id'],
-            include: {
-              guardians: {
-                select: {
-                  id: true,
-                  full_name: true,
-                  primary_phone: true,
-                  email_address: true,
-                  cnic: true,
-                  occupation: true,
-                },
+          where: { student_id: { in: studentIds } },
+          distinct: ['guardian_id'],
+          include: {
+            guardians: {
+              select: {
+                id: true,
+                full_name: true,
+                primary_phone: true,
+                email_address: true,
+                cnic: true,
+                occupation: true,
               },
             },
-          })
+          },
+        })
         : [];
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

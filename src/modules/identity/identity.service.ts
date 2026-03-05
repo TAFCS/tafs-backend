@@ -65,9 +65,13 @@ export class IdentityService {
         if (resolvedFamilyId) {
           familyId = resolvedFamilyId;
         } else {
+          const familyName = dto.father.full_name
+            ? dto.father.full_name
+            : dto.last_name;
+
           const family = await tx.families.create({
             data: {
-              household_name: dto.father.full_name,
+              household_name: familyName,
             },
           });
           familyId = family.id;
@@ -92,7 +96,6 @@ export class IdentityService {
           place_of_birth: dto.place_of_birth,
           identification_marks: dto.identification_marks,
           medical_info: dto.medical_info,
-          consent_publicity: dto.consent_publicity ?? false,
           primary_phone: dto.primary_phone,
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,
@@ -237,7 +240,6 @@ export class IdentityService {
             physical_impairment: dto.physical_impairment || undefined,
             medical_info: dto.medical_info || undefined,
             interests: dto.interests || undefined,
-            consent_publicity: dto.consent_publicity ?? undefined,
             status: 'ENROLLED',
           },
         });
