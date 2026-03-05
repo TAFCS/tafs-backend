@@ -237,6 +237,12 @@ export class AuthService {
   private async storeStaffRefreshToken(userId: string, rawToken: string) {
     const tokenHash = await bcrypt.hash(rawToken, 10);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    // Revoke all existing tokens before inserting so the table stays lean
+    // and validation only ever needs one bcrypt.compare.
+    await this.prisma.user_refresh_tokens.updateMany({
+      where: { user_id: userId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
     await this.prisma.user_refresh_tokens.create({
       data: { user_id: userId, token_hash: tokenHash, expires_at: expiresAt },
     });
@@ -245,6 +251,11 @@ export class AuthService {
   private async storeParentRefreshToken(familyId: number, rawToken: string) {
     const tokenHash = await bcrypt.hash(rawToken, 10);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    // Same cleanup as staff tokens.
+    await this.prisma.family_refresh_tokens.updateMany({
+      where: { family_id: familyId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
     await this.prisma.family_refresh_tokens.create({
       data: {
         family_id: familyId,

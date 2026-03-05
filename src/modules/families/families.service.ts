@@ -194,11 +194,13 @@ export class FamiliesService {
   // ── Assign child to family ────────────────────────────────────────────────
 
   async assignChildToFamily(familyId: number, studentId: number) {
-    await this._assertExists(familyId);
+    // Fetch both in parallel to avoid two sequential round-trips
+    const [family, student] = await Promise.all([
+      this.prisma.families.findFirst({ where: { id: familyId, deleted_at: null } }),
+      this.prisma.students.findFirst({ where: { id: studentId, deleted_at: null } }),
+    ]);
 
-    const student = await this.prisma.students.findFirst({
-      where: { id: studentId, deleted_at: null },
-    });
+    if (!family) throw new NotFoundException(`Family #${familyId} not found`);
     if (!student) throw new NotFoundException(`Student #${studentId} not found`);
 
     if (student.family_id === familyId) {

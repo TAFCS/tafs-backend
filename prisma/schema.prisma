@@ -183,6 +183,11 @@ model students {
 
   @@index([class_id], map: "idx_students_class_id")
   @@index([section_id], map: "idx_students_section_id")
+  @@index([first_name, last_name], map: "idx_students_first_last_name")
+  @@index([family_id], map: "idx_students_family_id")
+  @@index([campus_id], map: "idx_students_campus_id")
+  @@index([status], map: "idx_students_status")
+  @@index([deleted_at], map: "idx_students_deleted_at")
 }
 
 model users {
@@ -209,6 +214,8 @@ model user_refresh_tokens {
   revoked_at DateTime?
   created_at DateTime  @default(now()) @db.Timestamp(6)
   user       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, revoked_at, expires_at], map: "idx_user_rf_tokens_lookup")
 }
 
 model family_refresh_tokens {
@@ -219,6 +226,8 @@ model family_refresh_tokens {
   revoked_at DateTime?
   created_at DateTime  @default(now()) @db.Timestamp(6)
   family     families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id, revoked_at, expires_at], map: "idx_family_rf_tokens_lookup")
 }
 
 model class_fee_schedule {
