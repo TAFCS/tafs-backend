@@ -161,7 +161,6 @@ model students {
   province                 String?                    @db.VarChar(50)
   city                     String?                    @db.VarChar(50)
   physical_impairment      String?
-  consent_publicity        Boolean?                   @default(false)
   school_leaving_cert_url  String?
   achievements_cert_url    String?
   photo_blue_bg_url        String?

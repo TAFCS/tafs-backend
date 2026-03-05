@@ -114,10 +114,6 @@ export class SubmitAdmissionFormDto {
     @IsOptional()
     interests?: string;
 
-    @IsBoolean()
-    @IsOptional()
-    consent_publicity?: boolean;
-
     @IsOptional()
     admission?: {
         academic_system: string;

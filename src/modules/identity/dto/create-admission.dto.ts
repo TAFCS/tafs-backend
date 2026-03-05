@@ -231,10 +231,6 @@ export class CreateAdmissionDto {
   @IsOptional()
   medical_info?: string;
 
-  @IsBoolean()
-  @IsOptional()
-  consent_publicity?: boolean;
-
   // Candidate contact
   @IsString()
   @IsOptional()
