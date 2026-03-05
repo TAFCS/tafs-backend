@@ -13,8 +13,11 @@ export class ClassFeeScheduleController {
   constructor(private readonly classFeeScheduleService: ClassFeeScheduleService) {}
 
   @Get()
-  // NOTE: Assuming generic basic capabilities. Use specific Action.Read mapping if defined.
-  @CheckPolicies((ability) => ability.can(Action.Read, 'ClassFeeSchedule' as any) || ability.can(Action.Manage, 'all'))
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Read, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
   async findAll() {
     const schedules = await this.classFeeScheduleService.findAll();
     return {
@@ -26,7 +29,11 @@ export class ClassFeeScheduleController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @CheckPolicies((ability) => ability.can(Action.Create, 'ClassFeeSchedule' as any) || ability.can(Action.Manage, 'all'))
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Create, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
   async create(@Body() dto: CreateClassFeeScheduleDto) {
     const created = await this.classFeeScheduleService.create(dto);
     return {
@@ -38,7 +45,11 @@ export class ClassFeeScheduleController {
 
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
-  @CheckPolicies((ability) => ability.can(Action.Update, 'ClassFeeSchedule' as any) || ability.can(Action.Manage, 'all'))
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Update, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
   async bulkUpdate(@Body() dto: BulkUpdateClassFeeScheduleDto) {
     const updated = await this.classFeeScheduleService.bulkUpdate(dto);
     return {

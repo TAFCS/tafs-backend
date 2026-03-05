@@ -11,6 +11,7 @@ import { FamiliesModule } from './modules/families/families.module';
 import { ClassesModule } from './modules/classes/classes.module';
 import { SectionsModule } from './modules/sections/sections.module';
 import { FeeTypesModule } from './modules/fee-types/fee-types.module';
+import { ClassFeeScheduleModule } from './modules/class-fee-schedule/class-fee-schedule.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { FeeTypesModule } from './modules/fee-types/fee-types.module';
     ClassesModule,
     SectionsModule,
     FeeTypesModule,
+    ClassFeeScheduleModule,
   ],
   controllers: [AppController],
   providers: [AppService],
