@@ -33,6 +33,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
         can(Action.Manage, 'ClassFeeSchedule');
+        can(Action.Manage, 'StudentFee');
         can(Action.Manage, 'Class');
         can(Action.Manage, 'Section');
         can(Action.Read, 'User', { campusId: user.campusId } as any);
@@ -45,6 +46,7 @@ export class CaslAbilityFactory {
         can(Action.Read, 'Fee', { campusId: user.campusId } as any);
         can(Action.Read, 'Challan', { campusId: user.campusId } as any);
         can(Action.Read, 'ClassFeeSchedule');
+        can(Action.Read, 'StudentFee');
         can(Action.Read, 'Class');
         can(Action.Read, 'Section');
         break;
@@ -54,6 +56,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
         can(Action.Manage, 'ClassFeeSchedule');
+        can(Action.Manage, 'StudentFee');
         can(Action.Read, 'Class');
         can(Action.Read, 'Section');
         break;

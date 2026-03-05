@@ -12,4 +12,5 @@ export type AppSubjects =
   | 'Challan'
   | 'Class'
   | 'Section'
+  | 'StudentFee'
   | 'all';

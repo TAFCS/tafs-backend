@@ -13,6 +13,7 @@ import { SectionsModule } from './modules/sections/sections.module';
 import { FeeTypesModule } from './modules/fee-types/fee-types.module';
 import { ClassFeeScheduleModule } from './modules/class-fee-schedule/class-fee-schedule.module';
 import { FeesModule } from './modules/fees/fees.module';
+import { StudentFeesModule } from './modules/student-fees/student-fees.module';
 
 @Module({
   imports: [
@@ -28,8 +29,9 @@ import { FeesModule } from './modules/fees/fees.module';
     FeeTypesModule,
     ClassFeeScheduleModule,
     FeesModule,
+    StudentFeesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

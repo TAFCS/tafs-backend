@@ -61,6 +61,7 @@ export class StudentsService {
       selectArgs.last_name = true;
       selectArgs.cc_number = true;
       selectArgs.gr_number = true;
+      selectArgs.class_id = true;
       selectArgs.status = true;
       selectArgs.photograph_url = true;
       selectArgs.campuses = { select: { campus_name: true, campus_code: true } };
@@ -308,6 +309,7 @@ export class StudentsService {
         gr_number: mappedData.core?.gr_number,
         cc_number: mappedData.core?.cc_number,
         campus: mappedData.core?.campus_name,
+        class_id: s.class_id,
         grade_and_section: mappedData.academic?.requested_grade,
         primary_guardian_name: mappedData.contact?.primary_guardian_name,
         whatsapp_number: mappedData.contact?.whatsapp_number,
@@ -374,6 +376,7 @@ export class StudentsService {
       cc_number: s.cc_number,
       campus: s.campuses?.campus_name,
       campus_code: s.campuses?.campus_code,
+      class_id: s.class_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
       financial_status_badge: 'CLEARED',

@@ -20,7 +20,7 @@ import { BulkUpdateClassFeeScheduleDto } from './dto/bulk-update-class-fee-sched
 @Controller('class-fee-schedule')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class ClassFeeScheduleController {
-  constructor(private readonly classFeeScheduleService: ClassFeeScheduleService) {}
+  constructor(private readonly classFeeScheduleService: ClassFeeScheduleService) { }
 
   @Get()
   @CheckPolicies(
@@ -45,6 +45,14 @@ export class ClassFeeScheduleController {
   )
   async findByClass(@Query('class_id') classId: string) {
     const parsedClassId = Number(classId);
+
+    if (isNaN(parsedClassId) || parsedClassId <= 0) {
+      return {
+        success: true,
+        message: 'Invalid class ID provided',
+        data: [],
+      };
+    }
 
     const schedules =
       await this.classFeeScheduleService.findByClassId(parsedClassId);
