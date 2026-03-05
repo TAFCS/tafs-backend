@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from '@nestjs/common';
 import { ClassesService } from './classes.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
+import { CreateClassDto } from './dto/create-class.dto';
 
 @Controller('classes')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -19,6 +20,18 @@ export class ClassesController {
       success: true,
       message: 'Classes list retrieved successfully',
       data: classes,
+    };
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @CheckPolicies((ability) => ability.can(Action.Create, 'Class'))
+  async create(@Body() dto: CreateClassDto) {
+    const created = await this.classesService.create(dto);
+    return {
+      success: true,
+      message: 'Class created successfully',
+      data: created,
     };
   }
 

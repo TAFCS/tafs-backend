@@ -8,6 +8,14 @@ class ClassUpdateItemDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  class_code?: string;
+
+  @IsOptional()
+  @IsString()
+  academic_system?: string;
 }
 
 export class BulkUpdateClassesDto {
