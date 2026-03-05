@@ -194,29 +194,66 @@ export class FamiliesService {
   // ── Assign child to family ────────────────────────────────────────────────
 
   async assignChildToFamily(familyId: number, studentId: number) {
-    // Fetch both in parallel to avoid two sequential round-trips
     const [family, student] = await Promise.all([
-      this.prisma.families.findFirst({ where: { id: familyId, deleted_at: null } }),
-      this.prisma.students.findFirst({ where: { id: studentId, deleted_at: null } }),
+      this.prisma.families.findFirst({
+        where: { id: familyId, deleted_at: null },
+        include: { students: { where: { deleted_at: null }, take: 1 } },
+      }),
+      this.prisma.students.findFirst({
+        where: { id: studentId, deleted_at: null },
+      }),
     ]);
 
     if (!family) throw new NotFoundException(`Family #${familyId} not found`);
     if (!student) throw new NotFoundException(`Student #${studentId} not found`);
 
     if (student.family_id === familyId) {
-      throw new ConflictException(`Student #${studentId} is already in family #${familyId}`);
+      throw new ConflictException(
+        `Student #${studentId} is already in family #${familyId}`,
+      );
     }
 
-    const updated = await this.prisma.students.update({
-      where: { id: studentId },
-      data: { family_id: familyId },
-      select: {
-        id: true,
-        first_name: true,
-        last_name: true,
-        cc_number: true,
-        family_id: true,
-      },
+    // Identify target guardians to link to (from existing siblings)
+    const targetStudentId = family.students?.[0]?.id;
+    const targetGuardians = targetStudentId
+      ? await this.prisma.student_guardians.findMany({
+        where: { student_id: targetStudentId },
+      })
+      : [];
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // 1. Update the student's family link
+      const s = await tx.students.update({
+        where: { id: studentId },
+        data: { family_id: familyId },
+        select: {
+          id: true,
+          first_name: true,
+          last_name: true,
+          cc_number: true,
+          family_id: true,
+        },
+      });
+
+      // 2. Remove old family guardian links
+      await tx.student_guardians.deleteMany({
+        where: { student_id: studentId },
+      });
+
+      // 3. Link to new family's guardians
+      if (targetGuardians.length > 0) {
+        await tx.student_guardians.createMany({
+          data: targetGuardians.map((tg) => ({
+            student_id: studentId,
+            guardian_id: tg.guardian_id,
+            relationship: tg.relationship,
+            is_primary_contact: tg.is_primary_contact,
+            is_emergency_contact: tg.is_emergency_contact,
+          })),
+        });
+      }
+
+      return s;
     });
 
     return updated;

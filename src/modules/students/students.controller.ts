@@ -1,7 +1,7 @@
-import { Controller, Get, HttpStatus, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
-import { createPaginatedApiResponse } from '../../utils/serializer.util';
+import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -11,7 +11,7 @@ import { STUDENTS_MESSAGES } from '../../constants/api-response/students.constan
 @Controller('students')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class StudentsController {
-  constructor(private readonly studentsService: StudentsService) {}
+  constructor(private readonly studentsService: StudentsService) { }
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
@@ -22,6 +22,17 @@ export class StudentsController {
       meta,
       HttpStatus.OK,
       STUDENTS_MESSAGES.LIST_SUCCESS,
+    );
+  }
+
+  @Get(':id')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    const student = await this.studentsService.findOne(id);
+    return createApiResponse(
+      student,
+      HttpStatus.OK,
+      STUDENTS_MESSAGES.RETRIEVE_SUCCESS,
     );
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { calculateOffset } from '../../utils/pagination.util';
@@ -7,7 +7,7 @@ import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async findAll(query: GetStudentsDto) {
     const { page = 1, limit = 10, search, campus_id, status, fields } = query;
@@ -78,6 +78,22 @@ export class StudentsService {
           legacy_pid: true,
           household_name: true,
           primary_address: true,
+          students: {
+            where: { deleted_at: null },
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              cc_number: true,
+              student_guardians: {
+                where: { is_primary_contact: true },
+                take: 1,
+                select: {
+                  guardians: { select: { full_name: true } }
+                }
+              }
+            }
+          },
           _count: { select: { students: true } } // For sibling_count
         },
       };
@@ -174,12 +190,12 @@ export class StudentsService {
     const mappedItems = studentsData.map((s: any) => {
       let primaryGuardianNode: any = null;
       let emergencyGuardianNode: any = null;
-      
+
       if (s.student_guardians) {
-         primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact !== false);
-         emergencyGuardianNode = s.student_guardians.find((g: any) => g.is_emergency_contact === true);
-         // fallback for when only one record exists but explicit booleans aren't returned safely
-         if (!primaryGuardianNode && s.student_guardians.length > 0) primaryGuardianNode = s.student_guardians[0];
+        primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact !== false);
+        emergencyGuardianNode = s.student_guardians.find((g: any) => g.is_emergency_contact === true);
+        // fallback for when only one record exists but explicit booleans aren't returned safely
+        if (!primaryGuardianNode && s.student_guardians.length > 0) primaryGuardianNode = s.student_guardians[0];
       }
 
       const primaryGuardian = primaryGuardianNode?.guardians;
@@ -221,6 +237,14 @@ export class StudentsService {
           household_name: s.families?.household_name,
           primary_address: s.families?.primary_address,
           sibling_count: s.families?._count?.students,
+          siblings: s.families?.students
+            ?.filter((sib: any) => sib.id !== s.id)
+            ?.map((sib: any) => ({
+              id: sib.id,
+              full_name: `${sib.first_name} ${sib.last_name}`.trim(),
+              cc_number: sib.cc_number,
+              father_name: sib.student_guardians?.[0]?.guardians?.full_name,
+            })),
         };
       }
 
@@ -286,11 +310,81 @@ export class StudentsService {
         date_of_birth: mappedData.demographic?.dob,
         registration_number: mappedData.core?.cc_number,
         residential_address: mappedData.family?.primary_address,
+        siblings: mappedData.family?.siblings,
       };
     });
 
     const meta = createPaginationMeta(page, limit, total);
 
     return { items: mappedItems, meta };
+  }
+
+  async findOne(id: number) {
+    const s = await this.prisma.students.findFirst({
+      where: { id, deleted_at: null },
+      include: {
+        campuses: true,
+        families: {
+          include: {
+            students: {
+              where: { deleted_at: null },
+              select: {
+                id: true,
+                first_name: true,
+                last_name: true,
+                cc_number: true,
+                student_guardians: {
+                  where: { is_primary_contact: true },
+                  take: 1,
+                  select: { guardians: { select: { full_name: true } } }
+                }
+              }
+            },
+            _count: { select: { students: true } }
+          }
+        },
+        student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
+        student_guardians: {
+          where: { OR: [{ is_primary_contact: true }, { is_emergency_contact: true }] },
+          include: { guardians: true }
+        },
+        student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
+        student_activities: true,
+      }
+    });
+
+    if (!s) throw new NotFoundException(`Student #${id} not found`);
+
+    const primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact !== false) || s.student_guardians[0];
+    const primaryGuardian = primaryGuardianNode?.guardians;
+
+    return {
+      id: s.id,
+      student_full_name: `${s.first_name} ${s.last_name}`.trim(),
+      gr_number: s.gr_number,
+      cc_number: s.cc_number,
+      campus: s.campuses?.campus_name,
+      campus_code: s.campuses?.campus_code,
+      grade_and_section: s.student_admissions?.[0]?.requested_grade,
+      enrollment_status: s.status,
+      financial_status_badge: 'CLEARED',
+      family_id: s.family_id,
+      household_name: s.families?.household_name,
+      primary_guardian_name: primaryGuardian?.full_name,
+      primary_guardian_cnic: primaryGuardian?.cnic,
+      whatsapp_number: primaryGuardian?.whatsapp_number || s.whatsapp_number,
+      primary_phone: primaryGuardian?.primary_phone || s.primary_phone,
+      date_of_birth: s.dob,
+      registration_number: s.cc_number,
+      residential_address: s.families?.primary_address,
+      siblings: s.families?.students
+        ?.filter((sib: any) => sib.id !== s.id)
+        ?.map((sib: any) => ({
+          id: sib.id,
+          full_name: `${sib.first_name} ${sib.last_name}`.trim(),
+          cc_number: sib.cc_number,
+          father_name: sib.student_guardians?.[0]?.guardians?.full_name,
+        })),
+    };
   }
 }
