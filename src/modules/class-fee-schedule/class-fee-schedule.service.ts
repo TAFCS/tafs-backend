@@ -16,6 +16,16 @@ export class ClassFeeScheduleService {
     });
   }
 
+  async findByClassId(classId: number) {
+    return this.prisma.class_fee_schedule.findMany({
+      where: { class_id: classId },
+      include: {
+        classes: true,
+        fee_types: true,
+      },
+    });
+  }
+
   async create(dto: CreateClassFeeScheduleDto) {
     return this.prisma.class_fee_schedule.create({
       data: {

@@ -174,6 +174,7 @@ model students {
   relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
+  student_fees             student_fees[]
   student_guardians        student_guardians[]
   student_languages        student_languages[]
   student_previous_schools student_previous_schools[]
@@ -255,12 +256,27 @@ model fee_types {
   freq               fee_frequency?
   breakup            Json?
   class_fee_schedule class_fee_schedule[]
+  student_fees       student_fees[]
 }
 
 model sections {
   id          Int        @id @default(autoincrement())
   description String     @db.VarChar(255)
   students    students[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model student_fees {
+  id          Int       @id @default(autoincrement())
+  student_id  Int
+  fee_type_id Int
+  amount      Decimal   @db.Decimal(10, 2)
+  due_date    DateTime  @db.Date
+  month       Int?
+  validity    DateTime? @db.Date
+  status      Boolean?  @default(false)
+  fee_types   fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students    students  @relation(fields: [student_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 enum StaffRole {

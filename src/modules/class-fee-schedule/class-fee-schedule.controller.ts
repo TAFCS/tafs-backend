@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ClassFeeScheduleService } from './class-fee-schedule.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -23,6 +33,25 @@ export class ClassFeeScheduleController {
     return {
       success: true,
       message: 'Class fee schedules retrieved successfully',
+      data: schedules,
+    };
+  }
+
+  @Get('by-class')
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Read, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
+  async findByClass(@Query('class_id') classId: string) {
+    const parsedClassId = Number(classId);
+
+    const schedules =
+      await this.classFeeScheduleService.findByClassId(parsedClassId);
+
+    return {
+      success: true,
+      message: 'Class fee schedule retrieved successfully',
       data: schedules,
     };
   }
