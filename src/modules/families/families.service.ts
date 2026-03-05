@@ -22,6 +22,7 @@ export class FamiliesService {
     const { page = 1, limit = 10, search } = query;
     const offset = calculateOffset(page, limit);
 
+    const isNumeric = search && /^\d+$/.test(search);
     const where = {
       deleted_at: null,
       ...(search
@@ -30,6 +31,7 @@ export class FamiliesService {
             { household_name: { contains: search, mode: 'insensitive' as const } },
             { email: { contains: search, mode: 'insensitive' as const } },
             { legacy_pid: { contains: search, mode: 'insensitive' as const } },
+            ...(isNumeric ? [{ id: Number(search) }] : []),
             // Search by guardian CNIC  →  families → students → student_guardians → guardians
             {
               students: {
@@ -63,16 +65,41 @@ export class FamiliesService {
           primary_address: true,
           legacy_pid: true,
           created_at: true,
+          students: {
+            where: { deleted_at: null },
+            take: 1,
+            select: {
+              student_guardians: {
+                where: { is_primary_contact: true },
+                take: 1,
+                select: {
+                  guardians: {
+                    select: {
+                      full_name: true,
+                      cnic: true,
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
       }),
       this.prisma.families.count({ where }),
     ]);
 
     return {
-      families: families.map((f) => ({
-        ...f,
-        student_count: null,
-      })),
+      families: families.map((f) => {
+        const primaryGuardian = f.students?.[0]?.student_guardians?.[0]?.guardians;
+        return {
+          ...f,
+          primary_guardian: primaryGuardian ? {
+            name: primaryGuardian.full_name,
+            cnic: primaryGuardian.cnic,
+          } : null,
+          student_count: null,
+        };
+      }),
       meta: createPaginationMeta(page, limit, total),
     };
   }

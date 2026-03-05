@@ -24,6 +24,15 @@ export class StudentsService {
         { last_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
         { cc_number: { contains: search, mode: 'insensitive' } },
+        {
+          student_guardians: {
+            some: {
+              guardians: {
+                cnic: { contains: search, mode: 'insensitive' },
+              },
+            },
+          },
+        },
       ];
     }
 
