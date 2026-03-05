@@ -10,6 +10,7 @@ import { StudentsModule } from './modules/students/students.module';
 import { FamiliesModule } from './modules/families/families.module';
 import { ClassesModule } from './modules/classes/classes.module';
 import { SectionsModule } from './modules/sections/sections.module';
+import { FeeTypesModule } from './modules/fee-types/fee-types.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SectionsModule } from './modules/sections/sections.module';
     FamiliesModule,
     ClassesModule,
     SectionsModule,
+    FeeTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
