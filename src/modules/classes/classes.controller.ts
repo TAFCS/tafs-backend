@@ -1,9 +1,10 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, UseGuards } from '@nestjs/common';
 import { ClassesService } from './classes.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
+import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
 
 @Controller('classes')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -18,6 +19,18 @@ export class ClassesController {
       success: true,
       message: 'Classes list retrieved successfully',
       data: classes,
+    };
+  }
+
+  @Patch('bulk')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Class'))
+  async bulkUpdate(@Body() dto: BulkUpdateClassesDto) {
+    const updated = await this.classesService.bulkUpdate(dto);
+    return {
+      success: true,
+      message: 'Classes updated successfully',
+      data: updated,
     };
   }
 }

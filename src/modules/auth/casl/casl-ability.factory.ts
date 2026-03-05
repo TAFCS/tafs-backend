@@ -32,7 +32,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Family');
         can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
-        can(Action.Read, 'Class');
+        can(Action.Manage, 'Class');
         can(Action.Read, 'User', { campusId: user.campusId } as any);
         cannot(Action.Delete, 'Campus');
         break;
@@ -55,7 +55,7 @@ export class CaslAbilityFactory {
       case StaffRole.RECEPTIONIST:
         can(Action.Manage, 'Student', { campusId: user.campusId } as any);
         can(Action.Manage, 'Family');
-        can(Action.Read, 'Class');
+        can(Action.Manage, 'Class');
         break;
 
       case StaffRole.TEACHER:
