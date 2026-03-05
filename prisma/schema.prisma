@@ -21,8 +21,6 @@ model families {
   legacy_pid        String?                 @db.VarChar(50)
   household_name    String                  @db.VarChar(100)
   primary_address   String?
-  consent_publicity Boolean?                @default(false)
-  username          String?                 @unique @db.VarChar(50)
   password_hash     String?                 @db.VarChar(255)
   created_at        DateTime?               @default(now()) @db.Timestamp(6)
   deleted_at        DateTime?               @db.Timestamp(6)
@@ -171,6 +169,8 @@ model students {
   whatsapp_number          String?                    @db.VarChar(20)
   primary_phone            String?                    @db.VarChar(20)
   email                    String?                    @db.VarChar(100)
+  class_id                 Int?
+  section_id               Int?
   relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
@@ -178,7 +178,12 @@ model students {
   student_languages        student_languages[]
   student_previous_schools student_previous_schools[]
   campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                  classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                 sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([class_id], map: "idx_students_class_id")
+  @@index([section_id], map: "idx_students_section_id")
 }
 
 model users {
@@ -217,6 +222,36 @@ model family_refresh_tokens {
   family     families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
 }
 
+model class_fee_schedule {
+  id        Int       @id @default(autoincrement())
+  class_id  Int
+  fee_id    Int
+  amount    Decimal   @db.Decimal(10, 2)
+  classes   classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fee_types fee_types @relation(fields: [fee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model classes {
+  id                 Int                  @id @default(autoincrement())
+  description        String               @db.VarChar(255)
+  class_fee_schedule class_fee_schedule[]
+  students           students[]
+}
+
+model fee_types {
+  id                 Int                  @id @default(autoincrement())
+  description        String               @db.VarChar(255)
+  freq               fee_frequency?
+  breakup            Json?
+  class_fee_schedule class_fee_schedule[]
+}
+
+model sections {
+  id          Int        @id @default(autoincrement())
+  description String     @db.VarChar(255)
+  students    students[]
+}
+
 enum StaffRole {
   SUPER_ADMIN
   CAMPUS_ADMIN
@@ -231,4 +266,9 @@ enum student_status {
   ENROLLED
   EXPELLED
   GRADUATED
+}
+
+enum fee_frequency {
+  MONTHLY
+  ONE_TIME
 }

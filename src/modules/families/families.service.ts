@@ -29,7 +29,6 @@ export class FamiliesService {
             OR: [
               { household_name: { contains: search, mode: 'insensitive' as const } },
               { email: { contains: search, mode: 'insensitive' as const } },
-              { username: { contains: search, mode: 'insensitive' as const } },
               { legacy_pid: { contains: search, mode: 'insensitive' as const } },
               // Search by guardian CNIC  →  families → students → student_guardians → guardians
               {
@@ -61,12 +60,9 @@ export class FamiliesService {
           id: true,
           household_name: true,
           email: true,
-          username: true,
           primary_address: true,
-          consent_publicity: true,
           legacy_pid: true,
           created_at: true,
-          _count: { select: { students: { where: { deleted_at: null } } } },
         },
       }),
       this.prisma.families.count({ where }),
@@ -75,8 +71,7 @@ export class FamiliesService {
     return {
       families: families.map((f) => ({
         ...f,
-        student_count: f._count.students,
-        _count: undefined,
+        student_count: null,
       })),
       meta: createPaginationMeta(page, limit, total),
     };
@@ -140,15 +135,6 @@ export class FamiliesService {
   // ── Create ────────────────────────────────────────────────────────────────
 
   async createFamily(dto: CreateFamilyDto) {
-    if (dto.username) {
-      const conflict = await this.prisma.families.findFirst({
-        where: { username: dto.username, deleted_at: null },
-      });
-      if (conflict) {
-        throw new ConflictException(`Username '${dto.username}' is already taken`);
-      }
-    }
-
     const password_hash = dto.password
       ? await bcrypt.hash(dto.password, 10)
       : null;
@@ -158,18 +144,14 @@ export class FamiliesService {
         household_name: dto.household_name,
         primary_address: dto.primary_address,
         email: dto.email,
-        username: dto.username,
         password_hash,
-        consent_publicity: dto.consent_publicity ?? false,
         legacy_pid: dto.legacy_pid,
       },
       select: {
         id: true,
         household_name: true,
         email: true,
-        username: true,
         primary_address: true,
-        consent_publicity: true,
         legacy_pid: true,
         created_at: true,
       },
@@ -183,15 +165,6 @@ export class FamiliesService {
   async updateFamily(id: number, dto: UpdateFamilyDto) {
     await this._assertExists(id);
 
-    if (dto.username) {
-      const conflict = await this.prisma.families.findFirst({
-        where: { username: dto.username, deleted_at: null, NOT: { id } },
-      });
-      if (conflict) {
-        throw new ConflictException(`Username '${dto.username}' is already taken`);
-      }
-    }
-
     const password_hash = dto.password
       ? await bcrypt.hash(dto.password, 10)
       : undefined;
@@ -202,18 +175,14 @@ export class FamiliesService {
         ...(dto.household_name !== undefined && { household_name: dto.household_name }),
         ...(dto.primary_address !== undefined && { primary_address: dto.primary_address }),
         ...(dto.email !== undefined && { email: dto.email }),
-        ...(dto.username !== undefined && { username: dto.username }),
         ...(password_hash !== undefined && { password_hash }),
-        ...(dto.consent_publicity !== undefined && { consent_publicity: dto.consent_publicity }),
         ...(dto.legacy_pid !== undefined && { legacy_pid: dto.legacy_pid }),
       },
       select: {
         id: true,
         household_name: true,
         email: true,
-        username: true,
         primary_address: true,
-        consent_publicity: true,
         legacy_pid: true,
         created_at: true,
       },

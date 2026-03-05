@@ -136,7 +136,6 @@ export class AuthService {
 
     const payload: IJwtParentPayload = {
       sub: family.id,
-      username: family.username as string,
       familyId: family.id,
       userType: 'PARENT',
     };
@@ -165,7 +164,6 @@ export class AuthService {
       refreshToken,
       family: {
         id: family.id,
-        username: family.username,
         householdName: family.household_name,
       },
       students: students.map((student) => ({
@@ -196,7 +194,6 @@ export class AuthService {
 
     const payload: IJwtParentPayload = {
       sub: family.id,
-      username: family.username as string,
       familyId: family.id,
       userType: 'PARENT',
     };

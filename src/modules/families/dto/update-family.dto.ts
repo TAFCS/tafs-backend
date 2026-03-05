@@ -21,16 +21,8 @@ export class UpdateFamilyDto {
 
   @IsOptional()
   @IsString()
-  username?: string;
-
-  @IsOptional()
-  @IsString()
   @MinLength(6)
   password?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  consent_publicity?: boolean;
 
   @IsOptional()
   @IsString()

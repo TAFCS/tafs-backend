@@ -13,8 +13,9 @@ export class UsersService {
   }
 
   async findParentByUsername(username: string) {
-    return this.prisma.families.findUnique({
-      where: { username: username },
+    // For parents we now treat "username" as the email used for login
+    return this.prisma.families.findFirst({
+      where: { email: username },
     });
   }
 }

@@ -12,7 +12,6 @@ export interface IJwtStaffPayload {
 
 export interface IJwtParentPayload {
   sub: number;
-  username: string;
   familyId: number;
   userType: 'PARENT';
 }

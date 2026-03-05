@@ -20,19 +20,11 @@ export class CreateFamilyDto {
   @IsEmail()
   email?: string;
 
-  @IsOptional()
-  @IsString()
-  username?: string;
-
   /** Plain-text password — service will bcrypt-hash it */
   @IsOptional()
   @IsString()
   @MinLength(6)
   password?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  consent_publicity?: boolean;
 
   @IsOptional()
   @IsString()
