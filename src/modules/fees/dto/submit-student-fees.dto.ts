@@ -3,8 +3,10 @@ import {
   IsArray,
   IsDateString,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsPositive,
+  IsString,
   Max,
   Min,
   ValidateNested,
@@ -31,9 +33,10 @@ export class FeeLineItemDto {
 }
 
 export class SubmitStudentFeesDto {
-  @IsInt()
-  @IsPositive()
-  student_id: number;
+  /** Student CC number e.g. "CC-2026-00003" */
+  @IsString()
+  @IsNotEmpty()
+  cc_number: string;
 
   @IsArray()
   @ValidateNested({ each: true })

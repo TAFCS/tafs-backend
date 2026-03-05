@@ -13,14 +13,15 @@ export class FeesService {
    * re-submitting the same student+fee_type+month updates the amount in place.
    */
   async submitStudentFees(dto: SubmitStudentFeesDto) {
-    // Verify student exists
+    // Resolve cc_number → internal student id
     const student = await this.prisma.students.findFirst({
-      where: { id: dto.student_id, deleted_at: null },
+      where: { cc_number: dto.cc_number, deleted_at: null },
       select: { id: true },
     });
     if (!student) {
-      throw new NotFoundException(`Student with id ${dto.student_id} not found`);
+      throw new NotFoundException(`Student with CC number ${dto.cc_number} not found`);
     }
+    const studentId = student.id;
 
     // Bulk upsert inside a single transaction
     await this.prisma.$transaction(
@@ -28,7 +29,7 @@ export class FeesService {
         this.prisma.$executeRaw`
           INSERT INTO student_fees (student_id, fee_type_id, amount, due_date, month, status)
           VALUES (
-            ${dto.student_id}::int,
+            ${studentId}::int,
             ${item.fee_type_id}::int,
             ${new Prisma.Decimal(item.amount)},
             ${new Date(item.due_date)}::date,
