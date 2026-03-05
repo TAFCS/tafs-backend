@@ -32,6 +32,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Family');
         can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
+        can(Action.Read, 'Class');
         can(Action.Read, 'User', { campusId: user.campusId } as any);
         cannot(Action.Delete, 'Campus');
         break;
@@ -41,21 +42,25 @@ export class CaslAbilityFactory {
         can(Action.Read, 'Family');
         can(Action.Read, 'Fee', { campusId: user.campusId } as any);
         can(Action.Read, 'Challan', { campusId: user.campusId } as any);
+        can(Action.Read, 'Class');
         break;
 
       case StaffRole.FINANCE_CLERK:
         can(Action.Read, 'Student', { campusId: user.campusId } as any);
         can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
+        can(Action.Read, 'Class');
         break;
 
       case StaffRole.RECEPTIONIST:
         can(Action.Manage, 'Student', { campusId: user.campusId } as any);
         can(Action.Manage, 'Family');
+        can(Action.Read, 'Class');
         break;
 
       case StaffRole.TEACHER:
         can(Action.Read, 'Student', { campusId: user.campusId } as any);
+        can(Action.Read, 'Class');
         break;
     }
 
@@ -68,6 +73,7 @@ export class CaslAbilityFactory {
     can(Action.Read, 'Student', { familyId: user.familyId } as any);
     can(Action.Read, 'Fee', { familyId: user.familyId } as any);
     can(Action.Read, 'Challan', { familyId: user.familyId } as any);
+    can(Action.Read, 'Class');
 
     return build();
   }

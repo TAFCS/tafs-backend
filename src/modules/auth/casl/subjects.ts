@@ -9,4 +9,5 @@ export type AppSubjects =
   | 'User'
   | 'Campus'
   | 'Challan'
+  | 'Class'
   | 'all';

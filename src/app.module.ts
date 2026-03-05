@@ -8,6 +8,7 @@ import { UsersModule } from './modules/users/users.module';
 import { IdentityModule } from './modules/identity/identity.module';
 import { StudentsModule } from './modules/students/students.module';
 import { FamiliesModule } from './modules/families/families.module';
+import { ClassesModule } from './modules/classes/classes.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { FamiliesModule } from './modules/families/families.module';
     IdentityModule,
     StudentsModule,
     FamiliesModule,
+    ClassesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
