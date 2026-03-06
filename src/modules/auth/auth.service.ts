@@ -164,6 +164,7 @@ export class AuthService {
       refreshToken,
       family: {
         id: family.id,
+        email: family.email ?? '',
         householdName: family.household_name,
       },
       students: students.map((student) => ({
