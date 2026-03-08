@@ -130,7 +130,6 @@ export class StudentsService {
       selectArgs.gender = true;
       selectArgs.nationality = true;
       selectArgs.religion = true;
-      selectArgs.place_of_birth = true;
       selectArgs.email = true;
     }
 
@@ -268,7 +267,6 @@ export class StudentsService {
           gender: s.gender,
           nationality: s.nationality,
           religion: s.religion,
-          place_of_birth: s.place_of_birth,
           email: s.email,
         };
       }
