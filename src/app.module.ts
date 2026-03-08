@@ -15,6 +15,7 @@ import { ClassFeeScheduleModule } from './modules/class-fee-schedule/class-fee-s
 import { FeesModule } from './modules/fees/fees.module';
 import { StudentFeesModule } from './modules/student-fees/student-fees.module';
 import { CampusesModule } from './modules/campuses/campuses.module';
+import { StaffEditingModule } from './modules/staff-editing/staff-editing.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { CampusesModule } from './modules/campuses/campuses.module';
     FeesModule,
     StudentFeesModule,
     CampusesModule,
+    StaffEditingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
