@@ -9,11 +9,13 @@ datasource db {
 }
 
 model campuses {
-  id          Int        @id @default(autoincrement())
-  campus_code String     @unique @db.VarChar(10)
-  campus_name String     @db.VarChar(100)
-  students    students[]
-  users       users[]
+  id                 Int                  @id @default(autoincrement())
+  campus_code        String               @unique @db.VarChar(10)
+  campus_name        String               @db.VarChar(100)
+  campus_classes     campus_classes[]
+  class_fee_schedule class_fee_schedule[]
+  students           students[]
+  users              users[]
 }
 
 model families {
@@ -141,11 +143,10 @@ model student_siblings {
 
 model students {
   cc                       Int                        @id @default(autoincrement())
-  family_id                Int
+  family_id                Int?
   campus_id                Int?
-  gr_number                String?                    @unique @db.VarChar(50)
-  full_name                String                     @db.VarChar(100)
-  dob                      DateTime                   @db.Date
+  gr_number                String?                    @db.VarChar(50)
+  dob                      DateTime?                  @db.Date
   gender                   String?                    @db.VarChar(10)
   nationality              String?                    @db.VarChar(50)
   religion                 String?                    @db.VarChar(50)
@@ -172,6 +173,8 @@ model students {
   class_id                 Int?
   section_id               Int?
   house_id                 Int?
+  doa                      DateTime?                  @db.Date
+  full_name                String                     @db.VarChar(100)
   relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
@@ -181,7 +184,7 @@ model students {
   student_previous_schools student_previous_schools[]
   campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                  classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                 families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   houses                   houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                 sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -239,6 +242,8 @@ model class_fee_schedule {
   class_id  Int
   fee_id    Int
   amount    Decimal   @db.Decimal(10, 2)
+  campus_id Int?
+  campuses  campuses? @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes   classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   fee_types fee_types @relation(fields: [fee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
@@ -248,6 +253,7 @@ model classes {
   description        String               @db.VarChar(255)
   class_code         String               @db.VarChar(10)
   academic_system    String               @db.VarChar(20)
+  campus_classes     campus_classes[]
   class_fee_schedule class_fee_schedule[]
   students           students[]
 }
@@ -288,6 +294,18 @@ model houses {
   house_name  String?    @db.VarChar(100)
   house_color String?    @db.VarChar(50)
   students    students[]
+}
+
+model campus_classes {
+  id        Int      @id @default(autoincrement())
+  campus_id Int
+  class_id  Int
+  is_active Boolean? @default(true)
+  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes   classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id], map: "campus_classes_unique")
+  @@index([campus_id], map: "idx_campus_classes_campus")
 }
 
 enum StaffRole {
