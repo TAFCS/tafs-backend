@@ -162,6 +162,7 @@ export class IdentityService {
           const ecGuardian = await tx.guardians.create({
             data: {
               full_name: ec.full_name,
+              country_code: ec.country_code ?? '+92',
               primary_phone: ec.primary_phone,
             },
           });
@@ -469,6 +470,7 @@ export class IdentityService {
   private async upsertGuardian(tx: TxClient, data: GuardianDto) {
     const payload = {
       full_name: data.full_name,
+      country_code: data.country_code ?? '+92',
       primary_phone: data.primary_phone ?? null,
       whatsapp_number: data.whatsapp_number ?? null,
       work_phone: data.work_phone ?? null,

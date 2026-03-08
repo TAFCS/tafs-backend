@@ -39,6 +39,11 @@ export class UpdateGuardianRelationshipDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(10)
+  country_code?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   primary_phone?: string;
 

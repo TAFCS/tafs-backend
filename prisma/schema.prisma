@@ -63,6 +63,7 @@ model guardians {
   passport_front_url    String?
   passport_back_url     String?
   place_of_birth        String?             @db.VarChar(100)
+  country_code          String?             @default("+92") @db.VarChar(10)
   student_guardians     student_guardians[]
 }
 

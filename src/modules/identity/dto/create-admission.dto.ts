@@ -67,6 +67,11 @@ export class GuardianDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(10)
+  country_code?: string;
+
+  @IsString()
+  @IsOptional()
   @MaxLength(20)
   primary_phone?: string;
 
@@ -150,6 +155,11 @@ export class EmergencyContactDto {
   @IsNotEmpty()
   @MaxLength(100)
   full_name: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(10)
+  country_code?: string;
 
   @IsString()
   @IsNotEmpty()
