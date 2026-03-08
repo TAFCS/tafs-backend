@@ -256,6 +256,11 @@ export class CreateAdmissionDto {
   // Candidate contact
   @IsString()
   @IsOptional()
+  @MaxLength(10)
+  country_code?: string;
+
+  @IsString()
+  @IsOptional()
   @MaxLength(20)
   primary_phone?: string;
 

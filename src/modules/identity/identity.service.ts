@@ -93,6 +93,7 @@ export class IdentityService {
           city: dto.city,
           identification_marks: dto.identification_marks,
           medical_info: dto.medical_info,
+          country_code: dto.country_code ?? '+92',
           primary_phone: dto.primary_phone,
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,

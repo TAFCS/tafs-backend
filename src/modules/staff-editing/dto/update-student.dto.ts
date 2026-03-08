@@ -88,6 +88,11 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(10)
+  country_code?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(100)
   email?: string;
 

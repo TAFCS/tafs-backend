@@ -170,6 +170,7 @@ model students {
   photo_blue_bg_url        String?
   whatsapp_number          String?                    @db.VarChar(20)
   primary_phone            String?                    @db.VarChar(20)
+  country_code             String?                    @default("+92") @db.VarChar(10)
   email                    String?                    @db.VarChar(100)
   class_id                 Int?
   section_id               Int?
