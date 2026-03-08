@@ -19,7 +19,7 @@ export class UpdateGuardianDto {
   cnic?: string;
 
   @IsOptional()
-  @IsDateString()
+  @IsString()
   dob?: string;
 
   @IsOptional()

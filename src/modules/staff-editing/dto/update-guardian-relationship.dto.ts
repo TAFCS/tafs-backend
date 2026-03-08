@@ -34,7 +34,7 @@ export class UpdateGuardianRelationshipDto {
   cnic?: string;
 
   @IsOptional()
-  @IsDateString()
+  @IsString()
   dob?: string;
 
   @IsOptional()

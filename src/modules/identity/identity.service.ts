@@ -164,7 +164,7 @@ export class IdentityService {
               full_name: ec.full_name,
               country_code: ec.country_code ?? '+92',
               primary_phone: ec.primary_phone,
-            },
+            } as any,
           });
           await tx.student_guardians.create({
             data: {
@@ -497,7 +497,7 @@ export class IdentityService {
       });
     }
 
-    return tx.guardians.create({ data: payload });
+    return tx.guardians.create({ data: payload as any });
   }
 
   /**

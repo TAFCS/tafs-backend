@@ -13,6 +13,25 @@ import { createPaginationMeta } from '../../utils/serializer.util';
 export class StaffEditingService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // ─── Date Helpers ─────────────────────────────────────────────────────────
+
+  private formatDateToFrontend(date: Date | null): string | null {
+    if (!date) return null;
+    const d = new Date(date);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  private parseDateFromFrontend(dateStr: string | null): Date | null {
+    if (!dateStr) return null;
+    const parts = dateStr.split('/');
+    if (parts.length !== 3) return new Date(dateStr); // Fallback to native parsing
+    const [day, month, year] = parts;
+    return new Date(`${year}-${month}-${day}`);
+  }
+
   // ─── Students ─────────────────────────────────────────────────────────────
 
   async getStudents(dto: GetSheetStudentsDto) {
@@ -166,6 +185,7 @@ export class StaffEditingService {
       is_primary_contact: link.is_primary_contact,
       is_emergency_contact: link.is_emergency_contact,
       ...link.guardians,
+      dob: this.formatDateToFrontend(link.guardians.dob),
     }));
   }
 
@@ -176,7 +196,9 @@ export class StaffEditingService {
 
     // Convert dob string to Date if present
     const guardianData: any = { ...guardianFields };
-    if (guardianFields.dob) guardianData.dob = new Date(guardianFields.dob);
+    if (guardianFields.dob) {
+      guardianData.dob = this.parseDateFromFrontend(guardianFields.dob);
+    }
 
     // Upsert by CNIC to prevent duplicates; create new if no CNIC provided.
     // No `select` — get the full guardian row back to avoid an extra round-trip.
@@ -204,24 +226,37 @@ export class StaffEditingService {
       is_primary_contact,
       is_emergency_contact,
       ...guardian,
+      dob: this.formatDateToFrontend(guardian.dob),
     };
   }
 
   async getGuardian(id: number) {
     const guardian = await this.prisma.guardians.findUnique({ where: { id } });
     if (!guardian) throw new NotFoundException(`Guardian #${id} not found`);
-    return guardian;
+    return {
+      ...guardian,
+      dob: this.formatDateToFrontend(guardian.dob),
+    };
   }
 
   async updateGuardian(id: number, dto: UpdateGuardianDto) {
     const { dob, ...rest } = dto;
     const data: Record<string, unknown> = {
       ...rest,
-      ...(dob !== undefined ? { dob: new Date(dob) } : {}),
+      ...(dob !== undefined
+        ? { dob: this.parseDateFromFrontend(dob as string) }
+        : {}),
     };
 
     try {
-      return await this.prisma.guardians.update({ where: { id }, data: data as any });
+      const guardian = await this.prisma.guardians.update({
+        where: { id },
+        data: data as any,
+      });
+      return {
+        ...guardian,
+        dob: this.formatDateToFrontend(guardian.dob),
+      };
     } catch (e: any) {
       if (e?.code === 'P2025') throw new NotFoundException(`Guardian #${id} not found`);
       throw e;
@@ -241,7 +276,9 @@ export class StaffEditingService {
     if (is_emergency_contact !== undefined) relationshipData.is_emergency_contact = is_emergency_contact;
 
     const guardianData: Record<string, any> = { ...guardianFields };
-    if (dob !== undefined) guardianData.dob = dob ? new Date(dob) : null;
+    if (dob !== undefined) {
+      guardianData.dob = dob ? this.parseDateFromFrontend(dob as string) : null;
+    }
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -285,6 +322,7 @@ export class StaffEditingService {
           is_primary_contact: link.is_primary_contact,
           is_emergency_contact: link.is_emergency_contact,
           ...link.guardians,
+          dob: this.formatDateToFrontend(link.guardians.dob),
         };
       });
     } catch (e: any) {
