@@ -73,6 +73,15 @@ export class CaslAbilityFactory {
         can(Action.Read, 'Class');
         can(Action.Read, 'Section');
         break;
+
+      case StaffRole.STAFF_EDITOR:
+        // Restricted access primarily for staff editing students
+        can(Action.Manage, 'Student', { campusId: user.campusId } as any);
+        can(Action.Manage, 'Class');
+        can(Action.Manage, 'Section');
+        can(Action.Manage, 'Family');
+        can(Action.Read, 'User', { campusId: user.campusId } as any);
+        break;
     }
 
     return build();

@@ -332,6 +332,7 @@ enum StaffRole {
   FINANCE_CLERK
   RECEPTIONIST
   TEACHER
+  STAFF_EDITOR
 }
 
 enum student_status {
