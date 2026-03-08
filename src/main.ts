@@ -122,10 +122,12 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  await app.listen(process.env.PORT ?? 3000);
+  const port = process.env.PORT ?? 8080;
+  await app.listen(port);
 
-  const appUrl = await app.getUrl();
   // eslint-disable-next-line no-console
-  console.log(`Swagger docs available at: ${appUrl}/api/docs`);
+  console.log(`🚀 Server running at: http://localhost:${port}/api/v1`);
+  // eslint-disable-next-line no-console
+  console.log(`📖 Swagger docs available at: http://localhost:${port}/api/docs`);
 }
 bootstrap();

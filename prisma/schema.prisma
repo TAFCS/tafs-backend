@@ -62,6 +62,7 @@ model guardians {
   cnic_pic_url          String?
   passport_front_url    String?
   passport_back_url     String?
+  place_of_birth        String?             @db.VarChar(100)
   student_guardians     student_guardians[]
 }
 
@@ -174,6 +175,7 @@ model students {
   house_id                 Int?
   doa                      DateTime?                  @db.Date
   full_name                String                     @db.VarChar(100)
+  place_of_birth           String?                    @db.VarChar(100)
   relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
@@ -268,7 +270,7 @@ model fee_types {
 }
 
 model sections {
-  id          Int        @id @default(autoincrement())
+  id              Int               @id @default(autoincrement())
   description     String            @db.VarChar(255)
   campus_sections campus_sections[]
   students        students[]
