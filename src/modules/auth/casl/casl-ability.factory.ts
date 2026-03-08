@@ -80,6 +80,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Class');
         can(Action.Manage, 'Section');
         can(Action.Manage, 'Family');
+        can(Action.Manage, 'Campus');
         can(Action.Read, 'User', { campusId: user.campusId } as any);
         break;
     }
