@@ -102,4 +102,63 @@ export class CampusesService {
             where: { id },
         });
     }
+
+    // ─── Campus Classes ───────────────────────────────────────────────────────
+
+    async addClassToCampus(campusId: number, classId: number) {
+        // Verify both campus and class exist
+        const [campus, cls] = await Promise.all([
+            this.prisma.campuses.findUnique({ where: { id: campusId }, select: { id: true } }),
+            this.prisma.classes.findUnique({ where: { id: classId }, select: { id: true } }),
+        ]);
+        if (!campus) throw new NotFoundException(`Campus #${campusId} not found`);
+        if (!cls) throw new NotFoundException(`Class #${classId} not found`);
+
+        // Upsert: re-activates a previously deactivated link instead of throwing a duplicate error
+        const record = await this.prisma.campus_classes.upsert({
+            where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
+            update: { is_active: true },
+            create: { campus_id: campusId, class_id: classId, is_active: true },
+            include: { classes: { select: { id: true, description: true, class_code: true, academic_system: true } } },
+        });
+        return record;
+    }
+
+    async updateCampusClass(campusId: number, classId: number, isActive: boolean) {
+        try {
+            return await this.prisma.campus_classes.update({
+                where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
+                data: { is_active: isActive },
+                include: { classes: { select: { id: true, description: true, class_code: true, academic_system: true } } },
+            });
+        } catch (e: any) {
+            if (e?.code === 'P2025') {
+                throw new NotFoundException(`Class #${classId} is not offered at campus #${campusId}`);
+            }
+            throw e;
+        }
+    }
+
+    async removeClassFromCampus(campusId: number, classId: number) {
+        // Check if any active students in this campus are assigned to this class
+        const studentCount = await this.prisma.students.count({
+            where: { campus_id: campusId, class_id: classId, deleted_at: null },
+        });
+        if (studentCount > 0) {
+            throw new BadRequestException(
+                `Cannot remove class #${classId}: ${studentCount} student(s) are currently assigned to it at this campus`,
+            );
+        }
+
+        try {
+            await this.prisma.campus_classes.delete({
+                where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
+            });
+        } catch (e: any) {
+            if (e?.code === 'P2025') {
+                throw new NotFoundException(`Class #${classId} is not offered at campus #${campusId}`);
+            }
+            throw e;
+        }
+    }
 }

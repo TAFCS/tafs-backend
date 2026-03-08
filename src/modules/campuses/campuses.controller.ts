@@ -79,4 +79,40 @@ export class CampusesController {
         await this.campusesService.delete(id);
         return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.DELETE_SUCCESS);
     }
+
+    // ─── Campus Classes ───────────────────────────────────────────────────────
+
+    @Post(':id/classes/:classId')
+    @HttpCode(HttpStatus.CREATED)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    async addClassToCampus(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+    ) {
+        const record = await this.campusesService.addClassToCampus(id, classId);
+        return createApiResponse(record, HttpStatus.CREATED, CAMPUSES_MESSAGES.CLASS_ADDED);
+    }
+
+    @Patch(':id/classes/:classId')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    async updateCampusClass(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+        @Body('is_active') isActive: boolean,
+    ) {
+        const record = await this.campusesService.updateCampusClass(id, classId, isActive);
+        return createApiResponse(record, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_UPDATED);
+    }
+
+    @Delete(':id/classes/:classId')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'Campus'))
+    async removeClassFromCampus(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+    ) {
+        await this.campusesService.removeClassFromCampus(id, classId);
+        return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
+    }
 }

@@ -7,4 +7,7 @@ export const CAMPUSES_MESSAGES = {
     BULK_UPDATE_SUCCESS: 'Campuses updated successfully.',
     NOT_FOUND: 'Campus not found.',
     HAS_DEPENDENTS: 'Cannot delete campus with linked students or users.',
+    CLASS_ADDED: 'Class added to campus successfully.',
+    CLASS_UPDATED: 'Campus class updated successfully.',
+    CLASS_REMOVED: 'Class removed from campus successfully.',
 };
