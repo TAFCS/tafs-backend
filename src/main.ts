@@ -13,8 +13,12 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
 
-  // Security headers (HSTS, X-Frame-Options, X-Content-Type-Options, etc.)
-  app.use(helmet());
+  // Security headers
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
   // Gzip / Brotli compression — reduces JSON payload size by 60-80%
   app.use(compression());
@@ -38,13 +42,23 @@ async function bootstrap() {
   // dev server (which uses a random port) is never blocked.
   const rawOrigins = process.env.CORS_ORIGIN;
   const corsOrigin: string | string[] | RegExp = rawOrigins
-    ? rawOrigins.split(',').map((o) => o.trim())
+    ? rawOrigins.split(',').map((o) => o.trim().replace(/\/$/, ''))
     : /^http:\/\/localhost(:\d+)?$/;
+
+  // eslint-disable-next-line no-console
+  console.log('CORS origins configured:', corsOrigin);
 
   app.enableCors({
     origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'X-Requested-With',
+      'Origin',
+      'Access-Control-Allow-Origin',
+    ],
     credentials: true,
   });
 
