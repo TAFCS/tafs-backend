@@ -13,10 +13,33 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
 
+  const rawOrigins = process.env.CORS_ORIGIN;
+  const corsOrigins = rawOrigins
+    ? rawOrigins.split(',').map((o) => o.trim().replace(/\/$/, ''))
+    : [/^http:\/\/localhost(:\d+)?$/];
+
+  // Enable CORS first thing to ensure OPTIONS requests are handled before other middleware
+  app.enableCors({
+    origin: corsOrigins,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Accept',
+      'Authorization',
+      'X-Requested-With',
+      'Origin',
+    ],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  });
+
   // Security headers
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginOpenerPolicy: { policy: 'same-origin' },
+      contentSecurityPolicy: false, // Temporarily disable CSP to rule it out
     }),
   );
 
@@ -37,30 +60,8 @@ async function bootstrap() {
   // Consistent JSON error shape for all unhandled exceptions
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // Production: set CORS_ORIGIN as a comma-separated list of allowed origins.
-  // Development (no env var): allow any localhost origin so the Flutter web
-  // dev server (which uses a random port) is never blocked.
-  const rawOrigins = process.env.CORS_ORIGIN;
-  const corsOrigin: string | string[] | RegExp = rawOrigins
-    ? rawOrigins.split(',').map((o) => o.trim().replace(/\/$/, ''))
-    : /^http:\/\/localhost(:\d+)?$/;
-
   // eslint-disable-next-line no-console
-  console.log('CORS origins configured:', corsOrigin);
-
-  app.enableCors({
-    origin: corsOrigin,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'X-Requested-With',
-      'Origin',
-      'Access-Control-Allow-Origin',
-    ],
-    credentials: true,
-  });
+  console.log('CORS origins configured:', corsOrigins);
 
   app.use(
     morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
