@@ -109,4 +109,28 @@ export class UpdateGuardianDto {
   @IsString()
   @MaxLength(100)
   occupational_position?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  place_of_birth?: string;
+
+  @IsOptional()
+  @IsString()
+  cnic_pic_url?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  passport_front_url?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  passport_back_url?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  photo_url?: string;
 }

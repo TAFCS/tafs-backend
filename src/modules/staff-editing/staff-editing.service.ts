@@ -233,15 +233,59 @@ export class StaffEditingService {
     guardianId: number,
     dto: UpdateGuardianRelationshipDto,
   ) {
+    const { relationship, is_primary_contact, is_emergency_contact, dob, ...guardianFields } = dto;
+
+    const relationshipData: Prisma.student_guardiansUpdateInput = {};
+    if (relationship !== undefined) relationshipData.relationship = relationship;
+    if (is_primary_contact !== undefined) relationshipData.is_primary_contact = is_primary_contact;
+    if (is_emergency_contact !== undefined) relationshipData.is_emergency_contact = is_emergency_contact;
+
+    const guardianData: Record<string, any> = { ...guardianFields };
+    if (dob !== undefined) guardianData.dob = dob ? new Date(dob) : null;
+
     try {
-      return await this.prisma.student_guardians.update({
-        where: {
-          student_id_guardian_id: {
-            student_id: studentCc,
-            guardian_id: guardianId,
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Update relationship if any field provided
+        if (Object.keys(relationshipData).length > 0) {
+          await tx.student_guardians.update({
+            where: {
+              student_id_guardian_id: {
+                student_id: studentCc,
+                guardian_id: guardianId,
+              },
+            },
+            data: relationshipData,
+          });
+        }
+
+        // 2. Update guardian personal details if any field provided
+        if (Object.keys(guardianData).length > 0) {
+          await tx.guardians.update({
+            where: { id: guardianId },
+            data: guardianData,
+          });
+        }
+
+        // Return combined view
+        const link = await tx.student_guardians.findUnique({
+          where: {
+            student_id_guardian_id: {
+              student_id: studentCc,
+              guardian_id: guardianId,
+            },
           },
-        },
-        data: dto,
+          include: { guardians: true },
+        });
+
+        if (!link) throw new NotFoundException(`Link not found after update`);
+
+        return {
+          guardian_id: link.guardian_id,
+          relationship: link.relationship,
+          is_primary_contact: link.is_primary_contact,
+          is_emergency_contact: link.is_emergency_contact,
+          ...link.guardians,
+        };
       });
     } catch (e: any) {
       if (e?.code === 'P2025') {
