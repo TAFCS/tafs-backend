@@ -55,11 +55,6 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(100)
-  place_of_birth?: string;
-
-  @IsOptional()
-  @IsString()
   @MaxLength(50)
   country?: string;
 

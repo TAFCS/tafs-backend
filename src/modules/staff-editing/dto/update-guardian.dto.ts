@@ -74,11 +74,6 @@ export class UpdateGuardianDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
-  place_of_birth?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
   house_appt_name?: string;
 
   @IsOptional()

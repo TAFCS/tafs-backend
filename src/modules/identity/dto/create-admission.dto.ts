@@ -90,11 +90,6 @@ export class GuardianDto {
 
   @IsString()
   @IsOptional()
-  @MaxLength(100)
-  place_of_birth?: string;
-
-  @IsString()
-  @IsOptional()
   @MaxLength(50)
   education_level?: string;
 
@@ -215,8 +210,18 @@ export class CreateAdmissionDto {
 
   @IsString()
   @IsOptional()
-  @MaxLength(100)
-  place_of_birth?: string;
+  @MaxLength(50)
+  country?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  province?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  city?: string;
 
   @IsString()
   @IsOptional()
