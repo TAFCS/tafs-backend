@@ -23,12 +23,16 @@ import type {
 // ─── Cookie helpers ────────────────────────────────────────────────────────────
 
 const IS_PROD = process.env.NODE_ENV === 'production';
-const ACCESS_COOKIE_TTL  = 15 * 60 * 1000;            // 15 minutes (ms)
+const ACCESS_COOKIE_TTL = 15 * 60 * 1000;            // 15 minutes (ms)
 const REFRESH_COOKIE_TTL = 7 * 24 * 60 * 60 * 1000;   // 7 days (ms)
 
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-  const base = { httpOnly: true, secure: IS_PROD, sameSite: 'strict' as const };
-  res.cookie('tafs_access',  accessToken,  { ...base, maxAge: ACCESS_COOKIE_TTL });
+  const base = {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? ('none' as const) : ('lax' as const),
+  };
+  res.cookie('tafs_access', accessToken, { ...base, maxAge: ACCESS_COOKIE_TTL });
   res.cookie('tafs_refresh', refreshToken, { ...base, maxAge: REFRESH_COOKIE_TTL });
   // tafs_session is a presence-flag cookie read by Next.js middleware for
   // server-side route protection. Also httpOnly so JS cannot forge it.
@@ -36,8 +40,12 @@ function setAuthCookies(res: Response, accessToken: string, refreshToken: string
 }
 
 function clearAuthCookies(res: Response) {
-  const base = { httpOnly: true, secure: IS_PROD, sameSite: 'strict' as const };
-  res.clearCookie('tafs_access',  base);
+  const base = {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? ('none' as const) : ('lax' as const),
+  };
+  res.clearCookie('tafs_access', base);
   res.clearCookie('tafs_refresh', base);
   res.clearCookie('tafs_session', base);
 }
@@ -46,7 +54,7 @@ function clearAuthCookies(res: Response) {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   // ─── Staff (cookie-based — webapp only) ────────────────────────────────────
 
