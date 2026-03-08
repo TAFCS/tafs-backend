@@ -17,7 +17,7 @@ export class StudentFeesService {
 
     async findByStudentCC(ccNumber: string) {
         const student = await this.prisma.students.findUnique({
-            where: { cc_number: ccNumber },
+            where: { cc: Number(ccNumber) },
         });
 
         if (!student) {
@@ -25,7 +25,7 @@ export class StudentFeesService {
         }
 
         return this.prisma.student_fees.findMany({
-            where: { student_id: student.id },
+            where: { student_id: student.cc },
             include: {
                 fee_types: true,
             },
@@ -37,7 +37,7 @@ export class StudentFeesService {
 
         // Check if student exists
         const student = await this.prisma.students.findUnique({
-            where: { id: student_id },
+            where: { cc: student_id },
         });
 
         if (!student) {

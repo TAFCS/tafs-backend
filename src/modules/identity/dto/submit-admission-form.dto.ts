@@ -1,5 +1,6 @@
 import {
     IsString,
+    IsInt,
     IsOptional,
     IsNotEmpty,
     IsBoolean,
@@ -78,9 +79,9 @@ export class StudentActivityDto {
 }
 
 export class SubmitAdmissionFormDto {
-    @IsString()
+    @IsInt()
     @IsNotEmpty()
-    cc_number: string;
+    cc: number;
 
     @IsString()
     @IsOptional()

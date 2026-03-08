@@ -147,7 +147,7 @@ export class AuthService {
     const students = await this.prisma.students.findMany({
       where: { family_id: family.id },
       select: {
-        id: true,
+        cc: true,
         first_name: true,
         last_name: true,
         photograph_url: true,
@@ -168,7 +168,7 @@ export class AuthService {
         householdName: family.household_name,
       },
       students: students.map((student) => ({
-        id: student.id,
+        cc: student.cc,
         fullName: `${student.first_name} ${student.last_name}`,
         section:
           student.student_admissions[0]?.requested_grade ?? null,

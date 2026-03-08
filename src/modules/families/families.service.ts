@@ -113,10 +113,9 @@ export class FamiliesService {
         students: {
           where: { deleted_at: null },
           select: {
-            id: true,
+            cc: true,
             first_name: true,
             last_name: true,
-            cc_number: true,
             gr_number: true,
             status: true,
             photograph_url: true,
@@ -130,7 +129,7 @@ export class FamiliesService {
     if (!family) throw new NotFoundException(`Family #${id} not found`);
 
     // Collect guardian info via student_guardians junction
-    const studentIds = family.students.map((s) => s.id);
+    const studentIds = family.students.map((s) => s.cc);
     const guardians =
       studentIds.length > 0
         ? await this.prisma.student_guardians.findMany({
@@ -227,7 +226,7 @@ export class FamiliesService {
         include: { students: { where: { deleted_at: null }, take: 1 } },
       }),
       this.prisma.students.findFirst({
-        where: { id: studentId, deleted_at: null },
+        where: { cc: studentId, deleted_at: null },
       }),
     ]);
 
@@ -241,7 +240,7 @@ export class FamiliesService {
     }
 
     // Identify target guardians to link to (from existing siblings)
-    const targetStudentId = family.students?.[0]?.id;
+    const targetStudentId = family.students?.[0]?.cc;
     const targetGuardians = targetStudentId
       ? await this.prisma.student_guardians.findMany({
         where: { student_id: targetStudentId },
@@ -251,13 +250,12 @@ export class FamiliesService {
     const updated = await this.prisma.$transaction(async (tx) => {
       // 1. Update the student's family link
       const s = await tx.students.update({
-        where: { id: studentId },
+        where: { cc: studentId },
         data: { family_id: familyId },
         select: {
-          id: true,
+          cc: true,
           first_name: true,
           last_name: true,
-          cc_number: true,
           family_id: true,
         },
       });
@@ -292,7 +290,7 @@ export class FamiliesService {
     await this._assertExists(familyId);
 
     const student = await this.prisma.students.findFirst({
-      where: { id: studentId, deleted_at: null, family_id: familyId },
+      where: { cc: studentId, deleted_at: null, family_id: familyId },
     });
     if (!student) {
       throw new NotFoundException(

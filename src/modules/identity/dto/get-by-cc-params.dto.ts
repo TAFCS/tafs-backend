@@ -1,11 +1,10 @@
-import { IsNotEmpty, IsString, Matches } from 'class-validator';
+import { IsInt, IsPositive } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class GetByCcParamsDto {
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^CC-\d{4}-\d{5}$/, {
-    message: 'cc must be in format CC-YYYY-NNNNN',
-  })
-  cc: string;
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  cc: number;
 }
 

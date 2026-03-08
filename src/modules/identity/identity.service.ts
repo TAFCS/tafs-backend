@@ -78,15 +78,11 @@ export class IdentityService {
         }
       }
 
-      // ── 2. Generate Computer Code ────────────────────────────────────────
-      const ccNumber = await this.generateCCNumber(tx);
-
-      // ── 3. Create student ────────────────────────────────────────────────
+      // ── 2. Create student ────────────────────────────────────────────────
       const dob = new Date(dto.dob);
       const student = await tx.students.create({
         data: {
           family_id: familyId,
-          cc_number: ccNumber,
           first_name: dto.first_name,
           last_name: dto.last_name,
           dob,
@@ -104,11 +100,11 @@ export class IdentityService {
         },
       });
 
-      // ── 4. Upsert father ─────────────────────────────────────────────────
+      // ── 3. Upsert father ─────────────────────────────────────────────────
       const father = await this.upsertGuardian(tx, dto.father);
       await tx.student_guardians.create({
         data: {
-          student_id: student.id,
+          student_id: student.cc,
           guardian_id: father.id,
           relationship: 'Father',
           is_primary_contact: true,
@@ -116,12 +112,12 @@ export class IdentityService {
         },
       });
 
-      // ── 5. Upsert mother ─────────────────────────────────────────────────
+      // ── 4. Upsert mother ─────────────────────────────────────────────────
       const mother = await this.upsertGuardian(tx, dto.mother);
       if (mother.id !== father.id) {
         await tx.student_guardians.create({
           data: {
-            student_id: student.id,
+            student_id: student.cc,
             guardian_id: mother.id,
             relationship: 'Mother',
             is_primary_contact: false,
@@ -130,7 +126,7 @@ export class IdentityService {
         });
       }
 
-      // ── 6. Emergency contact ─────────────────────────────────────────────
+      // ── 5. Emergency contact ─────────────────────────────────────────────
       if (dto.emergency_contact) {
         const ec = dto.emergency_contact;
 
@@ -145,7 +141,7 @@ export class IdentityService {
           await tx.student_guardians.update({
             where: {
               student_id_guardian_id: {
-                student_id: student.id,
+                student_id: student.cc,
                 guardian_id: father.id,
               },
             },
@@ -155,7 +151,7 @@ export class IdentityService {
           await tx.student_guardians.update({
             where: {
               student_id_guardian_id: {
-                student_id: student.id,
+                student_id: student.cc,
                 guardian_id: mother.id,
               },
             },
@@ -170,7 +166,7 @@ export class IdentityService {
           });
           await tx.student_guardians.create({
             data: {
-              student_id: student.id,
+              student_id: student.cc,
               guardian_id: ecGuardian.id,
               relationship: ec.relationship,
               is_primary_contact: false,
@@ -180,11 +176,11 @@ export class IdentityService {
         }
       }
 
-      // ── 7. Previous schools ──────────────────────────────────────────────
+      // ── 6. Previous schools ──────────────────────────────────────────────
       if (dto.previous_schools?.length) {
         await tx.student_previous_schools.createMany({
           data: dto.previous_schools.map((school) => ({
-            student_id: student.id,
+            student_id: student.cc,
             school_name: school.school_name,
             location: school.location,
             class_studied_from: school.class_studied_from,
@@ -194,19 +190,19 @@ export class IdentityService {
         });
       }
 
-      // ── 8. Admission record ──────────────────────────────────────────────
+      // ── 7. Admission record ──────────────────────────────────────────────
       await tx.student_admissions.create({
         data: {
-          student_id: student.id,
+          student_id: student.cc,
           academic_system: dto.admission.academic_system,
           requested_grade: dto.admission.requested_grade,
           academic_year: dto.admission.academic_year,
         },
       });
 
-      // ── 9. Return full record ────────────────────────────────────────────
+      // ── 8. Return full record ────────────────────────────────────────────
       return tx.students.findUnique({
-        where: { id: student.id },
+        where: { cc: student.cc },
         include: this.defaultStudentInclude(),
       });
     },
@@ -221,16 +217,16 @@ export class IdentityService {
       async (tx) => {
         // 1. Find existing student
         const student = await tx.students.findUnique({
-          where: { cc_number: dto.cc_number },
+          where: { cc: dto.cc },
         });
 
         if (!student) {
-          throw new NotFoundException(`Student with CC ${dto.cc_number} not found`);
+          throw new NotFoundException(`Student with CC ${dto.cc} not found`);
         }
 
         // 2. Update Student base table
         await tx.students.update({
-          where: { id: student.id },
+          where: { cc: student.cc },
           data: {
             gr_number: dto.gr_number || undefined,
             gender: dto.gender || undefined,
@@ -252,8 +248,8 @@ export class IdentityService {
           const f = await this.upsertGuardian(tx, dto.father);
           fatherId = f.id;
           await tx.student_guardians.upsert({
-            where: { student_id_guardian_id: { student_id: student.id, guardian_id: f.id } },
-            create: { student_id: student.id, guardian_id: f.id, relationship: 'Father', is_primary_contact: true },
+            where: { student_id_guardian_id: { student_id: student.cc, guardian_id: f.id } },
+            create: { student_id: student.cc, guardian_id: f.id, relationship: 'Father', is_primary_contact: true },
             update: { relationship: 'Father', is_primary_contact: true },
           });
         }
@@ -263,8 +259,8 @@ export class IdentityService {
           motherId = m.id;
           if (motherId !== fatherId) {
             await tx.student_guardians.upsert({
-              where: { student_id_guardian_id: { student_id: student.id, guardian_id: m.id } },
-              create: { student_id: student.id, guardian_id: m.id, relationship: 'Mother' },
+              where: { student_id_guardian_id: { student_id: student.cc, guardian_id: m.id } },
+              create: { student_id: student.cc, guardian_id: m.id, relationship: 'Mother' },
               update: { relationship: 'Mother' },
             });
           }
@@ -274,8 +270,8 @@ export class IdentityService {
           const g = await this.upsertGuardian(tx, dto.guardian);
           if (g.id !== fatherId && g.id !== motherId) {
             await tx.student_guardians.upsert({
-              where: { student_id_guardian_id: { student_id: student.id, guardian_id: g.id } },
-              create: { student_id: student.id, guardian_id: g.id, relationship: 'Guardian', is_emergency_contact: true },
+              where: { student_id_guardian_id: { student_id: student.cc, guardian_id: g.id } },
+              create: { student_id: student.cc, guardian_id: g.id, relationship: 'Guardian', is_emergency_contact: true },
               update: { is_emergency_contact: true },
             });
           }
@@ -284,7 +280,7 @@ export class IdentityService {
         // 4. Update Admission details
         if (dto.admission) {
           const existingAdm = await tx.student_admissions.findFirst({
-            where: { student_id: student.id },
+            where: { student_id: student.cc },
           });
           if (existingAdm) {
             await tx.student_admissions.update({
@@ -298,7 +294,7 @@ export class IdentityService {
           } else {
             await tx.student_admissions.create({
               data: {
-                student_id: student.id,
+                student_id: student.cc,
                 academic_system: dto.admission.academic_system,
                 requested_grade: dto.admission.requested_grade,
                 academic_year: dto.admission.academic_year,
@@ -309,11 +305,11 @@ export class IdentityService {
 
         // 5. Replace Previous Schools
         if (dto.previous_schools) {
-          await tx.student_previous_schools.deleteMany({ where: { student_id: student.id } });
+          await tx.student_previous_schools.deleteMany({ where: { student_id: student.cc } });
           if (dto.previous_schools.length > 0) {
             await tx.student_previous_schools.createMany({
               data: dto.previous_schools.map((s) => ({
-                student_id: student.id,
+                student_id: student.cc,
                 school_name: s.school_name,
                 location: s.location,
                 class_studied_from: s.class_studied_from,
@@ -326,11 +322,11 @@ export class IdentityService {
 
         // 6. Replace Languages
         if (dto.languages) {
-          await tx.student_languages.deleteMany({ where: { student_id: student.id } });
+          await tx.student_languages.deleteMany({ where: { student_id: student.cc } });
           if (dto.languages.length > 0) {
             await tx.student_languages.createMany({
               data: dto.languages.map((l) => ({
-                student_id: student.id,
+                student_id: student.cc,
                 language_name: l.language_name,
                 can_speak: l.can_speak,
                 can_read: l.can_read,
@@ -373,11 +369,11 @@ export class IdentityService {
 
         // 8. Relatives
         if (dto.relatives) {
-          await tx.relatives_attending_tafs.deleteMany({ where: { student_id: student.id } });
+          await tx.relatives_attending_tafs.deleteMany({ where: { student_id: student.cc } });
           if (dto.relatives.length > 0) {
             await tx.relatives_attending_tafs.createMany({
               data: dto.relatives.map((r) => ({
-                student_id: student.id,
+                student_id: student.cc,
                 name: r.name,
                 class: r.class,
                 relationship: r.relationship,
@@ -388,11 +384,11 @@ export class IdentityService {
 
         // 9. Activities
         if (dto.activities) {
-          await tx.student_activities.deleteMany({ where: { student_id: student.id } });
+          await tx.student_activities.deleteMany({ where: { student_id: student.cc } });
           if (dto.activities.length > 0) {
             await tx.student_activities.createMany({
               data: dto.activities.map((a) => ({
-                student_id: student.id,
+                student_id: student.cc,
                 activity_name: a.activity_name,
                 grade: a.grade,
                 honors_awards: a.honors_awards,
@@ -404,7 +400,7 @@ export class IdentityService {
 
         // Return updated student
         return tx.students.findUnique({
-          where: { id: student.id },
+          where: { cc: student.cc },
           include: this.defaultStudentInclude(),
         });
       },
@@ -415,14 +411,14 @@ export class IdentityService {
     );
   }
 
-  async getAdmissionByCC(cc: string) {
-    if (!cc?.trim()) {
+  async getAdmissionByCC(cc: number) {
+    if (!cc) {
       throw new NotFoundException('Admission not found for empty CC');
     }
 
     const student = await this.prisma.students.findFirst({
       where: {
-        cc_number: cc,
+        cc: cc,
       },
       include: this.defaultStudentInclude(),
     });
@@ -443,10 +439,9 @@ export class IdentityService {
           students: {
             where: { deleted_at: null },
             select: {
-              id: true,
+              cc: true,
               first_name: true,
               last_name: true,
-              cc_number: true,
               status: true,
               student_admissions: {
                 select: { requested_grade: true },
@@ -502,34 +497,6 @@ export class IdentityService {
     }
 
     return tx.guardians.create({ data: payload });
-  }
-
-  /**
-   * Generate the next CC number: CC-YYYY-NNNNN
-   * Uses the total student count inside the transaction to be race-safe.
-   */
-  private async generateCCNumber(tx: TxClient): Promise<string> {
-    const year = new Date().getFullYear();
-
-    // Find the highest CC number for the current year
-    const lastStudent = await tx.students.findFirst({
-      where: { cc_number: { startsWith: `CC-${year}-` } },
-      orderBy: { cc_number: 'desc' },
-    });
-
-    let nextNumber = 1;
-    if (lastStudent && lastStudent.cc_number) {
-      const parts = lastStudent.cc_number.split('-');
-      if (parts.length === 3) {
-        const lastCount = parseInt(parts[2], 10);
-        if (!isNaN(lastCount)) {
-          nextNumber = lastCount + 1;
-        }
-      }
-    }
-
-    const padded = String(nextNumber).padStart(5, '0');
-    return `CC-${year}-${padded}`;
   }
 
   /**

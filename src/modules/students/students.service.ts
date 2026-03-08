@@ -23,7 +23,7 @@ export class StudentsService {
         { first_name: { contains: search, mode: 'insensitive' } },
         { last_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
-        { cc_number: { contains: search, mode: 'insensitive' } },
+        ...(/^\d+$/.test(search) ? [{ cc: Number(search) }] : []),
         {
           student_guardians: {
             some: {
@@ -53,13 +53,12 @@ export class StudentsService {
     // Build the dynamic 'select' object
     const selectArgs: Prisma.studentsSelect = {
       // Base keys required for internal operations
-      id: true,
+      cc: true,
     };
 
     if (requestedFields.has('core')) {
       selectArgs.first_name = true;
       selectArgs.last_name = true;
-      selectArgs.cc_number = true;
       selectArgs.gr_number = true;
       selectArgs.class_id = true;
       selectArgs.status = true;
@@ -91,10 +90,9 @@ export class StudentsService {
           students: {
             where: { deleted_at: null },
             select: {
-              id: true,
+              cc: true,
               first_name: true,
               last_name: true,
-              cc_number: true,
               student_guardians: {
                 where: { is_primary_contact: true },
                 take: 1,
@@ -192,7 +190,7 @@ export class StudentsService {
         skip: offset,
         take: limit,
         orderBy: { created_at: 'desc' },
-        select: Object.keys(selectArgs).length > 1 ? selectArgs : { id: true }, // Ensure at least id is selected
+        select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true }, // Ensure at least cc is selected
       }),
     ]);
 
@@ -213,15 +211,15 @@ export class StudentsService {
       const latestAdmission = s.student_admissions?.[0] || null;
       const previousSchool = s.student_previous_schools?.[0] || null;
 
-      const mappedData: any = { id: s.id };
+      const mappedData: any = { cc: s.cc };
 
       if (requestedFields.has('core')) {
         mappedData.core = {
-          id: s.id,
+          cc: s.cc,
           first_name: s.first_name,
           last_name: s.last_name,
           full_name: `${s.first_name} ${s.last_name}`.trim(),
-          cc_number: s.cc_number,
+          cc_number: s.cc,
           gr_number: s.gr_number,
           campus_name: s.campuses?.campus_name,
           campus_code: s.campuses?.campus_code,
@@ -248,11 +246,11 @@ export class StudentsService {
           primary_address: s.families?.primary_address,
           sibling_count: s.families?._count?.students,
           siblings: s.families?.students
-            ?.filter((sib: any) => sib.id !== s.id)
+            ?.filter((sib: any) => sib.cc !== s.cc)
             ?.map((sib: any) => ({
-              id: sib.id,
+              cc: sib.cc,
               full_name: `${sib.first_name} ${sib.last_name}`.trim(),
-              cc_number: sib.cc_number,
+              cc_number: sib.cc,
               father_name: sib.student_guardians?.[0]?.guardians?.full_name,
             })),
         };
@@ -332,7 +330,7 @@ export class StudentsService {
 
   async findOne(id: number) {
     const s = await this.prisma.students.findFirst({
-      where: { id, deleted_at: null },
+      where: { cc: id, deleted_at: null },
       include: {
         campuses: true,
         families: {
@@ -340,10 +338,9 @@ export class StudentsService {
             students: {
               where: { deleted_at: null },
               select: {
-                id: true,
+                cc: true,
                 first_name: true,
                 last_name: true,
-                cc_number: true,
                 student_guardians: {
                   where: { is_primary_contact: true },
                   take: 1,
@@ -370,10 +367,10 @@ export class StudentsService {
     const primaryGuardian = primaryGuardianNode?.guardians;
 
     return {
-      id: s.id,
+      cc: s.cc,
       student_full_name: `${s.first_name} ${s.last_name}`.trim(),
       gr_number: s.gr_number,
-      cc_number: s.cc_number,
+      cc_number: s.cc,
       campus: s.campuses?.campus_name,
       campus_code: s.campuses?.campus_code,
       class_id: s.class_id,
@@ -387,14 +384,14 @@ export class StudentsService {
       whatsapp_number: primaryGuardian?.whatsapp_number || s.whatsapp_number,
       primary_phone: primaryGuardian?.primary_phone || s.primary_phone,
       date_of_birth: s.dob,
-      registration_number: s.cc_number,
+      registration_number: s.cc,
       residential_address: s.families?.primary_address,
       siblings: s.families?.students
-        ?.filter((sib: any) => sib.id !== s.id)
+        ?.filter((sib: any) => sib.cc !== s.cc)
         ?.map((sib: any) => ({
-          id: sib.id,
+          cc: sib.cc,
           full_name: `${sib.first_name} ${sib.last_name}`.trim(),
-          cc_number: sib.cc_number,
+          cc_number: sib.cc,
           father_name: sib.student_guardians?.[0]?.guardians?.full_name,
         })),
     };

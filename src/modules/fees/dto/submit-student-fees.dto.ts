@@ -6,7 +6,6 @@ import {
   IsNotEmpty,
   IsNumber,
   IsPositive,
-  IsString,
   Max,
   Min,
   ValidateNested,
@@ -33,10 +32,10 @@ export class FeeLineItemDto {
 }
 
 export class SubmitStudentFeesDto {
-  /** Student CC number e.g. "CC-2026-00003" */
-  @IsString()
+  /** Student CC (integer primary key) */
+  @IsInt()
   @IsNotEmpty()
-  cc_number: string;
+  cc: number;
 
   @IsArray()
   @ValidateNested({ each: true })

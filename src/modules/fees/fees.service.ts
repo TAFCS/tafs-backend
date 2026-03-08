@@ -15,13 +15,13 @@ export class FeesService {
   async submitStudentFees(dto: SubmitStudentFeesDto) {
     // Resolve cc_number → internal student id
     const student = await this.prisma.students.findFirst({
-      where: { cc_number: dto.cc_number, deleted_at: null },
-      select: { id: true },
+      where: { cc: dto.cc, deleted_at: null },
+      select: { cc: true },
     });
     if (!student) {
-      throw new NotFoundException(`Student with CC number ${dto.cc_number} not found`);
+      throw new NotFoundException(`Student with CC ${dto.cc} not found`);
     }
-    const studentId = student.id;
+    const studentId = student.cc;
 
     // Bulk upsert inside a single transaction
     await this.prisma.$transaction(
