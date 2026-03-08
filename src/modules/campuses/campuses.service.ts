@@ -93,26 +93,35 @@ export class CampusesService {
     }
 
     async delete(id: number) {
-        // Check if there are any linked students or users to prevent cascade-like effects
-        // since we want to avoid deleting a campus that is currently in use.
-        const studentCount = await this.prisma.students.count({
-            where: { campus_id: id },
-        });
+        // Use a transaction to safely unlink related records and delete the campus
+        return this.prisma.$transaction(async (tx) => {
+            // 1. Unlink Students
+            await tx.students.updateMany({
+                where: { campus_id: id },
+                data: { campus_id: null },
+            });
 
-        if (studentCount > 0) {
-            throw new BadRequestException('Cannot delete campus with linked students');
-        }
+            // 2. Unlink Users/Staff
+            await tx.users.updateMany({
+                where: { campus_id: id },
+                data: { campus_id: null },
+            });
 
-        const userCount = await this.prisma.users.count({
-            where: { campus_id: id },
-        });
+            // 3. Unlink Class Fee Schedules
+            await tx.class_fee_schedule.updateMany({
+                where: { campus_id: id },
+                data: { campus_id: null },
+            });
 
-        if (userCount > 0) {
-            throw new BadRequestException('Cannot delete campus with linked users');
-        }
+            // 4. Delete Junction Records (Campus Classes assignments)
+            await tx.campus_classes.deleteMany({
+                where: { campus_id: id },
+            });
 
-        return this.prisma.campuses.delete({
-            where: { id },
+            // 5. Finally, delete the campus itself
+            return tx.campuses.delete({
+                where: { id },
+            });
         });
     }
 
