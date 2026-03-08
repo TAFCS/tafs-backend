@@ -55,4 +55,44 @@ export class ClassesService {
 
     return updated;
   }
+
+  async delete(id: number) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Unlink Students
+        await tx.students.updateMany({
+          where: { class_id: id },
+          data: { class_id: null },
+        });
+
+        // 2. Delete assignments in junction tables
+        await tx.campus_classes.deleteMany({
+          where: { class_id: id },
+        });
+
+        await tx.campus_sections.deleteMany({
+          where: { class_id: id },
+        });
+
+        // 3. Delete related fee schedules
+        await tx.class_fee_schedule.deleteMany({
+          where: { class_id: id },
+        });
+
+        // 4. Finally, delete the class record
+        return await tx.classes.delete({
+          where: { id },
+        });
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2025') {
+        throw new NotFoundException(`Class #${id} not found`);
+      }
+      if (e?.code === 'P2003') {
+        // Foreign key constraint failure (e.g. if we missed something and it's protected)
+        throw new Error('Cannot delete class as it is being referenced by other records.');
+      }
+      throw e;
+    }
+  }
 }

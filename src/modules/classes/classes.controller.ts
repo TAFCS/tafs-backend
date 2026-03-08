@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ClassesService } from './classes.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -44,6 +44,17 @@ export class ClassesController {
       success: true,
       message: 'Classes updated successfully',
       data: updated,
+    };
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Delete, 'Class'))
+  async delete(@Param('id', ParseIntPipe) id: number) {
+    await this.classesService.delete(id);
+    return {
+      success: true,
+      message: 'Class deleted successfully',
     };
   }
 }
