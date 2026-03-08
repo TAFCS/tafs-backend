@@ -69,7 +69,7 @@ model relatives_attending_tafs {
   class        String?  @db.VarChar(20)
   relationship String?  @db.VarChar(50)
   student_id   Int
-  students     students @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students     students @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_activities {
@@ -79,7 +79,7 @@ model student_activities {
   grade            String?   @db.VarChar(20)
   honors_awards    String?
   continue_at_tafs Boolean?  @default(true)
-  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students         students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_admissions {
@@ -89,7 +89,7 @@ model student_admissions {
   requested_grade  String    @db.VarChar(20)
   academic_year    String?   @db.VarChar(10)
   application_date DateTime? @default(now()) @db.Timestamp(6)
-  students         students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students         students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_guardians {
@@ -99,7 +99,7 @@ model student_guardians {
   is_primary_contact   Boolean?  @default(false)
   is_emergency_contact Boolean?  @default(false)
   guardians            guardians @relation(fields: [guardian_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students             students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students             students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@id([student_id, guardian_id])
 }
@@ -111,7 +111,7 @@ model student_languages {
   can_speak     Boolean?
   can_read      Boolean?
   can_write     Boolean?
-  students      students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students      students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_previous_schools {
@@ -122,7 +122,7 @@ model student_previous_schools {
   class_studied_from String?   @db.VarChar(20)
   class_studied_to   String?   @db.VarChar(20)
   reason_for_leaving String?
-  students           students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students           students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model student_siblings {
@@ -138,10 +138,9 @@ model student_siblings {
 }
 
 model students {
-  id                       Int                        @id @default(autoincrement())
+  cc                       Int                        @id @default(autoincrement())
   family_id                Int
   campus_id                Int?
-  cc_number                String                     @unique @db.VarChar(50)
   gr_number                String?                    @unique @db.VarChar(50)
   first_name               String                     @db.VarChar(50)
   last_name                String                     @db.VarChar(50)
@@ -171,6 +170,7 @@ model students {
   email                    String?                    @db.VarChar(100)
   class_id                 Int?
   section_id               Int?
+  house_id                 Int?
   relatives_attending_tafs relatives_attending_tafs[]
   student_activities       student_activities[]
   student_admissions       student_admissions[]
@@ -181,6 +181,7 @@ model students {
   campuses                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                  classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                 families                   @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  houses                   houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                 sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([class_id], map: "idx_students_class_id")
@@ -276,9 +277,16 @@ model student_fees {
   validity    DateTime? @db.Date
   status      Boolean?  @default(false)
   fee_types   fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students    students  @relation(fields: [student_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students    students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([student_id, fee_type_id, month])
+}
+
+model houses {
+  id          Int        @id @default(autoincrement())
+  house_name  String?    @db.VarChar(100)
+  house_color String?    @db.VarChar(50)
+  students    students[]
 }
 
 enum StaffRole {
