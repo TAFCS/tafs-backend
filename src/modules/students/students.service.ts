@@ -388,4 +388,30 @@ export class StudentsService {
         })),
     };
   }
+
+  async assignStudent(id: number, dto: any) {
+    const student = await this.prisma.students.findUnique({
+        where: { cc: id },
+    });
+
+    if (!student || student.deleted_at) {
+        throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    return this.prisma.students.update({
+        where: { cc: id },
+        data: {
+            campus_id: dto.campus_id !== undefined ? dto.campus_id : undefined,
+            class_id: dto.class_id !== undefined ? dto.class_id : undefined,
+            section_id: dto.section_id !== undefined ? dto.section_id : undefined,
+            house_id: dto.house_id !== undefined ? dto.house_id : undefined,
+        },
+        include: {
+            campuses: { select: { campus_name: true, campus_code: true } },
+            classes: { select: { description: true, class_code: true } },
+            sections: { select: { description: true } },
+            houses: { select: { house_name: true } },
+        },
+    });
+}
 }

@@ -1,6 +1,7 @@
-import { Controller, Get, HttpStatus, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
+import { AssignStudentDto } from './dto/assign-student.dto';
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -33,6 +34,20 @@ export class StudentsController {
       student,
       HttpStatus.OK,
       STUDENTS_MESSAGES.RETRIEVE_SUCCESS,
+    );
+  }
+
+  @Patch(':id/assignment')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async assignStudent(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AssignStudentDto,
+  ) {
+    const updated = await this.studentsService.assignStudent(id, dto);
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      'Student assignment updated successfully',
     );
   }
 }

@@ -185,6 +185,18 @@ export class AdmissionDetailsDto {
   @IsOptional()
   @MaxLength(10)
   academic_year?: string;
+
+  @IsOptional()
+  @IsInt()
+  campus_id?: number;
+
+  @IsOptional()
+  @IsInt()
+  class_id?: number;
+
+  @IsOptional()
+  @IsInt()
+  section_id?: number;
 }
 
 // ─── Root DTO ─────────────────────────────────────────────────────────────────

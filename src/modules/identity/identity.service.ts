@@ -98,6 +98,9 @@ export class IdentityService {
           email: dto.email,
           admission_age_years: this.calcAge(dob),
           status: 'SOFT_ADMISSION',
+          campus_id: dto.admission.campus_id || undefined,
+          class_id: dto.admission.class_id || undefined,
+          section_id: dto.admission.section_id || undefined,
         },
       });
 
