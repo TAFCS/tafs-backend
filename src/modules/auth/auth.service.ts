@@ -148,8 +148,7 @@ export class AuthService {
       where: { family_id: family.id },
       select: {
         cc: true,
-        first_name: true,
-        last_name: true,
+        full_name: true,
         photograph_url: true,
         student_admissions: {
           orderBy: { id: 'desc' },
@@ -169,7 +168,7 @@ export class AuthService {
       },
       students: students.map((student) => ({
         cc: student.cc,
-        fullName: `${student.first_name} ${student.last_name}`,
+        fullName: student.full_name,
         section:
           student.student_admissions[0]?.requested_grade ?? null,
         profilePictureUrl: student.photograph_url,

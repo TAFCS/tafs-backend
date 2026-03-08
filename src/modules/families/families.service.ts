@@ -114,8 +114,7 @@ export class FamiliesService {
           where: { deleted_at: null },
           select: {
             cc: true,
-            first_name: true,
-            last_name: true,
+            full_name: true,
             gr_number: true,
             status: true,
             photograph_url: true,
@@ -254,8 +253,7 @@ export class FamiliesService {
         data: { family_id: familyId },
         select: {
           cc: true,
-          first_name: true,
-          last_name: true,
+          full_name: true,
           family_id: true,
         },
       });

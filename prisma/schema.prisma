@@ -142,8 +142,7 @@ model students {
   family_id                Int
   campus_id                Int?
   gr_number                String?                    @unique @db.VarChar(50)
-  first_name               String                     @db.VarChar(50)
-  last_name                String                     @db.VarChar(50)
+  full_name                String                     @db.VarChar(100)
   dob                      DateTime                   @db.Date
   gender                   String?                    @db.VarChar(10)
   nationality              String?                    @db.VarChar(50)
@@ -186,7 +185,7 @@ model students {
 
   @@index([class_id], map: "idx_students_class_id")
   @@index([section_id], map: "idx_students_section_id")
-  @@index([first_name, last_name], map: "idx_students_first_last_name")
+  @@index([full_name], map: "idx_students_full_name")
   @@index([family_id], map: "idx_students_family_id")
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([status], map: "idx_students_status")

@@ -67,7 +67,7 @@ export class IdentityService {
         } else {
           const familyName = dto.father.full_name
             ? dto.father.full_name
-            : dto.last_name;
+            : dto.full_name;
 
           const family = await tx.families.create({
             data: {
@@ -83,8 +83,7 @@ export class IdentityService {
       const student = await tx.students.create({
         data: {
           family_id: familyId,
-          first_name: dto.first_name,
-          last_name: dto.last_name,
+          full_name: dto.full_name,
           dob,
           gender: dto.gender,
           nationality: dto.nationality,
@@ -440,8 +439,7 @@ export class IdentityService {
             where: { deleted_at: null },
             select: {
               cc: true,
-              first_name: true,
-              last_name: true,
+              full_name: true,
               status: true,
               student_admissions: {
                 select: { requested_grade: true },

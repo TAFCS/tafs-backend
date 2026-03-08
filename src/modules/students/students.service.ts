@@ -20,8 +20,7 @@ export class StudentsService {
 
     if (search) {
       where.OR = [
-        { first_name: { contains: search, mode: 'insensitive' } },
-        { last_name: { contains: search, mode: 'insensitive' } },
+        { full_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
         ...(/^\d+$/.test(search) ? [{ cc: Number(search) }] : []),
         {
@@ -57,8 +56,7 @@ export class StudentsService {
     };
 
     if (requestedFields.has('core')) {
-      selectArgs.first_name = true;
-      selectArgs.last_name = true;
+      selectArgs.full_name = true;
       selectArgs.gr_number = true;
       selectArgs.class_id = true;
       selectArgs.status = true;
@@ -91,8 +89,7 @@ export class StudentsService {
             where: { deleted_at: null },
             select: {
               cc: true,
-              first_name: true,
-              last_name: true,
+              full_name: true,
               student_guardians: {
                 where: { is_primary_contact: true },
                 take: 1,
@@ -216,9 +213,7 @@ export class StudentsService {
       if (requestedFields.has('core')) {
         mappedData.core = {
           cc: s.cc,
-          first_name: s.first_name,
-          last_name: s.last_name,
-          full_name: `${s.first_name} ${s.last_name}`.trim(),
+          full_name: s.full_name,
           cc_number: s.cc,
           gr_number: s.gr_number,
           campus_name: s.campuses?.campus_name,
@@ -249,7 +244,7 @@ export class StudentsService {
             ?.filter((sib: any) => sib.cc !== s.cc)
             ?.map((sib: any) => ({
               cc: sib.cc,
-              full_name: `${sib.first_name} ${sib.last_name}`.trim(),
+              full_name: sib.full_name,
               cc_number: sib.cc,
               father_name: sib.student_guardians?.[0]?.guardians?.full_name,
             })),
@@ -339,8 +334,7 @@ export class StudentsService {
               where: { deleted_at: null },
               select: {
                 cc: true,
-                first_name: true,
-                last_name: true,
+                full_name: true,
                 student_guardians: {
                   where: { is_primary_contact: true },
                   take: 1,
@@ -368,7 +362,7 @@ export class StudentsService {
 
     return {
       cc: s.cc,
-      student_full_name: `${s.first_name} ${s.last_name}`.trim(),
+      student_full_name: s.full_name,
       gr_number: s.gr_number,
       cc_number: s.cc,
       campus: s.campuses?.campus_name,
@@ -390,7 +384,7 @@ export class StudentsService {
         ?.filter((sib: any) => sib.cc !== s.cc)
         ?.map((sib: any) => ({
           cc: sib.cc,
-          full_name: `${sib.first_name} ${sib.last_name}`.trim(),
+          full_name: sib.full_name,
           cc_number: sib.cc,
           father_name: sib.student_guardians?.[0]?.guardians?.full_name,
         })),

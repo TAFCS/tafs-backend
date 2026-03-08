@@ -194,13 +194,8 @@ export class CreateAdmissionDto {
   // ── Student personal data ──
   @IsString()
   @IsNotEmpty()
-  @MaxLength(50)
-  first_name: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  last_name: string;
+  @MaxLength(100)
+  full_name: string;
 
   @IsDateString()
   dob: string;
