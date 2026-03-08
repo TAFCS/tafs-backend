@@ -91,44 +91,63 @@ export class StaffEditingService {
   }
 
   async getStudent(cc: number) {
-    const s = await this.prisma.students.findFirst({
-      where: { cc, deleted_at: null },
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
       include: {
-        campuses: true,
-        classes: true,
-        sections: true,
-        houses: true,
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        houses: { select: { house_name: true } },
         student_admissions: {
           orderBy: { application_date: 'desc' },
           take: 1,
         },
         student_guardians: {
           include: { guardians: true },
+          orderBy: { guardian_id: 'asc' },
         },
       },
     });
 
-    if (!s) throw new NotFoundException(`Student #${cc} not found`);
+    if (!s || s.deleted_at) throw new NotFoundException(`Student #${cc} not found`);
 
     return this.flattenStudentFull(s);
   }
 
   async updateStudent(cc: number, dto: UpdateStudentDto) {
-    const exists = await this.prisma.students.findFirst({
-      where: { cc, deleted_at: null },
-      select: { cc: true },
-    });
-    if (!exists) throw new NotFoundException(`Student #${cc} not found`);
+    const { dob, ...rest } = dto;
+    const data: Record<string, unknown> = {
+      ...rest,
+      ...(dob !== undefined ? { dob: new Date(dob) } : {}),
+    };
 
-    // Build the update data, converting dob string to Date if present
-    const data: Prisma.studentsUpdateInput = { ...dto } as any;
-    if (dto.dob) {
-      (data as any).dob = new Date(dto.dob);
+    try {
+      await this.prisma.students.update({ where: { cc }, data: data as any });
+    } catch (e: any) {
+      if (e?.code === 'P2025') throw new NotFoundException(`Student #${cc} not found`);
+      throw e;
     }
 
-    await this.prisma.students.update({ where: { cc }, data });
+    // Return the updated spreadsheet row — guardian tree excluded for auto-save speed
+    return this.fetchStudentRow(cc);
+  }
 
-    return this.getStudent(cc);
+  // Lightweight re-fetch for auto-save responses (no guardian tree loaded)
+  private async fetchStudentRow(cc: number) {
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      include: {
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        houses: { select: { house_name: true } },
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+        },
+      },
+    });
+    return s ? this.flattenStudent(s) : null;
   }
 
   // ─── Guardians ────────────────────────────────────────────────────────────
@@ -156,53 +175,36 @@ export class StaffEditingService {
 
     const { relationship, is_primary_contact = false, is_emergency_contact = false, ...guardianFields } = dto;
 
-    // Convert dob if present
+    // Convert dob string to Date if present
     const guardianData: any = { ...guardianFields };
-    if (guardianFields.dob) {
-      guardianData.dob = new Date(guardianFields.dob);
-    }
+    if (guardianFields.dob) guardianData.dob = new Date(guardianFields.dob);
 
-    // Upsert guardian: if CNIC provided, reuse existing guardian; otherwise create new
-    let guardian: { id: number };
-    if (guardianData.cnic) {
-      guardian = await this.prisma.guardians.upsert({
-        where: { cnic: guardianData.cnic },
-        update: {},
-        create: guardianData,
-        select: { id: true },
-      });
-    } else {
-      guardian = await this.prisma.guardians.create({
-        data: guardianData,
-        select: { id: true },
-      });
-    }
+    // Upsert by CNIC to prevent duplicates; create new if no CNIC provided.
+    // No `select` — get the full guardian row back to avoid an extra round-trip.
+    const guardian = guardianData.cnic
+      ? await this.prisma.guardians.upsert({
+          where: { cnic: guardianData.cnic as string },
+          update: {},
+          create: guardianData,
+        })
+      : await this.prisma.guardians.create({ data: guardianData });
 
-    // Upsert the join table row (handles duplicate link gracefully)
+    // Link to student — upsert handles re-adds without a duplicate key error
     const joinData = { relationship, is_primary_contact, is_emergency_contact };
     await this.prisma.student_guardians.upsert({
       where: {
-        student_id_guardian_id: {
-          student_id: studentCc,
-          guardian_id: guardian.id,
-        },
+        student_id_guardian_id: { student_id: studentCc, guardian_id: guardian.id },
       },
       update: joinData,
-      create: {
-        student_id: studentCc,
-        guardian_id: guardian.id,
-        ...joinData,
-      },
+      create: { student_id: studentCc, guardian_id: guardian.id, ...joinData },
     });
-
-    const full = await this.prisma.guardians.findUnique({ where: { id: guardian.id } });
 
     return {
       guardian_id: guardian.id,
       relationship,
       is_primary_contact,
       is_emergency_contact,
-      ...full,
+      ...guardian,
     };
   }
 
@@ -213,20 +215,18 @@ export class StaffEditingService {
   }
 
   async updateGuardian(id: number, dto: UpdateGuardianDto) {
-    const exists = await this.prisma.guardians.findUnique({
-      where: { id },
-      select: { id: true },
-    });
-    if (!exists) throw new NotFoundException(`Guardian #${id} not found`);
+    const { dob, ...rest } = dto;
+    const data: Record<string, unknown> = {
+      ...rest,
+      ...(dob !== undefined ? { dob: new Date(dob) } : {}),
+    };
 
-    const data: any = { ...dto };
-    if (dto.dob) data.dob = new Date(dto.dob);
-
-    // Separate out join-table fields — they don't belong on the guardians table
-    delete data.is_primary_contact;
-    delete data.is_emergency_contact;
-
-    return this.prisma.guardians.update({ where: { id }, data });
+    try {
+      return await this.prisma.guardians.update({ where: { id }, data: data as any });
+    } catch (e: any) {
+      if (e?.code === 'P2025') throw new NotFoundException(`Guardian #${id} not found`);
+      throw e;
+    }
   }
 
   async updateGuardianRelationship(
@@ -277,11 +277,11 @@ export class StaffEditingService {
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async assertStudentExists(cc: number) {
-    const s = await this.prisma.students.findFirst({
-      where: { cc, deleted_at: null },
-      select: { cc: true },
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { cc: true, deleted_at: true },
     });
-    if (!s) throw new NotFoundException(`Student #${cc} not found`);
+    if (!s || s.deleted_at) throw new NotFoundException(`Student #${cc} not found`);
   }
 
   private flattenStudent(s: any) {

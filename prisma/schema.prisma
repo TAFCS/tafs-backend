@@ -90,6 +90,8 @@ model student_admissions {
   academic_year    String?   @db.VarChar(10)
   application_date DateTime? @default(now()) @db.Timestamp(6)
   students         students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")
 }
 
 model student_guardians {

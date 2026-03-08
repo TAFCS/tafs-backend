@@ -1,7 +1,6 @@
 import {
   IsString,
   IsOptional,
-  IsBoolean,
   IsDateString,
   IsNumber,
   MaxLength,
@@ -115,12 +114,4 @@ export class UpdateGuardianDto {
   @IsString()
   @MaxLength(100)
   occupational_position?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  is_primary_contact?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  is_emergency_contact?: boolean;
 }
