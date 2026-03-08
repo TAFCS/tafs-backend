@@ -15,9 +15,16 @@ async function bootstrap() {
 
   // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;
-  const corsOrigins = rawOrigins
+  const envOrigins = rawOrigins
     ? rawOrigins.split(',').map((o) => o.trim().replace(/\/$/, ''))
-    : [/^http:\/\/localhost(:\d+)?$/];
+    : [];
+
+  const corsOrigins: (string | RegExp)[] = [
+    ...envOrigins,
+    /^http:\/\/localhost(:\d+)?$/,
+    /^https:\/\/tafs-webapp\.vercel\.app$/,
+    /^https:\/\/.*\.vercel\.app$/,
+  ];
 
   // eslint-disable-next-line no-console
   console.log('--- Startup: CORS Configuration ---');
