@@ -115,4 +115,11 @@ export class CampusesController {
         await this.campusesService.removeClassFromCampus(id, classId);
         return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
     }
+
+    @Get('options/classes')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Class'))
+    async findAllClasses() {
+        const classes = await this.campusesService.findAllClasses();
+        return createApiResponse(classes, HttpStatus.OK, 'Classes retrieved successfully');
+    }
 }

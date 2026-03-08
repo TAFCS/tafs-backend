@@ -57,26 +57,39 @@ export class CampusesService {
         }
 
         const updated = await this.prisma.$transaction(
-            dto.items.map((item) =>
-                this.prisma.campuses.update({
-                    where: { id: item.id },
-                    data: {
-                        ...(item.campus_code !== undefined && {
-                            campus_code: item.campus_code,
-                        }),
-                        ...(item.campus_name !== undefined && {
-                            campus_name: item.campus_name,
-                        }),
-                    },
-                }),
-            ),
+            dto.items.map((item) => {
+                if (item.id) {
+                    // Update existing
+                    return this.prisma.campuses.update({
+                        where: { id: item.id },
+                        data: {
+                            ...(item.campus_code !== undefined && {
+                                campus_code: item.campus_code,
+                            }),
+                            ...(item.campus_name !== undefined && {
+                                campus_name: item.campus_name,
+                            }),
+                        },
+                    });
+                } else {
+                    // Create new
+                    return this.prisma.campuses.create({
+                        data: {
+                            campus_code: item.campus_code || '',
+                            campus_name: item.campus_name || '',
+                        },
+                    });
+                }
+            }),
         );
 
-        if (!updated || updated.length !== dto.items.length) {
-            throw new NotFoundException('One or more campuses not found');
-        }
-
         return updated;
+    }
+
+    async findAllClasses() {
+        return this.prisma.classes.findMany({
+            orderBy: { description: 'asc' },
+        });
     }
 
     async delete(id: number) {

@@ -2,8 +2,9 @@ import { IsArray, IsInt, IsOptional, IsString, MaxLength, ValidateNested } from 
 import { Type } from 'class-transformer';
 
 class CampusUpdateItemDto {
+    @IsOptional()
     @IsInt()
-    id: number;
+    id?: number;
 
     @IsOptional()
     @IsString()
