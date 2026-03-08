@@ -2,11 +2,13 @@ import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetSheetStudentsDto {
+  // Cursor-based pagination: pass the last `cc` seen to get the next page.
+  // Omit (or send 0) for the first page.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
-  page?: number = 1;
+  @Min(0)
+  cursor?: number;
 
   @IsOptional()
   @Type(() => Number)

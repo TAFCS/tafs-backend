@@ -17,10 +17,7 @@ import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
-import {
-  createApiResponse,
-  createPaginatedApiResponse,
-} from '../../utils/serializer.util';
+import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 
 @Controller('staff-editing')
@@ -31,10 +28,9 @@ export class StaffEditingController {
 
   @Get('students')
   async getStudents(@Query() query: GetSheetStudentsDto) {
-    const { items, meta } = await this.staffEditingService.getStudents(query);
-    return createPaginatedApiResponse(
-      items,
-      meta,
+    const result = await this.staffEditingService.getStudents(query);
+    return createApiResponse(
+      result,
       HttpStatus.OK,
       STAFF_EDITING_MESSAGES.STUDENTS_LIST_SUCCESS,
     );

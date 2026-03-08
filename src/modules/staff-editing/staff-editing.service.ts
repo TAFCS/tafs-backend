@@ -6,8 +6,6 @@ import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
-import { calculateOffset } from '../../utils/pagination.util';
-import { createPaginationMeta } from '../../utils/serializer.util';
 
 @Injectable()
 export class StaffEditingService {
@@ -35,77 +33,70 @@ export class StaffEditingService {
   // ─── Students ─────────────────────────────────────────────────────────────
 
   async getStudents(dto: GetSheetStudentsDto) {
-    const { page = 1, limit = 50, search, campus_id, class_id, section_id } = dto;
-    const offset = calculateOffset(page, limit);
+    const { cursor, limit = 50, search, campus_id, class_id, section_id } = dto;
 
-    const where: Prisma.studentsWhereInput = { deleted_at: null };
+    const baseWhere: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
-      where.OR = [
+      baseWhere.OR = [
         { full_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
         ...(/^\d+$/.test(search) ? [{ cc: Number(search) }] : []),
       ];
     }
 
-    if (campus_id) where.campus_id = campus_id;
-    if (class_id) where.class_id = class_id;
-    if (section_id) where.section_id = section_id;
+    if (campus_id) baseWhere.campus_id = campus_id;
+    if (class_id) baseWhere.class_id = class_id;
+    if (section_id) baseWhere.section_id = section_id;
 
-    const [total, rows] = await Promise.all([
-      this.prisma.students.count({ where }),
-      this.prisma.students.findMany({
-        where,
-        skip: offset,
-        take: limit,
-        orderBy: { cc: 'asc' },
-        select: {
-          cc: true,
-          gr_number: true,
-          full_name: true,
-          dob: true,
-          gender: true,
-          nationality: true,
-          religion: true,
-          status: true,
-          whatsapp_number: true,
-          primary_phone: true,
-          email: true,
-          campus_id: true,
-          class_id: true,
-          section_id: true,
-          house_id: true,
-          admission_age_years: true,
-          country: true,
-          province: true,
-          city: true,
-          physical_impairment: true,
-          consent_publicity: true,
-          identification_marks: true,
-          medical_info: true,
-          interests: true,
-          photograph_url: true,
-          campuses: { select: { campus_name: true, campus_code: true } },
-          classes: { select: { description: true, class_code: true } },
-          sections: { select: { description: true } },
-          houses: { select: { house_name: true } },
-          student_admissions: {
-            orderBy: { application_date: 'desc' },
-            take: 1,
-            select: {
-              requested_grade: true,
-              academic_system: true,
-              academic_year: true,
-            },
-          },
-        },
-      }),
-    ]);
+    // Cursor pagination: WHERE cc > cursor ORDER BY cc ASC — uses the PK index directly,
+    // eliminates OFFSET scans and the COUNT(*) query entirely.
+    const where: Prisma.studentsWhereInput = cursor
+      ? { AND: [baseWhere, { cc: { gt: cursor } }] }
+      : baseWhere;
 
+    const rows = await this.prisma.students.findMany({
+      where,
+      take: limit,
+      orderBy: { cc: 'asc' },
+      select: {
+        cc: true,
+        gr_number: true,
+        full_name: true,
+        dob: true,
+        gender: true,
+        nationality: true,
+        religion: true,
+        status: true,
+        whatsapp_number: true,
+        primary_phone: true,
+        email: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
+        house_id: true,
+        admission_age_years: true,
+        country: true,
+        province: true,
+        city: true,
+        physical_impairment: true,
+        consent_publicity: true,
+        identification_marks: true,
+        medical_info: true,
+        interests: true,
+        photograph_url: true,
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        houses: { select: { house_name: true } },
+      },
+    });
+
+    const hasMore = rows.length === limit;
+    const nextCursor = hasMore ? (rows[rows.length - 1]?.cc ?? null) : null;
     const items = rows.map((s) => this.flattenStudent(s));
-    const meta = createPaginationMeta(page, limit, total);
 
-    return { items, meta };
+    return { items, hasMore, nextCursor };
   }
 
   async getStudent(cc: number) {
