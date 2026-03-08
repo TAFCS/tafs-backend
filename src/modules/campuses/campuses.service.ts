@@ -7,7 +7,7 @@ import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 export class CampusesService {
     constructor(private readonly prisma: PrismaService) { }
 
-    private readonly campusClassesInclude = {
+    private readonly campusIncludes = {
         campus_classes: {
             where: { is_active: true },
             orderBy: { class_id: 'asc' as const },
@@ -24,19 +24,41 @@ export class CampusesService {
                 },
             },
         },
+        campus_sections: {
+            where: { is_active: true },
+            select: {
+                id: true,
+                is_active: true,
+                class_id: true,
+                section_id: true,
+                sections: {
+                    select: {
+                        id: true,
+                        description: true,
+                    },
+                },
+                classes: {
+                    select: {
+                        id: true,
+                        description: true,
+                        class_code: true,
+                    },
+                },
+            },
+        },
     };
 
     async findAll() {
         return this.prisma.campuses.findMany({
             orderBy: { campus_name: 'asc' },
-            include: this.campusClassesInclude,
+            include: this.campusIncludes,
         });
     }
 
     async findOne(id: number) {
         const campus = await this.prisma.campuses.findUnique({
             where: { id },
-            include: this.campusClassesInclude,
+            include: this.campusIncludes,
         });
         if (!campus) throw new NotFoundException('Campus not found');
         return campus;
@@ -88,6 +110,12 @@ export class CampusesService {
 
     async findAllClasses() {
         return this.prisma.classes.findMany({
+            orderBy: { description: 'asc' },
+        });
+    }
+
+    async findAllSections() {
+        return this.prisma.sections.findMany({
             orderBy: { description: 'asc' },
         });
     }
@@ -170,6 +198,81 @@ export class CampusesService {
         } catch (e: any) {
             if (e?.code === 'P2025') {
                 throw new NotFoundException(`Class #${classId} is not offered at campus #${campusId}`);
+            }
+            throw e;
+        }
+    }
+
+    // ─── Campus Sections ──────────────────────────────────────────────────────
+
+    async addSectionToCampus(campusId: number, classId: number, sectionId: number) {
+        // Verify all entities exist
+        const [campus, cls, section] = await Promise.all([
+            this.prisma.campuses.findUnique({ where: { id: campusId }, select: { id: true } }),
+            this.prisma.classes.findUnique({ where: { id: classId }, select: { id: true } }),
+            this.prisma.sections.findUnique({ where: { id: sectionId }, select: { id: true } }),
+        ]);
+
+        if (!campus) throw new NotFoundException(`Campus #${campusId} not found`);
+        if (!cls) throw new NotFoundException(`Class #${classId} not found`);
+        if (!section) throw new NotFoundException(`Section #${sectionId} not found`);
+
+        // Check if class is offered at campus
+        const campusClass = await this.prisma.campus_classes.findUnique({
+            where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
+        });
+        if (!campusClass) {
+            throw new BadRequestException(`Class #${classId} must be added to campus #${campusId} before adding sections`);
+        }
+
+        return this.prisma.campus_sections.upsert({
+            where: { campus_id_class_id_section_id: { campus_id: campusId, class_id: classId, section_id: sectionId } },
+            update: { is_active: true },
+            create: { campus_id: campusId, class_id: classId, section_id: sectionId, is_active: true },
+            include: {
+                sections: { select: { id: true, description: true } },
+                classes: { select: { id: true, description: true, class_code: true } },
+            },
+        });
+    }
+
+    async updateCampusSection(campusId: number, classId: number, sectionId: number, isActive: boolean) {
+        try {
+            return await this.prisma.campus_sections.update({
+                where: { campus_id_class_id_section_id: { campus_id: campusId, class_id: classId, section_id: sectionId } },
+                data: { is_active: isActive },
+                include: {
+                    sections: { select: { id: true, description: true } },
+                    classes: { select: { id: true, description: true, class_code: true } },
+                },
+            });
+        } catch (e: any) {
+            if (e?.code === 'P2025') {
+                throw new NotFoundException(`Section triplet not found`);
+            }
+            throw e;
+        }
+    }
+
+    async removeSectionFromCampus(campusId: number, classId: number, sectionId: number) {
+        // Check for students assigned to this campus/class/section
+        const studentCount = await this.prisma.students.count({
+            where: { campus_id: campusId, class_id: classId, section_id: sectionId, deleted_at: null },
+        });
+
+        if (studentCount > 0) {
+            throw new BadRequestException(
+                `Cannot remove section: ${studentCount} student(s) are currently assigned to it at this campus/class`,
+            );
+        }
+
+        try {
+            await this.prisma.campus_sections.delete({
+                where: { campus_id_class_id_section_id: { campus_id: campusId, class_id: classId, section_id: sectionId } },
+            });
+        } catch (e: any) {
+            if (e?.code === 'P2025') {
+                throw new NotFoundException(`Section triplet not found`);
             }
             throw e;
         }

@@ -13,6 +13,7 @@ model campuses {
   campus_code        String               @unique @db.VarChar(10)
   campus_name        String               @db.VarChar(100)
   campus_classes     campus_classes[]
+  campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
   students           students[]
   users              users[]
@@ -254,6 +255,7 @@ model classes {
   class_code         String               @db.VarChar(10)
   academic_system    String               @db.VarChar(20)
   campus_classes     campus_classes[]
+  campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
   students           students[]
 }
@@ -269,8 +271,9 @@ model fee_types {
 
 model sections {
   id          Int        @id @default(autoincrement())
-  description String     @db.VarChar(255)
-  students    students[]
+  description     String            @db.VarChar(255)
+  campus_sections campus_sections[]
+  students        students[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -306,6 +309,20 @@ model campus_classes {
 
   @@unique([campus_id, class_id], map: "campus_classes_unique")
   @@index([campus_id], map: "idx_campus_classes_campus")
+}
+
+model campus_sections {
+  id         Int      @id @default(autoincrement())
+  campus_id  Int
+  class_id   Int
+  section_id Int
+  is_active  Boolean? @default(true)
+  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes    classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections   sections @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id, section_id], map: "campus_sections_unique")
+  @@index([campus_id], map: "idx_campus_sections_campus")
 }
 
 enum StaffRole {

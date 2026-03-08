@@ -122,4 +122,50 @@ export class CampusesController {
         const classes = await this.campusesService.findAllClasses();
         return createApiResponse(classes, HttpStatus.OK, 'Classes retrieved successfully');
     }
+
+    // ─── Campus Sections ──────────────────────────────────────────────────────
+
+    @Get('options/sections')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Section'))
+    async findAllSections() {
+        const sections = await this.campusesService.findAllSections();
+        return createApiResponse(sections, HttpStatus.OK, 'Sections retrieved successfully');
+    }
+
+    @Post(':id/classes/:classId/sections/:sectionId')
+    @HttpCode(HttpStatus.CREATED)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    async addSectionToCampus(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+        @Param('sectionId', ParseIntPipe) sectionId: number,
+    ) {
+        const record = await this.campusesService.addSectionToCampus(id, classId, sectionId);
+        return createApiResponse(record, HttpStatus.CREATED, CAMPUSES_MESSAGES.SECTION_ADDED);
+    }
+
+    @Patch(':id/classes/:classId/sections/:sectionId')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    async updateCampusSection(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+        @Param('sectionId', ParseIntPipe) sectionId: number,
+        @Body('is_active') isActive: boolean,
+    ) {
+        const record = await this.campusesService.updateCampusSection(id, classId, sectionId, isActive);
+        return createApiResponse(record, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
+    }
+
+    @Delete(':id/classes/:classId/sections/:sectionId')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'Campus'))
+    async removeSectionFromCampus(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('classId', ParseIntPipe) classId: number,
+        @Param('sectionId', ParseIntPipe) sectionId: number,
+    ) {
+        await this.campusesService.removeSectionFromCampus(id, classId, sectionId);
+        return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_REMOVED);
+    }
 }

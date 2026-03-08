@@ -10,4 +10,7 @@ export const CAMPUSES_MESSAGES = {
     CLASS_ADDED: 'Class added to campus successfully.',
     CLASS_UPDATED: 'Campus class updated successfully.',
     CLASS_REMOVED: 'Class removed from campus successfully.',
+    SECTION_ADDED: 'Section added to campus/class successfully.',
+    SECTION_UPDATED: 'Campus section updated successfully.',
+    SECTION_REMOVED: 'Section removed from campus/class successfully.',
 };
