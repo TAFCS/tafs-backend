@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Patch,
   Post,
   UseGuards,
@@ -55,6 +58,18 @@ export class FeeTypesController {
       updated,
       HttpStatus.OK,
       FEE_TYPES_MESSAGES.BULK_UPDATE_SUCCESS,
+    );
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee'))
+  async delete(@Param('id', ParseIntPipe) id: number) {
+    await this.feeTypesService.delete(id);
+    return createApiResponse(
+      null,
+      HttpStatus.OK,
+      FEE_TYPES_MESSAGES.DELETE_SUCCESS,
     );
   }
 }

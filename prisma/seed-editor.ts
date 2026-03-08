@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
@@ -10,13 +10,13 @@ async function main() {
         where: { username: 'testeditor' },
         update: {
             password_hash: passwordHash,
-            role: 'STAFF_EDITOR',
+            role: StaffRole.STAFF_EDITOR,
         },
         create: {
             username: 'testeditor',
             password_hash: passwordHash,
             full_name: 'Test Editor',
-            role: 'STAFF_EDITOR',
+            role: StaffRole.STAFF_EDITOR,
             email: 'testeditor@example.com',
             is_active: true,
             campus_id: 1, // Defaulting to Campus 1 (Aisha Bawany) mostly

@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Patch,
   Post,
   UseGuards,
@@ -55,6 +58,18 @@ export class SectionsController {
       updated,
       HttpStatus.OK,
       SECTIONS_MESSAGES.BULK_UPDATE_SUCCESS,
+    );
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Delete, 'Section'))
+  async delete(@Param('id', ParseIntPipe) id: number) {
+    await this.sectionsService.delete(id);
+    return createApiResponse(
+      null,
+      HttpStatus.OK,
+      SECTIONS_MESSAGES.DELETE_SUCCESS,
     );
   }
 }

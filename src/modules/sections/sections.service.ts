@@ -45,5 +45,35 @@ export class SectionsService {
 
     return updated;
   }
+
+  async delete(id: number) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Unlink Students
+        await tx.students.updateMany({
+          where: { section_id: id },
+          data: { section_id: null },
+        });
+
+        // 2. Delete assignments in junction tables
+        await tx.campus_sections.deleteMany({
+          where: { section_id: id },
+        });
+
+        // 3. Finally, delete the section record
+        return await tx.sections.delete({
+          where: { id },
+        });
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2025') {
+        throw new NotFoundException(`Section #${id} not found`);
+      }
+      if (e?.code === 'P2003') {
+        throw new Error('Cannot delete section as it is being referenced by other records.');
+      }
+      throw e;
+    }
+  }
 }
 

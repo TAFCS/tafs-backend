@@ -53,5 +53,30 @@ export class FeeTypesService {
 
     return updated;
   }
+
+  async delete(id: number) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Delete associated student fees (no cascade in schema for this direction usually)
+        await tx.student_fees.deleteMany({
+          where: { fee_type_id: id },
+        });
+
+        // 2. Finally, delete the fee type record
+        // Note: class_fee_schedule has onDelete: Cascade in schema, so it will be handled.
+        return await tx.fee_types.delete({
+          where: { id },
+        });
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2025') {
+        throw new NotFoundException(`Fee type #${id} not found`);
+      }
+      if (e?.code === 'P2003') {
+        throw new Error('Cannot delete fee type as it is being referenced by other records.');
+      }
+      throw e;
+    }
+  }
 }
 
