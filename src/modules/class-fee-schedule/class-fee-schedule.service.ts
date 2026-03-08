@@ -12,6 +12,7 @@ export class ClassFeeScheduleService {
       include: {
         classes: true,
         fee_types: true,
+        campuses: true,
       },
     });
   }
@@ -22,6 +23,7 @@ export class ClassFeeScheduleService {
       include: {
         classes: true,
         fee_types: true,
+        campuses: true,
       },
     });
   }
@@ -32,10 +34,12 @@ export class ClassFeeScheduleService {
         class_id: dto.class_id,
         fee_id: dto.fee_id,
         amount: dto.amount,
+        ...(dto.campus_id !== undefined && { campus_id: dto.campus_id }),
       },
       include: {
         classes: true,
         fee_types: true,
+        campuses: true,
       },
     });
   }
@@ -53,10 +57,12 @@ export class ClassFeeScheduleService {
             ...(item.class_id !== undefined && { class_id: item.class_id }),
             ...(item.fee_id !== undefined && { fee_id: item.fee_id }),
             ...(item.amount !== undefined && { amount: item.amount }),
+            ...(item.campus_id !== undefined && { campus_id: item.campus_id }),
           },
           include: {
             classes: true,
             fee_types: true,
+            campuses: true,
           },
         }),
       ),
