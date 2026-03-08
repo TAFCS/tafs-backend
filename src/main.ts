@@ -33,8 +33,16 @@ async function bootstrap() {
   // Consistent JSON error shape for all unhandled exceptions
   app.useGlobalFilters(new HttpExceptionFilter());
 
+  // Production: set CORS_ORIGIN as a comma-separated list of allowed origins.
+  // Development (no env var): allow any localhost origin so the Flutter web
+  // dev server (which uses a random port) is never blocked.
+  const rawOrigins = process.env.CORS_ORIGIN;
+  const corsOrigin: string | string[] | RegExp = rawOrigins
+    ? rawOrigins.split(',').map((o) => o.trim())
+    : /^http:\/\/localhost(:\d+)?$/;
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true,
