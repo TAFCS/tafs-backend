@@ -13,14 +13,52 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
 
+  // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;
   const corsOrigins = rawOrigins
     ? rawOrigins.split(',').map((o) => o.trim().replace(/\/$/, ''))
     : [/^http:\/\/localhost(:\d+)?$/];
 
-  // Enable CORS first thing to ensure OPTIONS requests are handled before other middleware
+  // eslint-disable-next-line no-console
+  console.log('--- Startup: CORS Configuration ---');
+  // eslint-disable-next-line no-console
+  console.log('Allowed Origins Raw:', rawOrigins);
+  // eslint-disable-next-line no-console
+  console.log('Allowed Origins Parsed:', corsOrigins);
+
+  // 2. Request Logger (Debug)
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS' || req.url.includes('auth')) {
+      // eslint-disable-next-line no-console
+      console.log(`[HTTP] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+    }
+    next();
+  });
+
+  // 3. Enable CORS (Must be before Helmet if using global prefix)
   app.enableCors({
-    origin: corsOrigins,
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const isAllowed = corsOrigins.some((pattern) => {
+        if (pattern instanceof RegExp) return pattern.test(origin);
+        // Case-insensitive and slash-agnostic comparison
+        const normalizedOrigin = origin.trim().replace(/\/$/, '').toLowerCase();
+        const normalizedPattern = String(pattern).trim().replace(/\/$/, '').toLowerCase();
+        return normalizedOrigin === normalizedPattern;
+      });
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(`[CORS REJECTED] Origin: ${origin}`);
+        callback(null, false);
+      }
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: [
@@ -34,19 +72,15 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  // Security headers
+  // 4. Security Headers
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: 'cross-origin' },
-      crossOriginOpenerPolicy: { policy: 'same-origin' },
-      contentSecurityPolicy: false, // Temporarily disable CSP to rule it out
+      contentSecurityPolicy: false,
     }),
   );
 
-  // Gzip / Brotli compression — reduces JSON payload size by 60-80%
   app.use(compression());
-
-  // Required to read cookies in controllers / strategies
   app.use(cookieParser());
 
   app.useGlobalPipes(
@@ -57,11 +91,7 @@ async function bootstrap() {
     }),
   );
 
-  // Consistent JSON error shape for all unhandled exceptions
   app.useGlobalFilters(new HttpExceptionFilter());
-
-  // eslint-disable-next-line no-console
-  console.log('CORS origins configured:', corsOrigins);
 
   app.use(
     morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
