@@ -7,15 +7,36 @@ import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 export class CampusesService {
     constructor(private readonly prisma: PrismaService) { }
 
+    private readonly campusClassesInclude = {
+        campus_classes: {
+            where: { is_active: true },
+            orderBy: { class_id: 'asc' as const },
+            select: {
+                id: true,
+                is_active: true,
+                classes: {
+                    select: {
+                        id: true,
+                        description: true,
+                        class_code: true,
+                        academic_system: true,
+                    },
+                },
+            },
+        },
+    };
+
     async findAll() {
         return this.prisma.campuses.findMany({
             orderBy: { campus_name: 'asc' },
+            include: this.campusClassesInclude,
         });
     }
 
     async findOne(id: number) {
         const campus = await this.prisma.campuses.findUnique({
             where: { id },
+            include: this.campusClassesInclude,
         });
         if (!campus) throw new NotFoundException('Campus not found');
         return campus;
