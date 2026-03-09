@@ -14,6 +14,17 @@ import { STUDENTS_MESSAGES } from '../../constants/api-response/students.constan
 export class StudentsController {
   constructor(private readonly studentsService: StudentsService) { }
 
+  @Get('search-simple')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async searchSimple(@Query('q') q: string) {
+    const results = await this.studentsService.searchSimple(q || '');
+    return createApiResponse(
+      results,
+      HttpStatus.OK,
+      'Search results retrieved successfully',
+    );
+  }
+
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   async findAll(@Query() query: GetStudentsDto) {

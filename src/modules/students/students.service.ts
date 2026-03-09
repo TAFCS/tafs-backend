@@ -413,5 +413,27 @@ export class StudentsService {
             houses: { select: { house_name: true } },
         },
     });
-}
+  }
+
+  async searchSimple(query: string) {
+    const where: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      OR: [
+        { full_name: { contains: query, mode: 'insensitive' } },
+        { gr_number: { contains: query, mode: 'insensitive' } },
+        ...(/^\d+$/.test(query) ? [{ cc: Number(query) }] : []),
+      ],
+    };
+
+    return this.prisma.students.findMany({
+      where,
+      take: 5,
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+      },
+      orderBy: { full_name: 'asc' },
+    });
+  }
 }
