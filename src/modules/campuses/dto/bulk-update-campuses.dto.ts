@@ -15,6 +15,10 @@ class CampusUpdateItemDto {
     @IsString()
     @MaxLength(100)
     campus_name?: string;
+
+    @IsOptional()
+    @IsString()
+    address?: string;
 }
 
 export class BulkUpdateCampusesDto {

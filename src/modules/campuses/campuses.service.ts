@@ -101,6 +101,7 @@ export class CampusesService {
             data: {
                 campus_code: dto.campus_code,
                 campus_name: dto.campus_name,
+                address: dto.address,
             },
         });
     }
@@ -123,6 +124,9 @@ export class CampusesService {
                             ...(item.campus_name !== undefined && {
                                 campus_name: item.campus_name,
                             }),
+                            ...(item.address !== undefined && {
+                                address: item.address,
+                            }),
                         },
                     });
                 } else {
@@ -131,6 +135,7 @@ export class CampusesService {
                         data: {
                             campus_code: item.campus_code || '',
                             campus_name: item.campus_name || '',
+                            address: item.address,
                         },
                     });
                 }

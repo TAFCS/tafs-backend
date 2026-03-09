@@ -12,6 +12,7 @@ model campuses {
   id                 Int                  @id @default(autoincrement())
   campus_code        String               @unique @db.VarChar(10)
   campus_name        String               @db.VarChar(100)
+  address            String?              @db.Text
   campus_classes     campus_classes[]
   campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]

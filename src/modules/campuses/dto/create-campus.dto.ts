@@ -1,4 +1,4 @@
-import { IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateCampusDto {
     @IsString()
@@ -8,4 +8,8 @@ export class CreateCampusDto {
     @IsString()
     @MaxLength(100)
     campus_name: string;
+
+    @IsOptional()
+    @IsString()
+    address?: string;
 }
