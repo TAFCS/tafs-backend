@@ -5,7 +5,7 @@ import { BulkUpdateClassFeeScheduleDto } from './dto/bulk-update-class-fee-sched
 
 @Injectable()
 export class ClassFeeScheduleService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async findAll() {
     return this.prisma.class_fee_schedule.findMany({
@@ -17,9 +17,12 @@ export class ClassFeeScheduleService {
     });
   }
 
-  async findByClassId(classId: number) {
+  async findByClassId(classId: number, campusId?: number) {
     return this.prisma.class_fee_schedule.findMany({
-      where: { class_id: classId },
+      where: {
+        class_id: classId,
+        ...(campusId !== undefined && { campus_id: campusId }),
+      },
       include: {
         classes: true,
         fee_types: true,
