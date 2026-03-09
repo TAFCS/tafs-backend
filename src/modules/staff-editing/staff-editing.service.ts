@@ -254,6 +254,17 @@ export class StaffEditingService {
     }
   }
 
+  async getGuardianByNic(nic: string) {
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { cnic: nic },
+    });
+    if (!guardian) return null;
+    return {
+      ...guardian,
+      dob: this.formatDateToFrontend(guardian.dob),
+    };
+  }
+
   async updateGuardianRelationship(
     studentCc: number,
     guardianId: number,

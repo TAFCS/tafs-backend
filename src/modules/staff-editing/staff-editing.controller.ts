@@ -149,4 +149,14 @@ export class StaffEditingController {
       STAFF_EDITING_MESSAGES.GUARDIAN_UPDATE_SUCCESS,
     );
   }
+
+  @Get('guardians/by-nic/:nic')
+  async getGuardianByNic(@Param('nic') nic: string) {
+    const guardian = await this.staffEditingService.getGuardianByNic(nic);
+    return createApiResponse(
+      guardian,
+      HttpStatus.OK,
+      STAFF_EDITING_MESSAGES.GUARDIAN_RETRIEVE_SUCCESS,
+    );
+  }
 }
