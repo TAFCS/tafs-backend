@@ -9,7 +9,7 @@ import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationshi
 
 @Injectable()
 export class StaffEditingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   // ─── Date Helpers ─────────────────────────────────────────────────────────
 
@@ -91,6 +91,16 @@ export class StaffEditingService {
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
         houses: { select: { house_name: true } },
+        student_guardians: {
+          select: {
+            relationship: true,
+            guardians: { select: { full_name: true, cnic: true } }
+          }
+        },
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+        },
       },
     });
 
@@ -147,11 +157,44 @@ export class StaffEditingService {
   private async fetchStudentRow(cc: number) {
     const s = await this.prisma.students.findUnique({
       where: { cc },
-      include: {
+      select: {
+        cc: true,
+        gr_number: true,
+        full_name: true,
+        dob: true,
+        gender: true,
+        nationality: true,
+        religion: true,
+        status: true,
+        whatsapp_number: true,
+        whatsapp_country_code: true,
+        primary_phone: true,
+        primary_phone_country_code: true,
+        email: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
+        house_id: true,
+        admission_age_years: true,
+        country: true,
+        province: true,
+        city: true,
+        physical_impairment: true,
+        consent_publicity: true,
+        identification_marks: true,
+        medical_info: true,
+        interests: true,
+        photograph_url: true,
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
         houses: { select: { house_name: true } },
+        student_guardians: {
+          select: {
+            relationship: true,
+            guardians: { select: { full_name: true, cnic: true } }
+          }
+        },
         student_admissions: {
           orderBy: { application_date: 'desc' },
           take: 1,
@@ -197,10 +240,10 @@ export class StaffEditingService {
     // No `select` — get the full guardian row back to avoid an extra round-trip.
     const guardian = guardianData.cnic
       ? await this.prisma.guardians.upsert({
-          where: { cnic: guardianData.cnic as string },
-          update: {},
-          create: guardianData,
-        })
+        where: { cnic: guardianData.cnic as string },
+        update: {},
+        create: guardianData,
+      })
       : await this.prisma.guardians.create({ data: guardianData });
 
     // Link to student — upsert handles re-adds without a duplicate key error
@@ -371,6 +414,14 @@ export class StaffEditingService {
 
   private flattenStudent(s: any) {
     const admission = s.student_admissions?.[0];
+    const guardians = s.student_guardians || [];
+    const father = guardians.find(
+      (g) => g.relationship.toUpperCase() === 'FATHER',
+    );
+    const mother = guardians.find(
+      (g) => g.relationship.toUpperCase() === 'MOTHER',
+    );
+
     return {
       cc: s.cc,
       gr_number: s.gr_number,
@@ -408,6 +459,10 @@ export class StaffEditingService {
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: admission?.academic_year ?? null,
+      father_name: father?.guardians?.full_name ?? null,
+      father_cnic: father?.guardians?.cnic ?? null,
+      mother_name: mother?.guardians?.full_name ?? null,
+      mother_cnic: mother?.guardians?.cnic ?? null,
     };
   }
 
