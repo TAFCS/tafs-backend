@@ -6,6 +6,7 @@ import {
     HttpStatus,
     Patch,
     Post,
+    Put,
     Param,
     Delete,
     UseGuards,
@@ -82,27 +83,16 @@ export class CampusesController {
 
     // ─── Campus Classes ───────────────────────────────────────────────────────
 
-    @Post(':id/classes/:classId')
-    @HttpCode(HttpStatus.CREATED)
-    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async addClassToCampus(
-        @Param('id', ParseIntPipe) id: number,
-        @Param('classId', ParseIntPipe) classId: number,
-    ) {
-        const record = await this.campusesService.addClassToCampus(id, classId);
-        return createApiResponse(record, HttpStatus.CREATED, CAMPUSES_MESSAGES.CLASS_ADDED);
-    }
-
-    @Patch(':id/classes/:classId')
+    @Put(':id/classes/:classId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async updateCampusClass(
+    async upsertCampusClass(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
-        @Body('is_active') isActive: boolean,
+        @Body('is_active') isActive?: boolean,
     ) {
-        const record = await this.campusesService.updateCampusClass(id, classId, isActive);
-        return createApiResponse(record, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_UPDATED);
+        const campus = await this.campusesService.upsertCampusClass(id, classId, isActive);
+        return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_UPDATED);
     }
 
     @Delete(':id/classes/:classId')
@@ -112,49 +102,23 @@ export class CampusesController {
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
     ) {
-        await this.campusesService.removeClassFromCampus(id, classId);
-        return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
-    }
-
-    @Get('options/classes')
-    @CheckPolicies((ability) => ability.can(Action.Read, 'Class'))
-    async findAllClasses() {
-        const classes = await this.campusesService.findAllClasses();
-        return createApiResponse(classes, HttpStatus.OK, 'Classes retrieved successfully');
+        const campus = await this.campusesService.removeClassFromCampus(id, classId);
+        return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
     }
 
     // ─── Campus Sections ──────────────────────────────────────────────────────
 
-    @Get('options/sections')
-    @CheckPolicies((ability) => ability.can(Action.Read, 'Section'))
-    async findAllSections() {
-        const sections = await this.campusesService.findAllSections();
-        return createApiResponse(sections, HttpStatus.OK, 'Sections retrieved successfully');
-    }
-
-    @Post(':id/classes/:classId/sections/:sectionId')
-    @HttpCode(HttpStatus.CREATED)
-    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async addSectionToCampus(
-        @Param('id', ParseIntPipe) id: number,
-        @Param('classId', ParseIntPipe) classId: number,
-        @Param('sectionId', ParseIntPipe) sectionId: number,
-    ) {
-        const record = await this.campusesService.addSectionToCampus(id, classId, sectionId);
-        return createApiResponse(record, HttpStatus.CREATED, CAMPUSES_MESSAGES.SECTION_ADDED);
-    }
-
-    @Patch(':id/classes/:classId/sections/:sectionId')
+    @Put(':id/classes/:classId/sections/:sectionId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async updateCampusSection(
+    async upsertCampusSection(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
-        @Body('is_active') isActive: boolean,
+        @Body('is_active') isActive?: boolean,
     ) {
-        const record = await this.campusesService.updateCampusSection(id, classId, sectionId, isActive);
-        return createApiResponse(record, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
+        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, isActive);
+        return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
     }
 
     @Delete(':id/classes/:classId/sections/:sectionId')
@@ -165,7 +129,7 @@ export class CampusesController {
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
     ) {
-        await this.campusesService.removeSectionFromCampus(id, classId, sectionId);
-        return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_REMOVED);
+        const campus = await this.campusesService.removeSectionFromCampus(id, classId, sectionId);
+        return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_REMOVED);
     }
 }
