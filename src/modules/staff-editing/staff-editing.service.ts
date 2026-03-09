@@ -160,42 +160,82 @@ export class StaffEditingService {
           });
         }
 
-        // 2. Update Father Info if provided
+        // Fetch all current guardian links to match in JS
+        const allLinks = await tx.student_guardians.findMany({
+          where: { student_id: cc },
+        });
+
+        const isFather = (rel: string) => {
+          const r = (rel || '').trim().toUpperCase();
+          return r === 'FATHER' || (r.includes('FATHER') && !r.includes('GRAND'));
+        };
+        const isMother = (rel: string) => {
+          const r = (rel || '').trim().toUpperCase();
+          return r === 'MOTHER' || (r.includes('MOTHER') && !r.includes('GRAND'));
+        };
+
+        // 2. Update/Create Father Info
         if (father_name !== undefined || father_cnic !== undefined) {
-          const fatherLink = await tx.student_guardians.findFirst({
-            where: {
-              student_id: cc,
-              relationship: { equals: 'FATHER', mode: 'insensitive' },
-            },
-          });
+          const fatherLink = allLinks.find(l => isFather(l.relationship));
 
           if (fatherLink) {
             const guardianUpdate: any = {};
             if (father_name !== undefined) guardianUpdate.full_name = father_name;
-            if (father_cnic !== undefined) guardianUpdate.cnic = father_cnic;
+            if (father_cnic !== undefined) guardianUpdate.cnic = (!father_cnic || father_cnic === "NULL") ? null : father_cnic;
             await tx.guardians.update({
               where: { id: fatherLink.guardian_id },
               data: guardianUpdate,
             });
+          } else if (father_name !== undefined || father_cnic !== undefined) {
+            const guardianData: any = {
+              full_name: father_name || 'NOT PROVIDED',
+              cnic: (!father_cnic || father_cnic === "NULL") ? null : father_cnic,
+            };
+            const guardian = guardianData.cnic
+              ? await tx.guardians.upsert({
+                where: { cnic: guardianData.cnic },
+                update: { full_name: guardianData.full_name },
+                create: guardianData,
+              })
+              : await tx.guardians.create({ data: guardianData });
+
+            await tx.student_guardians.upsert({
+              where: { student_id_guardian_id: { student_id: cc, guardian_id: guardian.id } },
+              update: { relationship: 'FATHER' },
+              create: { student_id: cc, guardian_id: guardian.id, relationship: 'FATHER' },
+            });
           }
         }
 
-        // 3. Update Mother Info if provided
+        // 3. Update/Create Mother Info
         if (mother_name !== undefined || mother_cnic !== undefined) {
-          const motherLink = await tx.student_guardians.findFirst({
-            where: {
-              student_id: cc,
-              relationship: { equals: 'MOTHER', mode: 'insensitive' },
-            },
-          });
+          const motherLink = allLinks.find(l => isMother(l.relationship));
 
           if (motherLink) {
             const guardianUpdate: any = {};
             if (mother_name !== undefined) guardianUpdate.full_name = mother_name;
-            if (mother_cnic !== undefined) guardianUpdate.cnic = mother_cnic;
+            if (mother_cnic !== undefined) guardianUpdate.cnic = (!mother_cnic || mother_cnic === "NULL") ? null : mother_cnic;
             await tx.guardians.update({
               where: { id: motherLink.guardian_id },
               data: guardianUpdate,
+            });
+          } else if (mother_name !== undefined || mother_cnic !== undefined) {
+            const guardianData: any = {
+              full_name: mother_name || 'NOT PROVIDED',
+              cnic: (!mother_cnic || mother_cnic === "NULL") ? null : mother_cnic,
+            };
+            const guardian = guardianData.cnic
+              ? await tx.guardians.upsert({
+                where: { cnic: guardianData.cnic },
+                update: { full_name: guardianData.full_name },
+                create: guardianData,
+              })
+              : await tx.guardians.create({ data: guardianData });
+
+            await tx.student_guardians.upsert({
+              where: { student_id_guardian_id: { student_id: cc, guardian_id: guardian.id } },
+              update: { relationship: 'MOTHER' },
+              create: { student_id: cc, guardian_id: guardian.id, relationship: 'MOTHER' },
             });
           }
         }
@@ -472,12 +512,19 @@ export class StaffEditingService {
   private flattenStudent(s: any) {
     const admission = s.student_admissions?.[0];
     const guardians = s.student_guardians || [];
-    const father = guardians.find(
-      (g) => g.relationship.toUpperCase() === 'FATHER',
-    );
-    const mother = guardians.find(
-      (g) => g.relationship.toUpperCase() === 'MOTHER',
-    );
+
+    const isFather = (rel: string) => {
+      const r = (rel || '').trim().toUpperCase();
+      return r === 'FATHER' || (r.includes('FATHER') && !r.includes('GRAND'));
+    };
+
+    const isMother = (rel: string) => {
+      const r = (rel || '').trim().toUpperCase();
+      return r === 'MOTHER' || (r.includes('MOTHER') && !r.includes('GRAND'));
+    };
+
+    const fatherLink = guardians.find((g: any) => isFather(g.relationship));
+    const motherLink = guardians.find((g: any) => isMother(g.relationship));
 
     return {
       cc: s.cc,
@@ -516,10 +563,10 @@ export class StaffEditingService {
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: admission?.academic_year ?? null,
-      father_name: father?.guardians?.full_name ?? null,
-      father_cnic: father?.guardians?.cnic ?? null,
-      mother_name: mother?.guardians?.full_name ?? null,
-      mother_cnic: mother?.guardians?.cnic ?? null,
+      father_name: fatherLink?.guardians?.full_name ?? null,
+      father_cnic: fatherLink?.guardians?.cnic ?? null,
+      mother_name: motherLink?.guardians?.full_name ?? null,
+      mother_cnic: motherLink?.guardians?.cnic ?? null,
     };
   }
 
