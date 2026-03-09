@@ -68,7 +68,7 @@ export class GuardianDto {
   @IsString()
   @IsOptional()
   @MaxLength(10)
-  country_code?: string;
+  primary_phone_country_code?: string;
 
   @IsString()
   @IsOptional()
@@ -77,8 +77,18 @@ export class GuardianDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(10)
+  whatsapp_country_code?: string;
+
+  @IsString()
+  @IsOptional()
   @MaxLength(20)
   whatsapp_number?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(10)
+  work_phone_country_code?: string;
 
   @IsString()
   @IsOptional()
@@ -159,7 +169,7 @@ export class EmergencyContactDto {
   @IsString()
   @IsOptional()
   @MaxLength(10)
-  country_code?: string;
+  primary_phone_country_code?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -257,12 +267,17 @@ export class CreateAdmissionDto {
   @IsString()
   @IsOptional()
   @MaxLength(10)
-  country_code?: string;
+  primary_phone_country_code?: string;
 
   @IsString()
   @IsOptional()
   @MaxLength(20)
   primary_phone?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(10)
+  whatsapp_country_code?: string;
 
   @IsString()
   @IsOptional()

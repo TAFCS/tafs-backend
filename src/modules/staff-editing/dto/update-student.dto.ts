@@ -83,13 +83,18 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(10)
+  whatsapp_country_code?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   primary_phone?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(10)
-  country_code?: string;
+  primary_phone_country_code?: string;
 
   @IsOptional()
   @IsString()

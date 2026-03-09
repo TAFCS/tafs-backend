@@ -93,8 +93,9 @@ export class IdentityService {
           city: dto.city,
           identification_marks: dto.identification_marks,
           medical_info: dto.medical_info,
-          country_code: dto.country_code ?? '+92',
+          primary_phone_country_code: dto.primary_phone_country_code ?? '+92',
           primary_phone: dto.primary_phone,
+          whatsapp_country_code: dto.whatsapp_country_code ?? '+92',
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,
           admission_age_years: this.calcAge(dob),
@@ -166,7 +167,7 @@ export class IdentityService {
           const ecGuardian = await tx.guardians.create({
             data: {
               full_name: ec.full_name,
-              country_code: ec.country_code ?? '+92',
+              primary_phone_country_code: ec.primary_phone_country_code ?? '+92',
               primary_phone: ec.primary_phone,
             } as any,
           });
@@ -474,9 +475,11 @@ export class IdentityService {
   private async upsertGuardian(tx: TxClient, data: GuardianDto) {
     const payload = {
       full_name: data.full_name,
-      country_code: data.country_code ?? '+92',
+      primary_phone_country_code: data.primary_phone_country_code ?? '+92',
       primary_phone: data.primary_phone ?? null,
+      whatsapp_country_code: data.whatsapp_country_code ?? '+92',
       whatsapp_number: data.whatsapp_number ?? null,
+      work_phone_country_code: data.work_phone_country_code ?? '+92',
       work_phone: data.work_phone ?? null,
       email_address: data.email_address ?? null,
       dob: data.dob ? new Date(data.dob) : null,
