@@ -136,16 +136,73 @@ export class StaffEditingService {
   }
 
   async updateStudent(cc: number, dto: UpdateStudentDto) {
-    const { dob, ...rest } = dto;
-    const data: Record<string, unknown> = {
+    const {
+      dob,
+      father_name,
+      father_cnic,
+      mother_name,
+      mother_cnic,
+      ...rest
+    } = dto;
+
+    const studentData: Record<string, unknown> = {
       ...rest,
       ...(dob !== undefined ? { dob: new Date(dob) } : {}),
     };
 
     try {
-      await this.prisma.students.update({ where: { cc }, data: data as any });
+      await this.prisma.$transaction(async (tx) => {
+        // 1. Update student fields
+        if (Object.keys(studentData).length > 0) {
+          await tx.students.update({
+            where: { cc },
+            data: studentData as any,
+          });
+        }
+
+        // 2. Update Father Info if provided
+        if (father_name !== undefined || father_cnic !== undefined) {
+          const fatherLink = await tx.student_guardians.findFirst({
+            where: {
+              student_id: cc,
+              relationship: { equals: 'FATHER', mode: 'insensitive' },
+            },
+          });
+
+          if (fatherLink) {
+            const guardianUpdate: any = {};
+            if (father_name !== undefined) guardianUpdate.full_name = father_name;
+            if (father_cnic !== undefined) guardianUpdate.cnic = father_cnic;
+            await tx.guardians.update({
+              where: { id: fatherLink.guardian_id },
+              data: guardianUpdate,
+            });
+          }
+        }
+
+        // 3. Update Mother Info if provided
+        if (mother_name !== undefined || mother_cnic !== undefined) {
+          const motherLink = await tx.student_guardians.findFirst({
+            where: {
+              student_id: cc,
+              relationship: { equals: 'MOTHER', mode: 'insensitive' },
+            },
+          });
+
+          if (motherLink) {
+            const guardianUpdate: any = {};
+            if (mother_name !== undefined) guardianUpdate.full_name = mother_name;
+            if (mother_cnic !== undefined) guardianUpdate.cnic = mother_cnic;
+            await tx.guardians.update({
+              where: { id: motherLink.guardian_id },
+              data: guardianUpdate,
+            });
+          }
+        }
+      });
     } catch (e: any) {
-      if (e?.code === 'P2025') throw new NotFoundException(`Student #${cc} not found`);
+      if (e?.code === 'P2025')
+        throw new NotFoundException(`Student #${cc} not found`);
       throw e;
     }
 

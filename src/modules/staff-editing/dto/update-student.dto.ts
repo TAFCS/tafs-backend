@@ -130,4 +130,25 @@ export class UpdateStudentDto {
   @IsOptional()
   @IsEnum(StudentStatus)
   status?: StudentStatus;
+
+  // Virtual fields for Parent Info (handled in service)
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  father_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  father_cnic?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mother_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  mother_cnic?: string;
 }
