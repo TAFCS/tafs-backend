@@ -1,4 +1,4 @@
-import { IsISO8601, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsISO8601, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateVoucherDto {
     @IsISO8601()
@@ -9,10 +9,18 @@ export class UpdateVoucherDto {
     @IsOptional()
     due_date?: string;
 
+    @IsISO8601()
+    @IsOptional()
+    validity_date?: string;
+
     @IsString()
     @MaxLength(20)
     @IsOptional()
     status?: string;
+
+    @IsBoolean()
+    @IsOptional()
+    late_fee_charge?: boolean;
 
     @IsInt()
     @IsOptional()

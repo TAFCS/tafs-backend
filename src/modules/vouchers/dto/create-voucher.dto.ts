@@ -1,4 +1,4 @@
-import { IsInt, IsISO8601, IsNotEmpty } from 'class-validator';
+import { IsBoolean, IsInt, IsISO8601, IsNotEmpty, IsOptional } from 'class-validator';
 
 export class CreateVoucherDto {
     @IsInt()
@@ -24,4 +24,12 @@ export class CreateVoucherDto {
     @IsISO8601()
     @IsNotEmpty()
     due_date: string;
+
+    @IsISO8601()
+    @IsOptional()
+    validity_date?: string;
+
+    @IsBoolean()
+    @IsNotEmpty()
+    late_fee_charge: boolean;
 }

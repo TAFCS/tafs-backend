@@ -354,6 +354,8 @@ model vouchers {
   issue_date      DateTime      @db.Date
   due_date        DateTime      @db.Date
   status          String?       @default("UNPAID") @db.VarChar(20)
+  validity_date   DateTime?     @db.Date
+  late_fee_charge Boolean
   bank_accounts   bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses        campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes         classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

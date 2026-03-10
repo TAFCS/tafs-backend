@@ -31,6 +31,8 @@ export class VouchersService {
                 bank_account_id: dto.bank_account_id,
                 issue_date: new Date(dto.issue_date),
                 due_date: new Date(dto.due_date),
+                validity_date: dto.validity_date ? new Date(dto.validity_date) : null,
+                late_fee_charge: dto.late_fee_charge,
             },
             include: VOUCHER_INCLUDE,
         });
@@ -69,7 +71,9 @@ export class VouchersService {
             data: {
                 ...(dto.issue_date ? { issue_date: new Date(dto.issue_date) } : {}),
                 ...(dto.due_date ? { due_date: new Date(dto.due_date) } : {}),
+                ...(dto.validity_date !== undefined ? { validity_date: dto.validity_date ? new Date(dto.validity_date) : null } : {}),
                 ...(dto.status !== undefined ? { status: dto.status } : {}),
+                ...(dto.late_fee_charge !== undefined ? { late_fee_charge: dto.late_fee_charge } : {}),
                 ...(dto.bank_account_id ? { bank_account_id: dto.bank_account_id } : {}),
             },
             include: VOUCHER_INCLUDE,
