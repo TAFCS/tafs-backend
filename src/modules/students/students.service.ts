@@ -365,6 +365,7 @@ export class StudentsService {
       cc_number: s.cc,
       campus: s.campuses?.campus_name,
       campus_code: s.campuses?.campus_code,
+      campus_id: s.campus_id,
       class_id: s.class_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
