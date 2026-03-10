@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsInt, Min, Max, IsBoolean } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class GetSheetStudentsDto {
   // Cursor-based pagination: pass the last `cc` seen to get the next page.
@@ -35,4 +35,9 @@ export class GetSheetStudentsDto {
   @Type(() => Number)
   @IsInt()
   section_id?: number;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  filterEmptyFields?: boolean;
 }

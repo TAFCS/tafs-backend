@@ -33,7 +33,7 @@ export class StaffEditingService {
   // ─── Students ─────────────────────────────────────────────────────────────
 
   async getStudents(dto: GetSheetStudentsDto) {
-    const { cursor, limit = 50, search, campus_id, class_id, section_id } = dto;
+    const { cursor, limit = 50, search, campus_id, class_id, section_id, filterEmptyFields } = dto;
 
     const baseWhere: Prisma.studentsWhereInput = { deleted_at: null };
 
@@ -49,8 +49,68 @@ export class StaffEditingService {
     if (class_id) baseWhere.class_id = class_id;
     if (section_id) baseWhere.section_id = section_id;
 
-    // Cursor pagination: WHERE cc > cursor ORDER BY cc ASC — uses the PK index directly,
-    // eliminates OFFSET scans and the COUNT(*) query entirely.
+    if (filterEmptyFields) {
+      const emptyFieldsQuery: Prisma.studentsWhereInput[] = [
+        { full_name: "" },
+        { gr_number: null },
+        { gr_number: "" },
+        // Father Name empty: No father linked OR linked father has empty name
+        {
+          NOT: {
+            student_guardians: {
+              some: {
+                relationship: { contains: 'FATHER', mode: 'insensitive' },
+                guardians: {
+                  full_name: { not: "" },
+                },
+              },
+            },
+          },
+        },
+        // Father CNIC empty: No father linked OR linked father has empty CNIC
+        {
+          NOT: {
+            student_guardians: {
+              some: {
+                relationship: { contains: 'FATHER', mode: 'insensitive' },
+                guardians: {
+                  AND: [
+                    { cnic: { not: null } },
+                    { cnic: { not: "" } },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        // Mother CNIC empty: No mother linked OR linked mother has empty CNIC
+        {
+          NOT: {
+            student_guardians: {
+              some: {
+                relationship: { contains: 'MOTHER', mode: 'insensitive' },
+                guardians: {
+                  AND: [
+                    { cnic: { not: null } },
+                    { cnic: { not: "" } },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ];
+
+      // If search is also present, we need to AND the search results with the empty fields OR list
+      if (baseWhere.OR) {
+        baseWhere.AND = [{ OR: baseWhere.OR }, { OR: emptyFieldsQuery }];
+        delete baseWhere.OR;
+      } else {
+        baseWhere.OR = emptyFieldsQuery;
+      }
+    }
+
+    // Cursor pagination: WHERE cc > cursor ORDER BY cc ASC
     const where: Prisma.studentsWhereInput = cursor
       ? { AND: [baseWhere, { cc: { gt: cursor } }] }
       : baseWhere;
