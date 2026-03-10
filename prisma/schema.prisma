@@ -352,3 +352,13 @@ enum fee_frequency {
   MONTHLY
   ONE_TIME
 }
+
+model bank_accounts {
+  id             Int     @id @default(autoincrement())
+  account_title  String  @db.VarChar(100)
+  account_number String  @unique @db.VarChar(50)
+  bank_name      String  @db.VarChar(100)
+  branch_code    String? @db.VarChar(20)
+  bank_address   String?
+  iban           String? @unique @db.VarChar(50)
+}
