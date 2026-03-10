@@ -25,4 +25,8 @@ export class UpdateVoucherDto {
     @IsInt()
     @IsOptional()
     bank_account_id?: number;
+
+    @IsInt()
+    @IsOptional()
+    section_id?: number;
 }

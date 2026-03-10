@@ -8,9 +8,12 @@ const VOUCHER_INCLUDE = {
         select: { cc: true, full_name: true, gr_number: true },
     },
     campuses: {
-        select: { id: true, name: true },
+        select: { id: true, campus_name: true },
     },
     classes: {
+        select: { id: true, description: true },
+    },
+    sections: {
         select: { id: true, description: true },
     },
     bank_accounts: {
@@ -28,6 +31,7 @@ export class VouchersService {
                 student_id: dto.student_id,
                 campus_id: dto.campus_id,
                 class_id: dto.class_id,
+                section_id: dto.section_id,
                 bank_account_id: dto.bank_account_id,
                 issue_date: new Date(dto.issue_date),
                 due_date: new Date(dto.due_date),
@@ -75,6 +79,7 @@ export class VouchersService {
                 ...(dto.status !== undefined ? { status: dto.status } : {}),
                 ...(dto.late_fee_charge !== undefined ? { late_fee_charge: dto.late_fee_charge } : {}),
                 ...(dto.bank_account_id ? { bank_account_id: dto.bank_account_id } : {}),
+                ...(dto.section_id !== undefined ? { section_id: dto.section_id } : {}),
             },
             include: VOUCHER_INCLUDE,
         });

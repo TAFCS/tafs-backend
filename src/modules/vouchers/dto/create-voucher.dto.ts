@@ -14,6 +14,10 @@ export class CreateVoucherDto {
     class_id: number;
 
     @IsInt()
+    @IsOptional()
+    section_id?: number;
+
+    @IsInt()
     @IsNotEmpty()
     bank_account_id: number;
 

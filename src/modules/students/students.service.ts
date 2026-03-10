@@ -367,6 +367,7 @@ export class StudentsService {
       campus_code: s.campuses?.campus_code,
       campus_id: s.campus_id,
       class_id: s.class_id,
+      section_id: s.section_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
       financial_status_badge: 'CLEARED',

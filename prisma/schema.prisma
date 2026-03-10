@@ -283,6 +283,7 @@ model sections {
   description     String            @db.VarChar(255)
   campus_sections campus_sections[]
   students        students[]
+  vouchers        vouchers[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -350,6 +351,7 @@ model vouchers {
   student_id      Int
   campus_id       Int
   class_id        Int
+  section_id      Int?
   bank_account_id Int
   issue_date      DateTime      @db.Date
   due_date        DateTime      @db.Date
@@ -359,6 +361,7 @@ model vouchers {
   bank_accounts   bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses        campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes         classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections        sections?     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students        students      @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
