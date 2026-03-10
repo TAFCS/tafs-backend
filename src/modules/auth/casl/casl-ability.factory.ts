@@ -57,6 +57,7 @@ export class CaslAbilityFactory {
         can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
         can(Action.Manage, 'ClassFeeSchedule');
         can(Action.Manage, 'StudentFee');
+        can(Action.Manage, 'Voucher', { campusId: user.campusId } as any);
         can(Action.Read, 'Class');
         can(Action.Read, 'Section');
         break;
