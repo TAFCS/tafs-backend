@@ -18,6 +18,7 @@ model campuses {
   class_fee_schedule class_fee_schedule[]
   students           students[]
   users              users[]
+  vouchers           vouchers[]
 }
 
 model families {
@@ -194,6 +195,7 @@ model students {
   families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                   vouchers[]
 
   @@index([class_id], map: "idx_students_class_id")
   @@index([section_id], map: "idx_students_section_id")
@@ -264,6 +266,7 @@ model classes {
   campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
   students           students[]
+  vouchers           vouchers[]
 }
 
 model fee_types {
@@ -331,6 +334,32 @@ model campus_sections {
   @@index([campus_id], map: "idx_campus_sections_campus")
 }
 
+model bank_accounts {
+  id             Int        @id @default(autoincrement())
+  account_title  String     @db.VarChar(100)
+  account_number String     @unique @db.VarChar(50)
+  bank_name      String     @db.VarChar(100)
+  branch_code    String?    @db.VarChar(20)
+  bank_address   String?
+  iban           String?    @unique @db.VarChar(50)
+  vouchers       vouchers[]
+}
+
+model vouchers {
+  id              Int           @id @default(autoincrement())
+  student_id      Int
+  campus_id       Int
+  class_id        Int
+  bank_account_id Int
+  issue_date      DateTime      @db.Date
+  due_date        DateTime      @db.Date
+  status          String?       @default("UNPAID") @db.VarChar(20)
+  bank_accounts   bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses        campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes         classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students        students      @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
 enum StaffRole {
   SUPER_ADMIN
   CAMPUS_ADMIN
@@ -351,14 +380,4 @@ enum student_status {
 enum fee_frequency {
   MONTHLY
   ONE_TIME
-}
-
-model bank_accounts {
-  id             Int     @id @default(autoincrement())
-  account_title  String  @db.VarChar(100)
-  account_number String  @unique @db.VarChar(50)
-  bank_name      String  @db.VarChar(100)
-  branch_code    String? @db.VarChar(20)
-  bank_address   String?
-  iban           String? @unique @db.VarChar(50)
 }
