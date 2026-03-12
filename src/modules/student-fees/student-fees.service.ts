@@ -18,18 +18,35 @@ export class StudentFeesService {
     async findByStudentCC(ccNumber: string) {
         const student = await this.prisma.students.findUnique({
             where: { cc: Number(ccNumber) },
+            include: {
+                families: {
+                    include: {
+                        students: {
+                            where: { deleted_at: null },
+                            include: {
+                                classes: true,
+                            },
+                        },
+                    },
+                },
+            },
         });
 
         if (!student) {
             throw new NotFoundException(`Student with CC number ${ccNumber} not found`);
         }
 
-        return this.prisma.student_fees.findMany({
+        const fees = await this.prisma.student_fees.findMany({
             where: { student_id: student.cc },
             include: {
                 fee_types: true,
             },
         });
+
+        return {
+            fees,
+            family: student.families,
+        };
     }
 
     async bulkSave(dto: BulkSaveStudentFeesDto) {
