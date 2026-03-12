@@ -17,7 +17,7 @@ const VOUCHER_INCLUDE = {
         select: { id: true, description: true },
     },
     bank_accounts: {
-        select: { id: true, bank_name: true, account_title: true, account_number: true },
+        select: { id: true, bank_name: true, account_title: true, account_number: true, branch_code: true, bank_address: true, iban: true },
     },
 };
 
