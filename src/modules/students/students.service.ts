@@ -418,18 +418,39 @@ export class StudentsService {
   }
 
   async searchSimple(query: string) {
+    const isNumeric = /^\d+$/.test(query);
+    const results: any[] = [];
+
+    // 1. Check for exact CC match if query is numeric
+    if (isNumeric) {
+      const exactMatch = await this.prisma.students.findFirst({
+        where: { cc: Number(query), deleted_at: null },
+        select: {
+          cc: true,
+          full_name: true,
+          gr_number: true,
+        },
+      });
+      if (exactMatch) results.push(exactMatch);
+    }
+
+    // 2. Fetch partial matches for names and GR numbers
     const where: Prisma.studentsWhereInput = {
       deleted_at: null,
       OR: [
         { full_name: { contains: query, mode: 'insensitive' } },
         { gr_number: { contains: query, mode: 'insensitive' } },
-        ...(/^\d+$/.test(query) ? [{ cc: Number(query) }] : []),
       ],
     };
 
-    return this.prisma.students.findMany({
+    // Exclude exact match if already added
+    if (results.length > 0) {
+      where.NOT = { cc: results[0].cc };
+    }
+
+    const others = await this.prisma.students.findMany({
       where,
-      take: 5,
+      take: 5 - results.length,
       select: {
         cc: true,
         full_name: true,
@@ -437,5 +458,7 @@ export class StudentsService {
       },
       orderBy: { full_name: 'asc' },
     });
+
+    return [...results, ...others];
   }
 }
