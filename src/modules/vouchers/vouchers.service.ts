@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -23,6 +23,8 @@ const VOUCHER_INCLUDE = {
 
 @Injectable()
 export class VouchersService {
+    private readonly logger = new Logger(VouchersService.name);
+
     constructor(private readonly prisma: PrismaService) {}
 
     async create(dto: CreateVoucherDto) {
@@ -42,16 +44,41 @@ export class VouchersService {
         });
     }
 
-    async findAll(studentId?: number, campusId?: number, status?: string) {
-        return this.prisma.vouchers.findMany({
-            where: {
-                ...(studentId ? { student_id: studentId } : {}),
-                ...(campusId ? { campus_id: campusId } : {}),
-                ...(status ? { status } : {}),
-            },
-            include: VOUCHER_INCLUDE,
-            orderBy: { issue_date: 'desc' },
-        });
+    async findAll(
+        studentId?: number,
+        campusId?: number,
+        status?: string,
+        classId?: number,
+        sectionId?: number,
+        cc?: number,
+        gr?: string,
+    ) {
+        try {
+            return await this.prisma.vouchers.findMany({
+                where: {
+                    // student_id or cc both resolve to student_id (cc is the student PK)
+                    ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
+                    ...(campusId ? { campus_id: campusId } : {}),
+                    ...(classId ? { class_id: classId } : {}),
+                    ...(sectionId ? { section_id: sectionId } : {}),
+                    ...(status ? { status } : {}),
+                    ...(gr
+                        ? {
+                              students: {
+                                  gr_number: { contains: gr, mode: 'insensitive' },
+                              },
+                          }
+                        : {}),
+                },
+                include: VOUCHER_INCLUDE,
+                orderBy: { issue_date: 'desc' },
+            });
+        } catch (err: any) {
+            this.logger.error('findAll failed', err?.message, err?.stack);
+            throw new InternalServerErrorException(
+                `Voucher query failed: ${err?.message ?? 'Unknown error'}`,
+            );
+        }
     }
 
     async findOne(id: number) {

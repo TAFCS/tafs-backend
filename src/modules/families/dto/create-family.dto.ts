@@ -29,4 +29,12 @@ export class CreateFamilyDto {
   @IsOptional()
   @IsString()
   legacy_pid?: string;
+
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  consent_publicity?: boolean;
 }

@@ -14,6 +14,7 @@ import {
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
+import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -46,15 +47,15 @@ export class VouchersController {
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findAll(
-        @Query('student_id') studentId?: string,
-        @Query('campus_id') campusId?: string,
-        @Query('status') status?: string,
-    ) {
+    async findAll(@Query() query: FilterVouchersDto) {
         const vouchers = await this.vouchersService.findAll(
-            studentId ? parseInt(studentId) : undefined,
-            campusId ? parseInt(campusId) : undefined,
-            status,
+            query.student_id,
+            query.campus_id,
+            query.status,
+            query.class_id,
+            query.section_id,
+            query.cc,
+            query.gr,
         );
         return {
             success: true,

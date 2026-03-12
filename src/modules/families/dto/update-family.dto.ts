@@ -1,30 +1,4 @@
-import {
-  IsString,
-  IsOptional,
-  IsEmail,
-  IsBoolean,
-  MinLength,
-} from 'class-validator';
+import { PartialType } from '@nestjs/swagger';
+import { CreateFamilyDto } from './create-family.dto';
 
-export class UpdateFamilyDto {
-  @IsOptional()
-  @IsString()
-  household_name?: string;
-
-  @IsOptional()
-  @IsString()
-  primary_address?: string;
-
-  @IsOptional()
-  @IsEmail()
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(6)
-  password?: string;
-
-  @IsOptional()
-  @IsString()
-  legacy_pid?: string;
-}
+export class UpdateFamilyDto extends PartialType(CreateFamilyDto) {}

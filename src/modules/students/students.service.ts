@@ -345,7 +345,6 @@ export class StudentsService {
         },
         student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
         student_guardians: {
-          where: { OR: [{ is_primary_contact: true }, { is_emergency_contact: true }] },
           include: { guardians: true }
         },
         student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
@@ -355,8 +354,9 @@ export class StudentsService {
 
     if (!s) throw new NotFoundException(`Student #${id} not found`);
 
-    const primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact !== false) || s.student_guardians[0];
+    const primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact === true) || s.student_guardians[0];
     const primaryGuardian = primaryGuardianNode?.guardians;
+    const fatherNode = s.student_guardians.find((g: any) => g.relationship === 'FATHER') || primaryGuardianNode;
 
     return {
       cc: s.cc,
@@ -378,7 +378,9 @@ export class StudentsService {
       whatsapp_number: primaryGuardian?.whatsapp_number || s.whatsapp_number,
       primary_phone: primaryGuardian?.primary_phone || s.primary_phone,
       date_of_birth: s.dob,
+      gender: s.gender,
       registration_number: s.cc,
+      father_name: fatherNode?.guardians?.full_name || primaryGuardian?.full_name,
       residential_address: s.families?.primary_address,
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)
