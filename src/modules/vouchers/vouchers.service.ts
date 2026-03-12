@@ -42,12 +42,30 @@ export class VouchersService {
         });
     }
 
-    async findAll(studentId?: number, campusId?: number, status?: string) {
+    async findAll(
+        studentId?: number,
+        campusId?: number,
+        status?: string,
+        classId?: number,
+        sectionId?: number,
+        cc?: number,
+        gr?: string,
+    ) {
         return this.prisma.vouchers.findMany({
             where: {
-                ...(studentId ? { student_id: studentId } : {}),
+                // student_id or cc both resolve to student_id (cc is the student PK)
+                ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
                 ...(campusId ? { campus_id: campusId } : {}),
+                ...(classId ? { class_id: classId } : {}),
+                ...(sectionId ? { section_id: sectionId } : {}),
                 ...(status ? { status } : {}),
+                ...(gr
+                    ? {
+                          students: {
+                              gr_number: { contains: gr, mode: 'insensitive' },
+                          },
+                      }
+                    : {}),
             },
             include: VOUCHER_INCLUDE,
             orderBy: { issue_date: 'desc' },

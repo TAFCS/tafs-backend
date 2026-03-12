@@ -50,11 +50,19 @@ export class VouchersController {
         @Query('student_id') studentId?: string,
         @Query('campus_id') campusId?: string,
         @Query('status') status?: string,
+        @Query('class_id') classId?: string,
+        @Query('section_id') sectionId?: string,
+        @Query('cc') cc?: string,
+        @Query('gr') gr?: string,
     ) {
         const vouchers = await this.vouchersService.findAll(
             studentId ? parseInt(studentId) : undefined,
             campusId ? parseInt(campusId) : undefined,
             status,
+            classId ? parseInt(classId) : undefined,
+            sectionId ? parseInt(sectionId) : undefined,
+            cc ? parseInt(cc) : undefined,
+            gr,
         );
         return {
             success: true,
