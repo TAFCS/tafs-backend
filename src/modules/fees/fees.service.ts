@@ -36,10 +36,9 @@ export class FeesService {
             ${item.academic_year},
             false
           )
-          ON CONFLICT (student_id, fee_type_id, month)
+          ON CONFLICT (student_id, fee_type_id, month, academic_year)
           DO UPDATE SET
-            amount        = EXCLUDED.amount,
-            academic_year = EXCLUDED.academic_year
+            amount = EXCLUDED.amount
         `,
       ),
     );

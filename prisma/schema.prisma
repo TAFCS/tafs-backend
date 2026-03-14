@@ -298,7 +298,7 @@ model student_fees {
   fee_types     fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
 
-  @@unique([student_id, fee_type_id, month])
+  @@unique([student_id, fee_type_id, month, academic_year])
 }
 
 model houses {
