@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsPositive,
+  IsString,
   Max,
   Min,
   ValidateNested,
@@ -26,9 +27,9 @@ export class FeeLineItemDto {
   @IsPositive()
   amount: number;
 
-  /** ISO date string, first of the month: "YYYY-MM-01" */
-  @IsDateString()
-  due_date: string;
+  @IsString()
+  @IsNotEmpty()
+  academic_year: string;
 }
 
 export class SubmitStudentFeesDto {

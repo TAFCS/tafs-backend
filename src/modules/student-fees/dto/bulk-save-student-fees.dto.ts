@@ -13,8 +13,7 @@ export class SaveStudentFeeItemDto {
     month?: number;
 
     @IsString()
-    @IsOptional()
-    due_date?: string; // ISO string
+    academic_year: string;
 }
 
 export class BulkSaveStudentFeesDto {

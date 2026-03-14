@@ -288,16 +288,15 @@ model sections {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model student_fees {
-  id          Int       @id @default(autoincrement())
-  student_id  Int
-  fee_type_id Int
-  amount      Decimal   @db.Decimal(10, 2)
-  due_date    DateTime  @db.Date
-  month       Int?
-  validity    DateTime? @db.Date
-  status      Boolean?  @default(false)
-  fee_types   fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students    students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  id            Int       @id @default(autoincrement())
+  student_id    Int
+  fee_type_id   Int
+  amount        Decimal   @db.Decimal(10, 2)
+  month         Int?
+  status        Boolean?  @default(false)
+  academic_year String    @db.VarChar
+  fee_types     fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([student_id, fee_type_id, month])
 }

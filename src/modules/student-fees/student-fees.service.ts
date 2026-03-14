@@ -74,7 +74,7 @@ export class StudentFeesService {
                     fee_type_id: item.fee_type_id,
                     amount: item.amount,
                     month: item.month,
-                    due_date: item.due_date ? new Date(item.due_date) : new Date(),
+                    academic_year: item.academic_year,
                     status: false,
                 }));
 

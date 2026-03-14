@@ -27,19 +27,19 @@ export class FeesService {
     await this.prisma.$transaction(
       dto.items.map((item) =>
         this.prisma.$executeRaw`
-          INSERT INTO student_fees (student_id, fee_type_id, amount, due_date, month, status)
+          INSERT INTO student_fees (student_id, fee_type_id, amount, month, academic_year, status)
           VALUES (
             ${studentId}::int,
             ${item.fee_type_id}::int,
             ${new Prisma.Decimal(item.amount)},
-            ${new Date(item.due_date)}::date,
             ${item.month}::int,
+            ${item.academic_year},
             false
           )
           ON CONFLICT (student_id, fee_type_id, month)
           DO UPDATE SET
-            amount   = EXCLUDED.amount,
-            due_date = EXCLUDED.due_date
+            amount        = EXCLUDED.amount,
+            academic_year = EXCLUDED.academic_year
         `,
       ),
     );
