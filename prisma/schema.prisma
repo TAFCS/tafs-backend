@@ -294,6 +294,8 @@ model student_fees {
   fee_type_id            Int
   month                  Int?
   academic_year          String           @db.VarChar
+  fee_deposited          Decimal?         @default(0) @db.Decimal
+  balance                Decimal?         @default(0) @db.Decimal
   precedence_override    Int              @default(0)
   issue_date             DateTime?        @db.Date
   due_date               DateTime?        @db.Date

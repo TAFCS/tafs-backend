@@ -1,4 +1,5 @@
 import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -101,10 +102,57 @@ export class VouchersService {
                 });
             }
 
+            // 5. Snapshot each fee line into voucher_heads, capturing the exact price
+            //    at the moment of issuance (Snapshot Billing).
+            if (dto.fee_lines && dto.fee_lines.length > 0) {
+                // Fetch the gross prices stored on student_fees so we don't rely on
+                // the caller to re-send data that already exists in the DB.
+                const feeIds = dto.fee_lines.map((l) => l.student_fee_id);
+                const studentFeeRecords = await tx.student_fees.findMany({
+                    where: { id: { in: feeIds } },
+                    select: { id: true, amount_before_discount: true },
+                });
+                const feeAmountMap = new Map(
+                    studentFeeRecords.map((sf) => [sf.id, sf.amount_before_discount]),
+                );
+
+                let totalBeforeDue = new Prisma.Decimal(0);
+
+                await tx.voucher_heads.createMany({
+                    data: dto.fee_lines.map((line) => {
+                        const gross = feeAmountMap.get(line.student_fee_id) ?? new Prisma.Decimal(0);
+                        const discount = new Prisma.Decimal(line.discount_amount ?? 0);
+                        const netAmount = new Prisma.Decimal(gross).sub(discount);
+                        totalBeforeDue = totalBeforeDue.add(netAmount);
+                        return {
+                            voucher_id: newVoucher.id, // Use newVoucher.id from step 2
+                            student_fee_id: line.student_fee_id,
+                            discount_amount: discount,
+                            net_amount: netAmount,
+                            amount_deposited: new Prisma.Decimal(0),
+                            balance: netAmount,
+                        };
+                    }),
+                    skipDuplicates: true,
+                });
+
+                // Update voucher with final totals derived from heads
+                const lateFee = dto.late_fee_charge ? 1000 : 0;
+                const totalAfterDue = totalBeforeDue.add(lateFee);
+
+                await tx.vouchers.update({
+                    where: { id: newVoucher.id },
+                    data: {
+                        total_payable_before_due: totalBeforeDue,
+                        total_payable_after_due: totalAfterDue,
+                    },
+                });
+            }
+
             return newVoucher;
         });
 
-        // 5. Upload PDF if provided (Outside transaction to avoid timeout)
+        // 6. Upload PDF if provided (Outside transaction to avoid timeout)
         if (pdfBuffer) {
             try {
                 const key = `vouchers/${dto.student_id}/voucher-${voucher.id}-${Date.now()}.pdf`;

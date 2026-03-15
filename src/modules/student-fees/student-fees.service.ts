@@ -77,14 +77,16 @@ export class StudentFeesService {
                 where: { student_id },
             });
 
-            // 2. Create new fees
+            // 2. Create new fees with the gross price captured in amount_before_discount.
+            //    The final billed price (post-discount) is snapshotted into
+            //    voucher_heads.net_amount only when a voucher is issued.
             if (items.length > 0) {
                 const createData = items.map((item) => ({
                     student_id,
                     fee_type_id: item.fee_type_id,
-                    amount_before_discount: item.amount,
                     month: item.month,
                     academic_year: item.academic_year,
+                    amount_before_discount: item.amount_before_discount,
                     status: 'NOT_ISSUED' as any,
                 }));
 

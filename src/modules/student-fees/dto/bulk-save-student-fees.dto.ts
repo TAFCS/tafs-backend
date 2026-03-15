@@ -1,4 +1,4 @@
-import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsDecimal } from 'class-validator';
+import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SaveStudentFeeItemDto {
@@ -6,14 +6,16 @@ export class SaveStudentFeeItemDto {
     fee_type_id: number;
 
     @IsNumber()
-    amount: number;
-
-    @IsNumber()
     @IsOptional()
     month?: number;
 
     @IsString()
     academic_year: string;
+
+    /** Gross price for this fee before any discount is applied. */
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @IsPositive()
+    amount_before_discount: number;
 }
 
 export class BulkSaveStudentFeesDto {
