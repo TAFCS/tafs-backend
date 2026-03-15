@@ -1,7 +1,6 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsDateString,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -22,14 +21,15 @@ export class FeeLineItemDto {
   @Max(12)
   month: number;
 
-  /** Final resolved amount (may be overridden from base) */
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  amount: number;
-
   @IsString()
   @IsNotEmpty()
   academic_year: string;
+
+  /** Gross price for this fee before any discount is applied. Stored on the
+   *  student_fees record so the original scheduled amount is always visible. */
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount_before_discount: number;
 }
 
 export class SubmitStudentFeesDto {

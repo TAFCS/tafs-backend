@@ -10,7 +10,12 @@ export class FeesService {
   /**
    * Upsert student fee rows — one per (fee_type × month).
    * Uses PostgreSQL ON CONFLICT DO UPDATE so the operation is idempotent:
-   * re-submitting the same student+fee_type+month updates the amount in place.
+   * re-submitting the same student+fee_type+month updates amount_before_discount
+   * in place, keeping the master price record current.
+   *
+   * NOTE: The final billed price (after discounts) is snapshotted into
+   * voucher_heads.net_amount only when a voucher is actually issued,
+   * ensuring historical accuracy for all previously issued bills.
    */
   async submitStudentFees(dto: SubmitStudentFeesDto) {
     // Resolve cc_number → internal student id
@@ -23,22 +28,23 @@ export class FeesService {
     }
     const studentId = student.cc;
 
-    // Bulk upsert inside a single transaction
+    // Bulk upsert inside a single transaction.
+    // amount_before_discount is stored here as the gross scheduled price.
     await this.prisma.$transaction(
       dto.items.map((item) =>
         this.prisma.$executeRaw`
-          INSERT INTO student_fees (student_id, fee_type_id, amount, month, academic_year, status)
+          INSERT INTO student_fees (student_id, fee_type_id, month, academic_year, amount_before_discount, status)
           VALUES (
             ${studentId}::int,
             ${item.fee_type_id}::int,
-            ${new Prisma.Decimal(item.amount)},
             ${item.month}::int,
             ${item.academic_year},
+            ${new Prisma.Decimal(item.amount_before_discount)},
             false
           )
           ON CONFLICT (student_id, fee_type_id, month, academic_year)
           DO UPDATE SET
-            amount = EXCLUDED.amount
+            amount_before_discount = EXCLUDED.amount_before_discount
         `,
       ),
     );

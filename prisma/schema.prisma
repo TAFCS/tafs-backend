@@ -289,22 +289,22 @@ model sections {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model student_fees {
-  id                  Int              @id @default(autoincrement())
-  student_id          Int
-  fee_type_id         Int
-  amount              Decimal          @db.Decimal(10, 2)
-  month               Int?
-  academic_year       String           @db.VarChar
-  fee_deposited       Decimal?         @default(0) @db.Decimal
-  balance             Decimal?         @default(0) @db.Decimal
-  precedence_override Int?             @default(0)
-  issue_date          DateTime?        @db.Date
-  due_date            DateTime?        @db.Date
-  validity_date       DateTime?        @db.Date
-  status              fee_status_enum? @default(NOT_ISSUED)
-  fee_types           fee_types        @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students            students         @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
-  voucher_heads       voucher_heads[]
+  id                     Int              @id @default(autoincrement())
+  student_id             Int
+  fee_type_id            Int
+  month                  Int?
+  academic_year          String           @db.VarChar
+  fee_deposited          Decimal?         @default(0) @db.Decimal
+  balance                Decimal?         @default(0) @db.Decimal
+  precedence_override    Int?             @default(0)
+  issue_date             DateTime?        @db.Date
+  due_date               DateTime?        @db.Date
+  validity_date          DateTime?        @db.Date
+  status                 fee_status_enum? @default(NOT_ISSUED)
+  amount_before_discount Decimal?         @db.Decimal
+  fee_types              fee_types        @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students               students         @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  voucher_heads          voucher_heads[]
 
   @@unique([student_id, fee_type_id, month, academic_year])
   @@index([due_date], map: "idx_student_fees_due_date")
@@ -381,16 +381,15 @@ model vouchers {
 }
 
 model voucher_heads {
-  id                     Int          @id @default(autoincrement())
-  voucher_id             Int
-  student_fee_id         Int
-  amount_before_discount Decimal      @default(0) @db.Decimal(12, 2)
-  discount_amount        Decimal?     @default(0) @db.Decimal(12, 2)
-  net_amount             Decimal      @db.Decimal(12, 2)
-  amount_deposited       Decimal?     @default(0) @db.Decimal(12, 2)
-  balance                Decimal?     @default(0) @db.Decimal(12, 2)
-  student_fees           student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
-  vouchers               vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
+  id               Int          @id @default(autoincrement())
+  voucher_id       Int
+  student_fee_id   Int
+  discount_amount  Decimal?     @default(0) @db.Decimal(12, 2)
+  net_amount       Decimal      @db.Decimal(12, 2)
+  amount_deposited Decimal?     @default(0) @db.Decimal(12, 2)
+  balance          Decimal?     @default(0) @db.Decimal(12, 2)
+  student_fees     student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
+  vouchers         vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
 
   @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
   @@index([voucher_id], map: "idx_voucher_heads_voucher")
