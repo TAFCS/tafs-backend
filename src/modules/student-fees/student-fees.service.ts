@@ -75,7 +75,7 @@ export class StudentFeesService {
                     amount: item.amount,
                     month: item.month,
                     academic_year: item.academic_year,
-                    status: false,
+                    status: 'NOT_ISSUED' as any,
                 }));
 
                 await tx.student_fees.createMany({

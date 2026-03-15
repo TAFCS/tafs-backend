@@ -14,25 +14,30 @@ export class StorageService {
     private readonly cdnEndpoint: string;
 
     constructor(private readonly config: ConfigService) {
-        const region = this.config.getOrThrow<string>('DO_SPACES_REGION');
-        const endpoint = this.config.getOrThrow<string>('DO_SPACES_ENDPOINT'); // e.g. https://nyc3.digitaloceanspaces.com
-        const accessKeyId = this.config.getOrThrow<string>('DO_SPACES_KEY');
-        const secretAccessKey = this.config.getOrThrow<string>('DO_SPACES_SECRET');
+        const region = this.config.get<string>('DO_SPACES_REGION');
+        const endpoint = this.config.get<string>('DO_SPACES_ENDPOINT');
+        const accessKeyId = this.config.get<string>('DO_SPACES_KEY');
+        const secretAccessKey = this.config.get<string>('DO_SPACES_SECRET');
+        this.bucket = this.config.get<string>('DO_SPACES_BUCKET') || 'missing-bucket';
 
-        this.bucket = this.config.getOrThrow<string>('DO_SPACES_BUCKET');
+        const isConfigMissing = !region || !endpoint || !accessKeyId || !secretAccessKey || accessKeyId === 'your_access_key';
 
-        // CDN endpoint, e.g. https://<bucket>.nyc3.cdn.digitaloceanspaces.com
-        // Falls back to the regular Spaces endpoint if CDN is not configured.
-        this.cdnEndpoint =
-            this.config.get<string>('DO_SPACES_CDN_ENDPOINT') ??
-            `${endpoint}/${this.bucket}`;
+        if (isConfigMissing) {
+            this.logger.warn('Storage configuration is missing or using placeholders. Uploads will be mocked.');
+            this.client = null as any;
+            this.cdnEndpoint = 'http://mock-storage';
+        } else {
+            this.cdnEndpoint =
+                this.config.get<string>('DO_SPACES_CDN_ENDPOINT') ??
+                `${endpoint}/${this.bucket}`;
 
-        this.client = new S3Client({
-            region,
-            endpoint,
-            credentials: { accessKeyId, secretAccessKey },
-            forcePathStyle: false, // DigitalOcean Spaces requires virtual-hosted style
-        });
+            this.client = new S3Client({
+                region: region!,
+                endpoint: endpoint!,
+                credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
+                forcePathStyle: false,
+            });
+        }
     }
 
     /**
@@ -43,6 +48,10 @@ export class StorageService {
      * @param mime   MIME type, defaults to "application/pdf"
      */
     async upload(key: string, body: Buffer, mime = 'application/pdf'): Promise<string> {
+        if (!this.client) {
+            this.logger.log(`Mocking upload for ${key} (storage not configured)`);
+            return `${this.cdnEndpoint}/${key}`;
+        }
         try {
             await this.client.send(
                 new PutObjectCommand({

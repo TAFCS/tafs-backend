@@ -288,24 +288,25 @@ model sections {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model student_fees {
-  id            Int       @id @default(autoincrement())
+  id            Int              @id @default(autoincrement())
   student_id    Int
   fee_type_id   Int
-  amount        Decimal   @db.Decimal(10, 2)
+  amount        Decimal          @db.Decimal(10, 2)
   month         Int?
-  status        Boolean?  @default(false)
-  academic_year String    @db.VarChar
-  fee_deposited Decimal?  @default(0) @db.Decimal
-  balance       Decimal?  @default(0) @db.Decimal
-  precedence    Int?      @default(0)
-  issue_date    DateTime? @db.Date
-  due_date      DateTime? @db.Date
-  validity_date DateTime? @db.Date
-  fee_types     fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  academic_year String           @db.VarChar
+  fee_deposited Decimal?         @default(0) @db.Decimal
+  balance       Decimal?         @default(0) @db.Decimal
+  precedence    Int?             @default(0)
+  issue_date    DateTime?        @db.Date
+  due_date      DateTime?        @db.Date
+  validity_date DateTime?        @db.Date
+  status        fee_status_enum? @default(NOT_ISSUED)
+  fee_types     fee_types        @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students      students         @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([student_id, fee_type_id, month, academic_year])
   @@index([due_date], map: "idx_student_fees_due_date")
+  @@index([precedence], map: "idx_student_fees_precedence")
 }
 
 model houses {
@@ -353,23 +354,27 @@ model bank_accounts {
 }
 
 model vouchers {
-  id              Int           @id @default(autoincrement())
-  student_id      Int
-  campus_id       Int
-  class_id        Int
-  bank_account_id Int
-  issue_date      DateTime      @db.Date
-  due_date        DateTime      @db.Date
-  status          String?       @default("UNPAID") @db.VarChar(20)
-  validity_date   DateTime?     @db.Date
-  late_fee_charge Boolean
-  section_id      Int?
-  pdf_url         String?
-  bank_accounts   bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  campuses        campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes         classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections        sections?     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students        students      @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+  id                       Int           @id @default(autoincrement())
+  student_id               Int
+  campus_id                Int
+  class_id                 Int
+  bank_account_id          Int
+  issue_date               DateTime      @db.Date
+  due_date                 DateTime      @db.Date
+  status                   String?       @default("UNPAID") @db.VarChar(20)
+  validity_date            DateTime?     @db.Date
+  late_fee_charge          Boolean
+  section_id               Int?
+  academic_year            String?       @db.VarChar(10)
+  month                    Int?
+  pdf_url                  String?
+  total_payable_before_due Decimal?      @default(0) @db.Decimal(12, 2)
+  total_payable_after_due  Decimal?      @default(0) @db.Decimal(12, 2)
+  bank_accounts            bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses                 campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                  classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                 sections?     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students                 students      @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 enum StaffRole {
@@ -392,4 +397,11 @@ enum student_status {
 enum fee_frequency {
   MONTHLY
   ONE_TIME
+}
+
+enum fee_status_enum {
+  NOT_ISSUED
+  ISSUED
+  PARTIALLY_PAID
+  PAID
 }

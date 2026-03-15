@@ -48,27 +48,48 @@ export class VouchersService {
                     due_date: dueDate,
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
+                    academic_year: dto.academic_year,
+                    month: dto.month,
                 },
                 include: VOUCHER_INCLUDE,
             });
 
             // Propagate issue_date, due_date, validity_date and precedence to the
             // student's fee records so they reflect the same billing cycle.
-            await tx.student_fees.updateMany({
-                where: { student_id: dto.student_id },
-                data: {
-                    issue_date: issueDate,
-                    due_date: dueDate,
-                    validity_date: validityDate,
-                    ...(dto.precedence !== undefined ? { precedence: dto.precedence } : {}),
-                },
-            });
+            if (dto.orderedFeeIds && dto.orderedFeeIds.length > 0) {
+                // If specific order is provided, update them sequentially
+                for (let i = 0; i < dto.orderedFeeIds.length; i++) {
+                    await tx.student_fees.update({
+                        where: { id: dto.orderedFeeIds[i] },
+                        data: {
+                            issue_date: issueDate,
+                            due_date: dueDate,
+                            validity_date: validityDate,
+                            precedence: (dto.precedence ?? 0) + i,
+                            status: 'ISSUED' as any,
+                        },
+                    });
+                }
+            } else {
+                // Otherwise update all fees for this student with same precedence
+                await tx.student_fees.updateMany({
+                    where: { student_id: dto.student_id },
+                    data: {
+                        issue_date: issueDate,
+                        due_date: dueDate,
+                        validity_date: validityDate,
+                        status: 'ISSUED' as any,
+                        ...(dto.precedence !== undefined ? { precedence: dto.precedence } : {}),
+                    },
+                });
+            }
 
-            // If a PDF was provided, upload it to DigitalOcean Spaces and persist the CDN URL.
+            // If a PDF was provided, upload it to DigitalOcean Spaces.
             if (pdfBuffer) {
                 const key = `vouchers/${dto.student_id}/voucher-${voucher.id}-${Date.now()}.pdf`;
                 const pdfUrl = await this.storage.upload(key, pdfBuffer);
 
+                // Update the voucher with the PDF URL
                 await tx.vouchers.update({
                     where: { id: voucher.id },
                     data: { pdf_url: pdfUrl },
