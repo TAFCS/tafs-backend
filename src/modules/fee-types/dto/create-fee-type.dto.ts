@@ -1,4 +1,4 @@
-import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsObject, IsOptional, IsString } from 'class-validator';
 import { fee_frequency } from '@prisma/client';
 
 export class CreateFeeTypeDto {
@@ -12,5 +12,9 @@ export class CreateFeeTypeDto {
   @IsOptional()
   @IsObject()
   breakup?: Record<string, any>;
+
+  @IsOptional()
+  @IsInt()
+  priority_order?: number;
 }
 

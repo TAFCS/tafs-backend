@@ -17,6 +17,10 @@ class FeeTypeUpdateItemDto {
   @IsOptional()
   @IsObject()
   breakup?: Record<string, any>;
+
+  @IsOptional()
+  @IsInt()
+  priority_order?: number;
 }
 
 export class BulkUpdateFeeTypesDto {

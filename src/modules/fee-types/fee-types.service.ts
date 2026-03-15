@@ -9,7 +9,7 @@ export class FeeTypesService {
 
   async findAll() {
     return this.prisma.fee_types.findMany({
-      orderBy: { description: 'asc' },
+      orderBy: { priority_order: 'asc' },
     });
   }
 
@@ -19,6 +19,7 @@ export class FeeTypesService {
         description: dto.description,
         freq: dto.freq,
         breakup: dto.breakup ?? undefined,
+        priority_order: dto.priority_order,
       },
     });
   }
@@ -41,6 +42,9 @@ export class FeeTypesService {
             }),
             ...(item.breakup !== undefined && {
               breakup: item.breakup,
+            }),
+            ...(item.priority_order !== undefined && {
+              priority_order: item.priority_order,
             }),
           },
         }),

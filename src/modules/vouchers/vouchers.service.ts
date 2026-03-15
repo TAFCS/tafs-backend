@@ -65,7 +65,7 @@ export class VouchersService {
                             issue_date: issueDate,
                             due_date: dueDate,
                             validity_date: validityDate,
-                            precedence: (dto.precedence ?? 0) + i,
+                            precedence_override: (dto.precedence ?? 0) + i,
                             status: 'ISSUED' as any,
                         },
                     });
@@ -79,7 +79,7 @@ export class VouchersService {
                         due_date: dueDate,
                         validity_date: validityDate,
                         status: 'ISSUED' as any,
-                        ...(dto.precedence !== undefined ? { precedence: dto.precedence } : {}),
+                        ...(dto.precedence !== undefined ? { precedence_override: dto.precedence } : {}),
                     },
                 });
             }
