@@ -364,6 +364,7 @@ model vouchers {
   validity_date   DateTime?     @db.Date
   late_fee_charge Boolean
   section_id      Int?
+  pdf_url         String?
   bank_accounts   bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses        campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes         classes       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

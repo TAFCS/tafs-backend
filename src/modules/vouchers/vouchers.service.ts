@@ -2,6 +2,7 @@ import { Injectable, InternalServerErrorException, Logger, NotFoundException } f
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
+import { StorageService } from '../../common/storage/storage.service';
 
 const VOUCHER_INCLUDE = {
     students: {
@@ -25,9 +26,12 @@ const VOUCHER_INCLUDE = {
 export class VouchersService {
     private readonly logger = new Logger(VouchersService.name);
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly storage: StorageService,
+    ) {}
 
-    async create(dto: CreateVoucherDto) {
+    async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
@@ -59,6 +63,19 @@ export class VouchersService {
                     ...(dto.precedence !== undefined ? { precedence: dto.precedence } : {}),
                 },
             });
+
+            // If a PDF was provided, upload it to DigitalOcean Spaces and persist the CDN URL.
+            if (pdfBuffer) {
+                const key = `vouchers/${dto.student_id}/voucher-${voucher.id}-${Date.now()}.pdf`;
+                const pdfUrl = await this.storage.upload(key, pdfBuffer);
+
+                await tx.vouchers.update({
+                    where: { id: voucher.id },
+                    data: { pdf_url: pdfUrl },
+                });
+
+                return { ...voucher, pdf_url: pdfUrl };
+            }
 
             return voucher;
         });

@@ -9,8 +9,11 @@ import {
     Patch,
     Post,
     Query,
+    UploadedFile,
     UseGuards,
+    UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -32,8 +35,12 @@ export class VouchersController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async create(@Body() dto: CreateVoucherDto) {
-        const voucher = await this.vouchersService.create(dto);
+    @UseInterceptors(FileInterceptor('pdf'))
+    async create(
+        @Body() dto: CreateVoucherDto,
+        @UploadedFile() pdf?: Express.Multer.File,
+    ) {
+        const voucher = await this.vouchersService.create(dto, pdf?.buffer);
         return {
             success: true,
             message: 'Voucher created successfully',
