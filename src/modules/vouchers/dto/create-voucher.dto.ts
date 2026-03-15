@@ -62,6 +62,11 @@ export class CreateVoucherDto {
     late_fee_charge: boolean;
 
     @Type(() => Number)
+    @IsNumber()
+    @IsOptional()
+    late_fee_amount?: number;
+
+    @Type(() => Number)
     @IsInt()
     @IsOptional()
     precedence?: number;

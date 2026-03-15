@@ -137,7 +137,7 @@ export class VouchersService {
                 });
 
                 // Update voucher with final totals derived from heads
-                const lateFee = dto.late_fee_charge ? 1000 : 0;
+                const lateFee = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
                 const totalAfterDue = totalBeforeDue.add(lateFee);
 
                 await tx.vouchers.update({
