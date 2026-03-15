@@ -1,4 +1,5 @@
 import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -80,6 +81,51 @@ export class VouchersService {
                         validity_date: validityDate,
                         status: 'ISSUED' as any,
                         ...(dto.precedence !== undefined ? { precedence_override: dto.precedence } : {}),
+                    },
+                });
+            }
+
+            // Snapshot each fee line into voucher_heads, capturing the exact price
+            // at the moment of issuance (Snapshot Billing).
+            if (dto.fee_lines && dto.fee_lines.length > 0) {
+                // Fetch the gross prices stored on student_fees so we don't rely on
+                // the caller to re-send data that already exists in the DB.
+                const feeIds = dto.fee_lines.map((l) => l.student_fee_id);
+                const studentFeeRecords = await tx.student_fees.findMany({
+                    where: { id: { in: feeIds } },
+                    select: { id: true, amount_before_discount: true },
+                });
+                const feeAmountMap = new Map(
+                    studentFeeRecords.map((sf) => [sf.id, sf.amount_before_discount]),
+                );
+
+                let totalBeforeDue = new Prisma.Decimal(0);
+
+                await tx.voucher_heads.createMany({
+                    data: dto.fee_lines.map((line) => {
+                        const gross = feeAmountMap.get(line.student_fee_id) ?? new Prisma.Decimal(0);
+                        const discount = new Prisma.Decimal(line.discount_amount ?? 0);
+                        const netAmount = new Prisma.Decimal(gross).sub(discount);
+                        totalBeforeDue = totalBeforeDue.add(netAmount);
+                        return {
+                            voucher_id: voucher.id,
+                            student_fee_id: line.student_fee_id,
+                            discount_amount: discount,
+                            net_amount: netAmount,
+                            amount_deposited: new Prisma.Decimal(0),
+                            balance: netAmount,
+                        };
+                    }),
+                    skipDuplicates: true,
+                });
+
+                // After-due total mirrors before-due; a late-fee voucher head
+                // is added as a separate line when applicable.
+                await tx.vouchers.update({
+                    where: { id: voucher.id },
+                    data: {
+                        total_payable_before_due: totalBeforeDue,
+                        total_payable_after_due: totalBeforeDue,
                     },
                 });
             }

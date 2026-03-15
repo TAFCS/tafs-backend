@@ -1,5 +1,22 @@
-import { IsBoolean, IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsISO8601, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+
+/**
+ * A single fee line to be snapshotted into voucher_heads when the voucher is
+ * issued. The gross price (amount_before_discount) is read automatically from
+ * the linked student_fees record; the caller only needs to supply the discount
+ * so the service can derive net_amount = amount_before_discount − discount_amount.
+ */
+export class VoucherFeeLineDto {
+    /** FK → student_fees.id */
+    @IsInt()
+    student_fee_id: number;
+
+    /** Discount to apply (0 if none) */
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @IsOptional()
+    discount_amount?: number;
+}
 
 export class CreateVoucherDto {
     @Type(() => Number)
@@ -62,4 +79,15 @@ export class CreateVoucherDto {
     @IsInt()
     @IsOptional()
     month?: number;
+
+    /**
+     * Fee lines to snapshot into voucher_heads.
+     * Each entry captures the price at the moment the voucher is issued,
+     * ensuring historical accuracy even if the class fee schedule changes later.
+     */
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => VoucherFeeLineDto)
+    @IsOptional()
+    fee_lines?: VoucherFeeLineDto[];
 }
