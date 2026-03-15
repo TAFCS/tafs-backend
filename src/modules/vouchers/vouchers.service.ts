@@ -51,7 +51,7 @@ export class VouchersService {
 
             // Calculate totals
             const totalBeforeDue = feeRecords.reduce((sum, fee) => sum + Number(fee.amount_before_discount), 0);
-            const lateFee = dto.late_fee_charge ? 1000 : 0;
+            const lateFee = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
             const totalAfterDue = totalBeforeDue + lateFee;
 
             // 2. Create the voucher record
