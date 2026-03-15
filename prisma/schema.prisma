@@ -295,10 +295,17 @@ model student_fees {
   month         Int?
   status        Boolean?  @default(false)
   academic_year String    @db.VarChar
+  fee_deposited Decimal?  @default(0) @db.Decimal
+  balance       Decimal?  @default(0) @db.Decimal
+  precedence    Int?      @default(0)
+  issue_date    DateTime? @db.Date
+  due_date      DateTime? @db.Date
+  validity_date DateTime? @db.Date
   fee_types     fee_types @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([student_id, fee_type_id, month, academic_year])
+  @@index([due_date], map: "idx_student_fees_due_date")
 }
 
 model houses {

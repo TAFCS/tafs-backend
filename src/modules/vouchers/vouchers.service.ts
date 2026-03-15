@@ -28,19 +28,39 @@ export class VouchersService {
     constructor(private readonly prisma: PrismaService) {}
 
     async create(dto: CreateVoucherDto) {
-        return this.prisma.vouchers.create({
-            data: {
-                student_id: dto.student_id,
-                campus_id: dto.campus_id,
-                class_id: dto.class_id,
-                section_id: dto.section_id,
-                bank_account_id: dto.bank_account_id,
-                issue_date: new Date(dto.issue_date),
-                due_date: new Date(dto.due_date),
-                validity_date: dto.validity_date ? new Date(dto.validity_date) : null,
-                late_fee_charge: dto.late_fee_charge,
-            },
-            include: VOUCHER_INCLUDE,
+        const issueDate = new Date(dto.issue_date);
+        const dueDate = new Date(dto.due_date);
+        const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
+
+        return this.prisma.$transaction(async (tx) => {
+            const voucher = await tx.vouchers.create({
+                data: {
+                    student_id: dto.student_id,
+                    campus_id: dto.campus_id,
+                    class_id: dto.class_id,
+                    section_id: dto.section_id,
+                    bank_account_id: dto.bank_account_id,
+                    issue_date: issueDate,
+                    due_date: dueDate,
+                    validity_date: validityDate,
+                    late_fee_charge: dto.late_fee_charge,
+                },
+                include: VOUCHER_INCLUDE,
+            });
+
+            // Propagate issue_date, due_date, validity_date and precedence to the
+            // student's fee records so they reflect the same billing cycle.
+            await tx.student_fees.updateMany({
+                where: { student_id: dto.student_id },
+                data: {
+                    issue_date: issueDate,
+                    due_date: dueDate,
+                    validity_date: validityDate,
+                    ...(dto.precedence !== undefined ? { precedence: dto.precedence } : {}),
+                },
+            });
+
+            return voucher;
         });
     }
 
