@@ -36,8 +36,25 @@ export class VouchersService {
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
-        return this.prisma.$transaction(async (tx) => {
-            const voucher = await tx.vouchers.create({
+        const voucher = await this.prisma.$transaction(async (tx) => {
+            // 1. Fetch the fees to be included in the voucher
+            const feeRecords = await tx.student_fees.findMany({
+                where: {
+                    id: { in: dto.orderedFeeIds && dto.orderedFeeIds.length > 0 ? dto.orderedFeeIds : [] },
+                    student_id: dto.student_id,
+                },
+                include: {
+                    fee_types: true,
+                },
+            });
+
+            // Calculate totals
+            const totalBeforeDue = feeRecords.reduce((sum, fee) => sum + Number(fee.amount_before_discount), 0);
+            const lateFee = dto.late_fee_charge ? 1000 : 0;
+            const totalAfterDue = totalBeforeDue + lateFee;
+
+            // 2. Create the voucher record
+            const newVoucher = await tx.vouchers.create({
                 data: {
                     student_id: dto.student_id,
                     campus_id: dto.campus_id,
@@ -50,56 +67,64 @@ export class VouchersService {
                     late_fee_charge: dto.late_fee_charge,
                     academic_year: dto.academic_year,
                     month: dto.month,
+                    total_payable_before_due: totalBeforeDue,
+                    total_payable_after_due: totalAfterDue,
                 },
                 include: VOUCHER_INCLUDE,
             });
 
-            // Propagate issue_date, due_date, validity_date and precedence to the
-            // student's fee records so they reflect the same billing cycle.
-            if (dto.orderedFeeIds && dto.orderedFeeIds.length > 0) {
-                // If specific order is provided, update them sequentially
-                for (let i = 0; i < dto.orderedFeeIds.length; i++) {
-                    await tx.student_fees.update({
-                        where: { id: dto.orderedFeeIds[i] },
-                        data: {
-                            issue_date: issueDate,
-                            due_date: dueDate,
-                            validity_date: validityDate,
-                            precedence_override: (dto.precedence ?? 0) + i,
-                            status: 'ISSUED' as any,
-                        },
-                    });
-                }
-            } else {
-                // Otherwise update all fees for this student with same precedence
-                await tx.student_fees.updateMany({
-                    where: { student_id: dto.student_id },
+            // 3. Create voucher heads (snapshots of fees)
+            const voucherHeadsData = feeRecords.map((fee) => ({
+                voucher_id: newVoucher.id,
+                student_fee_id: fee.id,
+                discount_amount: 0, // Placeholder for future use
+                net_amount: fee.amount_before_discount ?? 0,
+                amount_deposited: 0,
+                balance: fee.amount_before_discount ?? 0,
+            }));
+
+            await tx.voucher_heads.createMany({
+                data: voucherHeadsData,
+            });
+
+            // 4. Update student_fees records to mark them as ISSUED and set precedence from fee type
+            for (const fee of feeRecords) {
+                await tx.student_fees.update({
+                    where: { id: fee.id },
                     data: {
                         issue_date: issueDate,
                         due_date: dueDate,
                         validity_date: validityDate,
+                        precedence_override: fee.fee_types?.priority_order ?? 0,
                         status: 'ISSUED' as any,
-                        ...(dto.precedence !== undefined ? { precedence_override: dto.precedence } : {}),
                     },
                 });
             }
 
-            // If a PDF was provided, upload it to DigitalOcean Spaces.
-            if (pdfBuffer) {
+            return newVoucher;
+        });
+
+        // 5. Upload PDF if provided (Outside transaction to avoid timeout)
+        if (pdfBuffer) {
+            try {
                 const key = `vouchers/${dto.student_id}/voucher-${voucher.id}-${Date.now()}.pdf`;
                 const pdfUrl = await this.storage.upload(key, pdfBuffer);
 
-                // Update the voucher with the PDF URL
-                await tx.vouchers.update({
+                const updatedVoucher = await this.prisma.vouchers.update({
                     where: { id: voucher.id },
                     data: { pdf_url: pdfUrl },
+                    include: VOUCHER_INCLUDE,
                 });
 
-                return { ...voucher, pdf_url: pdfUrl };
+                return updatedVoucher;
+            } catch (error) {
+                this.logger.error(`Failed to upload PDF for voucher ${voucher.id}: ${error.message}`);
+                // Return the voucher anyway as the DB records are already committed
+                return voucher;
             }
+        }
 
-            return voucher;
-        });
+        return voucher;
     }
 
     async findAll(

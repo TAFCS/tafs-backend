@@ -12,6 +12,11 @@ export class StudentFeesService {
             include: {
                 fee_types: true,
             },
+            orderBy: {
+                fee_types: {
+                    priority_order: 'asc',
+                },
+            },
         });
     }
 
@@ -40,6 +45,11 @@ export class StudentFeesService {
             where: { student_id: student.cc },
             include: {
                 fee_types: true,
+            },
+            orderBy: {
+                fee_types: {
+                    priority_order: 'asc',
+                },
             },
         });
 
@@ -72,7 +82,7 @@ export class StudentFeesService {
                 const createData = items.map((item) => ({
                     student_id,
                     fee_type_id: item.fee_type_id,
-                    amount: item.amount,
+                    amount_before_discount: item.amount,
                     month: item.month,
                     academic_year: item.academic_year,
                     status: 'NOT_ISSUED' as any,
