@@ -28,11 +28,10 @@ export class FeesService {
       dto.items.map((item) => {
         const amount = new Prisma.Decimal(item.amount);
         return this.prisma.$executeRaw`
-          INSERT INTO student_fees (student_id, fee_type_id, amount_before_discount, balance, month, academic_year, status)
+          INSERT INTO student_fees (student_id, fee_type_id, amount_before_discount, month, academic_year, status)
           VALUES (
             ${studentId}::int,
             ${item.fee_type_id}::int,
-            ${amount},
             ${amount},
             ${item.month}::int,
             ${item.academic_year},
@@ -40,8 +39,7 @@ export class FeesService {
           )
           ON CONFLICT (student_id, fee_type_id, month, academic_year)
           DO UPDATE SET
-            amount_before_discount = EXCLUDED.amount_before_discount,
-            balance = EXCLUDED.balance
+            amount_before_discount = EXCLUDED.amount_before_discount
         `;
       }),
     );

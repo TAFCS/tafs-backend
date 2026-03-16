@@ -365,11 +365,16 @@ export class VouchersService {
                 );
             }
 
+            const affectedStudentFeeIds = [
+                ...new Set(
+                    parsedDistributions
+                        .map((d) => voucherHeadMap.get(d.headId)?.student_fee_id)
+                        .filter(Boolean) as number[],
+                ),
+            ];
+
             for (const { headId, amount } of parsedDistributions) {
                 if (amount.eq(0)) continue;
-
-                const head = voucherHeadMap.get(headId)!;
-                const studentFee = head.student_fees;
 
                 await tx.voucher_heads.update({
                     where: { id: headId },
@@ -378,40 +383,55 @@ export class VouchersService {
                         balance: { decrement: amount },
                     },
                 });
+            }
 
-                const currentFeeDeposited = new Prisma.Decimal(
-                    studentFee.fee_deposited ?? 0,
-                );
-                const nextFeeDeposited = currentFeeDeposited.add(amount);
-                const grossAmount = new Prisma.Decimal(
-                    studentFee.amount_before_discount ?? 0,
-                );
-                const rawBalance = grossAmount.sub(nextFeeDeposited);
-                const nextFeeBalance = Prisma.Decimal.max(rawBalance, new Prisma.Decimal(0));
-
-                let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
-                if (nextFeeBalance.eq(0)) {
-                    nextFeeStatus = 'PAID';
-                } else if (nextFeeDeposited.gt(0)) {
-                    nextFeeStatus = 'PARTIALLY_PAID';
-                }
-
-                await tx.student_fees.update({
-                    where: { id: studentFee.id },
-                    data: {
-                        fee_deposited: nextFeeDeposited,
-                        balance: nextFeeBalance,
-                        status: nextFeeStatus as any,
-                    },
+            // Batch update affected student fees
+            if (affectedStudentFeeIds.length > 0) {
+                const totalDeposits = await tx.voucher_heads.groupBy({
+                    by: ['student_fee_id'],
+                    where: { student_fee_id: { in: affectedStudentFeeIds } },
+                    _sum: { amount_deposited: true },
                 });
+
+                const studentFees = await tx.student_fees.findMany({
+                    where: { id: { in: affectedStudentFeeIds } },
+                });
+
+                for (const fee of studentFees) {
+                    const deposit = totalDeposits.find(
+                        (d) => d.student_fee_id === fee.id,
+                    );
+                    const totalDeposited = new Prisma.Decimal(
+                        deposit?._sum.amount_deposited ?? 0,
+                    );
+                    const grossAmount = new Prisma.Decimal(
+                        fee.amount_before_discount ?? 0,
+                    );
+                    const nextFeeBalance = Prisma.Decimal.max(
+                        grossAmount.sub(totalDeposited),
+                        new Prisma.Decimal(0),
+                    );
+
+                    let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
+                    if (nextFeeBalance.eq(0)) {
+                        nextFeeStatus = 'PAID';
+                    } else if (totalDeposited.gt(0)) {
+                        nextFeeStatus = 'PARTIALLY_PAID';
+                    }
+
+                    await tx.student_fees.update({
+                        where: { id: fee.id },
+                        data: { status: nextFeeStatus as any },
+                    });
+                }
             }
 
             if (lateFeeAmount.gt(0)) {
                 await tx.vouchers.update({
                     where: { id: voucherId },
                     data: {
-                        total_payable_after_due: { decrement: lateFeeAmount },
-                    },
+                        late_fee_deposited: { increment: lateFeeAmount },
+                    } as any,
                 });
             }
 
@@ -424,25 +444,29 @@ export class VouchersService {
                 throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
             }
 
+            // Calculate overall remaining balance including heads and remaining late surcharge
             const remainingHeads = refreshed.voucher_heads.reduce(
                 (sum, head) => sum.add(new Prisma.Decimal(head.balance ?? 0)),
                 new Prisma.Decimal(0),
             );
-            const remainingLateAfterDeposit = refreshed.late_fee_charge
-                ? Prisma.Decimal.max(
-                      new Prisma.Decimal(refreshed.total_payable_after_due ?? 0).sub(
-                          new Prisma.Decimal(refreshed.total_payable_before_due ?? 0),
-                      ),
-                      new Prisma.Decimal(0),
-                  )
-                : new Prisma.Decimal(0);
-            const remainingOverall = remainingHeads.add(remainingLateAfterDeposit);
+
+            const totalPayableAfterDue = new Prisma.Decimal(refreshed.total_payable_after_due ?? 0);
+            const totalPayableBeforeDue = new Prisma.Decimal(refreshed.total_payable_before_due ?? 0);
+            const totalLateSurcharge = Prisma.Decimal.max(totalPayableAfterDue.sub(totalPayableBeforeDue), 0);
+            const depositedLateSurcharge = new Prisma.Decimal((refreshed as any).late_fee_deposited ?? 0);
+            const remainingLateSurcharge = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLateSurcharge), 0);
+
+            const remainingOverall = remainingHeads.add(remainingLateSurcharge);
 
             let nextVoucherStatus = refreshed.status ?? 'UNPAID';
             if (remainingOverall.eq(0)) {
                 nextVoucherStatus = 'PAID';
-            } else if (depositAmount.gt(0)) {
-                nextVoucherStatus = 'PARTIALLY_PAID';
+            } else {
+                // If anything was ever deposited, it's at least PARTIALLY_PAID
+                const anyHeadDeposited = refreshed.voucher_heads.some(h => new Prisma.Decimal(h.amount_deposited ?? 0).gt(0));
+                if (anyHeadDeposited || depositedLateSurcharge.gt(0)) {
+                    nextVoucherStatus = 'PARTIALLY_PAID';
+                }
             }
 
             if (nextVoucherStatus !== refreshed.status) {
@@ -454,6 +478,6 @@ export class VouchersService {
             }
 
             return refreshed;
-        });
+        }, { timeout: 15000 });
     }
 }

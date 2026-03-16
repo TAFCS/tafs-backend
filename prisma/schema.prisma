@@ -183,6 +183,7 @@ model students {
   place_of_birth             String?                    @db.VarChar(100)
   primary_phone_country_code String?                    @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
+  deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
   student_admissions         student_admissions[]
@@ -289,21 +290,20 @@ model sections {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model student_fees {
-  id                     Int              @id @default(autoincrement())
+  id                     Int                   @id @default(autoincrement())
   student_id             Int
   fee_type_id            Int
   month                  Int?
-  academic_year          String           @db.VarChar
-  precedence_override    Int              @default(0)
-  issue_date             DateTime?        @db.Date
-  due_date               DateTime?        @db.Date
-  validity_date          DateTime?        @db.Date
-  status                 fee_status_enum? @default(NOT_ISSUED)
-  amount_before_discount Decimal?         @db.Decimal
-  balance                Decimal?         @default(0) @db.Decimal
-  fee_deposited          Decimal?         @default(0) @db.Decimal
-  fee_types              fee_types        @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students               students         @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  academic_year          String                @db.VarChar
+  precedence_override    Int                   @default(0)
+  issue_date             DateTime?             @db.Date
+  due_date               DateTime?             @db.Date
+  validity_date          DateTime?             @db.Date
+  status                 fee_status_enum?      @default(NOT_ISSUED)
+  amount_before_discount Decimal?              @db.Decimal
+  deposit_allocations    deposit_allocations[]
+  fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   voucher_heads          voucher_heads[]
 
   @@unique([student_id, fee_type_id, month, academic_year])
@@ -356,28 +356,30 @@ model bank_accounts {
 }
 
 model vouchers {
-  id                       Int             @id @default(autoincrement())
+  id                       Int                   @id @default(autoincrement())
   student_id               Int
   campus_id                Int
   class_id                 Int
   bank_account_id          Int
-  issue_date               DateTime        @db.Date
-  due_date                 DateTime        @db.Date
-  status                   String?         @default("UNPAID") @db.VarChar(20)
-  validity_date            DateTime?       @db.Date
+  issue_date               DateTime              @db.Date
+  due_date                 DateTime              @db.Date
+  status                   String?               @default("UNPAID") @db.VarChar(20)
+  validity_date            DateTime?             @db.Date
   late_fee_charge          Boolean
   section_id               Int?
-  academic_year            String?         @db.VarChar(10)
+  academic_year            String?               @db.VarChar(10)
   month                    Int?
   pdf_url                  String?
-  total_payable_before_due Decimal?        @default(0) @db.Decimal(12, 2)
-  total_payable_after_due  Decimal?        @default(0) @db.Decimal(12, 2)
+  total_payable_before_due Decimal?              @default(0) @db.Decimal(12, 2)
+  total_payable_after_due  Decimal?              @default(0) @db.Decimal(12, 2)
+  late_fee_deposited       Decimal?              @default(0) @db.Decimal(12, 2)
+  deposit_allocations      deposit_allocations[]
   voucher_heads            voucher_heads[]
-  bank_accounts            bank_accounts   @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  campuses                 campuses        @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                  classes         @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                 sections?       @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students                 students        @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+  bank_accounts            bank_accounts         @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses                 campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                  classes               @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                 sections?             @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students                 students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model voucher_heads {
@@ -393,6 +395,31 @@ model voucher_heads {
 
   @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
   @@index([voucher_id], map: "idx_voucher_heads_voucher")
+}
+
+model deposit_allocations {
+  id             Int           @id @default(autoincrement())
+  deposit_id     Int
+  student_fee_id Int?
+  voucher_id     Int?
+  amount         Decimal       @db.Decimal(12, 2)
+  type           String        @db.VarChar(20)
+  deposits       deposits      @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
+  student_fees   student_fees? @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers       vouchers?     @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model deposits {
+  id                  Int                   @id @default(autoincrement())
+  student_id          Int
+  total_amount        Decimal               @db.Decimal(12, 2)
+  deposit_date        DateTime              @default(now()) @db.Timestamp(6)
+  payment_method      String?               @db.VarChar(50)
+  reference_number    String?               @db.VarChar(100)
+  remarks             String?
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  deposit_allocations deposit_allocations[]
+  students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 enum StaffRole {
