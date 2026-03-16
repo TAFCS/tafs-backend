@@ -18,6 +18,7 @@ import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
+import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -98,6 +99,25 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher retrieved successfully',
+            data: voucher,
+        };
+    }
+
+    @Post(':id/deposit')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async recordDeposit(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: RecordVoucherDepositDto,
+    ) {
+        const voucher = await this.vouchersService.recordDeposit(id, dto);
+        return {
+            success: true,
+            message: 'Voucher deposit recorded successfully',
             data: voucher,
         };
     }
