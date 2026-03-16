@@ -63,6 +63,7 @@ export class VouchersController {
             query.section_id,
             query.cc,
             query.gr,
+            query.id,
         );
         return {
             success: true,

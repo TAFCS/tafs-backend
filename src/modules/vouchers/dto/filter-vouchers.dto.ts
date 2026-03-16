@@ -42,4 +42,10 @@ export class FilterVouchersDto {
     @IsOptional()
     @IsString()
     gr?: string;
+
+    @ApiPropertyOptional({ description: 'Filter by exact Voucher ID' })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    id?: number;
 }

@@ -192,12 +192,14 @@ export class VouchersService {
         sectionId?: number,
         cc?: number,
         gr?: string,
+        id?: number,
     ) {
         try {
             return await this.prisma.vouchers.findMany({
                 where: {
                     // student_id or cc both resolve to student_id (cc is the student PK)
                     ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
+                    ...(id ? { id } : {}),
                     ...(campusId ? { campus_id: campusId } : {}),
                     ...(classId ? { class_id: classId } : {}),
                     ...(sectionId ? { section_id: sectionId } : {}),
