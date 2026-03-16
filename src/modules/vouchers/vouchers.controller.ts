@@ -71,6 +71,21 @@ export class VouchersController {
         };
     }
 
+    @Get('by-student/:cc')
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async findByStudent(@Param('cc', ParseIntPipe) cc: number) {
+        const vouchers = await this.vouchersService.findByStudentCC(cc);
+        return {
+            success: true,
+            message: 'Student vouchers retrieved successfully',
+            data: vouchers,
+        };
+    }
+
     @Get(':id')
     @CheckPolicies(
         (ability) =>

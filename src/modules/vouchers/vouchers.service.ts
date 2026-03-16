@@ -21,6 +21,15 @@ const VOUCHER_INCLUDE = {
     bank_accounts: {
         select: { id: true, bank_name: true, account_title: true, account_number: true, branch_code: true, bank_address: true, iban: true },
     },
+    voucher_heads: {
+        include: {
+            student_fees: {
+                include: {
+                    fee_types: true
+                }
+            }
+        }
+    }
 };
 
 @Injectable()
@@ -223,6 +232,14 @@ export class VouchersService {
         }
 
         return voucher;
+    }
+
+    async findByStudentCC(cc: number) {
+        return this.prisma.vouchers.findMany({
+            where: { student_id: cc },
+            include: VOUCHER_INCLUDE,
+            orderBy: { issue_date: 'asc' },
+        });
     }
 
     async update(id: number, dto: UpdateVoucherDto) {
