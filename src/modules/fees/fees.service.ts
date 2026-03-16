@@ -25,22 +25,25 @@ export class FeesService {
 
     // Bulk upsert inside a single transaction
     await this.prisma.$transaction(
-      dto.items.map((item) =>
-        this.prisma.$executeRaw`
-          INSERT INTO student_fees (student_id, fee_type_id, amount, month, academic_year, status)
+      dto.items.map((item) => {
+        const amount = new Prisma.Decimal(item.amount);
+        return this.prisma.$executeRaw`
+          INSERT INTO student_fees (student_id, fee_type_id, amount_before_discount, balance, month, academic_year, status)
           VALUES (
             ${studentId}::int,
             ${item.fee_type_id}::int,
-            ${new Prisma.Decimal(item.amount)},
+            ${amount},
+            ${amount},
             ${item.month}::int,
             ${item.academic_year},
-            false
+            'NOT_ISSUED'::fee_status_enum
           )
           ON CONFLICT (student_id, fee_type_id, month, academic_year)
           DO UPDATE SET
-            amount = EXCLUDED.amount
-        `,
-      ),
+            amount_before_discount = EXCLUDED.amount_before_discount,
+            balance = EXCLUDED.balance
+        `;
+      }),
     );
 
     return { upserted: dto.items.length };

@@ -105,18 +105,20 @@ export class VouchersService {
             });
 
             // 4. Update student_fees records to mark them as ISSUED and set precedence from fee type
-            for (const fee of feeRecords) {
-                await tx.student_fees.update({
-                    where: { id: fee.id },
-                    data: {
-                        issue_date: issueDate,
-                        due_date: dueDate,
-                        validity_date: validityDate,
-                        precedence_override: fee.fee_types?.priority_order ?? 0,
-                        status: 'ISSUED' as any,
-                    },
-                });
-            }
+            await Promise.all(
+                feeRecords.map((fee) =>
+                    tx.student_fees.update({
+                        where: { id: fee.id },
+                        data: {
+                            issue_date: issueDate,
+                            due_date: dueDate,
+                            validity_date: validityDate,
+                            precedence_override: fee.fee_types?.priority_order ?? 0,
+                            status: 'ISSUED' as any,
+                        },
+                    }),
+                ),
+            );
 
             // 5. Snapshot each fee line into voucher_heads, capturing the exact price
             //    at the moment of issuance (Snapshot Billing).
@@ -166,7 +168,7 @@ export class VouchersService {
             }
 
             return newVoucher;
-        });
+        }, { timeout: 15000 });
 
         // 6. Upload PDF if provided (Outside transaction to avoid timeout)
         if (pdfBuffer) {
