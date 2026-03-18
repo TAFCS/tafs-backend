@@ -307,7 +307,6 @@ model student_fees {
   students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   voucher_heads          voucher_heads[]
 
-  @@unique([student_id, fee_type_id, month, academic_year])
   @@unique([student_id, fee_type_id, month, target_month, academic_year])
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")

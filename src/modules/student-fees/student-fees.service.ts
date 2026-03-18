@@ -71,32 +71,46 @@ export class StudentFeesService {
             throw new NotFoundException(`Student with ID ${student_id} not found`);
         }
 
-        return this.prisma.$transaction(async (tx) => {
-            // 1. Delete existing student-specific fees
-            await tx.student_fees.deleteMany({
-                where: { student_id },
-            });
-
-            // 2. Create new fees with the gross price captured in amount_before_discount.
-            //    The final billed price (post-discount) is snapshotted into
-            //    voucher_heads.net_amount only when a voucher is issued.
-            if (items.length > 0) {
-                const createData = items.map((item) => ({
-                    student_id,
-                    fee_type_id: item.fee_type_id,
-                    month: item.month,
-                    academic_year: item.academic_year,
-                    amount_before_discount: item.amount_before_discount,
-                    status: 'NOT_ISSUED' as any,
-                    target_month: item.month || 0,
-                }));
-
-                await tx.student_fees.createMany({
-                    data: createData,
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                // 1. Delete existing student-specific fees
+                await tx.student_fees.deleteMany({
+                    where: { student_id },
                 });
-            }
 
-            return this.findByStudent(student_id);
-        });
+                // 2. Create new fees with the gross price captured in amount_before_discount.
+                //    The final billed price (post-discount) is snapshotted into
+                //    voucher_heads.net_amount only when a voucher is issued.
+                if (items.length > 0) {
+                    // Deduplicate items to prevent unique constraint violations.
+                    // If multiple items for the same fee_type/month/year exist, the last one wins.
+                    const uniqueItemsMap = new Map<string, any>();
+                    
+                    items.forEach(item => {
+                        const key = `${item.fee_type_id}-${item.month}-${item.target_month}-${item.academic_year}`;
+                        uniqueItemsMap.set(key, {
+                            student_id,
+                            fee_type_id: item.fee_type_id,
+                            month: item.month,
+                            target_month: item.target_month,
+                            academic_year: item.academic_year,
+                            amount_before_discount: item.amount_before_discount,
+                            status: 'NOT_ISSUED' as any,
+                        });
+                    });
+
+                    const createData = Array.from(uniqueItemsMap.values());
+
+                    await tx.student_fees.createMany({
+                        data: createData,
+                    });
+                }
+
+                return this.findByStudent(student_id);
+            });
+        } catch (error) {
+            console.error('Bulk save failed:', error);
+            throw error;
+        }
     }
 }
