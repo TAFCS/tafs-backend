@@ -88,6 +88,7 @@ export class StudentFeesService {
                     academic_year: item.academic_year,
                     amount_before_discount: item.amount_before_discount,
                     status: 'NOT_ISSUED' as any,
+                    target_month: item.month || 0,
                 }));
 
                 await tx.student_fees.createMany({
