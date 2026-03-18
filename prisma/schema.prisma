@@ -301,6 +301,7 @@ model student_fees {
   validity_date          DateTime?             @db.Date
   status                 fee_status_enum?      @default(NOT_ISSUED)
   amount_before_discount Decimal?              @db.Decimal
+  target_month           Int
   deposit_allocations    deposit_allocations[]
   fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
