@@ -16,15 +16,11 @@ export class FeeLineItemDto {
   @IsInt()
   fee_type_id: number;
 
+  /** Calendar month 1–12 */
   @IsInt()
   @Min(1)
   @Max(12)
   month: number;
-
-  @IsInt()
-  @Min(1)
-  @Max(12)
-  target_month: number;
 
   /** Final resolved amount (may be overridden from base) */
   @IsNumber({ maxDecimalPlaces: 2 })
