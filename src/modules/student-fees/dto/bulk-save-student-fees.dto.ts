@@ -16,10 +16,16 @@ export class SaveStudentFeeItemDto {
     @IsString()
     academic_year: string;
 
-    /** Gross price for this fee before any discount is applied. */
+     /** Gross price for this fee before any student-specific discount is applied (template price). */
     @IsNumber({ maxDecimalPlaces: 2 })
     @IsPositive()
     amount_before_discount: number;
+
+    /** Net amount for this student (after specific override). */
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @IsPositive()
+    @IsOptional()
+    amount?: number;
 }
 
 export class BulkSaveStudentFeesDto {

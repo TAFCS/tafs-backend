@@ -132,6 +132,7 @@ export class StudentFeesService {
                         where: { id: existing.id },
                         data: {
                             month: item.month,
+                            amount: item.amount,
                             amount_before_discount: item.amount_before_discount,
                         },
                     })
@@ -144,6 +145,7 @@ export class StudentFeesService {
                             fee_type_id: item.fee_type_id,
                             month: item.month,
                             academic_year: item.academic_year,
+                            amount: item.amount,
                             amount_before_discount: item.amount_before_discount,
                             status: 'NOT_ISSUED' as any,
                             target_month: targetMonth,
