@@ -1,45 +1,29 @@
 import { IsArray, IsBoolean, IsInt, IsISO8601, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { Type, Transform } from 'class-transformer';
-
-/**
- * A single fee line to be snapshotted into voucher_heads when the voucher is
- * issued. The gross price (amount_before_discount) is read automatically from
- * the linked student_fees record; the caller only needs to supply the discount
- * so the service can derive net_amount = amount_before_discount − discount_amount.
- */
-export class VoucherFeeLineDto {
-    /** FK → student_fees.id */
-    @IsInt()
-    student_fee_id: number;
-
-    /** Discount to apply (0 if none) */
-    @IsNumber({ maxDecimalPlaces: 2 })
-    @IsOptional()
-    discount_amount?: number;
-}
+import { Type, Transform, plainToInstance } from 'class-transformer';
+import { VoucherFeeLineDto } from './voucher-fee-line.dto';
 
 export class CreateVoucherDto {
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsNotEmpty()
     student_id: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsNotEmpty()
     campus_id: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsNotEmpty()
     class_id: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsOptional()
     section_id?: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsNotEmpty()
     bank_account_id: number;
@@ -56,22 +40,27 @@ export class CreateVoucherDto {
     @IsOptional()
     validity_date?: string;
 
-    @Transform(({ value }) => value === 'true' || value === true)
+    @Transform(({ value }) => (value === 'true' || value === true))
     @IsBoolean()
     @IsNotEmpty()
     late_fee_charge: boolean;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsNumber()
     @IsOptional()
     late_fee_amount?: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsOptional()
     precedence?: number;
 
-    @Type(() => Number)
+    @Transform(({ value }) => {
+        if (value === undefined || value === null) return undefined;
+        if (Array.isArray(value)) return value.map(v => Number(v));
+        if (typeof value === 'string') return [Number(value)];
+        return value;
+    })
     @IsInt({ each: true })
     @IsOptional()
     orderedFeeIds?: number[];
@@ -80,7 +69,7 @@ export class CreateVoucherDto {
     @IsOptional()
     academic_year?: string;
 
-    @Type(() => Number)
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsOptional()
     month?: number;
@@ -90,6 +79,23 @@ export class CreateVoucherDto {
      * Each entry captures the price at the moment the voucher is issued,
      * ensuring historical accuracy even if the class fee schedule changes later.
      */
+    @Transform(({ value }) => {
+        if (typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed)) {
+                    return parsed.map(item => plainToInstance(VoucherFeeLineDto, item));
+                }
+                return parsed;
+            } catch (e) {
+                return value;
+            }
+        }
+        if (Array.isArray(value)) {
+            return value.map(item => plainToInstance(VoucherFeeLineDto, item));
+        }
+        return value;
+    })
     @IsArray()
     @ValidateNested({ each: true })
     @Type(() => VoucherFeeLineDto)

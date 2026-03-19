@@ -307,7 +307,8 @@ model student_fees {
   students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   voucher_heads          voucher_heads[]
 
-  @@unique([student_id, fee_type_id, target_month, academic_year])
+  @@unique([student_id, fee_type_id, month, target_month, academic_year])
+  @@unique([student_id, fee_type_id, target_month, academic_year], map: "student_fees_student_id_fee_type_id_target_month_academic_year_")
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
 }
@@ -391,6 +392,7 @@ model voucher_heads {
   net_amount       Decimal      @db.Decimal(12, 2)
   amount_deposited Decimal?     @default(0) @db.Decimal(12, 2)
   balance          Decimal?     @default(0) @db.Decimal(12, 2)
+  discount_label   String?      @db.VarChar(100)
   student_fees     student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
   vouchers         vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
 

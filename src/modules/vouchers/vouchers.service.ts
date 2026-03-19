@@ -65,12 +65,7 @@ export class VouchersService {
                 },
             });
 
-            // Calculate totals
-            const totalBeforeDue = feeRecords.reduce((sum, fee) => sum + Number(fee.amount_before_discount), 0);
-            const lateFee = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
-            const totalAfterDue = totalBeforeDue + lateFee;
-
-            // 2. Create the voucher record
+            // 2. Create the voucher record (initial creation with placeholder totals)
             const newVoucher = await tx.vouchers.create({
                 data: {
                     student_id: dto.student_id,
@@ -84,27 +79,43 @@ export class VouchersService {
                     late_fee_charge: dto.late_fee_charge,
                     academic_year: dto.academic_year,
                     month: dto.month,
-                    total_payable_before_due: totalBeforeDue,
-                    total_payable_after_due: totalAfterDue,
+                    total_payable_before_due: 0,
+                    total_payable_after_due: 0,
                 },
                 include: VOUCHER_INCLUDE,
             });
 
-            // 3. Create voucher heads (snapshots of fees)
-            const voucherHeadsData = feeRecords.map((fee) => ({
-                voucher_id: newVoucher.id,
-                student_fee_id: fee.id,
-                discount_amount: 0, // Placeholder for future use
-                net_amount: fee.amount_before_discount ?? 0,
-                amount_deposited: 0,
-                balance: fee.amount_before_discount ?? 0,
-            }));
+            // 3. Create voucher heads (snapshots of fees with current prices and discounts)
+            const feeLineMap = new Map(
+                (dto.fee_lines || []).map(l => [l.student_fee_id, l])
+            );
+
+            let totalBeforeDueDecimal = new Prisma.Decimal(0);
+
+            const voucherHeadsData = feeRecords.map((fee) => {
+                const discountInfo = feeLineMap.get(fee.id);
+                const gross = fee.amount_before_discount ?? new Prisma.Decimal(0);
+                const discount = new Prisma.Decimal(discountInfo?.discount_amount ?? 0);
+                const netAmount = new Prisma.Decimal(gross).sub(discount);
+                
+                totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
+
+                return {
+                    voucher_id: newVoucher.id,
+                    student_fee_id: fee.id,
+                    discount_amount: discount,
+                    discount_label: discountInfo?.discount_label ?? null,
+                    net_amount: netAmount,
+                    amount_deposited: 0,
+                    balance: netAmount,
+                };
+            });
 
             await tx.voucher_heads.createMany({
                 data: voucherHeadsData,
             });
 
-            // 4. Update student_fees records to mark them as ISSUED and set precedence from fee type
+            // 4. Update student_fees records to mark them as ISSUED
             await Promise.all(
                 feeRecords.map((fee) =>
                     tx.student_fees.update({
@@ -120,52 +131,17 @@ export class VouchersService {
                 ),
             );
 
-            // 5. Snapshot each fee line into voucher_heads, capturing the exact price
-            //    at the moment of issuance (Snapshot Billing).
-            if (dto.fee_lines && dto.fee_lines.length > 0) {
-                // Fetch the gross prices stored on student_fees so we don't rely on
-                // the caller to re-send data that already exists in the DB.
-                const feeIds = dto.fee_lines.map((l) => l.student_fee_id);
-                const studentFeeRecords = await tx.student_fees.findMany({
-                    where: { id: { in: feeIds } },
-                    select: { id: true, amount_before_discount: true },
-                });
-                const feeAmountMap = new Map(
-                    studentFeeRecords.map((sf) => [sf.id, sf.amount_before_discount]),
-                );
+            // 5. Update voucher with final totals derived from heads
+            const lateFeeVal = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
+            const totalAfterDueDecimal = totalBeforeDueDecimal.add(lateFeeVal);
 
-                let totalBeforeDue = new Prisma.Decimal(0);
-
-                await tx.voucher_heads.createMany({
-                    data: dto.fee_lines.map((line) => {
-                        const gross = feeAmountMap.get(line.student_fee_id) ?? new Prisma.Decimal(0);
-                        const discount = new Prisma.Decimal(line.discount_amount ?? 0);
-                        const netAmount = new Prisma.Decimal(gross).sub(discount);
-                        totalBeforeDue = totalBeforeDue.add(netAmount);
-                        return {
-                            voucher_id: newVoucher.id, // Use newVoucher.id from step 2
-                            student_fee_id: line.student_fee_id,
-                            discount_amount: discount,
-                            net_amount: netAmount,
-                            amount_deposited: new Prisma.Decimal(0),
-                            balance: netAmount,
-                        };
-                    }),
-                    skipDuplicates: true,
-                });
-
-                // Update voucher with final totals derived from heads
-                const lateFee = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
-                const totalAfterDue = totalBeforeDue.add(lateFee);
-
-                await tx.vouchers.update({
-                    where: { id: newVoucher.id },
-                    data: {
-                        total_payable_before_due: totalBeforeDue,
-                        total_payable_after_due: totalAfterDue,
-                    },
-                });
-            }
+            await tx.vouchers.update({
+                where: { id: newVoucher.id },
+                data: {
+                    total_payable_before_due: totalBeforeDueDecimal,
+                    total_payable_after_due: totalAfterDueDecimal,
+                },
+            });
 
             return newVoucher;
         }, { timeout: 15000 });
