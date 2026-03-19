@@ -9,6 +9,10 @@ export class SaveStudentFeeItemDto {
     @IsOptional()
     month?: number;
 
+    @IsNumber()
+    @IsOptional()
+    target_month?: number;
+
     @IsString()
     academic_year: string;
 
