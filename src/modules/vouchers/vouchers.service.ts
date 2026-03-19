@@ -288,78 +288,80 @@ export class VouchersService {
             );
         }
 
-        return this.prisma.$transaction(async (tx) => {
-            const voucher = await tx.vouchers.findUnique({
-                where: { id: voucherId },
-                include: {
-                    voucher_heads: {
-                        include: {
-                            student_fees: true,
-                        },
-                    },
-                },
-            });
+        // 1. PRE-TRANSACTION VALIDATION
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: { voucher_heads: true },
+        });
 
-            if (!voucher) {
-                throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
-            }
+        if (!voucher) {
+            throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+        }
 
-            const voucherHeadMap = new Map(voucher.voucher_heads.map((h) => [h.id, h]));
+        const voucherHeadMap = new Map(
+            voucher.voucher_heads.map((h) => [h.id, h]),
+        );
 
-            for (const { headId, amount } of parsedDistributions) {
-                const head = voucherHeadMap.get(headId);
-                if (!head) {
-                    throw new BadRequestException(
-                        `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
-                    );
-                }
-
-                const currentBalance = new Prisma.Decimal(head.balance ?? 0);
-                if (amount.gt(currentBalance)) {
-                    throw new BadRequestException(
-                        `Distribution for head #${headId} exceeds its balance.`,
-                    );
-                }
-            }
-
-            const currentBeforeDue = new Prisma.Decimal(
-                voucher.total_payable_before_due ?? 0,
-            );
-            const currentAfterDue = new Prisma.Decimal(
-                voucher.total_payable_after_due ?? 0,
-            );
-            const remainingLateFee = voucher.late_fee_charge
-                ? Prisma.Decimal.max(
-                      currentAfterDue.sub(currentBeforeDue),
-                      new Prisma.Decimal(0),
-                  )
-                : new Prisma.Decimal(0);
-
-            if (lateFeeAmount.gt(remainingLateFee)) {
+        for (const { headId, amount } of parsedDistributions) {
+            const head = voucherHeadMap.get(headId);
+            if (!head) {
                 throw new BadRequestException(
-                    'Late fee allocation exceeds the remaining late surcharge.',
+                    `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
                 );
             }
 
-            const affectedStudentFeeIds = [
-                ...new Set(
-                    parsedDistributions
-                        .map((d) => voucherHeadMap.get(d.headId)?.student_fee_id)
-                        .filter(Boolean) as number[],
-                ),
-            ];
-
-            for (const { headId, amount } of parsedDistributions) {
-                if (amount.eq(0)) continue;
-
-                await tx.voucher_heads.update({
-                    where: { id: headId },
-                    data: {
-                        amount_deposited: { increment: amount },
-                        balance: { decrement: amount },
-                    },
-                });
+            const currentBalance = new Prisma.Decimal(head.balance ?? 0);
+            if (amount.gt(currentBalance)) {
+                throw new BadRequestException(
+                    `Distribution for head #${headId} exceeds its balance.`,
+                );
             }
+        }
+
+        const currentBeforeDue = new Prisma.Decimal(
+            voucher.total_payable_before_due ?? 0,
+        );
+        const currentAfterDue = new Prisma.Decimal(
+            voucher.total_payable_after_due ?? 0,
+        );
+        const remainingLateFee = voucher.late_fee_charge
+            ? Prisma.Decimal.max(
+                  currentAfterDue.sub(currentBeforeDue),
+                  new Prisma.Decimal(0),
+              )
+            : new Prisma.Decimal(0);
+
+        if (lateFeeAmount.gt(remainingLateFee)) {
+            throw new BadRequestException(
+                'Late fee allocation exceeds the remaining late surcharge.',
+            );
+        }
+
+        const affectedStudentFeeIds: number[] = [
+            ...new Set(
+                parsedDistributions
+                    .map((d) => voucherHeadMap.get(d.headId)?.student_fee_id)
+                    .filter(Boolean) as number[],
+            ),
+        ];
+
+        // 2. LEAN TRANSACTION
+        await this.prisma.$transaction(
+            async (tx) => {
+
+
+            await Promise.all(
+                parsedDistributions.map(({ headId, amount }) => {
+                    if (amount.eq(0)) return Promise.resolve();
+                    return tx.voucher_heads.update({
+                        where: { id: headId },
+                        data: {
+                            amount_deposited: { increment: amount },
+                            balance: { decrement: amount },
+                        },
+                    });
+                }),
+            );
 
             // Batch update affected student fees
             if (affectedStudentFeeIds.length > 0) {
@@ -373,33 +375,35 @@ export class VouchersService {
                     where: { id: { in: affectedStudentFeeIds } },
                 });
 
-                for (const fee of studentFees) {
-                    const deposit = totalDeposits.find(
-                        (d) => d.student_fee_id === fee.id,
-                    );
-                    const totalDeposited = new Prisma.Decimal(
-                        deposit?._sum.amount_deposited ?? 0,
-                    );
-                    const grossAmount = new Prisma.Decimal(
-                        fee.amount_before_discount ?? 0,
-                    );
-                    const nextFeeBalance = Prisma.Decimal.max(
-                        grossAmount.sub(totalDeposited),
-                        new Prisma.Decimal(0),
-                    );
+                await Promise.all(
+                    studentFees.map((fee) => {
+                        const deposit = totalDeposits.find(
+                            (d) => d.student_fee_id === fee.id,
+                        );
+                        const totalDeposited = new Prisma.Decimal(
+                            deposit?._sum.amount_deposited ?? 0,
+                        );
+                        const grossAmount = new Prisma.Decimal(
+                            fee.amount_before_discount ?? 0,
+                        );
+                        const nextFeeBalance = Prisma.Decimal.max(
+                            grossAmount.sub(totalDeposited),
+                            new Prisma.Decimal(0),
+                        );
 
-                    let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
-                    if (nextFeeBalance.eq(0)) {
-                        nextFeeStatus = 'PAID';
-                    } else if (totalDeposited.gt(0)) {
-                        nextFeeStatus = 'PARTIALLY_PAID';
-                    }
+                        let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
+                        if (nextFeeBalance.eq(0)) {
+                            nextFeeStatus = 'PAID';
+                        } else if (totalDeposited.gt(0)) {
+                            nextFeeStatus = 'PARTIALLY_PAID';
+                        }
 
-                    await tx.student_fees.update({
-                        where: { id: fee.id },
-                        data: { status: nextFeeStatus as any },
-                    });
-                }
+                        return tx.student_fees.update({
+                            where: { id: fee.id },
+                            data: { status: nextFeeStatus as any },
+                        });
+                    }),
+                );
             }
 
             if (lateFeeAmount.gt(0)) {
@@ -411,49 +415,55 @@ export class VouchersService {
                 });
             }
 
-            const refreshed = await tx.vouchers.findUnique({
-                where: { id: voucherId },
-                include: VOUCHER_INCLUDE,
-            });
-
-            if (!refreshed) {
-                throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
-            }
-
-            // Calculate overall remaining balance including heads and remaining late surcharge
-            const remainingHeads = refreshed.voucher_heads.reduce(
-                (sum, head) => sum.add(new Prisma.Decimal(head.balance ?? 0)),
-                new Prisma.Decimal(0),
-            );
-
-            const totalPayableAfterDue = new Prisma.Decimal(refreshed.total_payable_after_due ?? 0);
-            const totalPayableBeforeDue = new Prisma.Decimal(refreshed.total_payable_before_due ?? 0);
-            const totalLateSurcharge = Prisma.Decimal.max(totalPayableAfterDue.sub(totalPayableBeforeDue), 0);
-            const depositedLateSurcharge = new Prisma.Decimal((refreshed as any).late_fee_deposited ?? 0);
-            const remainingLateSurcharge = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLateSurcharge), 0);
-
-            const remainingOverall = remainingHeads.add(remainingLateSurcharge);
-
-            let nextVoucherStatus = refreshed.status ?? 'UNPAID';
-            if (remainingOverall.eq(0)) {
-                nextVoucherStatus = 'PAID';
-            } else {
-                // If anything was ever deposited, it's at least PARTIALLY_PAID
-                const anyHeadDeposited = refreshed.voucher_heads.some(h => new Prisma.Decimal(h.amount_deposited ?? 0).gt(0));
-                if (anyHeadDeposited || depositedLateSurcharge.gt(0)) {
-                    nextVoucherStatus = 'PARTIALLY_PAID';
-                }
-            }
-
-            if (nextVoucherStatus !== refreshed.status) {
-                return tx.vouchers.update({
+                // Minimal refresh for calculation - much faster than full VOUCHER_INCLUDE
+                const refreshed = await tx.vouchers.findUnique({
                     where: { id: voucherId },
-                    data: { status: nextVoucherStatus },
-                    include: VOUCHER_INCLUDE,
+                    include: {
+                        voucher_heads: true,
+                    },
                 });
-            }
 
-            return refreshed;
-        }, { timeout: 15000 });
+                if (!refreshed) {
+                    throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+                }
+
+                const remainingHeads = refreshed.voucher_heads.reduce(
+                    (sum, head) => sum.add(new Prisma.Decimal(head.balance as any ?? 0)),
+                    new Prisma.Decimal(0),
+                );
+
+                const tAfter = new Prisma.Decimal((refreshed as any).total_payable_after_due ?? 0);
+                const tBefore = new Prisma.Decimal((refreshed as any).total_payable_before_due ?? 0);
+                const totalLateSurcharge = Prisma.Decimal.max(tAfter.sub(tBefore), 0);
+                const depositedLS = new Prisma.Decimal((refreshed as any).late_fee_deposited ?? 0);
+                const remainingLS = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLS), 0);
+
+                const isOverdue = new Date() > new Date(refreshed.due_date);
+                const remainingOverall = isOverdue ? remainingHeads.add(remainingLS) : remainingHeads;
+
+                let nextVoucherStatus = refreshed.status ?? 'UNPAID';
+                if (remainingOverall.eq(0)) {
+                    nextVoucherStatus = 'PAID';
+                } else {
+                    const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
+                        new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
+                    );
+                    if (anyHeadDeposited || depositedLS.gt(0)) {
+                        nextVoucherStatus = 'PARTIALLY_PAID';
+                    }
+                }
+
+                if (nextVoucherStatus !== refreshed.status) {
+                    await tx.vouchers.update({
+                        where: { id: voucherId },
+                        data: { status: nextVoucherStatus },
+                    });
+                }
+            },
+            { timeout: 30000 },
+        );
+
+        // 3. FINAL FULL FETCH
+        return this.findOne(voucherId);
     }
 }
