@@ -180,7 +180,7 @@ export class VouchersService {
         id?: number,
     ) {
         try {
-            return await this.prisma.vouchers.findMany({
+            const vouchers = await this.prisma.vouchers.findMany({
                 where: {
                     // student_id or cc both resolve to student_id (cc is the student PK)
                     ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
@@ -200,6 +200,7 @@ export class VouchersService {
                 include: VOUCHER_INCLUDE,
                 orderBy: { issue_date: 'desc' },
             });
+            return vouchers.map((v) => this.normalizeVoucher(v));
         } catch (err: any) {
             this.logger.error('findAll failed', err?.message, err?.stack);
             throw new InternalServerErrorException(
@@ -218,15 +219,16 @@ export class VouchersService {
             throw new NotFoundException(`Voucher with ID ${id} not found`);
         }
 
-        return voucher;
+        return this.normalizeVoucher(voucher);
     }
 
     async findByStudentCC(cc: number) {
-        return this.prisma.vouchers.findMany({
+        const vouchers = await this.prisma.vouchers.findMany({
             where: { student_id: cc },
             include: VOUCHER_INCLUDE,
             orderBy: { issue_date: 'asc' },
         });
+        return vouchers.map((v) => this.normalizeVoucher(v));
     }
 
     async update(id: number, dto: UpdateVoucherDto) {
@@ -444,12 +446,16 @@ export class VouchersService {
                 let nextVoucherStatus = refreshed.status ?? 'UNPAID';
                 if (remainingOverall.eq(0)) {
                     nextVoucherStatus = 'PAID';
+                } else if (isOverdue) {
+                    nextVoucherStatus = 'OVERDUE';
                 } else {
                     const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
                         new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
                     );
                     if (anyHeadDeposited || depositedLS.gt(0)) {
                         nextVoucherStatus = 'PARTIALLY_PAID';
+                    } else {
+                        nextVoucherStatus = 'UNPAID';
                     }
                 }
 
@@ -465,5 +471,39 @@ export class VouchersService {
 
         // 3. FINAL FULL FETCH
         return this.findOne(voucherId);
+    }
+
+    private normalizeVoucher(voucher: any) {
+        if (!voucher) return null;
+        if (voucher.status === 'PAID') return voucher;
+
+        const remHeads = (voucher.voucher_heads || []).reduce(
+            (sum, head) => sum.add(new Prisma.Decimal(head.balance as any ?? 0)),
+            new Prisma.Decimal(0),
+        );
+
+        const tAfter = new Prisma.Decimal((voucher as any).total_payable_after_due ?? 0);
+        const tBefore = new Prisma.Decimal((voucher as any).total_payable_before_due ?? 0);
+        const depLS = new Prisma.Decimal((voucher as any).late_fee_deposited ?? 0);
+        const totalLS = Prisma.Decimal.max(tAfter.sub(tBefore), 0);
+        const remLS = Prisma.Decimal.max(totalLS.sub(depLS), 0);
+        
+        const isOverdue = new Date() > new Date(voucher.due_date);
+        const remOverall = isOverdue ? remHeads.add(remLS) : remHeads;
+
+        let computedStatus = voucher.status;
+        if (remOverall.eq(0)) {
+            computedStatus = 'PAID';
+        } else if (isOverdue) {
+            computedStatus = 'OVERDUE';
+        } else {
+            const anyDep = (voucher.voucher_heads || []).some(h => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0)) || depLS.gt(0);
+            computedStatus = anyDep ? 'PARTIALLY_PAID' : 'UNPAID';
+        }
+
+        return {
+            ...voucher,
+            status: computedStatus,
+        };
     }
 }
