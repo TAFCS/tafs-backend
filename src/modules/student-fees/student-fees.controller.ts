@@ -7,6 +7,9 @@ import {
     Param,
     Post,
     Query,
+    Patch,
+    Delete,
+    ParseIntPipe,
     UseGuards,
 } from '@nestjs/common';
 import { StudentFeesService } from './student-fees.service';
@@ -50,6 +53,49 @@ export class StudentFeesController {
             success: true,
             message: 'Student fees saved successfully',
             data: updated,
+        };
+    }
+
+    @Post('bundles')
+    @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee'))
+    async createBundle(@Body() dto: any) {
+        const bundle = await this.studentFeesService.createBundle(dto);
+        return {
+            success: true,
+            message: 'Bundle created successfully',
+            data: bundle,
+        };
+    }
+
+    @Patch('bundles/:id')
+    @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee'))
+    async updateBundle(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+        const bundle = await this.studentFeesService.updateBundle(id, dto);
+        return {
+            success: true,
+            message: 'Bundle updated successfully',
+            data: bundle,
+        };
+    }
+
+    @Delete('bundles/:id')
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee'))
+    async deleteBundle(@Param('id', ParseIntPipe) id: number) {
+        await this.studentFeesService.deleteBundle(id);
+        return {
+            success: true,
+            message: 'Bundle deleted successfully',
+        };
+    }
+
+    @Get('bundles/:studentId')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee'))
+    async getBundlesByStudent(@Param('studentId', ParseIntPipe) studentId: number) {
+        const bundles = await this.studentFeesService.getBundlesByStudent(studentId);
+        return {
+            success: true,
+            message: 'Bundles retrieved successfully',
+            data: bundles,
         };
     }
 }

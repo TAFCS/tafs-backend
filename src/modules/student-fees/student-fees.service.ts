@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
+import { CreateBundleDto } from './dto/create-bundle.dto';
 
 @Injectable()
 export class StudentFeesService {
@@ -11,6 +13,7 @@ export class StudentFeesService {
             where: { student_id: studentId },
             include: {
                 fee_types: true,
+                student_fee_bundles: true,
             },
             orderBy: {
                 fee_types: {
@@ -160,5 +163,87 @@ export class StudentFeesService {
         }
 
         return this.findByStudent(student_id);
+    }
+
+    async createBundle(dto: CreateBundleDto) {
+        const { student_id, bundle_name, total_amount, academic_year, fee_ids } = dto;
+
+        // Verify fees belong to this student
+        const fees = await this.prisma.student_fees.findMany({
+            where: {
+                id: { in: fee_ids },
+                student_id,
+            },
+        });
+
+        if (fees.length !== fee_ids.length) {
+            throw new BadRequestException('One or more fees do not belong to the student');
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const bundle = await tx.student_fee_bundles.create({
+                data: {
+                    student_id,
+                    bundle_name,
+                    total_amount: total_amount ? new Prisma.Decimal(total_amount) : 0,
+                    academic_year,
+                },
+            });
+
+            await tx.student_fees.updateMany({
+                where: { id: { in: fee_ids } },
+                data: { bundle_id: bundle.id },
+            });
+
+            return bundle;
+        });
+    }
+
+    async updateBundle(id: number, dto: Partial<CreateBundleDto>) {
+        const { bundle_name, total_amount, academic_year, fee_ids } = dto;
+
+        return this.prisma.$transaction(async (tx) => {
+            const bundle = await tx.student_fee_bundles.update({
+                where: { id },
+                data: {
+                    bundle_name,
+                    total_amount: total_amount ? new Prisma.Decimal(total_amount) : undefined,
+                    academic_year,
+                },
+            });
+
+            if (fee_ids) {
+                // Unlink old fees
+                await tx.student_fees.updateMany({
+                    where: { bundle_id: id },
+                    data: { bundle_id: null },
+                });
+
+                // Link new fees
+                await tx.student_fees.updateMany({
+                    where: { id: { in: fee_ids } },
+                    data: { bundle_id: id },
+                });
+            }
+
+            return bundle;
+        });
+    }
+
+    async deleteBundle(id: number) {
+        return this.prisma.student_fee_bundles.delete({
+            where: { id },
+        });
+    }
+
+    async getBundlesByStudent(studentId: number) {
+        return this.prisma.student_fee_bundles.findMany({
+            where: { student_id: studentId },
+            include: {
+                student_fees: {
+                    include: { fee_types: true },
+                },
+            },
+        });
     }
 }

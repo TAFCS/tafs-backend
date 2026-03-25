@@ -102,6 +102,17 @@ model student_admissions {
   @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")
 }
 
+model student_fee_bundles {
+  id            Int            @id @default(autoincrement())
+  student_id    Int
+  bundle_name   String         @db.VarChar(100)
+  total_amount  Decimal?       @default(0) @db.Decimal(12, 2)
+  academic_year String?        @db.VarChar(20)
+  created_at    DateTime?      @default(now()) @db.Timestamp(6)
+  students      students       @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  student_fees  student_fees[]
+}
+
 model student_guardians {
   student_id           Int
   guardian_id          Int
@@ -192,6 +203,7 @@ model students {
   student_guardians          student_guardians[]
   student_languages          student_languages[]
   student_previous_schools   student_previous_schools[]
+  student_fee_bundles        student_fee_bundles[]
   campuses                   campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                    classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -304,6 +316,8 @@ model student_fees {
   amount                 Decimal?              @db.Decimal(12, 2)
   amount_before_discount Decimal?              @db.Decimal(12, 2)
   target_month           Int
+  bundle_id              Int?
+  student_fee_bundles    student_fee_bundles?  @relation(fields: [bundle_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   deposit_allocations    deposit_allocations[]
   fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
