@@ -98,6 +98,7 @@ export class IdentityService {
           whatsapp_country_code: dto.whatsapp_country_code ?? '+92',
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,
+          academic_year: dto.admission.academic_year,
           admission_age_years: this.calcAge(dob),
           status: 'SOFT_ADMISSION',
           campus_id: dto.admission.campus_id || undefined,
@@ -243,6 +244,7 @@ export class IdentityService {
             physical_impairment: dto.physical_impairment || undefined,
             medical_info: dto.medical_info || undefined,
             interests: dto.interests || undefined,
+            academic_year: dto.admission?.academic_year || undefined,
             status: 'ENROLLED',
           },
         });

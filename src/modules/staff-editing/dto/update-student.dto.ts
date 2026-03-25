@@ -124,6 +124,11 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(10)
+  academic_year?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(50)
   gr_number?: string;
 

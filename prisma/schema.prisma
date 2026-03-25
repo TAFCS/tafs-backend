@@ -180,6 +180,7 @@ model students {
   house_id                   Int?
   doa                        DateTime?                  @db.Date
   full_name                  String                     @db.VarChar(100)
+  academic_year              String?                    @db.VarChar(10)
   place_of_birth             String?                    @db.VarChar(100)
   primary_phone_country_code String?                    @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
