@@ -6,6 +6,8 @@ import {
   HttpStatus,
   Patch,
   Post,
+  Delete,
+  Param,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -94,6 +96,21 @@ export class ClassFeeScheduleController {
       success: true,
       message: 'Class fee schedules updated successfully',
       data: updated,
+    };
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Delete, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
+  async remove(@Param('id') id: string) {
+    await this.classFeeScheduleService.remove(Number(id));
+    return {
+      success: true,
+      message: 'Class fee schedule deleted successfully',
     };
   }
 }

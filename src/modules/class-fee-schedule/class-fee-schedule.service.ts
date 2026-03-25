@@ -77,4 +77,10 @@ export class ClassFeeScheduleService {
 
     return updated;
   }
+
+  async remove(id: number) {
+    return this.prisma.class_fee_schedule.delete({
+      where: { id },
+    });
+  }
 }
