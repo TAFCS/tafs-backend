@@ -1,7 +1,9 @@
-import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { AssignStudentDto } from './dto/assign-student.dto';
+import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
+import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -59,6 +61,28 @@ export class StudentsController {
       updated,
       HttpStatus.OK,
       'Student assignment updated successfully',
+    );
+  }
+
+  @Post('promotion/single')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async promoteSingle(@Body() dto: PromoteSingleStudentDto) {
+    const result = await this.studentsService.promoteSingle(dto);
+    return createApiResponse(
+      result,
+      HttpStatus.OK,
+      STUDENTS_MESSAGES.PROMOTION_SINGLE_SUCCESS,
+    );
+  }
+
+  @Post('promotion/bulk')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async promoteBulk(@Body() dto: PromoteBulkStudentsDto) {
+    const result = await this.studentsService.promoteBulk(dto);
+    return createApiResponse(
+      result,
+      HttpStatus.OK,
+      STUDENTS_MESSAGES.PROMOTION_BULK_SUCCESS,
     );
   }
 }

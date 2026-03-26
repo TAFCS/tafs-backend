@@ -1,13 +1,52 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { Prisma } from '@prisma/client';
+import { ClassSelectorDto } from './dto/class-selector.dto';
+import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
+import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
+
+type PromotionStatus = 'promoted' | 'skipped' | 'failed';
+
+type PromotionReasonCode =
+  | 'STUDENT_NOT_FOUND'
+  | 'FROM_CLASS_MISMATCH'
+  | 'ALREADY_AT_TARGET'
+  | 'TARGET_CLASS_INACTIVE_FOR_CAMPUS'
+  | 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS'
+  | 'INTERNAL_ERROR';
+
+type PromotionOutcome = {
+  student_id: number;
+  status: PromotionStatus;
+  reason_code?: PromotionReasonCode;
+  message: string;
+  from_class_id?: number | null;
+  to_class_id?: number;
+  from_academic_year?: string | null;
+  to_academic_year?: string;
+  dry_run: boolean;
+};
+
+type ResolvedClass = {
+  id: number;
+  description: string;
+  class_code: string;
+  academic_system: string;
+};
 
 @Injectable()
 export class StudentsService {
   constructor(private readonly prisma: PrismaService) { }
+
+  private readonly assignmentInclude = {
+    campuses: { select: { campus_name: true, campus_code: true } },
+    classes: { select: { description: true, class_code: true } },
+    sections: { select: { description: true } },
+    houses: { select: { house_name: true } },
+  } as const;
 
   async findAll(query: GetStudentsDto) {
     const { page = 1, limit = 10, search, campus_id, status, fields } = query;
@@ -410,13 +449,396 @@ export class StudentsService {
             section_id: dto.section_id !== undefined ? dto.section_id : undefined,
             house_id: dto.house_id !== undefined ? dto.house_id : undefined,
         },
-        include: {
-            campuses: { select: { campus_name: true, campus_code: true } },
-            classes: { select: { description: true, class_code: true } },
-            sections: { select: { description: true } },
-            houses: { select: { house_name: true } },
-        },
+        include: this.assignmentInclude,
     });
+  }
+
+  async promoteSingle(dto: PromoteSingleStudentDto) {
+    const result = await this.promoteBulk({
+      from: dto.from,
+      to: dto.to,
+      to_section_id: dto.to_section_id,
+      student_ids: [dto.student_id],
+      reason: dto.reason,
+      dry_run: dto.dry_run,
+    });
+
+    return {
+      ...result,
+      outcome: result.results[0] || null,
+    };
+  }
+
+  async promoteBulk(dto: PromoteBulkStudentsDto) {
+    const fromClass = await this.resolveClassSelector(dto.from, 'from');
+    const toClass = await this.resolveClassSelector(dto.to, 'to');
+
+    if (fromClass.id === toClass.id) {
+      throw new BadRequestException('From and to class must be different for promotion');
+    }
+
+    const dryRun = !!dto.dry_run;
+    const distinctStudentIds = dto.student_ids?.length
+      ? Array.from(new Set(dto.student_ids))
+      : undefined;
+
+    const where: Prisma.studentsWhereInput = {
+      deleted_at: null,
+    };
+
+    if (dto.campus_id !== undefined) {
+      where.campus_id = dto.campus_id;
+    }
+
+    if (dto.section_id !== undefined) {
+      where.section_id = dto.section_id;
+    }
+
+    if (distinctStudentIds && distinctStudentIds.length > 0) {
+      where.cc = { in: distinctStudentIds };
+    } else {
+      where.class_id = fromClass.id;
+    }
+
+    const candidates = await this.prisma.students.findMany({
+      where,
+      select: {
+        cc: true,
+        class_id: true,
+        section_id: true,
+        campus_id: true,
+        academic_year: true,
+      },
+      orderBy: { cc: 'asc' },
+    });
+
+    const classActiveCache = new Map<string, boolean>();
+    const sectionActiveCache = new Map<string, boolean>();
+    const results: PromotionOutcome[] = [];
+
+    if (distinctStudentIds && distinctStudentIds.length > 0) {
+      const byId = new Map(candidates.map((s) => [s.cc, s]));
+      for (const studentId of distinctStudentIds) {
+        const student = byId.get(studentId);
+        if (!student) {
+          results.push({
+            student_id: studentId,
+            status: 'failed',
+            reason_code: 'STUDENT_NOT_FOUND',
+            message: 'Student not found or does not match provided filters',
+            dry_run: dryRun,
+          });
+          continue;
+        }
+
+        const outcome = await this.processPromotionForStudent(
+          student,
+          fromClass,
+          toClass,
+          dto.to_section_id,
+          dto.reason,
+          dryRun,
+          classActiveCache,
+          sectionActiveCache,
+        );
+        results.push(outcome);
+      }
+    } else {
+      for (const student of candidates) {
+        const outcome = await this.processPromotionForStudent(
+          student,
+          fromClass,
+          toClass,
+          dto.to_section_id,
+          dto.reason,
+          dryRun,
+          classActiveCache,
+          sectionActiveCache,
+        );
+        results.push(outcome);
+      }
+    }
+
+    const total_promoted = results.filter((r) => r.status === 'promoted').length;
+    const total_skipped = results.filter((r) => r.status === 'skipped').length;
+    const total_failed = results.filter((r) => r.status === 'failed').length;
+
+    return {
+      summary: {
+        total_requested: results.length,
+        total_promoted,
+        total_skipped,
+        total_failed,
+        dry_run: dryRun,
+      },
+      from_class: fromClass,
+      to_class: toClass,
+      results,
+    };
+  }
+
+  private async processPromotionForStudent(
+    student: {
+      cc: number;
+      class_id: number | null;
+      section_id: number | null;
+      campus_id: number | null;
+      academic_year: string | null;
+    },
+    fromClass: ResolvedClass,
+    toClass: ResolvedClass,
+    toSectionId: number | undefined,
+    _reason: string | undefined,
+    dryRun: boolean,
+    classActiveCache: Map<string, boolean>,
+    sectionActiveCache: Map<string, boolean>,
+  ): Promise<PromotionOutcome> {
+    if (student.class_id !== fromClass.id) {
+      return {
+        student_id: student.cc,
+        status: 'failed',
+        reason_code: 'FROM_CLASS_MISMATCH',
+        message: 'Student is not currently assigned to the selected from class',
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        dry_run: dryRun,
+      };
+    }
+
+    const nextAcademicYear = this.incrementAcademicYear(student.academic_year);
+
+    if (student.class_id === toClass.id && student.academic_year === nextAcademicYear) {
+      return {
+        student_id: student.cc,
+        status: 'skipped',
+        reason_code: 'ALREADY_AT_TARGET',
+        message: 'Student already exists at the target class and academic year',
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        to_academic_year: nextAcademicYear,
+        dry_run: dryRun,
+      };
+    }
+
+    const mappingValidation = await this.validateTargetMapping(
+      student.campus_id,
+      toClass.id,
+      toSectionId,
+      classActiveCache,
+      sectionActiveCache,
+    );
+
+    if (!mappingValidation.valid) {
+      return {
+        student_id: student.cc,
+        status: 'failed',
+        reason_code: mappingValidation.reason_code,
+        message: mappingValidation.message,
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        to_academic_year: nextAcademicYear,
+        dry_run: dryRun,
+      };
+    }
+
+    if (dryRun) {
+      return {
+        student_id: student.cc,
+        status: 'promoted',
+        message: 'Student validated successfully for promotion (dry-run)',
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        to_academic_year: nextAcademicYear,
+        dry_run: true,
+      };
+    }
+
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.students.update({
+            where: { cc: student.cc },
+            data: {
+              class_id: toClass.id,
+              section_id: toSectionId !== undefined ? toSectionId : student.section_id,
+              academic_year: nextAcademicYear,
+            },
+          });
+
+          await tx.student_admissions.create({
+            data: {
+              student_id: student.cc,
+              academic_system: toClass.academic_system,
+              requested_grade: toClass.description,
+              academic_year: nextAcademicYear,
+            },
+          });
+        },
+        {
+          maxWait: 5000,
+          timeout: 15000,
+        },
+      );
+
+      return {
+        student_id: student.cc,
+        status: 'promoted',
+        message: 'Student promoted successfully',
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        to_academic_year: nextAcademicYear,
+        dry_run: false,
+      };
+    } catch {
+      return {
+        student_id: student.cc,
+        status: 'failed',
+        reason_code: 'INTERNAL_ERROR',
+        message: 'Unexpected error occurred while promoting student',
+        from_class_id: student.class_id,
+        to_class_id: toClass.id,
+        from_academic_year: student.academic_year,
+        to_academic_year: nextAcademicYear,
+        dry_run: false,
+      };
+    }
+  }
+
+  private async resolveClassSelector(
+    selector: ClassSelectorDto,
+    fieldName: 'from' | 'to',
+  ): Promise<ResolvedClass> {
+    if (!selector || (selector.class_id === undefined && !selector.class_label?.trim())) {
+      throw new BadRequestException(`${fieldName} selector requires class_id or class_label`);
+    }
+
+    if (selector.class_id !== undefined) {
+      const cls = await this.prisma.classes.findUnique({
+        where: { id: selector.class_id },
+        select: {
+          id: true,
+          description: true,
+          class_code: true,
+          academic_system: true,
+        },
+      });
+
+      if (!cls) {
+        throw new BadRequestException(`${fieldName} class not found for class_id=${selector.class_id}`);
+      }
+
+      return cls;
+    }
+
+    const label = selector.class_label!.trim();
+    const cls = await this.prisma.classes.findFirst({
+      where: {
+        OR: [
+          { description: { equals: label, mode: 'insensitive' } },
+          { class_code: { equals: label, mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        id: true,
+        description: true,
+        class_code: true,
+        academic_system: true,
+      },
+    });
+
+    if (!cls) {
+      throw new BadRequestException(`${fieldName} class not found for class_label=${label}`);
+    }
+
+    return cls;
+  }
+
+  private async validateTargetMapping(
+    campusId: number | null,
+    toClassId: number,
+    toSectionId: number | undefined,
+    classActiveCache: Map<string, boolean>,
+    sectionActiveCache: Map<string, boolean>,
+  ): Promise<{ valid: true } | { valid: false; reason_code: PromotionReasonCode; message: string }> {
+    if (!campusId) {
+      return { valid: true };
+    }
+
+    const classKey = `${campusId}:${toClassId}`;
+    let classIsActive = classActiveCache.get(classKey);
+    if (classIsActive === undefined) {
+      const mapping = await this.prisma.campus_classes.findFirst({
+        where: {
+          campus_id: campusId,
+          class_id: toClassId,
+          is_active: true,
+        },
+        select: { id: true },
+      });
+      classIsActive = !!mapping;
+      classActiveCache.set(classKey, classIsActive);
+    }
+
+    if (!classIsActive) {
+      return {
+        valid: false,
+        reason_code: 'TARGET_CLASS_INACTIVE_FOR_CAMPUS',
+        message: 'Target class is not active for the student campus',
+      };
+    }
+
+    if (toSectionId === undefined) {
+      return { valid: true };
+    }
+
+    const sectionKey = `${campusId}:${toClassId}:${toSectionId}`;
+    let sectionIsActive = sectionActiveCache.get(sectionKey);
+    if (sectionIsActive === undefined) {
+      const sectionMapping = await this.prisma.campus_sections.findFirst({
+        where: {
+          campus_id: campusId,
+          class_id: toClassId,
+          section_id: toSectionId,
+          is_active: true,
+        },
+        select: { id: true },
+      });
+      sectionIsActive = !!sectionMapping;
+      sectionActiveCache.set(sectionKey, sectionIsActive);
+    }
+
+    if (!sectionIsActive) {
+      return {
+        valid: false,
+        reason_code: 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS',
+        message: 'Target section is not valid for the target class and campus',
+      };
+    }
+
+    return { valid: true };
+  }
+
+  private incrementAcademicYear(currentAcademicYear: string | null): string {
+    const yearRangeMatch = currentAcademicYear?.match(/^(\d{4})-(\d{4})$/);
+    if (yearRangeMatch) {
+      const start = Number(yearRangeMatch[1]);
+      const end = Number(yearRangeMatch[2]);
+      return `${start + 1}-${end + 1}`;
+    }
+
+    const yearOnlyMatch = currentAcademicYear?.match(/^(\d{4})$/);
+    if (yearOnlyMatch) {
+      const year = Number(yearOnlyMatch[1]);
+      return `${year + 1}-${year + 2}`;
+    }
+
+    const fallbackStartYear = new Date().getFullYear() + 1;
+    return `${fallbackStartYear}-${fallbackStartYear + 1}`;
   }
 
   async searchSimple(query: string) {
