@@ -19,5 +19,10 @@ export class CreateBundleDto {
 
     @IsArray()
     @IsInt({ each: true })
+    @IsNotEmpty()
     fee_ids: number[];
+
+    @IsInt()
+    @IsOptional()
+    target_month?: number;
 }

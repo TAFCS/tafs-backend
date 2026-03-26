@@ -182,18 +182,32 @@ export class StudentFeesService {
         }
 
         return this.prisma.$transaction(async (tx) => {
+            const feesForTotal = await tx.student_fees.findMany({
+                where: { id: { in: fee_ids } },
+                select: { amount: true, amount_before_discount: true }
+            });
+
+            const calculatedTotal = feesForTotal.reduce((sum, f) => 
+                sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
+                new Prisma.Decimal(0)
+            );
+
             const bundle = await tx.student_fee_bundles.create({
                 data: {
                     student_id,
                     bundle_name,
-                    total_amount: total_amount ? new Prisma.Decimal(total_amount) : 0,
+                    total_amount: total_amount ? new Prisma.Decimal(total_amount) : calculatedTotal,
                     academic_year,
+                    target_month: dto.target_month
                 },
             });
 
             await tx.student_fees.updateMany({
                 where: { id: { in: fee_ids } },
-                data: { bundle_id: bundle.id },
+                data: {
+                    bundle_id: bundle.id,
+                    month: dto.target_month
+                },
             });
 
             return bundle;
@@ -201,7 +215,7 @@ export class StudentFeesService {
     }
 
     async updateBundle(id: number, dto: Partial<CreateBundleDto>) {
-        const { bundle_name, total_amount, academic_year, fee_ids } = dto;
+        const { bundle_name, total_amount, academic_year, fee_ids, target_month } = dto;
 
         return this.prisma.$transaction(async (tx) => {
             const bundle = await tx.student_fee_bundles.update({
@@ -210,20 +224,36 @@ export class StudentFeesService {
                     bundle_name,
                     total_amount: total_amount ? new Prisma.Decimal(total_amount) : undefined,
                     academic_year,
+                    target_month
                 },
             });
 
-            if (fee_ids) {
-                // Unlink old fees
-                await tx.student_fees.updateMany({
-                    where: { bundle_id: id },
-                    data: { bundle_id: null },
-                });
+            if (fee_ids || target_month !== undefined) {
+                // 1. Revert fees currently in this bundle to their original target_month
+                await tx.$executeRaw`
+                    UPDATE student_fees 
+                    SET month = target_month 
+                    WHERE bundle_id = ${id}
+                `;
 
-                // Link new fees
+                // 2. Clear old links
+                if (fee_ids) {
+                    await tx.student_fees.updateMany({
+                        where: { bundle_id: id },
+                        data: { bundle_id: null },
+                    });
+                }
+
+                // 3. Link and sync new/current fees
+                const finalFeeIds = fee_ids || (await tx.student_fees.findMany({ where: { bundle_id: id }, select: { id: true } })).map(f => f.id);
+                const finalTargetMonth = target_month ?? bundle.target_month;
+
                 await tx.student_fees.updateMany({
-                    where: { id: { in: fee_ids } },
-                    data: { bundle_id: id },
+                    where: { id: { in: finalFeeIds } },
+                    data: {
+                        bundle_id: id,
+                        month: finalTargetMonth
+                    },
                 });
             }
 
@@ -232,8 +262,19 @@ export class StudentFeesService {
     }
 
     async deleteBundle(id: number) {
-        return this.prisma.student_fee_bundles.delete({
-            where: { id },
+        return this.prisma.$transaction(async (tx) => {
+            // Revert member fees' month to their target_month (original period)
+            // Note: Postgres specific syntax for updates involving other table columns
+            // Using raw query for clarity and multi-column sync if prisma doesn't support easily
+            await tx.$executeRaw`
+                UPDATE student_fees 
+                SET month = target_month 
+                WHERE bundle_id = ${id}
+            `;
+
+            return tx.student_fee_bundles.delete({
+                where: { id },
+            });
         });
     }
 
