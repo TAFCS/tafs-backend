@@ -8,6 +8,8 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
+import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
+import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { StorageService } from '../../common/storage/storage.service';
@@ -168,6 +170,105 @@ export class VouchersService {
         }
 
         return voucher;
+    }
+
+    async previewBulk(dto: PreviewBulkVouchersDto) {
+        const selection = await this.getBulkVoucherSelection({
+            campus_id: dto.campus_id,
+            class_id: dto.class_id,
+            section_id: dto.section_id,
+            academic_year: dto.academic_year,
+            month: dto.month,
+        });
+
+        return {
+            filters: {
+                campus_id: dto.campus_id,
+                class_id: dto.class_id ?? null,
+                section_id: dto.section_id ?? null,
+                academic_year: dto.academic_year,
+                month: dto.month,
+            },
+            total_matched_students: selection.totalMatchedStudents,
+            eligible_students: selection.eligibleStudents.length,
+            skipped_no_fee_schedule: selection.skippedNoFeeSchedule.length,
+            skipped_already_issued: selection.skippedAlreadyIssued.length,
+            skipped_missing_assignment: selection.skippedMissingAssignment.length,
+            eligible_student_ids: selection.eligibleStudents.map((s) => s.student_id),
+        };
+    }
+
+    async createBulk(dto: CreateBulkVouchersDto) {
+        const selection = await this.getBulkVoucherSelection({
+            campus_id: dto.campus_id,
+            class_id: dto.class_id,
+            section_id: dto.section_id,
+            academic_year: dto.academic_year,
+            month: dto.month,
+        });
+
+        const generated: number[] = [];
+        const generatedVoucherIds: number[] = [];
+        const failed: { student_id: number; reason: string }[] = [];
+
+        for (const item of selection.eligibleStudents) {
+            try {
+                const voucherDto: CreateVoucherDto = {
+                    student_id: item.student_id,
+                    campus_id: item.campus_id,
+                    class_id: item.class_id,
+                    section_id: item.section_id ?? undefined,
+                    bank_account_id: dto.bank_account_id,
+                    issue_date: dto.issue_date,
+                    due_date: dto.due_date,
+                    validity_date: dto.validity_date,
+                    late_fee_charge: dto.late_fee_charge ?? true,
+                    late_fee_amount: dto.late_fee_amount,
+                    academic_year: dto.academic_year,
+                    month: dto.month,
+                    precedence: 1,
+                    orderedFeeIds: item.fee_ids,
+                    fee_lines: item.fee_ids.map((feeId) => ({
+                        student_fee_id: feeId,
+                        discount_amount: 0,
+                        discount_label: '',
+                    })),
+                };
+
+                const created = await this.create(voucherDto);
+                generated.push(item.student_id);
+                if (created?.id) {
+                    generatedVoucherIds.push(created.id);
+                }
+            } catch (error: any) {
+                this.logger.error(
+                    `Bulk voucher creation failed for student ${item.student_id}: ${error?.message ?? 'Unknown error'}`,
+                );
+                failed.push({
+                    student_id: item.student_id,
+                    reason: error?.message ?? 'Failed to create voucher',
+                });
+            }
+        }
+
+        return {
+            filters: {
+                campus_id: dto.campus_id,
+                class_id: dto.class_id ?? null,
+                section_id: dto.section_id ?? null,
+                academic_year: dto.academic_year,
+                month: dto.month,
+            },
+            total_matched_students: selection.totalMatchedStudents,
+            generated_count: generated.length,
+            skipped_no_fee_schedule: selection.skippedNoFeeSchedule.length,
+            skipped_already_issued: selection.skippedAlreadyIssued.length,
+            skipped_missing_assignment: selection.skippedMissingAssignment.length,
+            failed_count: failed.length,
+            generated_student_ids: generated,
+            generated_voucher_ids: generatedVoucherIds,
+            failed_students: failed,
+        };
     }
 
     async findAll(
@@ -505,6 +606,126 @@ export class VouchersService {
         return {
             ...voucher,
             status: computedStatus,
+        };
+    }
+
+    private async getBulkVoucherSelection(filters: {
+        campus_id: number;
+        class_id?: number;
+        section_id?: number;
+        academic_year: string;
+        month: number;
+    }) {
+        const students = await this.prisma.students.findMany({
+            where: {
+                deleted_at: null,
+                campus_id: filters.campus_id,
+                ...(filters.class_id ? { class_id: filters.class_id } : {}),
+                ...(filters.section_id ? { section_id: filters.section_id } : {}),
+            },
+            select: {
+                cc: true,
+                campus_id: true,
+                class_id: true,
+                section_id: true,
+            },
+        });
+
+        const totalMatchedStudents = students.length;
+        if (students.length === 0) {
+            return {
+                totalMatchedStudents: 0,
+                eligibleStudents: [] as Array<{
+                    student_id: number;
+                    campus_id: number;
+                    class_id: number;
+                    section_id: number | null;
+                    fee_ids: number[];
+                }>,
+                skippedNoFeeSchedule: [] as number[],
+                skippedAlreadyIssued: [] as number[],
+                skippedMissingAssignment: [] as number[],
+            };
+        }
+
+        const studentIds = students.map((s) => s.cc);
+
+        const fees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: { in: studentIds },
+                academic_year: filters.academic_year,
+                OR: [
+                    { month: filters.month },
+                    { target_month: filters.month },
+                    { student_fee_bundles: { is: { target_month: filters.month } } },
+                ],
+            },
+            select: {
+                id: true,
+                student_id: true,
+            },
+        });
+
+        const feeIdsByStudent = new Map<number, number[]>();
+        for (const fee of fees) {
+            const list = feeIdsByStudent.get(fee.student_id) ?? [];
+            list.push(fee.id);
+            feeIdsByStudent.set(fee.student_id, list);
+        }
+
+        const existingVouchers = await this.prisma.vouchers.findMany({
+            where: {
+                student_id: { in: studentIds },
+                academic_year: filters.academic_year,
+                month: filters.month,
+            },
+            select: { student_id: true },
+        });
+        const existingVoucherStudentIds = new Set(existingVouchers.map((v) => v.student_id));
+
+        const eligibleStudents: Array<{
+            student_id: number;
+            campus_id: number;
+            class_id: number;
+            section_id: number | null;
+            fee_ids: number[];
+        }> = [];
+        const skippedNoFeeSchedule: number[] = [];
+        const skippedAlreadyIssued: number[] = [];
+        const skippedMissingAssignment: number[] = [];
+
+        for (const student of students) {
+            if (!student.campus_id || !student.class_id) {
+                skippedMissingAssignment.push(student.cc);
+                continue;
+            }
+
+            if (existingVoucherStudentIds.has(student.cc)) {
+                skippedAlreadyIssued.push(student.cc);
+                continue;
+            }
+
+            const feeIds = feeIdsByStudent.get(student.cc) ?? [];
+            if (feeIds.length === 0) {
+                skippedNoFeeSchedule.push(student.cc);
+                continue;
+            }
+
+            eligibleStudents.push({
+                student_id: student.cc,
+                campus_id: student.campus_id,
+                class_id: student.class_id,
+                section_id: student.section_id ?? null,
+                fee_ids: feeIds,
+            });
+        }
+
+        return {
+            totalMatchedStudents,
+            eligibleStudents,
+            skippedNoFeeSchedule,
+            skippedAlreadyIssued,
+            skippedMissingAssignment,
         };
     }
 }
