@@ -32,7 +32,8 @@ const VOUCHER_INCLUDE = {
         include: {
             student_fees: {
                 include: {
-                    fee_types: true
+                    fee_types: true,
+                    student_fee_bundles: true
                 }
             }
         }

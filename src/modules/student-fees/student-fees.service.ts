@@ -48,6 +48,7 @@ export class StudentFeesService {
             where: { student_id: student.cc },
             include: {
                 fee_types: true,
+                student_fee_bundles: true,
                 voucher_heads: {
                     orderBy: { id: 'desc' },
                     take: 1,
