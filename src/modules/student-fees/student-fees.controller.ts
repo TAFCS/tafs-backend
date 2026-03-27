@@ -30,14 +30,19 @@ export class StudentFeesController {
             ability.can(Action.Read, 'StudentFee') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findByStudentCC(@Param('ccNumber') ccNumber: string) {
-        const fees = await this.studentFeesService.findByStudentCC(ccNumber);
+    async findByStudentCC(
+        @Param('ccNumber') ccNumber: string,
+        @Query('dateFrom') dateFrom?: string,
+        @Query('dateTo') dateTo?: string,
+    ) {
+        const fees = await this.studentFeesService.findByStudentCC(ccNumber, dateFrom, dateTo);
         return {
             success: true,
             message: 'Student fees retrieved successfully',
             data: fees,
         };
     }
+
 
     @Post('bulk')
     @HttpCode(HttpStatus.OK)

@@ -23,7 +23,7 @@ export class StudentFeesService {
         });
     }
 
-    async findByStudentCC(ccNumber: string) {
+    async findByStudentCC(ccNumber: string, dateFrom?: string, dateTo?: string) {
         const student = await this.prisma.students.findUnique({
             where: { cc: Number(ccNumber) },
             include: {
@@ -44,8 +44,19 @@ export class StudentFeesService {
             throw new NotFoundException(`Student with CC number ${ccNumber} not found`);
         }
 
+        // Build date filter for fee_date
+        const feeDateFilter: any = {};
+        if (dateFrom || dateTo) {
+            feeDateFilter.fee_date = {};
+            if (dateFrom) feeDateFilter.fee_date.gte = new Date(dateFrom);
+            if (dateTo) feeDateFilter.fee_date.lte = new Date(dateTo);
+        }
+
         const fees = await this.prisma.student_fees.findMany({
-            where: { student_id: student.cc },
+            where: {
+                student_id: student.cc,
+                ...(dateFrom || dateTo ? feeDateFilter : {}),
+            },
             include: {
                 fee_types: true,
                 student_fee_bundles: true,
@@ -59,18 +70,39 @@ export class StudentFeesService {
                     },
                 },
             },
-            orderBy: {
-                fee_types: {
-                    priority_order: 'asc',
-                },
-            },
+            orderBy: [
+                { fee_date: 'asc' },
+                { fee_types: { priority_order: 'asc' } },
+            ],
         });
 
+        // Group fees by fee_date
+        const groupMap = new Map<string, typeof fees>();
+        const ungrouped: typeof fees = [];
+
+        for (const fee of fees) {
+            if (fee.fee_date) {
+                const key = fee.fee_date.toISOString().split('T')[0];
+                if (!groupMap.has(key)) groupMap.set(key, []);
+                groupMap.get(key)!.push(fee);
+            } else {
+                ungrouped.push(fee);
+            }
+        }
+
+        const groups = Array.from(groupMap.entries()).map(([fee_date, groupFees]) => ({
+            fee_date,
+            fees: groupFees,
+        }));
+
         return {
-            fees,
+            groups,
+            ungrouped,
+            fees, // Keep backward compat — flat list
             family: student.families,
         };
     }
+
 
     async bulkSave(dto: BulkSaveStudentFeesDto) {
         const { student_id, items, bundles } = dto;
