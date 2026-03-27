@@ -148,6 +148,7 @@ export class StudentFeesService {
                                 month: item.month,
                                 amount: item.amount,
                                 amount_before_discount: item.amount_before_discount,
+                                fee_date: item.fee_date ? new Date(item.fee_date) : null,
                             },
                         });
                     } else {
@@ -161,6 +162,7 @@ export class StudentFeesService {
                                 amount_before_discount: item.amount_before_discount,
                                 status: 'NOT_ISSUED' as any,
                                 target_month: targetMonth,
+                                fee_date: item.fee_date ? new Date(item.fee_date) : null,
                             },
                         });
                     }
