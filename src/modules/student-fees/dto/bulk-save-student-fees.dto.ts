@@ -33,6 +33,23 @@ export class SaveStudentFeeItemDto {
     fee_date?: string;
 }
 
+export class SaveStudentFeeBundleDto {
+    @IsString()
+    bundle_name: string;
+
+    @IsNumber()
+    @IsOptional()
+    target_month?: number;
+
+    @IsString()
+    academic_year: string;
+
+    /** Array of `${fee_type_id}|${target_month}` strings to identify which fees belong in this bundle. */
+    @IsArray()
+    @IsString({ each: true })
+    fee_keys: string[];
+}
+
 export class BulkSaveStudentFeesDto {
     @IsNumber()
     student_id: number;
@@ -41,4 +58,11 @@ export class BulkSaveStudentFeesDto {
     @ValidateNested({ each: true })
     @Type(() => SaveStudentFeeItemDto)
     items: SaveStudentFeeItemDto[];
+
+    @IsArray()
+    @IsOptional()
+    @ValidateNested({ each: true })
+    @Type(() => SaveStudentFeeBundleDto)
+    bundles?: SaveStudentFeeBundleDto[];
 }
+

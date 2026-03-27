@@ -73,7 +73,7 @@ export class StudentFeesService {
     }
 
     async bulkSave(dto: BulkSaveStudentFeesDto) {
-        const { student_id, items } = dto;
+        const { student_id, items, bundles } = dto;
 
         if (items.length === 0) {
             return this.findByStudent(student_id);
@@ -87,93 +87,158 @@ export class StudentFeesService {
         }
 
         // Get the unique years involved in this save
-        const years = Array.from(new Set(items.map(i => i.academic_year)));
+        const years = Array.from(new Set(items.map((i) => i.academic_year)));
 
-        const existingFees = await this.prisma.student_fees.findMany({
-            where: { 
-                student_id,
-                academic_year: { in: years } 
-            },
-            include: {
-                voucher_heads: { select: { id: true }, take: 1 },
-            },
-        });
+        return this.prisma.$transaction(
+            async (tx) => {
+                const existingFees = await tx.student_fees.findMany({
+                    where: {
+                        student_id,
+                        academic_year: { in: years },
+                    },
+                    include: {
+                        voucher_heads: { select: { id: true }, take: 1 },
+                    },
+                });
 
-        const existingMap = new Map(
-            existingFees.map((f) => [
-                `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${f.fee_date ? new Date(f.fee_date).toISOString().split('T')[0] : ''}`,
-                f,
-            ]),
-        );
-
-        const incomingKeys = new Set(
-            items.map((i) => {
-                const tm = i.target_month ?? i.month ?? 8;
-                const targetMonth = tm > 0 ? tm : 8;
-                const dateKey = i.fee_date ?? '';
-                return `${i.fee_type_id}|${targetMonth}|${i.academic_year}|${dateKey}`;
-            }),
-        );
-
-        // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
-        const toDelete = existingFees
-            .filter((f) => {
-                const dateKey = f.fee_date ? new Date(f.fee_date).toISOString().split('T')[0] : '';
-                return !incomingKeys.has(`${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateKey}`);
-            })
-            .filter((f) => f.voucher_heads.length === 0)
-            .map((f) => f.id);
-
-        const writes: any[] = [];
-        if (toDelete.length > 0) {
-            writes.push(this.prisma.student_fees.deleteMany({ where: { id: { in: toDelete } } }));
-        }
-
-        // 2. Upsert
-        for (const item of items) {
-            const tm = item.target_month ?? item.month ?? 8;
-            const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
-            const dateKey = item.fee_date ?? '';
-            const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateKey}`;
-            const existing = existingMap.get(key);
-            const feeDateValue = item.fee_date ? new Date(item.fee_date) : null;
-
-            if (existing) {
-                writes.push(
-                    this.prisma.student_fees.update({
-                        where: { id: existing.id },
-                        data: {
-                            month: item.month,
-                            amount: item.amount,
-                            amount_before_discount: item.amount_before_discount,
-                            fee_date: feeDateValue,
-                        },
-                    })
+                const existingMap = new Map(
+                    existingFees.map((f) => [
+                        `${f.fee_type_id}|${f.target_month}|${f.academic_year}`,
+                        f,
+                    ]),
                 );
-            } else {
-                writes.push(
-                    this.prisma.student_fees.create({
-                        data: {
+
+                const incomingKeys = new Set(
+                    items.map(
+                        (i) =>
+                            `${
+                                i.fee_type_id
+                            }|${i.target_month ?? i.month ?? 8}|${i.academic_year}`,
+                    ),
+                );
+
+                // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
+                const toDelete = existingFees
+                    .filter(
+                        (f) =>
+                            !incomingKeys.has(
+                                `${f.fee_type_id}|${f.target_month}|${f.academic_year}`,
+                            ),
+                    )
+                    .filter((f) => f.voucher_heads.length === 0)
+                    .map((f) => f.id);
+
+                if (toDelete.length > 0) {
+                    await tx.student_fees.deleteMany({
+                        where: { id: { in: toDelete } },
+                    });
+                }
+
+                // 2. Upsert items (Parallelized within transaction)
+                const upsertPromises = items.map((item) => {
+                    const tm = item.target_month ?? item.month ?? 8;
+                    const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
+                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}`;
+                    const existing = existingMap.get(key);
+
+                    if (existing) {
+                        return tx.student_fees.update({
+                            where: { id: existing.id },
+                            data: {
+                                month: item.month,
+                                amount: item.amount,
+                                amount_before_discount: item.amount_before_discount,
+                            },
+                        });
+                    } else {
+                        return tx.student_fees.create({
+                            data: {
+                                student_id,
+                                fee_type_id: item.fee_type_id,
+                                month: item.month,
+                                academic_year: item.academic_year,
+                                amount: item.amount,
+                                amount_before_discount: item.amount_before_discount,
+                                status: 'NOT_ISSUED' as any,
+                                target_month: targetMonth,
+                            },
+                        });
+                    }
+                });
+                await Promise.all(upsertPromises);
+
+                // 3. Process Bundles if provided
+                if (bundles && bundles.length > 0) {
+                    // Refetch all current fees for this student/years to get accurate IDs and current state
+                    const allFees = await tx.student_fees.findMany({
+                        where: {
                             student_id,
-                            fee_type_id: item.fee_type_id,
-                            month: item.month,
-                            academic_year: item.academic_year,
-                            amount: item.amount,
-                            amount_before_discount: item.amount_before_discount,
-                            status: 'NOT_ISSUED' as any,
-                            target_month: targetMonth,
-                            fee_date: feeDateValue,
+                            academic_year: { in: years },
                         },
-                    })
-                );
-            }
-        }
+                    });
 
-        if (writes.length > 0) {
-            await this.prisma.$transaction(writes);
-        }
+                    for (const b of bundles) {
+                        const bundleFees = allFees.filter((f) =>
+                            b.fee_keys.includes(
+                                `${f.fee_type_id}|${f.target_month}`,
+                            ),
+                        );
 
-        return this.findByStudent(student_id);
+                        if (bundleFees.length > 0) {
+                            const calculatedTotal = bundleFees.reduce(
+                                (sum, f) =>
+                                    sum.add(
+                                        new Prisma.Decimal(
+                                            f.amount ||
+                                                f.amount_before_discount ||
+                                                0,
+                                        ),
+                                    ),
+                                new Prisma.Decimal(0),
+                            );
+
+                            const bundle = await tx.student_fee_bundles.create({
+                                data: {
+                                    student_id,
+                                    bundle_name: b.bundle_name,
+                                    total_amount: calculatedTotal,
+                                    academic_year: b.academic_year,
+                                    target_month: b.target_month,
+                                },
+                            });
+
+                            await tx.student_fees.updateMany({
+                                where: {
+                                    id: { in: bundleFees.map((f) => f.id) },
+                                },
+                                data: {
+                                    bundle_id: bundle.id,
+                                    month: b.target_month,
+                                },
+                            });
+                        }
+                    }
+                }
+
+                // Return final state after all operations
+                return tx.student_fees.findMany({
+                    where: { student_id },
+                    include: {
+                        fee_types: true,
+                        student_fee_bundles: true,
+                    },
+                    orderBy: {
+                        fee_types: {
+                            priority_order: 'asc',
+                        },
+                    },
+                });
+            },
+            {
+                maxWait: 10000,
+                timeout: 30000,
+            },
+        );
     }
 
     async createBundle(dto: CreateBundleDto) {
@@ -274,8 +339,6 @@ export class StudentFeesService {
     async deleteBundle(id: number) {
         return this.prisma.$transaction(async (tx) => {
             // Revert member fees' month to their target_month (original period)
-            // Note: Postgres specific syntax for updates involving other table columns
-            // Using raw query for clarity and multi-column sync if prisma doesn't support easily
             await tx.$executeRaw`
                 UPDATE student_fees 
                 SET month = target_month 

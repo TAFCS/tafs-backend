@@ -21,7 +21,11 @@ export class ClassFeeScheduleService {
     return this.prisma.class_fee_schedule.findMany({
       where: {
         class_id: classId,
-        ...(campusId !== undefined && { campus_id: campusId }),
+        ...(campusId !== undefined
+          ? {
+              OR: [{ campus_id: campusId }, { campus_id: null }],
+            }
+          : {}),
       },
       include: {
         classes: true,
