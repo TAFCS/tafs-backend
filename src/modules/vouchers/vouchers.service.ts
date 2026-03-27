@@ -55,6 +55,7 @@ export class VouchersService {
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
+        const feeDate = dto.fee_date ? new Date(dto.fee_date) : null;
 
         const voucher = await this.prisma.$transaction(async (tx) => {
             // 1. Fetch the fees to be included in the voucher
@@ -81,7 +82,8 @@ export class VouchersService {
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
                     academic_year: dto.academic_year,
-                    month: dto.month,
+                    month: dto.month ?? null,
+                    fee_date: feeDate,
                     total_payable_before_due: 0,
                     total_payable_after_due: 0,
                 },
@@ -163,7 +165,7 @@ export class VouchersService {
 
                 return updatedVoucher;
             } catch (error) {
-                this.logger.error(`Failed to upload PDF for voucher ${voucher.id}: ${error.message}`);
+                this.logger.error(`Failed to upload PDF for voucher ${voucher.id}: ${(error as Error).message}`);
                 // Return the voucher anyway as the DB records are already committed
                 return voucher;
             }
@@ -179,6 +181,7 @@ export class VouchersService {
             section_id: dto.section_id,
             academic_year: dto.academic_year,
             month: dto.month,
+            fee_date: dto.fee_date,
         });
 
         return {
@@ -187,7 +190,8 @@ export class VouchersService {
                 class_id: dto.class_id ?? null,
                 section_id: dto.section_id ?? null,
                 academic_year: dto.academic_year,
-                month: dto.month,
+                month: dto.month ?? null,
+                fee_date: dto.fee_date ?? null,
             },
             total_matched_students: selection.totalMatchedStudents,
             eligible_students: selection.eligibleStudents.length,
@@ -205,6 +209,7 @@ export class VouchersService {
             section_id: dto.section_id,
             academic_year: dto.academic_year,
             month: dto.month,
+            fee_date: dto.fee_date,
         });
 
         const generated: number[] = [];
@@ -225,7 +230,8 @@ export class VouchersService {
                     late_fee_charge: dto.late_fee_charge ?? true,
                     late_fee_amount: dto.late_fee_amount,
                     academic_year: dto.academic_year,
-                    month: dto.month,
+                    month: dto.month ?? undefined,
+                    fee_date: dto.fee_date,
                     precedence: 1,
                     orderedFeeIds: item.fee_ids,
                     fee_lines: item.fee_ids.map((feeId) => ({
@@ -257,7 +263,8 @@ export class VouchersService {
                 class_id: dto.class_id ?? null,
                 section_id: dto.section_id ?? null,
                 academic_year: dto.academic_year,
-                month: dto.month,
+                month: dto.month ?? null,
+                fee_date: dto.fee_date ?? null,
             },
             total_matched_students: selection.totalMatchedStudents,
             generated_count: generated.length,
@@ -280,6 +287,8 @@ export class VouchersService {
         cc?: number,
         gr?: string,
         id?: number,
+        dateFrom?: string,
+        dateTo?: string,
     ) {
         try {
             const vouchers = await this.prisma.vouchers.findMany({
@@ -291,6 +300,14 @@ export class VouchersService {
                     ...(classId ? { class_id: classId } : {}),
                     ...(sectionId ? { section_id: sectionId } : {}),
                     ...(status ? { status } : {}),
+                    ...(dateFrom || dateTo
+                        ? {
+                              fee_date: {
+                                  ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+                                  ...(dateTo ? { lte: new Date(dateTo) } : {}),
+                              },
+                          }
+                        : {}),
                     ...(gr
                         ? {
                               students: {
@@ -614,7 +631,8 @@ export class VouchersService {
         class_id?: number;
         section_id?: number;
         academic_year: string;
-        month: number;
+        month?: number;
+        fee_date?: string;
     }) {
         const students = await this.prisma.students.findMany({
             where: {
@@ -649,17 +667,25 @@ export class VouchersService {
         }
 
         const studentIds = students.map((s) => s.cc);
+        const feeDateObj = filters.fee_date ? new Date(filters.fee_date) : null;
+
+        // Build fee query: fee_date-based (new) or month-based (legacy)
+        const feeWhere: any = {
+            student_id: { in: studentIds },
+            ...(feeDateObj
+                ? { fee_date: feeDateObj }
+                : {
+                      academic_year: filters.academic_year,
+                      OR: [
+                          { month: filters.month },
+                          { target_month: filters.month },
+                          { student_fee_bundles: { is: { target_month: filters.month } } },
+                      ],
+                  }),
+        };
 
         const fees = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: { in: studentIds },
-                academic_year: filters.academic_year,
-                OR: [
-                    { month: filters.month },
-                    { target_month: filters.month },
-                    { student_fee_bundles: { is: { target_month: filters.month } } },
-                ],
-            },
+            where: feeWhere,
             select: {
                 id: true,
                 student_id: true,
@@ -673,11 +699,13 @@ export class VouchersService {
             feeIdsByStudent.set(fee.student_id, list);
         }
 
+        // Deduplicate: fee_date-based (new) or month-based (legacy)
         const existingVouchers = await this.prisma.vouchers.findMany({
             where: {
                 student_id: { in: studentIds },
-                academic_year: filters.academic_year,
-                month: filters.month,
+                ...(feeDateObj
+                    ? { fee_date: feeDateObj }
+                    : { academic_year: filters.academic_year, month: filters.month }),
             },
             select: { student_id: true },
         });

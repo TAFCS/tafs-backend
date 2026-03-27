@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString } from 'class-validator';
+import { IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class FilterVouchersDto {
     @ApiPropertyOptional({ description: 'Filter by Student CC' })
@@ -48,4 +48,14 @@ export class FilterVouchersDto {
     @Type(() => Number)
     @IsInt()
     id?: number;
+
+    @ApiPropertyOptional({ description: 'Filter vouchers with fee_date on or after this date (ISO 8601, e.g. 2026-03-01)' })
+    @IsOptional()
+    @IsISO8601()
+    date_from?: string;
+
+    @ApiPropertyOptional({ description: 'Filter vouchers with fee_date on or before this date (ISO 8601, e.g. 2026-03-10)' })
+    @IsOptional()
+    @IsISO8601()
+    date_to?: string;
 }

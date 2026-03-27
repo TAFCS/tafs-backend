@@ -21,11 +21,25 @@ export class PreviewBulkVouchersDto {
     @IsNotEmpty()
     academic_year: string;
 
+    /**
+     * Legacy month-based targeting (1-12). Either `month` or `fee_date`
+     * must be provided, but not necessarily both.
+     */
     @Type(() => Number)
     @IsInt()
     @Min(1)
     @Max(12)
-    month: number;
+    @IsOptional()
+    month?: number;
+
+    /**
+     * Exact fee date (ISO 8601). When provided, fees and duplicate-check
+     * are resolved by this date instead of `month`, allowing multiple
+     * vouchers per student in the same calendar month.
+     */
+    @IsISO8601()
+    @IsOptional()
+    fee_date?: string;
 
     @IsISO8601()
     @IsNotEmpty()

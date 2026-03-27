@@ -99,6 +99,8 @@ export class VouchersController {
             query.cc,
             query.gr,
             query.id,
+            query.date_from,
+            query.date_to,
         );
         return {
             success: true,

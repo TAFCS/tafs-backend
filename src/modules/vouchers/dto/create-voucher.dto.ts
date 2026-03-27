@@ -75,6 +75,15 @@ export class CreateVoucherDto {
     month?: number;
 
     /**
+     * Specific fee date (ISO 8601). When provided, this is used instead of
+     * `month` to identify the fee heads and stamp the voucher — enabling
+     * multiple vouchers for the same student in the same calendar month.
+     */
+    @IsISO8601()
+    @IsOptional()
+    fee_date?: string;
+
+    /**
      * Fee lines to snapshot into voucher_heads.
      * Each entry captures the price at the moment the voucher is issued,
      * ensuring historical accuracy even if the class fee schedule changes later.

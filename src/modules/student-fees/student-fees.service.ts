@@ -101,20 +101,26 @@ export class StudentFeesService {
 
         const existingMap = new Map(
             existingFees.map((f) => [
-                `${f.fee_type_id}|${f.target_month}|${f.academic_year}`,
+                `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${f.fee_date ? new Date(f.fee_date).toISOString().split('T')[0] : ''}`,
                 f,
             ]),
         );
 
         const incomingKeys = new Set(
-            items.map((i) =>
-                `${i.fee_type_id}|${i.target_month ?? i.month ?? 8}|${i.academic_year}`
-            ),
+            items.map((i) => {
+                const tm = i.target_month ?? i.month ?? 8;
+                const targetMonth = tm > 0 ? tm : 8;
+                const dateKey = i.fee_date ?? '';
+                return `${i.fee_type_id}|${targetMonth}|${i.academic_year}|${dateKey}`;
+            }),
         );
 
         // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
         const toDelete = existingFees
-            .filter((f) => !incomingKeys.has(`${f.fee_type_id}|${f.target_month}|${f.academic_year}`))
+            .filter((f) => {
+                const dateKey = f.fee_date ? new Date(f.fee_date).toISOString().split('T')[0] : '';
+                return !incomingKeys.has(`${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateKey}`);
+            })
             .filter((f) => f.voucher_heads.length === 0)
             .map((f) => f.id);
 
@@ -127,8 +133,10 @@ export class StudentFeesService {
         for (const item of items) {
             const tm = item.target_month ?? item.month ?? 8;
             const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
-            const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}`;
+            const dateKey = item.fee_date ?? '';
+            const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateKey}`;
             const existing = existingMap.get(key);
+            const feeDateValue = item.fee_date ? new Date(item.fee_date) : null;
 
             if (existing) {
                 writes.push(
@@ -138,6 +146,7 @@ export class StudentFeesService {
                             month: item.month,
                             amount: item.amount,
                             amount_before_discount: item.amount_before_discount,
+                            fee_date: feeDateValue,
                         },
                     })
                 );
@@ -153,6 +162,7 @@ export class StudentFeesService {
                             amount_before_discount: item.amount_before_discount,
                             status: 'NOT_ISSUED' as any,
                             target_month: targetMonth,
+                            fee_date: feeDateValue,
                         },
                     })
                 );

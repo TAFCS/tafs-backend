@@ -1,4 +1,4 @@
-import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive } from 'class-validator';
+import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, IsISO8601 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SaveStudentFeeItemDto {
@@ -26,6 +26,11 @@ export class SaveStudentFeeItemDto {
     @IsPositive()
     @IsOptional()
     amount?: number;
+
+    /** Exact date for this fee head — enables multiple vouchers per student per month. */
+    @IsISO8601()
+    @IsOptional()
+    fee_date?: string;
 }
 
 export class BulkSaveStudentFeesDto {
