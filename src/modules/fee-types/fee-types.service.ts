@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateFeeTypeDto } from './dto/create-fee-type.dto';
 import { BulkUpdateFeeTypesDto } from './dto/bulk-update-fee-types.dto';
@@ -7,6 +7,21 @@ import { BulkUpdateFeeTypesDto } from './dto/bulk-update-fee-types.dto';
 export class FeeTypesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private static readonly ACADEMIC_MONTHS = [
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+  ];
+
   async findAll() {
     return this.prisma.fee_types.findMany({
       orderBy: { priority_order: 'asc' },
@@ -14,11 +29,13 @@ export class FeeTypesService {
   }
 
   async create(dto: CreateFeeTypeDto) {
+    const normalizedBreakup = this.normalizeAndValidateBreakup(dto.breakup);
+
     return this.prisma.fee_types.create({
       data: {
         description: dto.description,
         freq: dto.freq,
-        breakup: dto.breakup ?? undefined,
+        breakup: normalizedBreakup,
         priority_order: dto.priority_order,
       },
     });
@@ -27,6 +44,12 @@ export class FeeTypesService {
   async bulkUpdate(dto: BulkUpdateFeeTypesDto) {
     if (!dto.items || dto.items.length === 0) {
       return [];
+    }
+
+    for (const item of dto.items) {
+      if (item.breakup !== undefined) {
+        this.normalizeAndValidateBreakup(item.breakup, `fee type id=${item.id}`);
+      }
     }
 
     const updated = await this.prisma.$transaction(
@@ -41,7 +64,7 @@ export class FeeTypesService {
               freq: item.freq,
             }),
             ...(item.breakup !== undefined && {
-              breakup: item.breakup,
+              breakup: this.normalizeAndValidateBreakup(item.breakup, `fee type id=${item.id}`),
             }),
             ...(item.priority_order !== undefined && {
               priority_order: item.priority_order,
@@ -81,6 +104,88 @@ export class FeeTypesService {
       }
       throw e;
     }
+  }
+
+  private normalizeAndValidateBreakup(
+    breakup: Record<string, any> | undefined,
+    context = 'fee type',
+  ) {
+    if (!breakup) {
+      throw new BadRequestException(`Breakup is required for ${context}`);
+    }
+
+    let months: string[] = [];
+    if (Array.isArray(breakup.months)) {
+      months = breakup.months
+        .map((m: unknown) => String(m).trim())
+        .filter(Boolean);
+    } else if (Array.isArray(breakup)) {
+      months = breakup
+        .map((m: unknown) => String(m).trim())
+        .filter(Boolean);
+    } else if (typeof breakup.months === 'string') {
+      months = breakup.months
+        .split(',')
+        .map((m: string) => m.trim())
+        .filter(Boolean);
+    }
+
+    if (months.length === 0) {
+      throw new BadRequestException(`At least one month is required for ${context}`);
+    }
+
+    const invalidMonths = months.filter(
+      (month) => !FeeTypesService.ACADEMIC_MONTHS.includes(month),
+    );
+    if (invalidMonths.length > 0) {
+      throw new BadRequestException(
+        `Invalid month values for ${context}: ${invalidMonths.join(', ')}`,
+      );
+    }
+
+    const breakupObj = Array.isArray(breakup)
+      ? ({} as Record<string, any>)
+      : (breakup as Record<string, any>);
+    const rawDayMap = breakupObj.collection_day_by_month ?? breakupObj.collection_date_by_month;
+    if (!rawDayMap || typeof rawDayMap !== 'object' || Array.isArray(rawDayMap)) {
+      throw new BadRequestException(
+        `collection_day_by_month is required and must be an object for ${context}`,
+      );
+    }
+
+    const normalizedDayMap: Record<string, number> = {};
+    for (const month of months) {
+      const value = rawDayMap[month];
+      if (value === undefined || value === null || value === '') {
+        throw new BadRequestException(
+          `Missing collection day for month ${month} in ${context}`,
+        );
+      }
+
+      let dayNumber: number | null = null;
+      if (typeof value === 'number') {
+        dayNumber = Number.isInteger(value) ? value : null;
+      } else if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          dayNumber = Number(trimmed.slice(8, 10));
+        } else if (/^\d{1,2}$/.test(trimmed)) {
+          dayNumber = Number(trimmed);
+        }
+      }
+
+      if (!dayNumber || dayNumber < 1 || dayNumber > 31) {
+        throw new BadRequestException(
+          `Invalid collection day for month ${month} in ${context}; expected 1-31`,
+        );
+      }
+      normalizedDayMap[month] = dayNumber;
+    }
+
+    return {
+      months,
+      collection_day_by_month: normalizedDayMap,
+    };
   }
 }
 
