@@ -52,8 +52,6 @@ export class VouchersService {
     ) {}
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
-        this.logger.debug('CreateVoucherDto received:', JSON.stringify(dto, null, 2));
-
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
