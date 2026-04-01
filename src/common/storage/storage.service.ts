@@ -12,6 +12,7 @@ export class StorageService {
     private readonly client: S3Client;
     private readonly bucket: string;
     private readonly cdnEndpoint: string;
+    private readonly uploadEndpoint: string;
 
     constructor(private readonly config: ConfigService) {
         const region = this.config.get<string>('DO_SPACES_REGION');
@@ -19,24 +20,42 @@ export class StorageService {
         const accessKeyId = this.config.get<string>('DO_SPACES_KEY');
         const secretAccessKey = this.config.get<string>('DO_SPACES_SECRET');
         this.bucket = this.config.get<string>('DO_SPACES_BUCKET') || 'missing-bucket';
+        const regionEndpoint = region ? `https://${region}.digitaloceanspaces.com` : '';
+        const normalizedEndpoint = (endpoint || '').trim().replace(/\/+$/, '');
 
-        const isConfigMissing = !region || !endpoint || !accessKeyId || !secretAccessKey || accessKeyId === 'your_access_key';
+        const isConfigMissing = !region || !accessKeyId || !secretAccessKey || accessKeyId === 'your_access_key';
 
         if (isConfigMissing) {
             this.logger.warn('Storage configuration is missing or using placeholders. Uploads will be mocked.');
             this.client = null as any;
             this.cdnEndpoint = 'http://mock-storage';
+            this.uploadEndpoint = '';
         } else {
+            const rawHost = (() => {
+                try {
+                    return new URL(normalizedEndpoint || regionEndpoint).host.toLowerCase();
+                } catch {
+                    return '';
+                }
+            })();
+            const bucketPrefix = `${this.bucket.toLowerCase()}.`;
+            const isBucketQualifiedEndpoint = rawHost.startsWith(bucketPrefix);
+            this.uploadEndpoint = isBucketQualifiedEndpoint ? regionEndpoint : (normalizedEndpoint || regionEndpoint);
             this.cdnEndpoint =
                 this.config.get<string>('DO_SPACES_CDN_ENDPOINT') ??
-                `${endpoint}/${this.bucket}`;
+                `${this.uploadEndpoint}/${this.bucket}`;
 
             this.client = new S3Client({
                 region: region!,
-                endpoint: endpoint!,
+                endpoint: this.uploadEndpoint,
                 credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
-                forcePathStyle: false,
+                // If endpoint already includes bucket host, force path-style to avoid duplicate bucket hostnames.
+                forcePathStyle: isBucketQualifiedEndpoint,
             });
+
+            this.logger.log(
+                `Storage initialized with endpoint "${this.uploadEndpoint}" (bucketQualifiedInput=${isBucketQualifiedEndpoint})`,
+            );
         }
     }
 
@@ -75,6 +94,7 @@ export class StorageService {
      * Silently ignores errors (best-effort cleanup).
      */
     async deleteByUrl(url: string): Promise<void> {
+        if (!this.client) return;
         try {
             const key = url.replace(`${this.cdnEndpoint}/`, '');
             await this.client.send(
