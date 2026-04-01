@@ -317,7 +317,7 @@ export class VouchersService {
                         : {}),
                 },
                 include: VOUCHER_INCLUDE,
-                orderBy: { issue_date: 'desc' },
+                orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
             });
             return vouchers.map((v) => this.normalizeVoucher(v));
         } catch (err: any) {
