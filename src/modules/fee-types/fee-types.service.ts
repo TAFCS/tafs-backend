@@ -29,7 +29,11 @@ export class FeeTypesService {
   }
 
   async create(dto: CreateFeeTypeDto) {
-    const normalizedBreakup = this.normalizeAndValidateBreakup(dto.breakup);
+    const normalizedBreakup = this.normalizeAndValidateBreakup(
+      dto.breakup,
+      'fee type',
+      dto.freq,
+    );
 
     return this.prisma.fee_types.create({
       data: {
@@ -48,7 +52,11 @@ export class FeeTypesService {
 
     for (const item of dto.items) {
       if (item.breakup !== undefined) {
-        this.normalizeAndValidateBreakup(item.breakup, `fee type id=${item.id}`);
+        this.normalizeAndValidateBreakup(
+          item.breakup,
+          `fee type id=${item.id}`,
+          item.freq,
+        );
       }
     }
 
@@ -64,7 +72,11 @@ export class FeeTypesService {
               freq: item.freq,
             }),
             ...(item.breakup !== undefined && {
-              breakup: this.normalizeAndValidateBreakup(item.breakup, `fee type id=${item.id}`),
+              breakup: this.normalizeAndValidateBreakup(
+                item.breakup,
+                `fee type id=${item.id}`,
+                item.freq,
+              ),
             }),
             ...(item.priority_order !== undefined && {
               priority_order: item.priority_order,
@@ -109,6 +121,7 @@ export class FeeTypesService {
   private normalizeAndValidateBreakup(
     breakup: Record<string, any> | undefined,
     context = 'fee type',
+    freq?: string,
   ) {
     if (!breakup) {
       throw new BadRequestException(`Breakup is required for ${context}`);
@@ -180,6 +193,19 @@ export class FeeTypesService {
         );
       }
       normalizedDayMap[month] = dayNumber;
+    }
+
+    if (freq === 'MONTHLY') {
+      const uniqueDays = Array.from(new Set(Object.values(normalizedDayMap)));
+      if (uniqueDays.length !== 1) {
+        throw new BadRequestException(
+          `Monthly fee types require one shared collection day across all selected months in ${context}`,
+        );
+      }
+      const sharedDay = uniqueDays[0];
+      for (const month of months) {
+        normalizedDayMap[month] = sharedDay;
+      }
     }
 
     return {
