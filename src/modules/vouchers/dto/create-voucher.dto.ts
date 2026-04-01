@@ -60,9 +60,18 @@ export class CreateVoucherDto {
 
     @Transform(({ value }) => {
         if (value === undefined || value === null) return undefined;
-        if (Array.isArray(value)) return value.map(v => Number(v));
-        if (typeof value === 'string') return [Number(value)];
-        return value;
+        let arr: any[] = [];
+        if (Array.isArray(value)) {
+            arr = value;
+        } else if (typeof value === 'string') {
+            // Handle comma-separated strings or single values
+            arr = value.includes(',') ? value.split(',') : [value];
+        } else {
+            arr = [value];
+        }
+        return arr
+            .map(v => parseInt(String(v).trim(), 10))
+            .filter(v => !isNaN(v));
     })
     @IsInt({ each: true })
     @IsOptional()

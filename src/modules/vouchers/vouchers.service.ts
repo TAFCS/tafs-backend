@@ -52,6 +52,16 @@ export class VouchersService {
     ) {}
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
+        // --- Temporary Debug Check for orderedFeeIds ---
+        if (!dto.orderedFeeIds || dto.orderedFeeIds.length === 0) {
+            throw new BadRequestException({
+                message: "orderedFeeIds is missing or contains only invalid integers.",
+                debug: {
+                    receivedDto: { ...dto, pdf: undefined },
+                }
+            });
+        }
+
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
