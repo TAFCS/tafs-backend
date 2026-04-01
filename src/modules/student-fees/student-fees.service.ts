@@ -212,13 +212,18 @@ export class StudentFeesService {
                     });
 
                     for (const b of bundles) {
-                        const bundleFees = allFees.filter((f) =>
-                            b.fee_keys.includes(
-                                `${f.fee_type_id}|${f.target_month}`,
-                            ),
-                        );
+                        const bundleFees = allFees.filter((f) => {
+                            const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
+                            const key = `${f.fee_type_id}|${f.target_month}|${dateStr}`;
+                            return b.fee_keys.includes(key);
+                        });
 
                         if (bundleFees.length > 0) {
+                            const firstFee = bundleFees[0];
+                            // Use the provided target_month from the bundle DTO, or fall back 
+                            // to the first member fee's period identity (target_month).
+                            const bundleMonth = b.target_month ?? firstFee.target_month;
+
                             const calculatedTotal = bundleFees.reduce(
                                 (sum, f) =>
                                     sum.add(
@@ -237,7 +242,7 @@ export class StudentFeesService {
                                     bundle_name: b.bundle_name,
                                     total_amount: calculatedTotal,
                                     academic_year: b.academic_year,
-                                    target_month: b.target_month,
+                                    target_month: bundleMonth,
                                 },
                             });
 
@@ -247,7 +252,7 @@ export class StudentFeesService {
                                 },
                                 data: {
                                     bundle_id: bundle.id,
-                                    month: b.target_month,
+                                    month: bundleMonth, // Ensure they all belong to the bundle's month
                                 },
                             });
                         }
@@ -276,7 +281,7 @@ export class StudentFeesService {
     }
 
     async createBundle(dto: CreateBundleDto) {
-        const { student_id, bundle_name, total_amount, academic_year, fee_ids } = dto;
+        const { student_id, bundle_name, total_amount, academic_year, fee_ids, target_month } = dto;
 
         // Verify fees belong to this student
         const fees = await this.prisma.student_fees.findMany({
@@ -291,15 +296,18 @@ export class StudentFeesService {
         }
 
         return this.prisma.$transaction(async (tx) => {
-            const feesForTotal = await tx.student_fees.findMany({
+            const feesForProcessing = await tx.student_fees.findMany({
                 where: { id: { in: fee_ids } },
-                select: { amount: true, amount_before_discount: true }
+                select: { amount: true, amount_before_discount: true, month: true, target_month: true }
             });
 
-            const calculatedTotal = feesForTotal.reduce((sum, f) =>
+            const calculatedTotal = feesForProcessing.reduce((sum, f) =>
                 sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
                 new Prisma.Decimal(0)
             );
+
+            const firstFee = feesForProcessing[0];
+            const finalTargetMonth = target_month ?? firstFee.month ?? firstFee.target_month;
 
             const bundle = await tx.student_fee_bundles.create({
                 data: {
@@ -307,7 +315,7 @@ export class StudentFeesService {
                     bundle_name,
                     total_amount: total_amount ? new Prisma.Decimal(total_amount) : calculatedTotal,
                     academic_year,
-                    target_month: dto.target_month
+                    target_month: finalTargetMonth
                 },
             });
 
@@ -315,7 +323,7 @@ export class StudentFeesService {
                 where: { id: { in: fee_ids } },
                 data: {
                     bundle_id: bundle.id,
-                    month: dto.target_month
+                    month: finalTargetMonth
                 },
             });
 
