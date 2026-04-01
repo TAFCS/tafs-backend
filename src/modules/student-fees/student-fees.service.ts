@@ -134,29 +134,28 @@ export class StudentFeesService {
                 });
 
                 const existingMap = new Map(
-                    existingFees.map((f) => [
-                        `${f.fee_type_id}|${f.target_month}|${f.academic_year}`,
-                        f,
-                    ]),
+                    existingFees.map((f) => {
+                        const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
+                        const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
+                        return [key, f];
+                    }),
                 );
 
                 const incomingKeys = new Set(
-                    items.map(
-                        (i) =>
-                            `${
-                                i.fee_type_id
-                            }|${i.target_month ?? i.month ?? 8}|${i.academic_year}`,
-                    ),
+                    items.map((i) => {
+                        const tm = i.target_month ?? i.month ?? 8;
+                        const dateStr = i.fee_date || 'no-date';
+                        return `${i.fee_type_id}|${tm}|${i.academic_year}|${dateStr}`;
+                    }),
                 );
 
                 // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
                 const toDelete = existingFees
-                    .filter(
-                        (f) =>
-                            !incomingKeys.has(
-                                `${f.fee_type_id}|${f.target_month}|${f.academic_year}`,
-                            ),
-                    )
+                    .filter((f) => {
+                        const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
+                        const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
+                        return !incomingKeys.has(key);
+                    })
                     .filter((f) => f.voucher_heads.length === 0)
                     .map((f) => f.id);
 
@@ -170,7 +169,8 @@ export class StudentFeesService {
                 const upsertPromises = items.map((item) => {
                     const tm = item.target_month ?? item.month ?? 8;
                     const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
-                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}`;
+                    const dateStr = item.fee_date || 'no-date';
+                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateStr}`;
                     const existing = existingMap.get(key);
 
                     if (existing) {
@@ -224,8 +224,8 @@ export class StudentFeesService {
                                     sum.add(
                                         new Prisma.Decimal(
                                             f.amount ||
-                                                f.amount_before_discount ||
-                                                0,
+                                            f.amount_before_discount ||
+                                            0,
                                         ),
                                     ),
                                 new Prisma.Decimal(0),
@@ -296,7 +296,7 @@ export class StudentFeesService {
                 select: { amount: true, amount_before_discount: true }
             });
 
-            const calculatedTotal = feesForTotal.reduce((sum, f) => 
+            const calculatedTotal = feesForTotal.reduce((sum, f) =>
                 sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
                 new Prisma.Decimal(0)
             );
