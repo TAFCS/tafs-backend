@@ -3,6 +3,9 @@ import { Type, Transform, plainToInstance } from 'class-transformer';
 import { VoucherFeeLineDto } from './voucher-fee-line.dto';
 
 export class CreateVoucherDto {
+    @IsOptional()
+    pdf?: any;
+
     @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsNotEmpty()
