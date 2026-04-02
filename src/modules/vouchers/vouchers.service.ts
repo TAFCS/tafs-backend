@@ -12,6 +12,7 @@ import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
 import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
+import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 
 const VOUCHER_INCLUDE = {
@@ -600,6 +601,111 @@ export class VouchersService {
 
         // 3. FINAL FULL FETCH
         return this.findOne(voucherId);
+    }
+
+    async savePaidPdf(voucherId: number, pdfBuffer: Buffer) {
+        const voucher = await this.prisma.vouchers.findUnique({ where: { id: voucherId } });
+        if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
+
+        const key = `vouchers/${voucher.student_id}/paid-voucher-${voucherId}-${Date.now()}.pdf`;
+        const pdfUrl = await this.storage.upload(key, pdfBuffer);
+        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
+        return { pdf_url: pdfUrl };
+    }
+
+    /**
+     * Split a PARTIALLY_PAID voucher:
+     *  - Generates a new UNPAID voucher for heads that still have balance > 0.
+     *  - Leaves the original voucher untouched (no status change).
+     */
+    async splitPartiallyPaid(voucherId: number, dto: SplitPartiallyPaidDto, pdfBuffer?: Buffer) {
+        const original = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: VOUCHER_INCLUDE,
+        });
+
+        if (!original) throw new NotFoundException(`Voucher ${voucherId} not found`);
+        if (original.status !== 'PARTIALLY_PAID') {
+            throw new BadRequestException(
+                `Voucher ${voucherId} is not PARTIALLY_PAID (current status: ${original.status}).`,
+            );
+        }
+
+        const headsWithBalance = (original.voucher_heads || []).filter(
+            (h) => new Prisma.Decimal(h.balance as any ?? 0).gt(0),
+        );
+
+        if (headsWithBalance.length === 0) {
+            throw new BadRequestException('No outstanding balance to split off.');
+        }
+
+        const issueDate = new Date(dto.issue_date);
+        const dueDate = new Date(dto.due_date);
+        const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
+
+        const newVoucher = await this.prisma.$transaction(async (tx) => {
+            // Create the new voucher record (totals calculated from heads below)
+            const created = await tx.vouchers.create({
+                data: {
+                    student_id: original.student_id,
+                    campus_id: original.campus_id,
+                    class_id: original.class_id,
+                    section_id: original.section_id,
+                    bank_account_id: original.bank_account_id,
+                    issue_date: issueDate,
+                    due_date: dueDate,
+                    validity_date: validityDate,
+                    late_fee_charge: original.late_fee_charge,
+                    academic_year: original.academic_year,
+                    month: original.month,
+                    fee_date: original.fee_date,
+                    status: 'UNPAID',
+                    total_payable_before_due: 0,
+                    total_payable_after_due: 0,
+                },
+            });
+
+            let totalBalance = new Prisma.Decimal(0);
+            const newHeadsData = headsWithBalance.map((h) => {
+                const balance = new Prisma.Decimal(h.balance as any ?? 0);
+                totalBalance = totalBalance.add(balance);
+                return {
+                    voucher_id: created.id,
+                    student_fee_id: h.student_fee_id,
+                    discount_amount: new Prisma.Decimal(0),
+                    discount_label: h.discount_label,
+                    net_amount: balance,
+                    amount_deposited: new Prisma.Decimal(0),
+                    balance: balance,
+                };
+            });
+
+            await tx.voucher_heads.createMany({ data: newHeadsData });
+
+            const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
+            await tx.vouchers.update({
+                where: { id: created.id },
+                data: {
+                    total_payable_before_due: totalBalance,
+                    total_payable_after_due: totalBalance.add(lateFeeVal),
+                },
+            });
+
+            return created;
+        }, { timeout: 15000 });
+
+        // Upload PDF outside transaction
+        if (pdfBuffer) {
+            try {
+                const key = `vouchers/${original.student_id}/voucher-${newVoucher.id}-${Date.now()}.pdf`;
+                const pdfUrl = await this.storage.upload(key, pdfBuffer);
+                await this.prisma.vouchers.update({ where: { id: newVoucher.id }, data: { pdf_url: pdfUrl } });
+            } catch (err) {
+                this.logger.error(`Failed to upload split PDF for voucher ${newVoucher.id}: ${(err as Error).message}`);
+            }
+        }
+
+        return this.findOne(newVoucher.id);
     }
 
     private normalizeVoucher(voucher: any) {

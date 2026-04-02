@@ -21,6 +21,7 @@ import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
+import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -172,6 +173,48 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher updated successfully',
+            data: voucher,
+        };
+    }
+
+    /** Save a stamped PAID PDF back to the voucher record. */
+    @Patch(':id/paid-pdf')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    @UseInterceptors(FileInterceptor('pdf'))
+    async savePaidPdf(
+        @Param('id', ParseIntPipe) id: number,
+        @UploadedFile() pdf: Express.Multer.File,
+    ) {
+        if (!pdf?.buffer) {
+            return { success: false, message: 'No PDF file uploaded.' };
+        }
+        const result = await this.vouchersService.savePaidPdf(id, pdf.buffer);
+        return { success: true, message: 'Paid PDF saved.', data: result };
+    }
+
+    /** Split a PARTIALLY_PAID voucher: create a new UNPAID voucher for the outstanding balances. */
+    @Post(':id/split-partially-paid')
+    @HttpCode(HttpStatus.CREATED)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Create, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    @UseInterceptors(FileInterceptor('pdf'))
+    async splitPartiallyPaid(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: SplitPartiallyPaidDto,
+        @UploadedFile() pdf?: Express.Multer.File,
+    ) {
+        const voucher = await this.vouchersService.splitPartiallyPaid(id, dto, pdf?.buffer);
+        return {
+            success: true,
+            message: 'New unpaid voucher created for outstanding balance.',
             data: voucher,
         };
     }
