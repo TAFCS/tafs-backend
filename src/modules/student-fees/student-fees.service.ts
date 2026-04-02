@@ -252,7 +252,6 @@ export class StudentFeesService {
                                 },
                                 data: {
                                     bundle_id: bundle.id,
-                                    month: bundleMonth, // Ensure they all belong to the bundle's month
                                 },
                             });
                         }
@@ -280,15 +279,30 @@ export class StudentFeesService {
         );
     }
 
-    async createBundle(dto: CreateBundleDto) {
-        const { student_id, bundle_name, total_amount, academic_year, fee_ids, target_month } = dto;
+    /**
+     * Explicitly update the fee_date for one or more student_fees records.
+     * Called before bundle creation to persist any date changes the user made in the UI.
+     */
+    async updateFeeDates(updates: { id: number; fee_date: string }[]) {
+        return this.prisma.$transaction(
+            updates.map(({ id, fee_date }) =>
+                this.prisma.student_fees.update({
+                    where: { id },
+                    data: { fee_date: new Date(fee_date) },
+                }),
+            ),
+        );
+    }    async createBundle(dto: CreateBundleDto) {
+        const { student_id, bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
 
-        // Verify fees belong to this student
+        // Build a lookup: fee_id → new fee_date (for fees that had their date changed in the UI)
+        const dateOverrideMap = new Map<number, Date>(
+            (fee_date_overrides ?? []).map(({ id, fee_date }) => [id, new Date(fee_date)])
+        );
+
+        // Verify all fees belong to this student
         const fees = await this.prisma.student_fees.findMany({
-            where: {
-                id: { in: fee_ids },
-                student_id,
-            },
+            where: { id: { in: fee_ids }, student_id },
         });
 
         if (fees.length !== fee_ids.length) {
@@ -298,41 +312,49 @@ export class StudentFeesService {
         return this.prisma.$transaction(async (tx) => {
             const feesForProcessing = await tx.student_fees.findMany({
                 where: { id: { in: fee_ids } },
-                select: { amount: true, amount_before_discount: true, month: true, target_month: true }
+                select: { amount: true, amount_before_discount: true, month: true, target_month: true },
             });
 
-            const calculatedTotal = feesForProcessing.reduce((sum, f) =>
-                sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
-                new Prisma.Decimal(0)
+            const calculatedTotal = feesForProcessing.reduce(
+                (sum, f) => sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
+                new Prisma.Decimal(0),
             );
 
             const firstFee = feesForProcessing[0];
             const finalTargetMonth = target_month ?? firstFee.month ?? firstFee.target_month;
 
+            // Create the bundle record
             const bundle = await tx.student_fee_bundles.create({
                 data: {
                     student_id,
                     bundle_name,
                     total_amount: total_amount ? new Prisma.Decimal(total_amount) : calculatedTotal,
                     academic_year,
-                    target_month: finalTargetMonth
+                    target_month: finalTargetMonth,
                 },
             });
 
-            await tx.student_fees.updateMany({
-                where: { id: { in: fee_ids } },
-                data: {
-                    bundle_id: bundle.id,
-                    month: finalTargetMonth
-                },
-            });
+            // Link each fee to the bundle, applying date overrides atomically
+            for (const feeId of fee_ids) {
+                await tx.student_fees.update({
+                    where: { id: feeId },
+                    data: {
+                        bundle_id: bundle.id,
+                        ...(dateOverrideMap.has(feeId) ? { fee_date: dateOverrideMap.get(feeId) } : {}),
+                    },
+                });
+            }
 
             return bundle;
         });
     }
 
     async updateBundle(id: number, dto: Partial<CreateBundleDto>) {
-        const { bundle_name, total_amount, academic_year, fee_ids, target_month } = dto;
+        const { bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
+
+        const dateOverrideMap = new Map<number, Date>(
+            (fee_date_overrides ?? []).map(({ id: fid, fee_date }) => [fid, new Date(fee_date)])
+        );
 
         return this.prisma.$transaction(async (tx) => {
             const bundle = await tx.student_fee_bundles.update({
@@ -361,17 +383,18 @@ export class StudentFeesService {
                     });
                 }
 
-                // 3. Link and sync new/current fees
+                // 3. Link and apply date overrides
                 const finalFeeIds = fee_ids || (await tx.student_fees.findMany({ where: { bundle_id: id }, select: { id: true } })).map(f => f.id);
-                const finalTargetMonth = target_month ?? bundle.target_month;
 
-                await tx.student_fees.updateMany({
-                    where: { id: { in: finalFeeIds } },
-                    data: {
-                        bundle_id: id,
-                        month: finalTargetMonth
-                    },
-                });
+                for (const feeId of finalFeeIds) {
+                    await tx.student_fees.update({
+                        where: { id: feeId },
+                        data: {
+                            bundle_id: id,
+                            ...(dateOverrideMap.has(feeId) ? { fee_date: dateOverrideMap.get(feeId) } : {}),
+                        },
+                    });
+                }
             }
 
             return bundle;

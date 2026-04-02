@@ -1,4 +1,13 @@
-import { IsString, IsInt, IsOptional, IsArray, IsNotEmpty, IsDecimal } from 'class-validator';
+import { IsString, IsInt, IsOptional, IsArray, IsNotEmpty, IsDecimal, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+class FeeDateOverride {
+    @IsInt()
+    id: number;
+
+    @IsString()
+    fee_date: string;
+}
 
 export class CreateBundleDto {
     @IsInt()
@@ -25,4 +34,11 @@ export class CreateBundleDto {
     @IsInt()
     @IsOptional()
     target_month?: number;
+
+    /** Per-fee date overrides. Applied atomically in the same transaction as bundle creation. */
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => FeeDateOverride)
+    fee_date_overrides?: FeeDateOverride[];
 }

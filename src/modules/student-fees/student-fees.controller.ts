@@ -61,6 +61,26 @@ export class StudentFeesController {
         };
     }
 
+    /**
+     * Explicitly update fee_date for a batch of student_fees records by ID.
+     * Used to persist manual date changes before bundle creation.
+     */
+    @Patch('update-fee-dates')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'StudentFee') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async updateFeeDates(@Body() body: { updates: { id: number; fee_date: string }[] }) {
+        const updated = await this.studentFeesService.updateFeeDates(body.updates);
+        return {
+            success: true,
+            message: 'Fee dates updated successfully',
+            data: updated,
+        };
+    }
+
     @Post('bundles')
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee'))
     async createBundle(@Body() dto: any) {
