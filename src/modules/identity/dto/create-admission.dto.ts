@@ -158,6 +158,16 @@ export class GuardianDto {
   @IsOptional()
   @MaxLength(50)
   country?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(20)
+  fax_number?: string;
 }
 
 export class EmergencyContactDto {
@@ -292,6 +302,11 @@ export class CreateAdmissionDto {
   @IsEmail()
   @IsOptional()
   email?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(20)
+  home_phone?: string;
 
   // ── Guardians ──
   @ValidateNested()

@@ -72,6 +72,11 @@ export class IdentityService {
           const family = await tx.families.create({
             data: {
               household_name: familyName,
+              home_phone: dto.home_phone,
+              primary_address: [dto.father.house_appt_name, dto.father.area_block].filter(Boolean).join(', ') || null,
+              city: dto.father.city,
+              province: dto.father.province,
+              country: dto.father.country,
             },
           });
           familyId = family.id;
@@ -506,6 +511,8 @@ export class IdentityService {
       city: data.city ?? null,
       province: data.province ?? null,
       country: data.country ?? null,
+      postal_code: data.postal_code ?? null,
+      fax_number: data.fax_number ?? null,
     };
 
     if (data.cnic) {
