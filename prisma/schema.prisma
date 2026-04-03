@@ -13,6 +13,7 @@ model campuses {
   campus_code        String               @unique @db.VarChar(10)
   campus_name        String               @db.VarChar(100)
   address            String?
+  bulk_voucher_jobs  bulk_voucher_jobs[]
   campus_classes     campus_classes[]
   campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
@@ -30,10 +31,6 @@ model families {
   created_at       DateTime?               @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?               @db.Timestamp(6)
   email            String?                 @db.VarChar(100)
-  home_phone       String?                 @db.VarChar(20)
-  city             String?                 @db.VarChar(50)
-  country          String?                 @db.VarChar(50)
-  province         String?                 @db.VarChar(50)
   refresh_tokens   family_refresh_tokens[]
   student_siblings student_siblings[]
   students         students[]
@@ -72,8 +69,6 @@ model guardians {
   primary_phone_country_code String?             @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?             @default("+92") @db.VarChar(10)
   work_phone_country_code    String?             @default("+92") @db.VarChar(10)
-  fax_number                 String?             @db.VarChar(20)
-  postal_code                String?             @db.VarChar(20)
   student_guardians          student_guardians[]
 }
 
@@ -371,14 +366,15 @@ model campus_sections {
 }
 
 model bank_accounts {
-  id             Int        @id @default(autoincrement())
-  account_title  String     @db.VarChar(100)
-  account_number String     @unique @db.VarChar(50)
-  bank_name      String     @db.VarChar(100)
-  branch_code    String?    @db.VarChar(20)
-  bank_address   String?
-  iban           String?    @unique @db.VarChar(50)
-  vouchers       vouchers[]
+  id                Int                 @id @default(autoincrement())
+  account_title     String              @db.VarChar(100)
+  account_number    String              @unique @db.VarChar(50)
+  bank_name         String              @db.VarChar(100)
+  branch_code       String?             @db.VarChar(20)
+  bank_address      String?
+  iban              String?             @unique @db.VarChar(50)
+  bulk_voucher_jobs bulk_voucher_jobs[]
+  vouchers          vouchers[]
 }
 
 model vouchers {
@@ -450,6 +446,38 @@ model deposits {
   students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
+model bulk_voucher_jobs {
+  id                  Int           @id @default(autoincrement())
+  created_by          String        @db.VarChar(255)
+  campus_id           Int
+  class_id            Int?
+  section_id          Int?
+  academic_year       String        @db.VarChar(10)
+  fee_date_from       DateTime      @db.Date
+  fee_date_to         DateTime      @db.Date
+  issue_date          DateTime      @db.Date
+  due_date            DateTime      @db.Date
+  validity_date       DateTime?     @db.Date
+  bank_account_id     Int
+  skip_already_issued Boolean       @default(true)
+  apply_late_fee      Boolean       @default(true)
+  late_fee_amount     Int           @default(1000)
+  status              BulkJobStatus @default(PENDING)
+  total_count         Int           @default(0)
+  success_count       Int           @default(0)
+  skip_count          Int           @default(0)
+  fail_count          Int           @default(0)
+  merged_pdf_url      String?
+  created_at          DateTime      @default(now()) @db.Timestamp(6)
+  updated_at          DateTime
+  bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([campus_id], map: "idx_bulk_jobs_campus")
+  @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
+  @@index([status], map: "idx_bulk_jobs_status")
+}
+
 enum StaffRole {
   SUPER_ADMIN
   CAMPUS_ADMIN
@@ -477,4 +505,12 @@ enum fee_status_enum {
   ISSUED
   PARTIALLY_PAID
   PAID
+}
+
+enum BulkJobStatus {
+  PENDING
+  PROCESSING
+  DONE
+  PARTIAL_FAILURE
+  FAILED
 }

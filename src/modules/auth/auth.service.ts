@@ -182,6 +182,10 @@ export class AuthService {
   }
 
   async refreshParentToken(dto: RefreshTokenDto) {
+    if (!dto.refreshToken?.trim()) {
+      throw new UnauthorizedException('No refresh token provided');
+    }
+
     const existing = await this.findValidParentRefreshToken(dto.refreshToken);
     if (!existing) {
       throw new UnauthorizedException('Invalid or expired refresh token');
@@ -194,6 +198,9 @@ export class AuthService {
 
     const family = await this.prisma.families.findUnique({
       where: { id: existing.family_id },
+      select: {
+        id: true,
+      },
     });
     if (!family) throw new UnauthorizedException('Account not found');
 
@@ -281,6 +288,9 @@ export class AuthService {
     } catch {
       return null;
     }
+    if (decoded.userType !== 'STAFF') {
+      return null;
+    }
 
     // 2. Narrow DB lookup to this user's active, non-expired tokens
     const tokens = await this.prisma.user_refresh_tokens.findMany({
@@ -307,6 +317,9 @@ export class AuthService {
         { secret: this.configService.get<string>('JWT_REFRESH_SECRET') },
       );
     } catch {
+      return null;
+    }
+    if (decoded.userType !== 'PARENT') {
       return null;
     }
 

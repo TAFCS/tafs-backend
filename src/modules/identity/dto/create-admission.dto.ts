@@ -303,11 +303,6 @@ export class CreateAdmissionDto {
   @IsOptional()
   email?: string;
 
-  @IsString()
-  @IsOptional()
-  @MaxLength(20)
-  home_phone?: string;
-
   // ── Guardians ──
   @ValidateNested()
   @Type(() => GuardianDto)

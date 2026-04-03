@@ -352,9 +352,12 @@ export class VouchersService {
         return this.normalizeVoucher(voucher);
     }
 
-    async findByStudentCC(cc: number) {
+    async findByStudentCC(cc: number, familyId?: number) {
         const vouchers = await this.prisma.vouchers.findMany({
-            where: { student_id: cc },
+            where: { 
+                student_id: cc,
+                ...(familyId ? { students: { family_id: familyId } } : {})
+            },
             include: VOUCHER_INCLUDE,
             orderBy: { issue_date: 'asc' },
         });

@@ -9,6 +9,7 @@ import {
     Patch,
     Post,
     Query,
+    Req,
     UploadedFile,
     UseGuards,
     UseInterceptors,
@@ -23,16 +24,17 @@ import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 
 @Controller('vouchers')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
 export class VouchersController {
     constructor(private readonly vouchersService: VouchersService) {}
 
     @Post()
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies(
         (ability) =>
@@ -53,6 +55,7 @@ export class VouchersController {
     }
 
     @Post('bulk/preview')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -69,6 +72,7 @@ export class VouchersController {
     }
 
     @Post('bulk/create')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies(
         (ability) =>
@@ -85,6 +89,7 @@ export class VouchersController {
     }
 
     @Get()
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -111,6 +116,7 @@ export class VouchersController {
     }
 
     @Get('by-student/:cc')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -126,6 +132,7 @@ export class VouchersController {
     }
 
     @Get(':id')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -141,6 +148,7 @@ export class VouchersController {
     }
 
     @Post(':id/deposit')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -160,6 +168,7 @@ export class VouchersController {
     }
 
     @Patch(':id')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Update, 'Voucher') ||
@@ -179,6 +188,7 @@ export class VouchersController {
 
     /** Save a stamped PAID PDF back to the voucher record. */
     @Patch(':id/paid-pdf')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -199,6 +209,7 @@ export class VouchersController {
 
     /** Split a PARTIALLY_PAID voucher: create a new UNPAID voucher for the outstanding balances. */
     @Post(':id/split-partially-paid')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies(
         (ability) =>
@@ -216,6 +227,25 @@ export class VouchersController {
             success: true,
             message: 'New unpaid voucher created for outstanding balance.',
             data: voucher,
+        };
+    }
+
+    // --- Parent Facing ---
+
+    @Get('parent/student/:cc')
+    @UseGuards(JwtParentGuard)
+    @HttpCode(HttpStatus.OK)
+    async findByStudentForParent(
+        @Param('cc', ParseIntPipe) cc: number,
+        @Req() req: any,
+    ) {
+        const familyId = req.user.familyId;
+        // Verify family access (usually inside service)
+        const vouchers = await this.vouchersService.findByStudentCC(cc, familyId);
+        return {
+            success: true,
+            message: 'Vouchers retrieved successfully',
+            data: vouchers,
         };
     }
 }
