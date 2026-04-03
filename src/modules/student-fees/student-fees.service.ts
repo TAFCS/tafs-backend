@@ -426,4 +426,399 @@ export class StudentFeesService {
             },
         });
     }
+
+    // ─── Bulk Operations Helpers ──────────────────────────────────────────────
+
+    private async getStudentsInScope(campusId: number, classId?: number, sectionId?: number) {
+        return this.prisma.students.findMany({
+            where: {
+                campus_id: campusId,
+                ...(classId ? { class_id: classId } : {}),
+                ...(sectionId ? { section_id: sectionId } : {}),
+                deleted_at: null,
+                status: 'ENROLLED',
+            },
+            select: {
+                cc: true,
+                full_name: true,
+                gr_number: true,
+                classes: { select: { description: true, class_code: true } },
+                sections: { select: { description: true } },
+            },
+        });
+    }
+
+    private getCalendarYear(academicYear: string, month: number): number {
+        const startYear = parseInt(academicYear.split('-')[0]);
+        return month >= 8 ? startYear : startYear + 1;
+    }
+
+    private isValidDayForMonth(year: number, month: number, day: number): boolean {
+        const d = new Date(year, month - 1, day);
+        return d.getMonth() === month - 1;
+    }
+
+    // ─── Tab 1: Preview ───────────────────────────────────────────────────────
+
+    async bulkPreview(params: {
+        campus_id: number;
+        class_id?: number;
+        section_id?: number;
+        academic_year: string;
+        fee_type_id: number;
+        fee_date: string;
+    }) {
+        const { campus_id, class_id, section_id, academic_year, fee_type_id, fee_date } = params;
+        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+
+        if (students.length === 0) {
+            return { students: [], total: 0, will_add: 0, already_exists: 0 };
+        }
+
+        const studentIds = students.map(s => s.cc);
+        const targetDate = new Date(fee_date);
+
+        const existing = await this.prisma.student_fees.findMany({
+            where: { student_id: { in: studentIds }, fee_type_id, fee_date: targetDate, academic_year },
+            select: { student_id: true },
+        });
+
+        const existingSet = new Set(existing.map(e => e.student_id));
+
+        const result = students.map(s => ({
+            student_id: s.cc,
+            full_name: s.full_name,
+            gr_number: s.gr_number,
+            class: (s as any).classes?.description || '',
+            section: (s as any).sections?.description || '',
+            status: existingSet.has(s.cc) ? 'already_exists' : 'will_add',
+        }));
+
+        return {
+            students: result,
+            total: result.length,
+            will_add: result.filter(r => r.status === 'will_add').length,
+            already_exists: result.filter(r => r.status === 'already_exists').length,
+        };
+    }
+
+    // ─── Tab 1: Confirm ───────────────────────────────────────────────────────
+
+    async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto) {
+        const { academic_year, fee_type_id, month, fee_date, amount, student_ids } = dto;
+        const targetDate = new Date(fee_date);
+
+        let added = 0;
+        let skipped = 0;
+        const skipped_reasons: { student_id: number; reason: string }[] = [];
+
+        await Promise.allSettled(
+            student_ids.map(studentId =>
+                this.prisma.$transaction(async (tx) => {
+                    const existing = await tx.student_fees.findFirst({
+                        where: { student_id: studentId, fee_type_id, fee_date: targetDate, academic_year },
+                    });
+
+                    if (existing) {
+                        skipped++;
+                        skipped_reasons.push({ student_id: studentId, reason: 'already_exists' });
+                        return;
+                    }
+
+                    try {
+                        await tx.student_fees.create({
+                            data: {
+                                student_id: studentId,
+                                fee_type_id,
+                                month,
+                                target_month: month,
+                                academic_year,
+                                amount: new Prisma.Decimal(amount),
+                                amount_before_discount: new Prisma.Decimal(amount),
+                                fee_date: targetDate,
+                                status: 'NOT_ISSUED' as any,
+                            },
+                        });
+                        added++;
+                    } catch (e: any) {
+                        skipped++;
+                        skipped_reasons.push({ student_id: studentId, reason: e?.code === 'P2002' ? 'already_exists' : 'error' });
+                    }
+                })
+            )
+        );
+
+        return { added, skipped, skipped_reasons };
+    }
+
+    // ─── Tab 2: Conflict Check ────────────────────────────────────────────────
+
+    async bulkAddRangeConflicts(params: {
+        campus_id: number;
+        class_id?: number;
+        section_id?: number;
+        academic_year: string;
+        fee_type_id: number;
+        start_month: number;
+        end_month: number;
+        day: number;
+    }) {
+        const { campus_id, class_id, section_id, academic_year, fee_type_id, start_month, end_month, day } = params;
+        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const studentIds = students.map(s => s.cc);
+        const monthResults: any[] = [];
+
+        for (let month = start_month; month <= end_month; month++) {
+            const calYear = this.getCalendarYear(academic_year, month);
+
+            if (!this.isValidDayForMonth(calYear, month, day)) {
+                monthResults.push({ month, valid: false, reason: `Day ${day} does not exist in this month` });
+                continue;
+            }
+
+            const feeDate = new Date(calYear, month - 1, day);
+            const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+            const existing = studentIds.length > 0
+                ? await this.prisma.student_fees.findMany({
+                    where: { student_id: { in: studentIds }, fee_type_id, fee_date: feeDate, academic_year },
+                    select: { student_id: true },
+                })
+                : [];
+
+            monthResults.push({
+                month,
+                valid: true,
+                fee_date: feeDateStr,
+                total_students: studentIds.length,
+                existing: existing.length,
+                will_add: studentIds.length - existing.length,
+            });
+        }
+
+        return { months: monthResults, total_students: studentIds.length };
+    }
+
+    // ─── Tab 2: Confirm ───────────────────────────────────────────────────────
+
+    async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto) {
+        const { academic_year, fee_type_id, start_month, end_month, day, amount, student_ids } = dto;
+
+        const validMonths: { month: number; date: Date; fee_date_str: string }[] = [];
+        const skippedMonths: { month: number; skipped_reason: string }[] = [];
+
+        for (let month = start_month; month <= end_month; month++) {
+            const calYear = this.getCalendarYear(academic_year, month);
+            if (!this.isValidDayForMonth(calYear, month, day)) {
+                skippedMonths.push({ month, skipped_reason: 'day_invalid' });
+                continue;
+            }
+            validMonths.push({
+                month,
+                date: new Date(calYear, month - 1, day),
+                fee_date_str: `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+            });
+        }
+
+        const monthSummary: Record<number, { added: number; skipped: number }> = {};
+        for (const vm of validMonths) monthSummary[vm.month] = { added: 0, skipped: 0 };
+
+        // Per-student transaction to keep each student's operation atomic
+        await Promise.allSettled(
+            student_ids.map(studentId =>
+                this.prisma.$transaction(async (tx) => {
+                    for (const { month, date } of validMonths) {
+                        const existing = await tx.student_fees.findFirst({
+                            where: { student_id: studentId, fee_type_id, fee_date: date, academic_year },
+                        });
+
+                        if (existing) { monthSummary[month].skipped++; continue; }
+
+                        try {
+                            await tx.student_fees.create({
+                                data: {
+                                    student_id: studentId,
+                                    fee_type_id,
+                                    month,
+                                    target_month: month,
+                                    academic_year,
+                                    amount: new Prisma.Decimal(amount),
+                                    amount_before_discount: new Prisma.Decimal(amount),
+                                    fee_date: date,
+                                    status: 'NOT_ISSUED' as any,
+                                },
+                            });
+                            monthSummary[month].added++;
+                        } catch (e: any) {
+                            if (e?.code === 'P2002') monthSummary[month].skipped++;
+                            else throw e;
+                        }
+                    }
+                })
+            )
+        );
+
+        const totalAdded = Object.values(monthSummary).reduce((s, m) => s + m.added, 0);
+        const totalSkipped = Object.values(monthSummary).reduce((s, m) => s + m.skipped, 0);
+
+        const summary = [
+            ...validMonths.map(vm => ({
+                month: vm.month,
+                fee_date: vm.fee_date_str,
+                added: monthSummary[vm.month].added,
+                skipped: monthSummary[vm.month].skipped,
+            })),
+            ...skippedMonths,
+        ].sort((a, b) => a.month - b.month);
+
+        return { summary, total_added: totalAdded, total_skipped: totalSkipped };
+    }
+
+    // ─── Tab 3: Delete Single Date Preview ───────────────────────────────────
+
+    async bulkDeletePreview(params: {
+        campus_id: number;
+        class_id?: number;
+        section_id?: number;
+        academic_year: string;
+        fee_date: string;
+        fee_type_id?: number;
+    }) {
+        const { campus_id, class_id, section_id, academic_year, fee_date, fee_type_id } = params;
+        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+
+        if (students.length === 0) return { rows: [], total: 0, can_delete: 0, blocked: 0 };
+
+        const studentIds = students.map(s => s.cc);
+        const targetDate = new Date(fee_date);
+
+        const fees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: { in: studentIds },
+                academic_year,
+                fee_date: targetDate,
+                ...(fee_type_id ? { fee_type_id } : {}),
+            },
+            include: {
+                fee_types: { select: { description: true } },
+                students: {
+                    select: {
+                        full_name: true, gr_number: true,
+                        classes: { select: { description: true } },
+                        sections: { select: { description: true } },
+                    },
+                },
+                voucher_heads: { select: { id: true }, take: 1 },
+            },
+        });
+
+        const rows = fees.map(f => ({
+            id: f.id,
+            student_id: f.student_id,
+            student_name: (f as any).students.full_name,
+            gr_number: (f as any).students.gr_number,
+            class: (f as any).students.classes?.description || '',
+            section: (f as any).students.sections?.description || '',
+            fee_type: (f as any).fee_types.description,
+            amount: f.amount?.toString() || '0',
+            fee_date: f.fee_date?.toISOString().split('T')[0] || '',
+            has_voucher: (f as any).voucher_heads.length > 0,
+            status: (f as any).voucher_heads.length > 0 ? 'blocked' : 'can_delete',
+        }));
+
+        return {
+            rows,
+            total: rows.length,
+            can_delete: rows.filter(r => !r.has_voucher).length,
+            blocked: rows.filter(r => r.has_voucher).length,
+        };
+    }
+
+    // ─── Tab 4: Delete Date Range Preview ────────────────────────────────────
+
+    async bulkDeleteRangePreview(params: {
+        campus_id: number;
+        class_id?: number;
+        section_id?: number;
+        academic_year: string;
+        start_month: number;
+        end_month: number;
+        day: number;
+        fee_type_id?: number;
+    }) {
+        const { campus_id, class_id, section_id, academic_year, start_month, end_month, day, fee_type_id } = params;
+        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const studentIds = students.map(s => s.cc);
+        const monthResults: any[] = [];
+        const allDeletableIds: number[] = [];
+
+        for (let month = start_month; month <= end_month; month++) {
+            const calYear = this.getCalendarYear(academic_year, month);
+
+            if (!this.isValidDayForMonth(calYear, month, day)) {
+                monthResults.push({ month, valid: false, reason: 'day_invalid', fee_date: null, total: 0, can_delete: 0, blocked: 0, fee_ids: [] });
+                continue;
+            }
+
+            const feeDate = new Date(calYear, month - 1, day);
+            const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+            const fees = studentIds.length > 0
+                ? await this.prisma.student_fees.findMany({
+                    where: {
+                        student_id: { in: studentIds },
+                        academic_year,
+                        fee_date: feeDate,
+                        ...(fee_type_id ? { fee_type_id } : {}),
+                    },
+                    include: { voucher_heads: { select: { id: true }, take: 1 } },
+                })
+                : [];
+
+            const canDelete = fees.filter((f: any) => f.voucher_heads.length === 0);
+            const blocked = fees.filter((f: any) => f.voucher_heads.length > 0);
+            const feeIds = canDelete.map((f: any) => f.id);
+            allDeletableIds.push(...feeIds);
+
+            monthResults.push({
+                month,
+                valid: true,
+                fee_date: feeDateStr,
+                total: fees.length,
+                can_delete: canDelete.length,
+                blocked: blocked.length,
+                fee_ids: feeIds,
+            });
+        }
+
+        return {
+            months: monthResults,
+            total_can_delete: allDeletableIds.length,
+            total_blocked: monthResults.reduce((s: number, m: any) => s + (m.blocked || 0), 0),
+            all_deletable_fee_ids: allDeletableIds,
+        };
+    }
+
+    // ─── Tabs 3 & 4: Confirm Delete ───────────────────────────────────────────
+
+    async bulkDelete(dto: import('./dto/bulk-delete.dto').BulkDeleteDto) {
+        const { student_fee_ids } = dto;
+
+        // Re-validate — check if any voucher was added since preview
+        const fees = await this.prisma.student_fees.findMany({
+            where: { id: { in: student_fee_ids } },
+            include: { voucher_heads: { select: { id: true }, take: 1 } },
+        });
+
+        const canDelete = fees.filter((f: any) => f.voucher_heads.length === 0).map((f: any) => f.id);
+        const blocked = fees.filter((f: any) => f.voucher_heads.length > 0).map((f: any) => f.id);
+
+        if (canDelete.length > 0) {
+            await this.prisma.student_fees.deleteMany({
+                where: { id: { in: canDelete } },
+            });
+        }
+
+        return { deleted: canDelete.length, blocked: blocked.length };
+    }
 }
