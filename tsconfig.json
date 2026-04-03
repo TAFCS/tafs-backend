@@ -21,6 +21,8 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-    "types": ["multer"]
+    "types": ["multer"],
+    "jsx": "react-jsx"
   }
 }
+

@@ -96,20 +96,20 @@ export class BulkVoucherJobsService {
         const feeDateFrom = new Date(dto.fee_date_from);
         const feeDateTo = new Date(dto.fee_date_to);
 
-        // 2. Find students that already have any voucher in the date range
-        const existingVouchers = await this.prisma.vouchers.findMany({
+        // 2. Find students that already have any fee records issued/paid in the date range
+        const issuedFees = await this.prisma.student_fees.findMany({
             where: {
                 student_id: { in: studentIds },
                 fee_date: {
                     gte: feeDateFrom,
                     lte: feeDateTo,
                 },
-                status: { not: 'VOID' },
+                status: { in: ['ISSUED', 'PAID', 'PARTIALLY_PAID'] },
             },
             select: { student_id: true },
         });
-
-        const alreadyIssuedSet = new Set(existingVouchers.map((v) => v.student_id));
+        
+        const alreadyIssuedSet = new Set(issuedFees.map((f) => f.student_id));
 
         // 3. Build response
         return students.map((s) => ({
@@ -256,14 +256,51 @@ export class BulkVoucherJobsService {
         // Fetch student records once for class/section/campus info
         const studentRecords = await this.prisma.students.findMany({
             where: { cc: { in: dto.student_ccs }, deleted_at: null },
-            include: { 
-                classes: true, 
-                sections: true, 
-                campuses: true 
+            select: {
+                cc: true,
+                full_name: true,
+                gender: true,
+                gr_number: true,
+                family_id: true,
+                class_id: true,
+                campus_id: true,
+                section_id: true,
+                classes: { select: { description: true } },
+                sections: { select: { description: true } },
+                campuses: { select: { campus_name: true } },
+                student_guardians: {
+                    select: {
+                        relationship: true,
+                        is_primary_contact: true,
+                        guardians: { select: { full_name: true } },
+                    },
+                },
             },
         });
 
         const studentMap = new Map(studentRecords.map((s) => [s.cc, s]));
+
+        // Pre-fetch siblings for all students in bulk to be efficient
+        const familyIds = studentRecords.map(s => s.family_id).filter(Boolean);
+        const allSiblings = await this.prisma.students.findMany({
+            where: {
+                family_id: { in: familyIds as number[] },
+                deleted_at: null,
+                status: 'ENROLLED',
+            },
+            include: {
+                classes: { select: { description: true } },
+                sections: { select: { description: true } },
+            },
+        });
+
+        const siblingsMap = new Map<number, typeof allSiblings>();
+        for (const s of allSiblings) {
+            if (!s.family_id) continue;
+            const list = siblingsMap.get(s.family_id) ?? [];
+            list.push(s);
+            siblingsMap.set(s.family_id, list);
+        }
 
         for (const cc of dto.student_ccs) {
             const student = studentMap.get(cc);
@@ -288,7 +325,19 @@ export class BulkVoucherJobsService {
                         },
                         status: 'NOT_ISSUED',
                     },
-                    include: { fee_types: true },
+                    select: {
+                        id: true,
+                        fee_date: true,
+                        amount: true,
+                        amount_before_discount: true,
+                        fee_type_id: true,
+                        fee_types: {
+                            select: {
+                                description: true,
+                                priority_order: true,
+                            },
+                        },
+                    },
                 });
 
                 // 2. Group them by their actual fee_date
@@ -326,6 +375,16 @@ export class BulkVoucherJobsService {
                             continue;
                         }
 
+                        const feeLines = feesForThisVoucher.map((f) => {
+                            const gross = Number(f.amount_before_discount || f.amount || 0);
+                            const net = Number(f.amount || 0);
+                            return {
+                                student_fee_id: f.id,
+                                discount_amount: Math.max(0, gross - net),
+                                discount_label: gross > net ? 'Discount' : '',
+                            };
+                        });
+
                         // Create the voucher record
                         const voucher = await this.vouchersService.create({
                             student_id: cc,
@@ -342,24 +401,35 @@ export class BulkVoucherJobsService {
                             fee_date: dateStr,
                             precedence: 1,
                             orderedFeeIds: feeIds,
-                            fee_lines: feeIds.map((feeId) => ({
-                                student_fee_id: feeId,
-                                discount_amount: 0,
-                                discount_label: '',
-                            })),
+                            fee_lines: feeLines,
                         });
 
                         // ── GENERATE PDF ──
                         try {
+                            const fatherG = (student.student_guardians || []).find(g => g.relationship === 'FATHER') || 
+                                          (student.student_guardians || []).find(g => g.is_primary_contact);
+                            const fatherName = fatherG?.guardians?.full_name || 'N/A';
+
                             const pdfBuffer = await this.voucherPdfService.generateVoucherPdf({
                                 voucherNumber: voucher.id.toString(),
                                 student: {
                                     cc: student.cc,
                                     fullName: student.full_name,
+                                    fatherName: fatherName,
+                                    gender: student.gender || 'N/A',
                                     grNumber: student.gr_number || 'N/A',
                                     className: student.classes?.description || 'N/A',
                                     sectionName: student.sections?.description || 'N/A',
                                 },
+                                siblings: (siblingsMap.get(student.family_id!) || [])
+                                    .filter(s => s.cc !== student.cc)
+                                    .map(s => ({
+                                        cc: s.cc,
+                                        fullName: s.full_name,
+                                        grNumber: s.gr_number || 'N/A',
+                                        className: s.classes?.description || 'N/A',
+                                        sectionName: s.sections?.description || 'N/A',
+                                    })),
                                 campusName: student.campuses?.campus_name || 'Main Campus',
                                 academicYear: dto.academic_year,
                                 month: new Date(dateStr).toLocaleString('default', { month: 'long', year: 'numeric' }),
@@ -373,12 +443,21 @@ export class BulkVoucherJobsService {
                                     iban: bankAccount?.iban || 'N/A',
                                     address: bankAccount?.bank_address || 'N/A',
                                 },
-                                feeHeads: feesForThisVoucher.map(f => ({
-                                    description: f.fee_types?.description || 'Fee',
-                                    amount: Number(f.amount),
-                                    netAmount: Number(f.amount),
-                                })),
-                                totalAmount: feesForThisVoucher.reduce((sum, f) => sum + Number(f.amount), 0),
+                                feeHeads: feesForThisVoucher.map(f => {
+                                    const gross = Number(f.amount_before_discount || f.amount || 0);
+                                    const net = Number(f.amount || 0);
+                                    const disc = Math.max(0, gross - net);
+                                    return {
+                                        description: f.fee_types?.description || 'Fee',
+                                        amount: gross,
+                                        discount: disc,
+                                        netAmount: net,
+                                        discountLabel: disc > 0 ? 'Discount' : '',
+                                    };
+                                }),
+                                totalAmount: feesForThisVoucher.reduce((sum, f) => {
+                                    return sum + Number(f.amount || 0);
+                                }, 0),
                                 lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
                             });
 
