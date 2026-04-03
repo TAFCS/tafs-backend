@@ -117,10 +117,113 @@ export class StudentFeesController {
     @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee'))
     async getBundlesByStudent(@Param('studentId', ParseIntPipe) studentId: number) {
         const bundles = await this.studentFeesService.getBundlesByStudent(studentId);
-        return {
-            success: true,
-            message: 'Bundles retrieved successfully',
-            data: bundles,
-        };
+        return { success: true, message: 'Bundles retrieved successfully', data: bundles };
+    }
+
+    // ─── Bulk Operations ──────────────────────────────────────────────────────
+
+    @Get('bulk-preview')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkPreview(
+        @Query('campus_id', ParseIntPipe) campus_id: number,
+        @Query('academic_year') academic_year: string,
+        @Query('fee_type_id', ParseIntPipe) fee_type_id: number,
+        @Query('fee_date') fee_date: string,
+        @Query('class_id') class_id?: string,
+        @Query('section_id') section_id?: string,
+    ) {
+        const data = await this.studentFeesService.bulkPreview({
+            campus_id,
+            academic_year,
+            fee_type_id,
+            fee_date,
+            class_id: class_id ? Number(class_id) : undefined,
+            section_id: section_id ? Number(section_id) : undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Post('bulk-add')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkAdd(@Body() dto: any) {
+        const data = await this.studentFeesService.bulkAdd(dto);
+        return { success: true, data };
+    }
+
+    @Get('bulk-add-range-conflicts')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkAddRangeConflicts(
+        @Query('campus_id', ParseIntPipe) campus_id: number,
+        @Query('academic_year') academic_year: string,
+        @Query('fee_type_id', ParseIntPipe) fee_type_id: number,
+        @Query('start_month', ParseIntPipe) start_month: number,
+        @Query('end_month', ParseIntPipe) end_month: number,
+        @Query('day', ParseIntPipe) day: number,
+        @Query('class_id') class_id?: string,
+        @Query('section_id') section_id?: string,
+    ) {
+        const data = await this.studentFeesService.bulkAddRangeConflicts({
+            campus_id, academic_year, fee_type_id, start_month, end_month, day,
+            class_id: class_id ? Number(class_id) : undefined,
+            section_id: section_id ? Number(section_id) : undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Post('bulk-add-range')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkAddRange(@Body() dto: any) {
+        const data = await this.studentFeesService.bulkAddRange(dto);
+        return { success: true, data };
+    }
+
+    @Get('bulk-delete-preview')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkDeletePreview(
+        @Query('campus_id', ParseIntPipe) campus_id: number,
+        @Query('academic_year') academic_year: string,
+        @Query('fee_date') fee_date: string,
+        @Query('class_id') class_id?: string,
+        @Query('section_id') section_id?: string,
+        @Query('fee_type_id') fee_type_id?: string,
+    ) {
+        const data = await this.studentFeesService.bulkDeletePreview({
+            campus_id, academic_year, fee_date,
+            class_id: class_id ? Number(class_id) : undefined,
+            section_id: section_id ? Number(section_id) : undefined,
+            fee_type_id: fee_type_id ? Number(fee_type_id) : undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Get('bulk-delete-range-preview')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkDeleteRangePreview(
+        @Query('campus_id', ParseIntPipe) campus_id: number,
+        @Query('academic_year') academic_year: string,
+        @Query('start_month', ParseIntPipe) start_month: number,
+        @Query('end_month', ParseIntPipe) end_month: number,
+        @Query('day', ParseIntPipe) day: number,
+        @Query('class_id') class_id?: string,
+        @Query('section_id') section_id?: string,
+        @Query('fee_type_id') fee_type_id?: string,
+    ) {
+        const data = await this.studentFeesService.bulkDeleteRangePreview({
+            campus_id, academic_year, start_month, end_month, day,
+            class_id: class_id ? Number(class_id) : undefined,
+            section_id: section_id ? Number(section_id) : undefined,
+            fee_type_id: fee_type_id ? Number(fee_type_id) : undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Delete('bulk-delete')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async bulkDelete(@Body() dto: any) {
+        const data = await this.studentFeesService.bulkDelete(dto);
+        return { success: true, data };
     }
 }
