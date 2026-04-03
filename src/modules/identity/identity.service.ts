@@ -80,8 +80,18 @@ export class IdentityService {
 
       // ── 2. Create student ────────────────────────────────────────────────
       const dob = new Date(dto.dob);
+
+      // Manual increment of CC (Computer Code) to avoid sequence desync issues
+      const latestStudent = await tx.students.findFirst({
+        orderBy: { cc: 'desc' },
+        select: { cc: true },
+      });
+      const nextCC = (latestStudent?.cc || 0) + 1;
+
       const student = await tx.students.create({
         data: {
+          cc: nextCC,
+          gr_number: dto.gr_number,
           family_id: familyId,
           full_name: dto.full_name,
           dob,

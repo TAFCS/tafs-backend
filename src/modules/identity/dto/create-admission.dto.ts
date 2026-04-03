@@ -220,6 +220,11 @@ export class CreateAdmissionDto {
 
   // ── Student personal data ──
   @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  gr_number?: string;
+
+  @IsString()
   @IsNotEmpty()
   @MaxLength(100)
   full_name: string;
