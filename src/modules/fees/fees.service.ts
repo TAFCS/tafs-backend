@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { SubmitStudentFeesDto } from './dto/submit-student-fees.dto';
@@ -46,5 +46,72 @@ export class FeesService {
     );
 
     return { upserted: dto.items.length };
+  }
+
+  async getFeeSummaryForParent(studentCc: number, familyId: number) {
+    // 1. Ownership check
+    const student = await this.prisma.students.findFirst({
+      where: { cc: studentCc, family_id: familyId, deleted_at: null },
+    });
+    if (!student) {
+      throw new ForbiddenException(
+        `Student #${studentCc} not linked to your family`,
+      );
+    }
+
+    const academicYear = student.academic_year;
+
+    // 2. Total fees charged this academic year
+    const totalCharged = await this.prisma.student_fees.aggregate({
+      where: {
+        student_id: studentCc,
+        ...(academicYear ? { academic_year: academicYear } : {}),
+      },
+      _sum: { amount: true },
+    });
+
+    // 3. All vouchers for this student
+    const vouchers = await this.prisma.vouchers.findMany({
+      where: { student_id: studentCc },
+      select: {
+        id: true,
+        status: true,
+        total_payable_before_due: true,
+        voucher_heads: {
+          select: {
+            amount_deposited: true,
+            balance: true,
+          },
+        },
+      },
+    });
+
+    const totalPaid = vouchers.reduce(
+      (sum, v) =>
+        sum +
+        v.voucher_heads.reduce(
+          (s, h) => s + Number(h.amount_deposited ?? 0),
+          0,
+        ),
+      0,
+    );
+
+    const unpaidVouchers = vouchers.filter(
+      (v) => v.status === 'UNPAID' || v.status === 'PARTIALLY_PAID',
+    );
+    const overdueAmount = unpaidVouchers.reduce(
+      (sum, v) =>
+        sum + v.voucher_heads.reduce((s, h) => s + Number(h.balance ?? 0), 0),
+      0,
+    );
+
+    return {
+      academicYear,
+      totalCharged: Number(totalCharged._sum.amount ?? 0),
+      totalPaid,
+      outstandingBalance: overdueAmount,
+      hasOverdue: overdueAmount > 0,
+      overdueCount: unpaidVouchers.length,
+    };
   }
 }

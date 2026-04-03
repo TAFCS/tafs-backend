@@ -149,12 +149,12 @@ export class AuthService {
       select: {
         cc: true,
         full_name: true,
+        gr_number: true,
         photograph_url: true,
-        student_admissions: {
-          orderBy: { id: 'desc' },
-          take: 1,
-          select: { requested_grade: true },
-        },
+        academic_year: true,
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
       },
     });
 
@@ -169,9 +169,14 @@ export class AuthService {
       students: students.map((student) => ({
         cc: student.cc,
         fullName: student.full_name,
-        section:
-          student.student_admissions[0]?.requested_grade ?? null,
-        profilePictureUrl: student.photograph_url,
+        grNumber: student.gr_number,
+        photographUrl: student.photograph_url,
+        campus: student.campuses?.campus_name ?? null,
+        campusCode: student.campuses?.campus_code ?? null,
+        className: student.classes?.description ?? null,
+        classCode: student.classes?.class_code ?? null,
+        section: student.sections?.description ?? null,
+        academicYear: student.academic_year,
       })),
     };
   }

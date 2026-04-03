@@ -26,14 +26,14 @@ model families {
   legacy_pid       String?                 @db.VarChar(50)
   household_name   String                  @db.VarChar(100)
   primary_address  String?
-  city             String?                 @db.VarChar(50)
-  province         String?                 @db.VarChar(50)
-  country          String?                 @db.VarChar(50)
-  home_phone       String?                 @db.VarChar(20)
   password_hash    String?                 @db.VarChar(255)
   created_at       DateTime?               @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?               @db.Timestamp(6)
   email            String?                 @db.VarChar(100)
+  home_phone       String?                 @db.VarChar(20)
+  city             String?                 @db.VarChar(50)
+  country          String?                 @db.VarChar(50)
+  province         String?                 @db.VarChar(50)
   refresh_tokens   family_refresh_tokens[]
   student_siblings student_siblings[]
   students         students[]
@@ -64,8 +64,6 @@ model guardians {
   country                    String?             @db.VarChar(50)
   province                   String?             @db.VarChar(50)
   city                       String?             @db.VarChar(50)
-  postal_code                String?             @db.VarChar(20)
-  fax_number                 String?             @db.VarChar(20)
   occupational_position      String?             @db.VarChar(100)
   cnic_pic_url               String?
   passport_front_url         String?
@@ -74,6 +72,8 @@ model guardians {
   primary_phone_country_code String?             @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?             @default("+92") @db.VarChar(10)
   work_phone_country_code    String?             @default("+92") @db.VarChar(10)
+  fax_number                 String?             @db.VarChar(20)
+  postal_code                String?             @db.VarChar(20)
   student_guardians          student_guardians[]
 }
 
@@ -333,7 +333,6 @@ model student_fees {
 
   @@unique([student_id, fee_type_id, month, target_month, academic_year])
   @@unique([student_id, fee_type_id, target_month, academic_year], map: "student_fees_student_id_fee_type_id_target_month_academic_year_")
-//  @@unique([student_id, fee_type_id, fee_date])
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
 }
