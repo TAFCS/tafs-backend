@@ -568,16 +568,19 @@ export class StudentFeesService {
         const studentIds = students.map(s => s.cc);
         const monthResults: any[] = [];
 
-        for (let month = start_month; month <= end_month; month++) {
-            const calYear = this.getCalendarYear(academic_year, month);
+        const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
+        const startIndex = ACADEMIC_ORDER.indexOf(start_month);
+        const endIndex = ACADEMIC_ORDER.indexOf(end_month);
 
+        for (let i = startIndex; i <= endIndex; i++) {
+            const month = ACADEMIC_ORDER[i];
+            const calYear = this.getCalendarYear(academic_year, month);
             if (!this.isValidDayForMonth(calYear, month, day)) {
-                monthResults.push({ month, valid: false, reason: `Day ${day} does not exist in this month` });
+                monthResults.push({ month, valid: false, reason: `Day ${day} doesn't exist in this month` });
                 continue;
             }
-
-            const feeDate = new Date(calYear, month - 1, day);
             const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const feeDate = new Date(feeDateStr);
 
             const existing = studentIds.length > 0
                 ? await this.prisma.student_fees.findMany({
@@ -604,74 +607,56 @@ export class StudentFeesService {
     async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto) {
         const { academic_year, fee_type_id, start_month, end_month, day, amount, student_ids } = dto;
 
-        const validMonths: { month: number; date: Date; fee_date_str: string }[] = [];
-        const skippedMonths: { month: number; skipped_reason: string }[] = [];
+        const monthSummary: any[] = [];
+        let totalAddedNum = 0;
+        let totalSkippedNum = 0;
 
-        for (let month = start_month; month <= end_month; month++) {
+        const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
+        const startIndex = ACADEMIC_ORDER.indexOf(start_month);
+        const endIndex = ACADEMIC_ORDER.indexOf(end_month);
+
+        for (let i = startIndex; i <= endIndex; i++) {
+            const month = ACADEMIC_ORDER[i];
             const calYear = this.getCalendarYear(academic_year, month);
             if (!this.isValidDayForMonth(calYear, month, day)) {
-                skippedMonths.push({ month, skipped_reason: 'day_invalid' });
+                monthSummary.push({ month, skipped_reason: 'day_invalid' });
                 continue;
             }
-            validMonths.push({
+            const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const date = new Date(feeDateStr);
+
+            // Using createMany for high-performance bulk operations (avoids timeouts on large campuses)
+            const bulkData = student_ids.map(studentId => ({
+                student_id: studentId,
+                fee_type_id,
                 month,
-                date: new Date(calYear, month - 1, day),
-                fee_date_str: `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+                target_month: month,
+                academic_year,
+                amount: new Prisma.Decimal(amount),
+                amount_before_discount: new Prisma.Decimal(amount),
+                fee_date: date,
+                status: 'NOT_ISSUED' as any,
+            }));
+
+            // Prisma createMany with skipDuplicates: true translates to INSERT IGNORE or ON CONFLICT DO NOTHING
+            const result = await this.prisma.student_fees.createMany({
+                data: bulkData,
+                skipDuplicates: true,
             });
+
+            const added = result.count;
+            const skipped = student_ids.length - added;
+            
+            totalAddedNum += added;
+            totalSkippedNum += skipped;
+            monthSummary.push({ month, added, skipped });
         }
 
-        const monthSummary: Record<number, { added: number; skipped: number }> = {};
-        for (const vm of validMonths) monthSummary[vm.month] = { added: 0, skipped: 0 };
-
-        // Per-student transaction to keep each student's operation atomic
-        await Promise.allSettled(
-            student_ids.map(studentId =>
-                this.prisma.$transaction(async (tx) => {
-                    for (const { month, date } of validMonths) {
-                        const existing = await tx.student_fees.findFirst({
-                            where: { student_id: studentId, fee_type_id, fee_date: date, academic_year },
-                        });
-
-                        if (existing) { monthSummary[month].skipped++; continue; }
-
-                        try {
-                            await tx.student_fees.create({
-                                data: {
-                                    student_id: studentId,
-                                    fee_type_id,
-                                    month,
-                                    target_month: month,
-                                    academic_year,
-                                    amount: new Prisma.Decimal(amount),
-                                    amount_before_discount: new Prisma.Decimal(amount),
-                                    fee_date: date,
-                                    status: 'NOT_ISSUED' as any,
-                                },
-                            });
-                            monthSummary[month].added++;
-                        } catch (e: any) {
-                            if (e?.code === 'P2002') monthSummary[month].skipped++;
-                            else throw e;
-                        }
-                    }
-                })
-            )
-        );
-
-        const totalAdded = Object.values(monthSummary).reduce((s, m) => s + m.added, 0);
-        const totalSkipped = Object.values(monthSummary).reduce((s, m) => s + m.skipped, 0);
-
-        const summary = [
-            ...validMonths.map(vm => ({
-                month: vm.month,
-                fee_date: vm.fee_date_str,
-                added: monthSummary[vm.month].added,
-                skipped: monthSummary[vm.month].skipped,
-            })),
-            ...skippedMonths,
-        ].sort((a, b) => a.month - b.month);
-
-        return { summary, total_added: totalAdded, total_skipped: totalSkipped };
+        return {
+            summary: monthSummary,
+            total_added: totalAddedNum,
+            total_skipped: totalSkippedNum,
+        };
     }
 
     // ─── Tab 3: Delete Single Date Preview ───────────────────────────────────
@@ -752,16 +737,20 @@ export class StudentFeesService {
         const monthResults: any[] = [];
         const allDeletableIds: number[] = [];
 
-        for (let month = start_month; month <= end_month; month++) {
-            const calYear = this.getCalendarYear(academic_year, month);
+        const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
+        const startIndex = ACADEMIC_ORDER.indexOf(start_month);
+        const endIndex = ACADEMIC_ORDER.indexOf(end_month);
 
+        for (let i = startIndex; i <= endIndex; i++) {
+            const month = ACADEMIC_ORDER[i];
+            const calYear = this.getCalendarYear(academic_year, month);
             if (!this.isValidDayForMonth(calYear, month, day)) {
                 monthResults.push({ month, valid: false, reason: 'day_invalid', fee_date: null, total: 0, can_delete: 0, blocked: 0, fee_ids: [] });
                 continue;
             }
 
-            const feeDate = new Date(calYear, month - 1, day);
             const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const feeDate = new Date(feeDateStr);
 
             const fees = studentIds.length > 0
                 ? await this.prisma.student_fees.findMany({
