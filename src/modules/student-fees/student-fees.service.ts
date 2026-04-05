@@ -570,47 +570,27 @@ export class StudentFeesService {
         const { academic_year, fee_type_id, month, fee_date, amount, student_ids } = dto;
         const targetDate = new Date(fee_date);
 
-        let added = 0;
-        let skipped = 0;
-        const skipped_reasons: { student_id: number; reason: string }[] = [];
+        // Use a single createMany with skipDuplicates instead of N parallel transactions.
+        // Opening one transaction per student in parallel exhausts the connection pool.
+        const result = await this.prisma.student_fees.createMany({
+            data: student_ids.map(studentId => ({
+                student_id: studentId,
+                fee_type_id,
+                month,
+                target_month: month,
+                academic_year,
+                amount: new Prisma.Decimal(amount),
+                amount_before_discount: new Prisma.Decimal(amount),
+                fee_date: targetDate,
+                status: 'NOT_ISSUED' as any,
+            })),
+            skipDuplicates: true,
+        });
 
-        await Promise.allSettled(
-            student_ids.map(studentId =>
-                this.prisma.$transaction(async (tx) => {
-                    const existing = await tx.student_fees.findFirst({
-                        where: { student_id: studentId, fee_type_id, fee_date: targetDate, academic_year },
-                    });
+        const added = result.count;
+        const skipped = student_ids.length - added;
 
-                    if (existing) {
-                        skipped++;
-                        skipped_reasons.push({ student_id: studentId, reason: 'already_exists' });
-                        return;
-                    }
-
-                    try {
-                        await tx.student_fees.create({
-                            data: {
-                                student_id: studentId,
-                                fee_type_id,
-                                month,
-                                target_month: month,
-                                academic_year,
-                                amount: new Prisma.Decimal(amount),
-                                amount_before_discount: new Prisma.Decimal(amount),
-                                fee_date: targetDate,
-                                status: 'NOT_ISSUED' as any,
-                            },
-                        });
-                        added++;
-                    } catch (e: any) {
-                        skipped++;
-                        skipped_reasons.push({ student_id: studentId, reason: e?.code === 'P2002' ? 'already_exists' : 'error' });
-                    }
-                })
-            )
-        );
-
-        return { added, skipped, skipped_reasons };
+        return { added, skipped, skipped_reasons: [] };
     }
 
     // ─── Tab 2: Conflict Check ────────────────────────────────────────────────
@@ -628,38 +608,57 @@ export class StudentFeesService {
         const { campus_id, class_id, section_id, academic_year, fee_type_id, start_month, end_month, day } = params;
         const students = await this.getStudentsInScope(campus_id, class_id, section_id);
         const studentIds = students.map(s => s.cc);
-        const monthResults: any[] = [];
 
         const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
         const startIndex = ACADEMIC_ORDER.indexOf(start_month);
         const endIndex = ACADEMIC_ORDER.indexOf(end_month);
 
+        // Build the list of valid fee dates first (no DB calls yet)
+        const monthMeta: { month: number; calYear: number; feeDateStr: string; feeDate: Date; valid: boolean; reason?: string }[] = [];
         for (let i = startIndex; i <= endIndex; i++) {
             const month = ACADEMIC_ORDER[i];
             const calYear = this.getCalendarYear(academic_year, month);
             if (!this.isValidDayForMonth(calYear, month, day)) {
-                monthResults.push({ month, valid: false, reason: `Day ${day} doesn't exist in this month` });
-                continue;
+                monthMeta.push({ month, calYear, feeDateStr: '', feeDate: new Date(), valid: false, reason: `Day ${day} doesn't exist in this month` });
+            } else {
+                const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                monthMeta.push({ month, calYear, feeDateStr, feeDate: new Date(feeDateStr), valid: true });
             }
-            const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const feeDate = new Date(feeDateStr);
-
-            const existing = studentIds.length > 0
-                ? await this.prisma.student_fees.findMany({
-                    where: { student_id: { in: studentIds }, fee_type_id, fee_date: feeDate, academic_year },
-                    select: { student_id: true },
-                })
-                : [];
-
-            monthResults.push({
-                month,
-                valid: true,
-                fee_date: feeDateStr,
-                total_students: studentIds.length,
-                existing: existing.length,
-                will_add: studentIds.length - existing.length,
-            });
         }
+
+        // Single batched DB query instead of one query per month
+        const validFeeDates = monthMeta.filter(m => m.valid).map(m => m.feeDate);
+        const allExisting = studentIds.length > 0 && validFeeDates.length > 0
+            ? await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    fee_type_id,
+                    fee_date: { in: validFeeDates },
+                    academic_year,
+                },
+                select: { student_id: true, fee_date: true },
+            })
+            : [];
+
+        // Group results by fee_date in memory
+        const existingByDate = new Map<string, number>();
+        for (const row of allExisting) {
+            const key = row.fee_date?.toISOString().split('T')[0] ?? '';
+            existingByDate.set(key, (existingByDate.get(key) ?? 0) + 1);
+        }
+
+        const monthResults: any[] = monthMeta.map(m => {
+            if (!m.valid) return { month: m.month, valid: false, reason: m.reason };
+            const existingCount = existingByDate.get(m.feeDateStr) ?? 0;
+            return {
+                month: m.month,
+                valid: true,
+                fee_date: m.feeDateStr,
+                total_students: studentIds.length,
+                existing: existingCount,
+                will_add: studentIds.length - existingCount,
+            };
+        });
 
         return { months: monthResults, total_students: studentIds.length };
     }
@@ -796,51 +795,66 @@ export class StudentFeesService {
         const { campus_id, class_id, section_id, academic_year, start_month, end_month, day, fee_type_id } = params;
         const students = await this.getStudentsInScope(campus_id, class_id, section_id);
         const studentIds = students.map(s => s.cc);
-        const monthResults: any[] = [];
-        const allDeletableIds: number[] = [];
 
         const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
         const startIndex = ACADEMIC_ORDER.indexOf(start_month);
         const endIndex = ACADEMIC_ORDER.indexOf(end_month);
 
+        // Build month metadata without any DB calls
+        const monthMeta: { month: number; feeDateStr: string; feeDate: Date; valid: boolean }[] = [];
         for (let i = startIndex; i <= endIndex; i++) {
             const month = ACADEMIC_ORDER[i];
             const calYear = this.getCalendarYear(academic_year, month);
             if (!this.isValidDayForMonth(calYear, month, day)) {
-                monthResults.push({ month, valid: false, reason: 'day_invalid', fee_date: null, total: 0, can_delete: 0, blocked: 0, fee_ids: [] });
-                continue;
+                monthMeta.push({ month, feeDateStr: '', feeDate: new Date(), valid: false });
+            } else {
+                const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                monthMeta.push({ month, feeDateStr, feeDate: new Date(feeDateStr), valid: true });
             }
+        }
 
-            const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const feeDate = new Date(feeDateStr);
+        // Single batched DB query instead of one query per month
+        const validFeeDates = monthMeta.filter(m => m.valid).map(m => m.feeDate);
+        const allFees = studentIds.length > 0 && validFeeDates.length > 0
+            ? await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    academic_year,
+                    fee_date: { in: validFeeDates },
+                    ...(fee_type_id ? { fee_type_id } : {}),
+                },
+                include: { voucher_heads: { select: { id: true }, take: 1 } },
+            })
+            : [];
 
-            const fees = studentIds.length > 0
-                ? await this.prisma.student_fees.findMany({
-                    where: {
-                        student_id: { in: studentIds },
-                        academic_year,
-                        fee_date: feeDate,
-                        ...(fee_type_id ? { fee_type_id } : {}),
-                    },
-                    include: { voucher_heads: { select: { id: true }, take: 1 } },
-                })
-                : [];
+        // Group fees by fee_date in memory
+        const feesByDate = new Map<string, typeof allFees>();
+        for (const fee of allFees) {
+            const key = fee.fee_date?.toISOString().split('T')[0] ?? '';
+            if (!feesByDate.has(key)) feesByDate.set(key, []);
+            feesByDate.get(key)!.push(fee);
+        }
 
+        const allDeletableIds: number[] = [];
+        const monthResults: any[] = monthMeta.map(m => {
+            if (!m.valid) return { month: m.month, valid: false, reason: 'day_invalid', fee_date: null, total: 0, can_delete: 0, blocked: 0, fee_ids: [] };
+
+            const fees = feesByDate.get(m.feeDateStr) ?? [];
             const canDelete = fees.filter((f: any) => f.voucher_heads.length === 0);
             const blocked = fees.filter((f: any) => f.voucher_heads.length > 0);
             const feeIds = canDelete.map((f: any) => f.id);
             allDeletableIds.push(...feeIds);
 
-            monthResults.push({
-                month,
+            return {
+                month: m.month,
                 valid: true,
-                fee_date: feeDateStr,
+                fee_date: m.feeDateStr,
                 total: fees.length,
                 can_delete: canDelete.length,
                 blocked: blocked.length,
                 fee_ids: feeIds,
-            });
-        }
+            };
+        });
 
         return {
             months: monthResults,
