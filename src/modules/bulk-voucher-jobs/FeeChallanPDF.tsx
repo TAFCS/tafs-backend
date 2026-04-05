@@ -321,7 +321,7 @@ interface FeeChallanPDFProps {
         validityDate: string;
         applyLateFee: boolean;
         lateFeeAmount?: number;
-        voucherNumber: string;
+        voucherNumber: number | string;
         generatedBy: {
             fullName: string;
             timestampStr: string;
@@ -404,8 +404,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
         <View style={[styles.studentSection, { backgroundColor: '#ffffff', borderColor: '#d1d5db', paddingHorizontal: 6 }]}>
             <View style={styles.datesSection}>
                 <View style={styles.dateItem}>
-                    <Text style={styles.dateLabel}>Billing</Text>
-                    <Text style={styles.dateValue}>{details.month}</Text>
+                    <Text style={styles.dateLabel}>Voucher No.</Text>
+                    <Text style={[styles.dateValue, { fontSize: 6 }]}>{details.voucherNumber}</Text>
                 </View>
                 <View style={styles.dateItem}>
                     <Text style={styles.dateLabel}>Issue</Text>
@@ -425,8 +425,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 </View>
             </View>
             <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 5, color: '#666666', fontWeight: 'bold' }}>VOUCHER NO:</Text>
-                <Text style={{ fontSize: 6, color: '#1a1a1a', fontWeight: 'bold' }}>{details.voucherNumber}</Text>
+                <Text style={{ fontSize: 5, color: '#666666', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
+                <Text style={{ fontSize: 6, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
             </View>
         </View>
 
@@ -438,94 +438,61 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={[styles.feeTable, { marginTop: 4 }]}>
             {(() => {
-                const stdFees = fees.filter(f => !(f.discount && f.discount > 0));
-                const discFees = fees.filter(f => f.discount && f.discount > 0);
-                const hasAnyDisc = showDiscount !== false && discFees.length > 0;
+                const hasAnyDisc = showDiscount !== false && fees.some(f => f.discount && f.discount > 0);
                 const discWord = (student.class_id === 21 || student.class_id === 22 || student.className === 'AS Level' || student.className === 'A2 Level') ? 'Scholarship' : 'Discount';
 
-                const renderStdFeeRow = (fee: any, i: number) => {
+                const renderFeeRow = (fee: any, i: number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
+                    const hasDiscount = showDiscount !== false && fee.discount && fee.discount > 0;
                     return (
                         <View key={i} style={styles.tableRow}>
                             <View style={styles.colDesc}>
                                 <Text>{fee.description}</Text>
-                            </View>
-                            <Text style={styles.colAmount}>
-                                {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </Text>
-                        </View>
-                    );
-                };
-
-                const renderDiscFeeRow = (fee: any, i: number) => {
-                    const effectiveNet = fee.netAmount ?? fee.amount;
-                    return (
-                        <View key={i} style={styles.tableRow}>
-                            <View style={styles.colDesc}>
-                                <Text>{fee.description}</Text>
-                                {showDiscount !== false && fee.discountLabel && fee.discountLabel !== 'Profile Disc' && (
-                                    <Text style={{ fontSize: 4.5, color: '#666666', marginTop: 1, fontStyle: 'italic' }}>{fee.discountLabel}</Text>
+                                {hasDiscount && fee.discountLabel && fee.discountLabel !== 'Profile Disc' && (
+                                    <Text style={{ fontSize: 4.5, color: '#059669', marginTop: 1, fontStyle: 'italic' }}>{fee.discountLabel}</Text>
                                 )}
                             </View>
-                            <Text style={styles.colAmount}>
-                                {fee.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </Text>
-                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
-                                {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </Text>
+                            {hasDiscount ? (
+                                <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                                    <Text style={{ fontSize: 5.5, color: '#9ca3af', textDecoration: 'line-through' }}>
+                                        {fee.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </Text>
+                                    <Text style={{ fontSize: 7, fontWeight: 'bold', color: '#059669' }}>
+                                        {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <Text style={styles.colAmount}>
+                                    {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </Text>
+                            )}
                         </View>
                     );
                 };
 
                 return (
                     <>
-                        {stdFees.length > 0 && (
-                            <>
-                                <View style={styles.tableHeader}>
-                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
-                                </View>
-                                {stdFees.map((fee, idx) => renderStdFeeRow(fee, idx))}
-                            </>
-                        )}
-                        
-                        {hasAnyDisc && (
-                            <View style={{ marginTop: stdFees.length > 0 ? 4 : 0 }}>
-                                <View style={[styles.tableHeader, { borderTopWidth: stdFees.length > 0 ? 0.5 : 0 }]}>
-                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Before {discWord}</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>After {discWord}</Text>
-                                </View>
-                                {discFees.map((fee, idx) => renderDiscFeeRow(fee, idx + stdFees.length))}
-                            </View>
-                        )}
-                        
-                        <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
-                            {hasAnyDisc ? (
-                                <>
-                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE BEFORE DISCOUNT</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
-                                        {Math.round(fees.reduce((s,f) => s + f.amount, 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </Text>
-                                </>
-                            ) : (
-                                <>
-                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
-                                        {totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </Text>
-                                </>
-                            )}
+                        <View style={styles.tableHeader}>
+                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
+                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
                         </View>
+                        {fees.map((fee, idx) => renderFeeRow(fee, idx))}
 
                         {hasAnyDisc && (
-                            <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2 }]}>
-                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE AFTER DISCOUNT</Text>
-                                <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
-                                    {Math.round(totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            <View style={[styles.totalRow, { borderTopWidth: 0.3, borderTopColor: '#d1d5db', paddingVertical: 1, marginTop: 2, borderBottomWidth: 0 }]}>
+                                <Text style={[styles.colDesc, { fontSize: 5, color: '#666666' }]}>TOTAL BEFORE {discWord.toUpperCase()}</Text>
+                                <Text style={[styles.colAmount, { fontSize: 6, color: '#666666' }]}>
+                                    {Math.round(fees.reduce((s, f) => s + f.amount, 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </Text>
                             </View>
                         )}
+
+                        <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
+                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
+                            <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
+                                {Math.round(totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                        </View>
                     </>
                 );
             })()}
@@ -560,7 +527,6 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 <Text style={styles.instructions}>4. Admission and Tuition Fee once paid are non-refundable/non-adjustable</Text>
                 <Text style={styles.instructions}>A. Fee vouchers are provided to students by the Accounts Department. However, if it is not received or not delivered by the child, it will be the responsibility of parents to collect the fee voucher from the respective campus.</Text>
                 <Text style={styles.instructions}>B. IF FEES REMAIN UNPAID FOR A MONTH AFTER THE DEADLINE, THE STUDENT WILL NOT BE ALLOWED TO ATTEND SCHOOL UNTIL FEES ARE CLEARED.</Text>
-                <Text style={styles.instructions}>C. ABOVE MENTIONED FEES IS NOT TRANSFERABLE AND NON REFUNDABLE.</Text>
 
                 <View style={styles.paymentOptionsTable}>
                     <View style={styles.paymentOptionsHeader}>
