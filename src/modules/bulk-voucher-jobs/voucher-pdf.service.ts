@@ -8,6 +8,7 @@ export interface VoucherPdfData {
     voucherNumber: string;
     student: {
         cc: number;
+        classId: number;
         fullName: string;
         fatherName: string;
         gender: string;
@@ -64,7 +65,7 @@ export class VoucherPdfService {
                 student_full_name: data.student.fullName,
                 gr_number: data.student.grNumber,
                 campus: data.campusName,
-                class_id: 0, // Fallback, not strictly needed for standard classes unless they are AS/A2 level
+                class_id: data.student.classId,
                 className: data.student.className,
                 sectionName: data.student.sectionName,
                 grade_and_section: `${data.student.className} - ${data.student.sectionName}`,
