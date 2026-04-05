@@ -43,6 +43,27 @@ export class StudentFeesController {
         };
     }
 
+    @Get('schedule')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee'))
+    async getStudentSchedule(
+        @Query('studentId', ParseIntPipe) studentId: number,
+        @Query('academicYear') academicYear: string,
+        @Query('classId', ParseIntPipe) classId: number,
+        @Query('campusId') campusId?: string,
+    ) {
+        const data = await this.studentFeesService.getStudentSchedule(
+            studentId,
+            academicYear,
+            classId,
+            campusId ? Number(campusId) : undefined,
+        );
+        return {
+            success: true,
+            message: 'Student schedule retrieved successfully',
+            data,
+        };
+    }
+
 
     @Post('bulk')
     @HttpCode(HttpStatus.OK)

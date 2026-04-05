@@ -103,6 +103,68 @@ export class StudentFeesService {
         };
     }
 
+    /**
+     * Gets the definitive fee schedule for a student and academic year.
+     * Follows the Strict Rule:
+     * - If any student_fees records exist for the year -> return ONLY those.
+     * - If zero records exist -> return the class_fee_schedule template.
+     */
+    async getStudentSchedule(
+        studentId: number,
+        academicYear: string,
+        classId: number,
+        campusId?: number,
+    ) {
+        // 1. Check for saved fees
+        const savedFees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: studentId,
+                academic_year: academicYear,
+            },
+            include: {
+                fee_types: true,
+                student_fee_bundles: true,
+            },
+            orderBy: {
+                fee_types: {
+                    priority_order: 'asc',
+                },
+            },
+        });
+
+        if (savedFees.length > 0) {
+            return {
+                fees: savedFees,
+                is_template: false,
+            };
+        }
+
+        // 2. No fees saved -> pull the template
+        const template = await this.prisma.class_fee_schedule.findMany({
+            where: {
+                class_id: classId,
+                ...(campusId !== undefined
+                    ? {
+                        OR: [{ campus_id: campusId }, { campus_id: null }],
+                    }
+                    : {}),
+            },
+            include: {
+                fee_types: true,
+            },
+            orderBy: {
+                fee_types: {
+                    priority_order: 'asc',
+                },
+            },
+        });
+
+        return {
+            fees: template,
+            is_template: true,
+        };
+    }
+
 
     async bulkSave(dto: BulkSaveStudentFeesDto) {
         const { student_id, items, bundles } = dto;
