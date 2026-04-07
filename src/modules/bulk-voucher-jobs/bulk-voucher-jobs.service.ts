@@ -118,6 +118,7 @@ export class BulkVoucherJobsService {
                     gte: feeDateFrom,
                     lte: feeDateTo,
                 },
+                academic_year: dto.academic_year,
                 status: { in: ['ISSUED', 'PAID', 'PARTIALLY_PAID'] },
             },
             select: { student_id: true },
@@ -286,6 +287,7 @@ export class BulkVoucherJobsService {
                 where: {
                     student_id: { in: dto.student_ccs },
                     fee_date: { gte: feeDateFrom, lte: feeDateTo },
+                    academic_year: dto.academic_year,
                     status: 'NOT_ISSUED',
                 },
                 select: {
