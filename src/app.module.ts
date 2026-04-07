@@ -19,6 +19,7 @@ import { StaffEditingModule } from './modules/staff-editing/staff-editing.module
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-jobs.module';
+import { EnrollmentModule } from './modules/enrollments/enrollment.module';
 
 
 @Module({
@@ -41,6 +42,7 @@ import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-
     BankAccountsModule,
     VouchersModule,
     BulkVoucherJobsModule,
+    EnrollmentModule,
   ],
   controllers: [AppController],
   providers: [AppService],
