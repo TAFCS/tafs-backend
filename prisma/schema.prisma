@@ -27,6 +27,7 @@ model families {
   legacy_pid       String?                 @db.VarChar(50)
   household_name   String                  @db.VarChar(100)
   primary_address  String?
+  home_phone       String?                 @db.VarChar(20)
   password_hash    String?                 @db.VarChar(255)
   created_at       DateTime?               @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?               @db.Timestamp(6)
@@ -66,6 +67,8 @@ model guardians {
   passport_front_url         String?
   passport_back_url          String?
   place_of_birth             String?             @db.VarChar(100)
+  postal_code                String?             @db.VarChar(20)
+  fax_number                 String?             @db.VarChar(20)
   primary_phone_country_code String?             @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?             @default("+92") @db.VarChar(10)
   work_phone_country_code    String?             @default("+92") @db.VarChar(10)

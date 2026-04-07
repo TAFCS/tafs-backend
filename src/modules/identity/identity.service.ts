@@ -64,6 +64,13 @@ export class IdentityService {
 
         if (resolvedFamilyId) {
           familyId = resolvedFamilyId;
+          // Update home_phone if provided
+          if (dto.home_phone) {
+            await tx.families.update({
+              where: { id: familyId },
+              data: { home_phone: dto.home_phone },
+            });
+          }
         } else {
           const familyName = dto.father.full_name
             ? dto.father.full_name
@@ -73,6 +80,7 @@ export class IdentityService {
             data: {
               household_name: familyName,
               primary_address: [dto.father.house_appt_name, dto.father.area_block].filter(Boolean).join(', ') || null,
+              home_phone: dto.home_phone || null,
             },
           });
           familyId = family.id;
