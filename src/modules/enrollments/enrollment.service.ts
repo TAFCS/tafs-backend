@@ -107,6 +107,21 @@ export class EnrollmentService {
   private async computeNextGr(campusId: number | null): Promise<string> {
     if (!campusId) return '1';
 
+    // Get campus name for prefix logic
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { campus_name: true },
+    });
+
+    const getPrefixByCampusName = (name: string) => {
+      const uname = name.toUpperCase();
+      if (uname.includes('KANEEZ FATIMA')) return 'KF-A';
+      if (uname.includes('NORTH NAZIMABAD')) return 'A-N';
+      return '';
+    };
+
+    const defaultPrefix = campus ? getPrefixByCampusName(campus.campus_name) : '';
+
     // Optimize: Instead of fetching ALL students, fetch the most recent ones 
     // to determine the current GR sequence and prefix.
     const students = await this.prisma.students.findMany({
@@ -116,10 +131,10 @@ export class EnrollmentService {
       take: 500, // Look at the last 500 admissions to find the max GR
     });
 
-    if (students.length === 0) return '1';
+    if (students.length === 0) return `${defaultPrefix}1`;
 
     let maxNum = 0;
-    let mainPrefix = '';
+    let mainPrefix = defaultPrefix;
 
     for (const s of students) {
       if (!s.gr_number) continue;
@@ -131,7 +146,7 @@ export class EnrollmentService {
         const num = parseInt(match[2], 10);
         if (num > maxNum) {
           maxNum = num;
-          mainPrefix = prefix;
+          mainPrefix = prefix || defaultPrefix;
         }
       } else {
         // Handle non-standard formats if any
