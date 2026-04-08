@@ -5,7 +5,7 @@ import { student_status } from '@prisma/client';
 
 @Injectable()
 export class EnrollmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async getCandidates() {
     return this.prisma.students.findMany({
@@ -18,8 +18,8 @@ export class EnrollmentService {
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
         student_admissions: {
-            orderBy: { application_date: 'desc' },
-            take: 1
+          orderBy: { application_date: 'desc' },
+          take: 1
         }
       },
       orderBy: { created_at: 'desc' },
@@ -29,43 +29,62 @@ export class EnrollmentService {
   async getSuggestions(cc: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
-      select: { campus_id: true, class_id: true, status: true },
+      select: {
+        campus_id: true,
+        class_id: true,
+        status: true,
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+          select: { requested_grade: true },
+        },
+      },
     });
 
     if (!student || student.status !== 'SOFT_ADMISSION') {
       throw new NotFoundException(`Valid candidate with CC #${cc} not found`);
     }
 
+    // Resolve class_id once — students.class_id is null post-registration,
+    // so fall back to matching requested_grade against classes.class_code
+    let resolvedClassId = student.class_id;
+    if (!resolvedClassId) {
+      const requestedGrade = student.student_admissions?.[0]?.requested_grade;
+      if (requestedGrade) {
+        const matched = await this.prisma.classes.findFirst({
+          where: { class_code: requestedGrade },
+          select: { id: true },
+        });
+        resolvedClassId = matched?.id ?? null;
+      }
+    }
+
     const [suggested_gr, suggested_house, suggested_section] = await Promise.all([
       this.computeNextGr(student.campus_id),
-      this.computeBalancedHouse(student.class_id),
-      this.computeBalancedSection(student.campus_id, student.class_id),
+      this.computeBalancedHouse(resolvedClassId),
+      this.computeBalancedSection(student.campus_id, resolvedClassId),
     ]);
 
-    // Fetch all houses for selection
     const all_houses = await this.prisma.houses.findMany();
-    // Fetch all sections only if both campus and class are known
+
     let available_sections: any[] = [];
-    if (student.campus_id && student.class_id) {
-        const campus_sections = await this.prisma.campus_sections.findMany({
-            where: {
-                campus_id: student.campus_id,
-                class_id: student.class_id,
-                is_active: true
-            },
-            include: {
-                sections: true
-            }
+    if (student.campus_id && resolvedClassId) {
+      const campus_sections = await this.prisma.campus_sections.findMany({
+        where: {
+          campus_id: student.campus_id,
+          class_id: resolvedClassId,
+          is_active: true,
+        },
+        include: { sections: true },
+      });
+      const seen = new Set();
+      available_sections = campus_sections
+        .map(cs => cs.sections)
+        .filter(s => {
+          if (!s || seen.has(s.id)) return false;
+          seen.add(s.id);
+          return true;
         });
-        // Ensure uniqueness just in case
-        const seen = new Set();
-        available_sections = campus_sections
-            .map(cs => cs.sections)
-            .filter(s => {
-                if (!s || seen.has(s.id)) return false;
-                seen.add(s.id);
-                return true;
-            });
     }
 
     return {
@@ -73,17 +92,37 @@ export class EnrollmentService {
       suggested_house,
       suggested_section,
       all_houses,
-      available_sections
+      available_sections,
     };
   }
 
   async enroll(cc: number, dto: EnrollStudentDto) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
+      include: {
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+          select: { requested_grade: true },
+        },
+      },
     });
 
     if (!student || student.status !== 'SOFT_ADMISSION') {
       throw new BadRequestException(`Student #${cc} is not eligible for enrollment`);
+    }
+
+    // Persist the resolved class_id on the student record during enrollment
+    let resolvedClassId = student.class_id;
+    if (!resolvedClassId) {
+      const requestedGrade = student.student_admissions?.[0]?.requested_grade;
+      if (requestedGrade) {
+        const matched = await this.prisma.classes.findFirst({
+          where: { class_code: requestedGrade },
+          select: { id: true },
+        });
+        resolvedClassId = matched?.id ?? null;
+      }
     }
 
     return this.prisma.students.update({
@@ -93,14 +132,15 @@ export class EnrollmentService {
         gr_number: dto.gr_number,
         house_id: dto.house_id,
         section_id: dto.section_id || undefined,
-        doa: new Date(), // Date of Admission
+        class_id: resolvedClassId ?? undefined, // writes it so future queries don't need the fallback
+        doa: new Date(),
       },
       include: {
         campuses: true,
         classes: true,
         sections: true,
         houses: true,
-      }
+      },
     });
   }
 
@@ -138,7 +178,7 @@ export class EnrollmentService {
 
     for (const s of students) {
       if (!s.gr_number) continue;
-      
+
       // Match pattern like "ABC-123" or just "123"
       const match = s.gr_number.match(/^(.*?)([0-9]+)$/);
       if (match) {
@@ -164,7 +204,7 @@ export class EnrollmentService {
     if (!classId) return null;
 
     const allHouses = await this.prisma.houses.findMany({
-        orderBy: { id: 'asc' }
+      orderBy: { id: 'asc' }
     });
     if (allHouses.length === 0) return null;
 
@@ -205,9 +245,9 @@ export class EnrollmentService {
 
     const sectionCounts = await this.prisma.students.groupBy({
       by: ['section_id'],
-      where: { 
-        campus_id: campusId, 
-        class_id: classId, 
+      where: {
+        campus_id: campusId,
+        class_id: classId,
         section_id: { in: availableSections.map(s => s.section_id) },
         status: 'ENROLLED'
       },
