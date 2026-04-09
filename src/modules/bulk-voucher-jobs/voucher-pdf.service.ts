@@ -45,6 +45,8 @@ export interface VoucherPdfData {
     }>;
     totalAmount: number;
     lateFeeAmount: number;
+    /** Portal URL to encode in QR code on each challan copy */
+    qrUrl?: string;
 }
 
 @Injectable()
@@ -110,7 +112,8 @@ export class VoucherPdfService {
                 gr_number: s.grNumber,
                 className: s.className,
                 sectionName: s.sectionName,
-            }))
+            })),
+            qrUrl: data.qrUrl,
         };
 
         try {

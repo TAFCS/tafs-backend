@@ -559,6 +559,7 @@ export class BulkVoucherJobsService {
             feeHeads: feeHeadsForPdf,
             totalAmount: feesForThisVoucher.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0),
             lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
+            qrUrl: process.env.PORTAL_URL ? `${process.env.PORTAL_URL}/vouchers/${voucher.id}` : undefined,
         });
 
         const key = `vouchers/${student.cc}/voucher-${voucher.id}-${Date.now()}.pdf`;

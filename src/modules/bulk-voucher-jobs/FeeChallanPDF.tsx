@@ -1,5 +1,29 @@
 import React from 'react';
-import { Page, Text, View, Document, StyleSheet, Image, Font } from '@react-pdf/renderer';
+import { Page, Text, View, Document, StyleSheet, Image, Font, Svg, Rect } from '@react-pdf/renderer';
+import QRCode from 'qrcode';
+
+// Renders a QR code via react-pdf native SVG — fully synchronous, no data URL needed
+const QrCodeView = ({ url, size = 36 }: { url: string; size?: number }) => {
+    try {
+        const qr = QRCode.create(url, { errorCorrectionLevel: 'L' });
+        const moduleCount = qr.modules.size;
+        const cellSize = size / moduleCount;
+        const data: Uint8Array = qr.modules.data;
+        return (
+            <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                <Rect x={0} y={0} width={size} height={size} fill="white" />
+                {Array.from(data).map((val, idx) => {
+                    if (!val) return null;
+                    const x = (idx % moduleCount) * cellSize;
+                    const y = Math.floor(idx / moduleCount) * cellSize;
+                    return <Rect key={idx} x={x} y={y} width={cellSize} height={cellSize} fill="black" />;
+                })}
+            </Svg>
+        );
+    } catch {
+        return null as any;
+    }
+};
 
 // Define styles
 const styles = StyleSheet.create({
@@ -383,9 +407,11 @@ interface FeeChallanPDFProps {
         className: string;
         sectionName: string;
     }[];
+    /** URL to encode in the QR code — e.g. portal link to this voucher */
+    qrUrl?: string;
 }
 
-const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, showDiscount, paidStamp, isLast }: { copyType: string, isLast?: boolean } & FeeChallanPDFProps) => (
+const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, showDiscount, paidStamp, isLast, qrUrl }: { copyType: string, isLast?: boolean } & FeeChallanPDFProps) => (
     <View style={[styles.section, isLast ? styles.lastSection : {}]}>
         <Text style={styles.copyLabel}>{copyType}</Text>
         {paidStamp && (
@@ -474,34 +500,48 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={[styles.feeTable, { marginTop: 4 }]}>
             {(() => {
-                const hasAnyDisc = showDiscount !== false && fees.some(f => f.discount && f.discount > 0);
+                const hasMTFDisc = showDiscount !== false && fees.some(f => f.discount && f.discount > 0 && f.description.toLowerCase().includes('tuition'));
                 const discWord = (student.class_id === 21 || student.class_id === 22 || student.className === 'AS Level' || student.className === 'A2 Level') ? 'Scholarship' : 'Discount';
 
                 const renderFeeRow = (fee: any, i: string | number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
+                    const isMTF = fee.description.toLowerCase().includes('tuition');
                     const hasDiscount = showDiscount !== false && fee.discount && fee.discount > 0;
-                    return (
-                        <View key={i} style={styles.tableRow}>
-                            <View style={styles.colDesc}>
-                                <Text>{fee.description}</Text>
-                                {hasDiscount && fee.discountLabel && fee.discountLabel !== 'Profile Disc' && (
-                                    <Text style={{ fontSize: 4.5, color: '#059669', marginTop: 1, fontStyle: 'italic' }}>{fee.discountLabel}</Text>
-                                )}
-                            </View>
-                            {hasDiscount ? (
-                                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                                    <Text style={{ fontSize: 5.5, color: '#9ca3af', textDecoration: 'line-through' }}>
+
+                    if (isMTF && hasDiscount) {
+                        return (
+                            <React.Fragment key={i}>
+                                {/* Row 1: Before Discount — muted/grey with strikethrough */}
+                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                    <Text style={[styles.colDesc, { color: '#9ca3af' }]}>
+                                        {fee.description} — Before Discount
+                                    </Text>
+                                    <Text style={{ flex: 1, textAlign: 'right', fontSize: 6, color: '#9ca3af', textDecoration: 'line-through' }}>
                                         {fee.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                     </Text>
-                                    <Text style={{ fontSize: 7, fontWeight: 'bold', color: '#059669' }}>
+                                </View>
+                                {/* Row 2: After Discount — indented with DISC badge */}
+                                <View style={[styles.tableRow, { paddingLeft: 8, borderLeftWidth: 1.5, borderLeftColor: '#cbd5e1' }]}>
+                                    <View style={{ flex: 3, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                                        <View style={{ backgroundColor: '#f0fdf4', paddingHorizontal: 2, paddingVertical: 1, borderRadius: 2 }}>
+                                            <Text style={{ fontSize: 4, color: '#16a34a', fontWeight: 'bold' }}>DISC</Text>
+                                        </View>
+                                        <Text style={{ fontSize: 6.5, color: '#1a1a1a' }}>{fee.description} — After Discount</Text>
+                                    </View>
+                                    <Text style={{ flex: 1, textAlign: 'right', fontSize: 7, fontWeight: 'bold', color: '#1a1a1a' }}>
                                         {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                     </Text>
                                 </View>
-                            ) : (
-                                <Text style={styles.colAmount}>
-                                    {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                </Text>
-                            )}
+                            </React.Fragment>
+                        );
+                    }
+
+                    return (
+                        <View key={i} style={styles.tableRow}>
+                            <Text style={styles.colDesc}>{fee.description}</Text>
+                            <Text style={styles.colAmount}>
+                                {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            </Text>
                         </View>
                     );
                 };
@@ -540,7 +580,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                             );
                         })()}
 
-                        {hasAnyDisc && (
+                        {hasMTFDisc && (
                             <View style={[styles.totalRow, { borderTopWidth: 0.3, borderTopColor: '#d1d5db', paddingVertical: 1, marginTop: 2, borderBottomWidth: 0 }]}>
                                 <Text style={[styles.colDesc, { fontSize: 5, color: '#666666' }]}>TOTAL BEFORE {discWord.toUpperCase()}</Text>
                                 <Text style={[styles.colAmount, { fontSize: 6, color: '#666666' }]}>
@@ -633,22 +673,30 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     </View>
                 </View>
 
-                <Text style={styles.generatedBy}>
-                    GENERATED BY {details.generatedBy.fullName} | {details.generatedBy.timestampStr}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 5, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2 }}>
+                    <Text style={[styles.generatedBy, { flex: 1, marginTop: 0, borderTopWidth: 0, paddingTop: 0, textAlign: 'left' }]}>
+                        GENERATED BY {details.generatedBy.fullName}{`\n`}{details.generatedBy.timestampStr}
+                    </Text>
+                    {qrUrl && (
+                        <View style={{ alignItems: 'center', marginLeft: 4 }}>
+                            <QrCodeView url={qrUrl} size={38} />
+                            <Text style={{ fontSize: 3.5, color: '#9ca3af', marginTop: 1, textAlign: 'center' }}>SCAN TO VERIFY</Text>
+                        </View>
+                    )}
+                </View>
             </View>
         </View>
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
             {/* Left 85% for the 3 Challan Copies */}
             <View style={{ width: '85%', flexDirection: 'row' }}>
-                <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
+                <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} qrUrl={qrUrl} />
+                <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} qrUrl={qrUrl} />
+                <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} qrUrl={qrUrl} isLast={true} />
             </View>
 
             {/* Right 15% for the 4th Column */}

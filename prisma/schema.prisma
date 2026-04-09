@@ -43,7 +43,7 @@ model bulk_voucher_jobs {
   fail_count          Int           @default(0)
   merged_pdf_url      String?
   created_at          DateTime      @default(now()) @db.Timestamp(6)
-  updated_at          DateTime      @default(now()) @db.Timestamp(6)
+  updated_at          DateTime
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -156,7 +156,7 @@ model families {
 }
 
 model family_refresh_tokens {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid())
   family_id  Int
   token_hash String    @db.VarChar(255)
   expires_at DateTime
@@ -410,7 +410,7 @@ model students {
 }
 
 model user_refresh_tokens {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid())
   user_id    String
   token_hash String    @db.VarChar(255)
   expires_at DateTime
@@ -431,7 +431,7 @@ model users {
   campus_id           Int?
   is_active           Boolean               @default(true)
   created_at          DateTime              @default(now()) @db.Timestamp(6)
-  updated_at          DateTime              @default(now()) @db.Timestamp(6)
+  updated_at          DateTime
   deleted_at          DateTime?             @db.Timestamp(6)
   user_refresh_tokens user_refresh_tokens[]
   campuses            campuses?             @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
