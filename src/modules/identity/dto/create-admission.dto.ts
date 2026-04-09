@@ -11,6 +11,7 @@ import {
   Min,
   IsEmail,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -96,6 +97,7 @@ export class GuardianDto {
   work_phone?: string;
 
   @IsEmail()
+  @ValidateIf((o) => o.email_address !== 'N/A')
   @IsOptional()
   email_address?: string;
 
@@ -300,6 +302,7 @@ export class CreateAdmissionDto {
   whatsapp_number?: string;
 
   @IsEmail()
+  @ValidateIf((o) => o.email !== 'N/A')
   @IsOptional()
   email?: string;
 

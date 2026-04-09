@@ -48,6 +48,73 @@ export class StudentsService {
     houses: { select: { house_name: true } },
   } as const;
 
+  private async getFinancialDigest(studentId: number) {
+    const [fees, deposits, allocations] = await Promise.all([
+      this.prisma.student_fees.findMany({ 
+        where: { student_id: studentId },
+        select: { amount: true, amount_paid: true, due_date: true, status: true }
+      }),
+      this.prisma.deposits.findMany({ 
+        where: { student_id: studentId },
+        select: { total_amount: true }
+      }),
+      this.prisma.deposit_allocations.findMany({
+        where: { deposits: { student_id: studentId } },
+        select: { amount: true }
+      })
+    ]);
+
+    const totalDeposits = deposits.reduce((sum, d) => sum.add(d.total_amount || 0), new Prisma.Decimal(0));
+    const totalAllocations = allocations.reduce((sum, a) => sum.add(a.amount || 0), new Prisma.Decimal(0));
+    const advance = totalDeposits.sub(totalAllocations);
+
+    if (fees.length === 0) {
+      return {
+        badge: 'NO_SCHEDULE',
+        outstanding: 0,
+        advance: advance.toNumber()
+      };
+    }
+
+    let outstanding = new Prisma.Decimal(0);
+    let anyOverdue = false;
+    let anyPartial = false;
+    const now = new Date();
+
+    for (const fee of fees) {
+      const balance = new Prisma.Decimal(fee.amount || 0).sub(fee.amount_paid || 0);
+      if (balance.gt(0)) {
+        outstanding = outstanding.add(balance);
+        if (fee.due_date && fee.due_date < now) {
+          anyOverdue = true;
+        }
+        if (new Prisma.Decimal(fee.amount_paid || 0).gt(0)) {
+          anyPartial = true;
+        }
+      }
+    }
+
+    let badge = 'Cleared';
+    if (anyOverdue) badge = 'Overdue';
+    else if (outstanding.gt(0)) badge = anyPartial ? 'Partial' : 'Partial'; // default to Partial if any unpaid
+    
+    // If outstanding > 0 but not overdue or partial, it's just 'Partial' (or we could add 'Pending')
+    // Existing frontend only handles Cleared, Overdue, Partial. 
+    // I'll map anything with balance to 'Partial' for now to fit existing styles, or just use the logic below.
+    if (anyOverdue) badge = 'Overdue';
+    else if (outstanding.gt(0)) {
+        badge = anyPartial ? 'Partial' : 'Partial'; 
+    } else {
+        badge = 'Cleared';
+    }
+
+    return {
+      badge,
+      outstanding: outstanding.toNumber(),
+      advance: advance.toNumber()
+    };
+  }
+
   async findAll(query: GetStudentsDto) {
     const { page = 1, limit = 10, search, campus_id, status, fields } = query;
     const offset = calculateOffset(page, limit);
@@ -344,7 +411,7 @@ export class StudentsService {
         primary_guardian_name: mappedData.contact?.primary_guardian_name,
         whatsapp_number: mappedData.contact?.whatsapp_number,
         enrollment_status: mappedData.core?.enrollment_status,
-        financial_status_badge: 'CLEARED',
+        financial_status_badge: 'CLEARED', // Basic list view stays simple or we can add a check later
         family_id: mappedData.family?.family_id,
         household_name: mappedData.family?.household_name,
         primary_guardian_cnic: mappedData.contact?.guardian_cnic,
@@ -397,6 +464,8 @@ export class StudentsService {
     const primaryGuardian = primaryGuardianNode?.guardians;
     const fatherNode = s.student_guardians.find((g: any) => g.relationship === 'FATHER') || primaryGuardianNode;
 
+    const financial = await this.getFinancialDigest(s.cc);
+
     return {
       cc: s.cc,
       student_full_name: s.full_name,
@@ -409,7 +478,9 @@ export class StudentsService {
       section_id: s.section_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
-      financial_status_badge: 'CLEARED',
+      financial_status_badge: financial.badge,
+      total_outstanding_balance: financial.outstanding,
+      advance_credit_balance: financial.advance,
       family_id: s.family_id,
       household_name: s.families?.household_name,
       primary_guardian_name: primaryGuardian?.full_name,
