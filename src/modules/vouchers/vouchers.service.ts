@@ -535,7 +535,10 @@ export class VouchersService {
 
                         return tx.student_fees.update({
                             where: { id: fee.id },
-                            data: { status: nextFeeStatus as any },
+                            data: {
+                                status: nextFeeStatus as any,
+                                amount_paid: totalDeposited,   // keep this in sync for arrears computation
+                            },
                         });
                     }),
                 );
@@ -873,6 +876,83 @@ export class VouchersService {
             skippedNoFeeSchedule,
             skippedAlreadyIssued,
             skippedMissingAssignment,
+        };
+    }
+
+    // ─── Arrears ─────────────────────────────────────────────────────────────
+
+    /**
+     * Compute all unpaid / partially-paid student_fees rows whose fee_date is
+     * strictly before targetFeeDate, and which are NOT already linked as a head
+     * on another active (non-PAID) voucher (to prevent double-counting).
+     */
+    async computeArrears(studentId: number, targetFeeDate: Date) {
+        console.log(`[Arrears] Computing for Student: ${studentId}, Before: ${targetFeeDate.toISOString()}`);
+        const candidates = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: studentId,
+                fee_date: { lt: targetFeeDate },
+                status: { notIn: ['PAID'] as any[] },
+            },
+            include: {
+                fee_types: true,
+                voucher_heads: {
+                    select: {
+                        id: true,
+                        vouchers: { select: { id: true, status: true } },
+                    },
+                },
+            },
+            orderBy: { fee_date: 'asc' },
+        });
+
+        console.log(`[Arrears] Found candidates: ${candidates.length}`);
+
+        const rows: {
+            student_fee_id: number;
+            fee_type: string;
+            fee_date: string;
+            amount: string;
+            amount_paid: string;
+            outstanding: string;
+        }[] = [];
+
+        let totalArrears = new Prisma.Decimal(0);
+        const arrearFeeIds: number[] = [];
+
+        for (const fee of candidates) {
+            const amount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
+            const paid = new Prisma.Decimal(fee.amount_paid ?? 0);
+            const outstanding = amount.sub(paid);
+
+            if (outstanding.lte(0)) continue;
+
+            // We no longer skip 'alreadyActive' fees because we want to allow users 
+            // to pull unpaid historical debt into new consolidated vouchers. 
+            // The 'lt: targetFeeDate' filter ensures we don't double-count current-month fees.
+
+            totalArrears = totalArrears.add(outstanding);
+            arrearFeeIds.push(fee.id);
+
+            rows.push({
+                student_fee_id: fee.id,
+                fee_type: fee.fee_types?.description ?? 'Unknown',
+                fee_date: fee.fee_date ? fee.fee_date.toISOString().split('T')[0] : '',
+                amount: amount.toFixed(2),
+                amount_paid: paid.toFixed(2),
+                outstanding: outstanding.toFixed(2),
+            });
+        }
+
+        console.log(`[Arrears] Final response: Total=${totalArrears}, Rows=${rows.length}, IDs=${arrearFeeIds.length}`);
+        if (arrearFeeIds.length > 0 && rows.length === 0) {
+            console.error('[Arrears] CRITICAL: Found IDs but generated 0 rows. Check logic.');
+        }
+
+        return {
+            total_arrears: Number(totalArrears.toFixed(2)),
+            arrear_fee_ids: arrearFeeIds,
+            rows,
         };
     }
 }

@@ -144,6 +144,40 @@ const styles = StyleSheet.create({
     },
     colDesc: { flex: 3, fontSize: 6.5 },
     colAmount: { flex: 1, textAlign: 'right', fontSize: 6.5 },
+    sectionLabelRow: {
+        backgroundColor: '#f8fafc',
+        paddingVertical: 2,
+        paddingHorizontal: 2,
+        marginTop: 3,
+        marginBottom: 1,
+        borderLeftWidth: 2,
+        borderLeftColor: '#94a3b8',
+        borderLeftStyle: 'solid',
+    },
+    sectionLabelRowArrear: {
+        backgroundColor: '#fffbeb',
+        paddingVertical: 2,
+        paddingHorizontal: 2,
+        marginTop: 3,
+        marginBottom: 1,
+        borderLeftWidth: 2,
+        borderLeftColor: '#f59e0b',
+        borderLeftStyle: 'solid',
+    },
+    sectionLabel: {
+        fontSize: 5,
+        fontWeight: 'bold',
+        color: '#64748b',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    sectionLabelArrear: {
+        fontSize: 5,
+        fontWeight: 'bold',
+        color: '#b45309',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
     instructions: {
         fontSize: 5.5,
         color: '#444444',
@@ -288,6 +322,8 @@ export interface FeeItem {
     netAmount?: number;    // after discount (if any)
     discount?: number;     // discount amount
     discountLabel?: string;
+    isArrear?: boolean;    // true = this row belongs to the ARREARS section
+    feeDate?: string;      // underlying fee_date (for ARREAR rows)
 }
 
 const formatDateToDDMMYYYY = (dateStr: string) => {
@@ -441,7 +477,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 const hasAnyDisc = showDiscount !== false && fees.some(f => f.discount && f.discount > 0);
                 const discWord = (student.class_id === 21 || student.class_id === 22 || student.className === 'AS Level' || student.className === 'A2 Level') ? 'Scholarship' : 'Discount';
 
-                const renderFeeRow = (fee: any, i: number) => {
+                const renderFeeRow = (fee: any, i: string | number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
                     const hasDiscount = showDiscount !== false && fee.discount && fee.discount > 0;
                     return (
@@ -476,7 +512,33 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                             <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
                             <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
                         </View>
-                        {fees.map((fee, idx) => renderFeeRow(fee, idx))}
+
+                        {(() => {
+                            const arrearFees = fees.filter(f => f.isArrear);
+                            const currentFees = fees.filter(f => !f.isArrear);
+                            return (
+                                <>
+                                    {arrearFees.length > 0 && (
+                                        <>
+                                            <View style={styles.sectionLabelRowArrear}>
+                                                <Text style={styles.sectionLabelArrear}>▲ ARREARS</Text>
+                                            </View>
+                                            {arrearFees.map((fee, idx) => renderFeeRow(fee, `a-${idx}`))}
+                                        </>
+                                    )}
+                                    {currentFees.length > 0 && (
+                                        <>
+                                            {arrearFees.length > 0 && (
+                                                <View style={styles.sectionLabelRow}>
+                                                    <Text style={styles.sectionLabel}>CURRENT FEES</Text>
+                                                </View>
+                                            )}
+                                            {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
+                                        </>
+                                    )}
+                                </>
+                            );
+                        })()}
 
                         {hasAnyDisc && (
                             <View style={[styles.totalRow, { borderTopWidth: 0.3, borderTopColor: '#d1d5db', paddingVertical: 1, marginTop: 2, borderBottomWidth: 0 }]}>

@@ -88,6 +88,28 @@ export class VouchersController {
         };
     }
 
+    /** Compute arrears for a student before a given fee_date. */
+    @Get('arrears')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async getArrears(
+        @Query('student_id') studentIdStr: string,
+        @Query('fee_date') feeDateStr: string,
+    ) {
+        const studentId = parseInt(studentIdStr, 10);
+        const feeDate = new Date(feeDateStr);
+        const result = await this.vouchersService.computeArrears(studentId, feeDate);
+        return {
+            success: true,
+            message: 'Arrears computed successfully',
+            data: result,
+        };
+    }
+
     @Get()
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies(

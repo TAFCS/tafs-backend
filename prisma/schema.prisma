@@ -8,6 +8,76 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model bank_accounts {
+  id                Int                 @id @default(autoincrement())
+  account_title     String              @db.VarChar(100)
+  account_number    String              @unique @db.VarChar(50)
+  bank_name         String              @db.VarChar(100)
+  branch_code       String?             @db.VarChar(20)
+  bank_address      String?
+  iban              String?             @unique @db.VarChar(50)
+  bulk_voucher_jobs bulk_voucher_jobs[]
+  vouchers          vouchers[]
+}
+
+model bulk_voucher_jobs {
+  id                  Int           @id @default(autoincrement())
+  created_by          String        @db.VarChar(255)
+  campus_id           Int
+  class_id            Int?
+  section_id          Int?
+  academic_year       String        @db.VarChar(10)
+  fee_date_from       DateTime      @db.Date
+  fee_date_to         DateTime      @db.Date
+  issue_date          DateTime      @db.Date
+  due_date            DateTime      @db.Date
+  validity_date       DateTime?     @db.Date
+  bank_account_id     Int
+  skip_already_issued Boolean       @default(true)
+  apply_late_fee      Boolean       @default(true)
+  late_fee_amount     Int           @default(1000)
+  status              BulkJobStatus @default(PENDING)
+  total_count         Int           @default(0)
+  success_count       Int           @default(0)
+  skip_count          Int           @default(0)
+  fail_count          Int           @default(0)
+  merged_pdf_url      String?
+  created_at          DateTime      @default(now()) @db.Timestamp(6)
+  updated_at          DateTime      @default(now()) @db.Timestamp(6)
+  bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([campus_id], map: "idx_bulk_jobs_campus")
+  @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
+  @@index([status], map: "idx_bulk_jobs_status")
+}
+
+model campus_classes {
+  id        Int      @id @default(autoincrement())
+  campus_id Int
+  class_id  Int
+  is_active Boolean? @default(true)
+  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes   classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id], map: "campus_classes_unique")
+  @@index([campus_id], map: "idx_campus_classes_campus")
+}
+
+model campus_sections {
+  id         Int      @id @default(autoincrement())
+  campus_id  Int
+  class_id   Int
+  section_id Int
+  is_active  Boolean? @default(true)
+  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes    classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections   sections @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id, section_id], map: "campus_sections_unique")
+  @@index([campus_id], map: "idx_campus_sections_campus")
+}
+
 model campuses {
   id                 Int                  @id @default(autoincrement())
   campus_code        String               @unique @db.VarChar(10)
@@ -22,19 +92,89 @@ model campuses {
   vouchers           vouchers[]
 }
 
+model class_fee_schedule {
+  id        Int       @id @default(autoincrement())
+  class_id  Int
+  fee_id    Int
+  amount    Decimal   @db.Decimal(10, 2)
+  campus_id Int?
+  campuses  campuses? @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes   classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fee_types fee_types @relation(fields: [fee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model classes {
+  id                 Int                  @id @default(autoincrement())
+  description        String               @db.VarChar(255)
+  class_code         String               @db.VarChar(10)
+  academic_system    String               @db.VarChar(20)
+  campus_classes     campus_classes[]
+  campus_sections    campus_sections[]
+  class_fee_schedule class_fee_schedule[]
+  students           students[]
+  vouchers           vouchers[]
+}
+
+model deposit_allocations {
+  id             Int           @id @default(autoincrement())
+  deposit_id     Int
+  student_fee_id Int?
+  voucher_id     Int?
+  amount         Decimal       @db.Decimal(12, 2)
+  type           String        @db.VarChar(20)
+  deposits       deposits      @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
+  student_fees   student_fees? @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers       vouchers?     @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model deposits {
+  id                  Int                   @id @default(autoincrement())
+  student_id          Int
+  total_amount        Decimal               @db.Decimal(12, 2)
+  deposit_date        DateTime              @default(now()) @db.Timestamp(6)
+  payment_method      String?               @db.VarChar(50)
+  reference_number    String?               @db.VarChar(100)
+  remarks             String?
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  deposit_allocations deposit_allocations[]
+  students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
 model families {
-  id               Int                     @id @default(autoincrement())
-  legacy_pid       String?                 @db.VarChar(50)
-  household_name   String                  @db.VarChar(100)
-  primary_address  String?
-  home_phone       String?                 @db.VarChar(20)
-  password_hash    String?                 @db.VarChar(255)
-  created_at       DateTime?               @default(now()) @db.Timestamp(6)
-  deleted_at       DateTime?               @db.Timestamp(6)
-  email            String?                 @db.VarChar(100)
-  refresh_tokens   family_refresh_tokens[]
-  student_siblings student_siblings[]
-  students         students[]
+  id                    Int                     @id @default(autoincrement())
+  legacy_pid            String?                 @db.VarChar(50)
+  household_name        String                  @db.VarChar(100)
+  primary_address       String?
+  password_hash         String?                 @db.VarChar(255)
+  created_at            DateTime?               @default(now()) @db.Timestamp(6)
+  deleted_at            DateTime?               @db.Timestamp(6)
+  email                 String?                 @db.VarChar(100)
+  home_phone            String?                 @db.VarChar(20)
+  family_refresh_tokens family_refresh_tokens[]
+  student_siblings      student_siblings[]
+  students              students[]
+}
+
+model family_refresh_tokens {
+  id         String    @id @default(uuid()) @db.Uuid
+  family_id  Int
+  token_hash String    @db.VarChar(255)
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now()) @db.Timestamp(6)
+  families   families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id, revoked_at, expires_at], map: "idx_family_rf_tokens_lookup")
+}
+
+model fee_types {
+  id                 Int                  @id @default(autoincrement())
+  description        String               @db.VarChar(255)
+  freq               fee_frequency?
+  breakup            Json?
+  priority_order     Int?
+  class_fee_schedule class_fee_schedule[]
+  student_fees       student_fees[]
 }
 
 model guardians {
@@ -67,12 +207,19 @@ model guardians {
   passport_front_url         String?
   passport_back_url          String?
   place_of_birth             String?             @db.VarChar(100)
-  postal_code                String?             @db.VarChar(20)
-  fax_number                 String?             @db.VarChar(20)
   primary_phone_country_code String?             @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?             @default("+92") @db.VarChar(10)
   work_phone_country_code    String?             @default("+92") @db.VarChar(10)
+  postal_code                String?             @db.VarChar(20)
+  fax_number                 String?             @db.VarChar(20)
   student_guardians          student_guardians[]
+}
+
+model houses {
+  id          Int        @id @default(autoincrement())
+  house_name  String?    @db.VarChar(100)
+  house_color String?    @db.VarChar(50)
+  students    students[]
 }
 
 model relatives_attending_tafs {
@@ -82,6 +229,14 @@ model relatives_attending_tafs {
   relationship String?  @db.VarChar(50)
   student_id   Int
   students     students @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model sections {
+  id              Int               @id @default(autoincrement())
+  description     String            @db.VarChar(255)
+  campus_sections campus_sections[]
+  students        students[]
+  vouchers        vouchers[]
 }
 
 model student_activities {
@@ -116,6 +271,35 @@ model student_fee_bundles {
   target_month  Int?
   students      students       @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   student_fees  student_fees[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model student_fees {
+  id                     Int                   @id @default(autoincrement())
+  student_id             Int
+  fee_type_id            Int
+  month                  Int?
+  academic_year          String                @db.VarChar
+  precedence_override    Int                   @default(0)
+  issue_date             DateTime?             @db.Date
+  due_date               DateTime?             @db.Date
+  validity_date          DateTime?             @db.Date
+  status                 fee_status_enum?      @default(NOT_ISSUED)
+  amount_before_discount Decimal?              @db.Decimal(12, 2)
+  target_month           Int
+  amount                 Decimal?              @db.Decimal(12, 2)
+  bundle_id              Int?
+  fee_date               DateTime?             @db.Date
+  amount_paid            Decimal?              @default(0) @db.Decimal(12, 2)
+  deposit_allocations    deposit_allocations[]
+  student_fee_bundles    student_fee_bundles?  @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
+  fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  voucher_heads          voucher_heads[]
+
+  @@index([due_date], map: "idx_student_fees_due_date")
+  @@index([precedence_override], map: "idx_student_fees_precedence")
 }
 
 model student_guardians {
@@ -216,168 +400,57 @@ model students {
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vouchers                   vouchers[]
 
-  @@index([class_id], map: "idx_students_class_id")
-  @@index([section_id], map: "idx_students_section_id")
-  @@index([full_name], map: "idx_students_full_name")
-  @@index([family_id], map: "idx_students_family_id")
   @@index([campus_id], map: "idx_students_campus_id")
-  @@index([status], map: "idx_students_status")
+  @@index([class_id], map: "idx_students_class_id")
   @@index([deleted_at], map: "idx_students_deleted_at")
-}
-
-model users {
-  id             String                @id @default(cuid())
-  username       String                @unique @db.VarChar(50)
-  password_hash  String                @db.VarChar(255)
-  email          String?               @unique @db.VarChar(100)
-  full_name      String                @db.VarChar(100)
-  role           StaffRole
-  campus_id      Int?
-  is_active      Boolean               @default(true)
-  created_at     DateTime              @default(now()) @db.Timestamp(6)
-  updated_at     DateTime              @updatedAt
-  deleted_at     DateTime?             @db.Timestamp(6)
-  refresh_tokens user_refresh_tokens[]
-  campus         campuses?             @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([family_id], map: "idx_students_family_id")
+  @@index([full_name], map: "idx_students_full_name")
+  @@index([section_id], map: "idx_students_section_id")
+  @@index([status], map: "idx_students_status")
 }
 
 model user_refresh_tokens {
-  id         String    @id @default(cuid())
+  id         String    @id @default(uuid()) @db.Uuid
   user_id    String
   token_hash String    @db.VarChar(255)
   expires_at DateTime
   revoked_at DateTime?
   created_at DateTime  @default(now()) @db.Timestamp(6)
-  user       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id, revoked_at, expires_at], map: "idx_user_rf_tokens_lookup")
 }
 
-model family_refresh_tokens {
-  id         String    @id @default(cuid())
-  family_id  Int
-  token_hash String    @db.VarChar(255)
-  expires_at DateTime
-  revoked_at DateTime?
-  created_at DateTime  @default(now()) @db.Timestamp(6)
-  family     families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
-
-  @@index([family_id, revoked_at, expires_at], map: "idx_family_rf_tokens_lookup")
+model users {
+  id                  String                @id
+  username            String                @unique @db.VarChar(50)
+  password_hash       String                @db.VarChar(255)
+  email               String?               @unique @db.VarChar(100)
+  full_name           String                @db.VarChar(100)
+  role                StaffRole
+  campus_id           Int?
+  is_active           Boolean               @default(true)
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  updated_at          DateTime              @default(now()) @db.Timestamp(6)
+  deleted_at          DateTime?             @db.Timestamp(6)
+  user_refresh_tokens user_refresh_tokens[]
+  campuses            campuses?             @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
-model class_fee_schedule {
-  id        Int       @id @default(autoincrement())
-  class_id  Int
-  fee_id    Int
-  amount    Decimal   @db.Decimal(10, 2)
-  campus_id Int?
-  campuses  campuses? @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes   classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  fee_types fee_types @relation(fields: [fee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-}
+model voucher_heads {
+  id               Int          @id @default(autoincrement())
+  voucher_id       Int
+  student_fee_id   Int
+  discount_amount  Decimal?     @default(0) @db.Decimal(12, 2)
+  net_amount       Decimal      @db.Decimal(12, 2)
+  amount_deposited Decimal?     @default(0) @db.Decimal(12, 2)
+  balance          Decimal?     @default(0) @db.Decimal(12, 2)
+  discount_label   String?      @db.VarChar(100)
+  student_fees     student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
+  vouchers         vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
 
-model classes {
-  id                 Int                  @id @default(autoincrement())
-  description        String               @db.VarChar(255)
-  class_code         String               @db.VarChar(10)
-  academic_system    String               @db.VarChar(20)
-  campus_classes     campus_classes[]
-  campus_sections    campus_sections[]
-  class_fee_schedule class_fee_schedule[]
-  students           students[]
-  vouchers           vouchers[]
-}
-
-model fee_types {
-  id                 Int                  @id @default(autoincrement())
-  description        String               @db.VarChar(255)
-  freq               fee_frequency?
-  breakup            Json?
-  priority_order     Int?
-  class_fee_schedule class_fee_schedule[]
-  student_fees       student_fees[]
-}
-
-model sections {
-  id              Int               @id @default(autoincrement())
-  description     String            @db.VarChar(255)
-  campus_sections campus_sections[]
-  students        students[]
-  vouchers        vouchers[]
-}
-
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model student_fees {
-  id                     Int                   @id @default(autoincrement())
-  student_id             Int
-  fee_type_id            Int
-  month                  Int?
-  academic_year          String                @db.VarChar
-  precedence_override    Int                   @default(0)
-  issue_date             DateTime?             @db.Date
-  due_date               DateTime?             @db.Date
-  validity_date          DateTime?             @db.Date
-  status                 fee_status_enum?      @default(NOT_ISSUED)
-  amount_before_discount Decimal?              @db.Decimal(12, 2)
-  target_month           Int
-  amount                 Decimal?              @db.Decimal(12, 2)
-  bundle_id              Int?
-  fee_date               DateTime?             @db.Date
-  deposit_allocations    deposit_allocations[]
-  student_fee_bundles    student_fee_bundles?  @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
-  fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students               students              @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
-  voucher_heads          voucher_heads[]
-
-  @@unique([student_id, fee_type_id, month, target_month, academic_year])
-  @@unique([student_id, fee_type_id, target_month, academic_year], map: "student_fees_student_id_fee_type_id_target_month_academic_year_")
-  @@index([due_date], map: "idx_student_fees_due_date")
-  @@index([precedence_override], map: "idx_student_fees_precedence")
-}
-
-model houses {
-  id          Int        @id @default(autoincrement())
-  house_name  String?    @db.VarChar(100)
-  house_color String?    @db.VarChar(50)
-  students    students[]
-}
-
-model campus_classes {
-  id        Int      @id @default(autoincrement())
-  campus_id Int
-  class_id  Int
-  is_active Boolean? @default(true)
-  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes   classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([campus_id, class_id], map: "campus_classes_unique")
-  @@index([campus_id], map: "idx_campus_classes_campus")
-}
-
-model campus_sections {
-  id         Int      @id @default(autoincrement())
-  campus_id  Int
-  class_id   Int
-  section_id Int
-  is_active  Boolean? @default(true)
-  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes    classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections   sections @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([campus_id, class_id, section_id], map: "campus_sections_unique")
-  @@index([campus_id], map: "idx_campus_sections_campus")
-}
-
-model bank_accounts {
-  id                Int                 @id @default(autoincrement())
-  account_title     String              @db.VarChar(100)
-  account_number    String              @unique @db.VarChar(50)
-  bank_name         String              @db.VarChar(100)
-  branch_code       String?             @db.VarChar(20)
-  bank_address      String?
-  iban              String?             @unique @db.VarChar(50)
-  bulk_voucher_jobs bulk_voucher_jobs[]
-  vouchers          vouchers[]
+  @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
+  @@index([voucher_id], map: "idx_voucher_heads_voucher")
 }
 
 model vouchers {
@@ -408,77 +481,12 @@ model vouchers {
   students                 students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
-model voucher_heads {
-  id               Int          @id @default(autoincrement())
-  voucher_id       Int
-  student_fee_id   Int
-  discount_amount  Decimal?     @default(0) @db.Decimal(12, 2)
-  net_amount       Decimal      @db.Decimal(12, 2)
-  amount_deposited Decimal?     @default(0) @db.Decimal(12, 2)
-  balance          Decimal?     @default(0) @db.Decimal(12, 2)
-  discount_label   String?      @db.VarChar(100)
-  student_fees     student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
-  vouchers         vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
-
-  @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
-  @@index([voucher_id], map: "idx_voucher_heads_voucher")
-}
-
-model deposit_allocations {
-  id             Int           @id @default(autoincrement())
-  deposit_id     Int
-  student_fee_id Int?
-  voucher_id     Int?
-  amount         Decimal       @db.Decimal(12, 2)
-  type           String        @db.VarChar(20)
-  deposits       deposits      @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
-  student_fees   student_fees? @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vouchers       vouchers?     @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model deposits {
-  id                  Int                   @id @default(autoincrement())
-  student_id          Int
-  total_amount        Decimal               @db.Decimal(12, 2)
-  deposit_date        DateTime              @default(now()) @db.Timestamp(6)
-  payment_method      String?               @db.VarChar(50)
-  reference_number    String?               @db.VarChar(100)
-  remarks             String?
-  created_at          DateTime              @default(now()) @db.Timestamp(6)
-  deposit_allocations deposit_allocations[]
-  students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model bulk_voucher_jobs {
-  id                  Int           @id @default(autoincrement())
-  created_by          String        @db.VarChar(255)
-  campus_id           Int
-  class_id            Int?
-  section_id          Int?
-  academic_year       String        @db.VarChar(10)
-  fee_date_from       DateTime      @db.Date
-  fee_date_to         DateTime      @db.Date
-  issue_date          DateTime      @db.Date
-  due_date            DateTime      @db.Date
-  validity_date       DateTime?     @db.Date
-  bank_account_id     Int
-  skip_already_issued Boolean       @default(true)
-  apply_late_fee      Boolean       @default(true)
-  late_fee_amount     Int           @default(1000)
-  status              BulkJobStatus @default(PENDING)
-  total_count         Int           @default(0)
-  success_count       Int           @default(0)
-  skip_count          Int           @default(0)
-  fail_count          Int           @default(0)
-  merged_pdf_url      String?
-  created_at          DateTime      @default(now()) @db.Timestamp(6)
-  updated_at          DateTime      @updatedAt
-  bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([campus_id], map: "idx_bulk_jobs_campus")
-  @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
-  @@index([status], map: "idx_bulk_jobs_status")
+enum BulkJobStatus {
+  PENDING
+  PROCESSING
+  DONE
+  PARTIAL_FAILURE
+  FAILED
 }
 
 enum StaffRole {
@@ -489,13 +497,6 @@ enum StaffRole {
   RECEPTIONIST
   TEACHER
   STAFF_EDITOR
-}
-
-enum student_status {
-  SOFT_ADMISSION
-  ENROLLED
-  EXPELLED
-  GRADUATED
 }
 
 enum fee_frequency {
@@ -510,10 +511,9 @@ enum fee_status_enum {
   PAID
 }
 
-enum BulkJobStatus {
-  PENDING
-  PROCESSING
-  DONE
-  PARTIAL_FAILURE
-  FAILED
+enum student_status {
+  SOFT_ADMISSION
+  ENROLLED
+  EXPELLED
+  GRADUATED
 }

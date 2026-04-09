@@ -13,6 +13,7 @@ async function main() {
             role: StaffRole.STAFF_EDITOR,
         },
         create: {
+            id: require('crypto').randomUUID(),
             username: 'testeditor',
             password_hash: passwordHash,
             full_name: 'Test Editor',
@@ -20,6 +21,7 @@ async function main() {
             email: 'testeditor@example.com',
             is_active: true,
             campus_id: 1, // Defaulting to Campus 1 (Aisha Bawany) mostly
+            updated_at: new Date(),
         },
     });
 

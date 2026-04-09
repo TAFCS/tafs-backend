@@ -56,7 +56,7 @@ export class AuthService {
         fullName: user.full_name,
         role: user.role,
         campusId: user.campus_id,
-        campusName: user.campus?.campus_name ?? null,
+        campusName: user.campuses?.campus_name ?? null,
       },
     };
   }
@@ -83,7 +83,7 @@ export class AuthService {
 
     const user = await this.prisma.users.findUnique({
       where: { id: existing.user_id },
-      include: { campus: true },
+      include: { campuses: true },
     });
     if (!user || !user.is_active) {
       throw new UnauthorizedException('Account is inactive');
@@ -110,7 +110,7 @@ export class AuthService {
         fullName: user.full_name,
         role: user.role,
         campusId: user.campus_id,
-        campusName: user.campus?.campus_name ?? null,
+        campusName: user.campuses?.campus_name ?? null,
       },
     };
   }
