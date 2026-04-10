@@ -59,6 +59,11 @@ export class StorageService {
         }
     }
 
+    /** Returns the public CDN URL for a given key without uploading anything. */
+    getPublicUrl(key: string): string {
+        return `${this.cdnEndpoint}/${key}`;
+    }
+
     /**
      * Upload a buffer to DigitalOcean Spaces and return the public CDN URL.
      *
