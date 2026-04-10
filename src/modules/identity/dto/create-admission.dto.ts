@@ -174,6 +174,7 @@ export class GuardianDto {
 
 export class EmergencyContactDto {
   @IsString()
+  @ValidateIf((o) => o.full_name !== 'N/A')
   @IsNotEmpty()
   @MaxLength(100)
   full_name: string;
@@ -207,6 +208,11 @@ export class AdmissionDetailsDto {
   @IsOptional()
   @MaxLength(10)
   academic_year?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  discipline?: string;
 
   @IsOptional()
   @IsInt()

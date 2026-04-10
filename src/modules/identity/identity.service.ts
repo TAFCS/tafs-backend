@@ -224,6 +224,7 @@ export class IdentityService {
           academic_system: dto.admission.academic_system,
           requested_grade: dto.admission.requested_grade,
           academic_year: dto.admission.academic_year,
+          discipline: dto.admission.discipline,
         },
       });
 
@@ -317,6 +318,7 @@ export class IdentityService {
                 academic_system: dto.admission.academic_system,
                 requested_grade: dto.admission.requested_grade,
                 academic_year: dto.admission.academic_year,
+                discipline: dto.admission.discipline,
               },
             });
           } else {
@@ -326,6 +328,7 @@ export class IdentityService {
                 academic_system: dto.admission.academic_system,
                 requested_grade: dto.admission.requested_grade,
                 academic_year: dto.admission.academic_year,
+                discipline: dto.admission.discipline,
               },
             });
           }

@@ -120,6 +120,7 @@ export class SubmitAdmissionFormDto {
         academic_system: string;
         requested_grade: string;
         academic_year?: string;
+        discipline?: string;
     };
 
     @IsArray()
