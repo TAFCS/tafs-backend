@@ -11,10 +11,11 @@ import {
     Query,
     Req,
     UploadedFile,
+    UploadedFiles,
     UseGuards,
     UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
@@ -229,7 +230,7 @@ export class VouchersController {
         return { success: true, message: 'Paid PDF saved.', data: result };
     }
 
-    /** Split a PARTIALLY_PAID voucher: create a new UNPAID voucher for the outstanding balances. */
+    /** Split a PARTIALLY_PAID voucher into a new PAID voucher + a new UNPAID voucher, then delete the original. */
     @Post(':id/split-partially-paid')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)
@@ -238,17 +239,22 @@ export class VouchersController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    @UseInterceptors(FileInterceptor('pdf'))
+    @UseInterceptors(FileFieldsInterceptor([
+        { name: 'paid_pdf', maxCount: 1 },
+        { name: 'unpaid_pdf', maxCount: 1 },
+    ]))
     async splitPartiallyPaid(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: SplitPartiallyPaidDto,
-        @UploadedFile() pdf?: Express.Multer.File,
+        @UploadedFiles() files?: { paid_pdf?: Express.Multer.File[]; unpaid_pdf?: Express.Multer.File[] },
     ) {
-        const voucher = await this.vouchersService.splitPartiallyPaid(id, dto, pdf?.buffer);
+        const paidPdf = files?.paid_pdf?.[0]?.buffer;
+        const unpaidPdf = files?.unpaid_pdf?.[0]?.buffer;
+        const result = await this.vouchersService.splitPartiallyPaid(id, dto, paidPdf, unpaidPdf);
         return {
             success: true,
-            message: 'New unpaid voucher created for outstanding balance.',
-            data: voucher,
+            message: 'Voucher split into paid and unpaid records successfully.',
+            data: result,
         };
     }
 

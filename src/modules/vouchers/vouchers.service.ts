@@ -621,10 +621,18 @@ export class VouchersService {
 
     /**
      * Split a PARTIALLY_PAID voucher:
-     *  - Generates a new UNPAID voucher for heads that still have balance > 0.
-     *  - Leaves the original voucher untouched (no status change).
+     *  1. Create a new PAID voucher   (heads = amount_deposited, prefix "Partial Payment of —")
+     *  2. Create a new UNPAID voucher (heads = balance,          prefix "Balance Payment of —")
+     *  3. Delete the original voucher (voucher_heads cascade, deposit_allocations reassigned)
+     * All DB work runs in a single transaction. PDF uploads happen before the transaction commits;
+     * if either upload fails the transaction is never committed.
      */
-    async splitPartiallyPaid(voucherId: number, dto: SplitPartiallyPaidDto, pdfBuffer?: Buffer) {
+    async splitPartiallyPaid(
+        voucherId: number,
+        dto: SplitPartiallyPaidDto,
+        paidPdfBuffer?: Buffer,
+        unpaidPdfBuffer?: Buffer,
+    ) {
         const original = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,
@@ -637,81 +645,126 @@ export class VouchersService {
             );
         }
 
-        const headsWithBalance = (original.voucher_heads || []).filter(
-            (h) => new Prisma.Decimal(h.balance as any ?? 0).gt(0),
-        );
+        // Fetch heads with full student_fees data for descriptions
+        const allHeads = await this.prisma.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            include: { student_fees: { include: { fee_types: true } } },
+        });
 
-        if (headsWithBalance.length === 0) {
-            throw new BadRequestException('No outstanding balance to split off.');
-        }
+        const paidHeads = allHeads.filter(h => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0));
+        const unpaidHeads = allHeads.filter(h => new Prisma.Decimal(h.balance as any ?? 0).gt(0));
+
+        if (paidHeads.length === 0) throw new BadRequestException('No deposited amounts found on this voucher.');
+        if (unpaidHeads.length === 0) throw new BadRequestException('No outstanding balance found on this voucher.');
 
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
-        const newVoucher = await this.prisma.$transaction(async (tx) => {
-            // Create the new voucher record (totals calculated from heads below)
-            const created = await tx.vouchers.create({
+        // Upload both PDFs BEFORE the transaction so we can roll back cleanly on failure
+        let paidPdfUrl: string | null = null;
+        let unpaidPdfUrl: string | null = null;
+
+        if (paidPdfBuffer) {
+            const key = `vouchers/${original.student_id}/paid-voucher-split-${voucherId}-${Date.now()}.pdf`;
+            paidPdfUrl = await this.storage.upload(key, paidPdfBuffer);
+        }
+        if (unpaidPdfBuffer) {
+            const key = `vouchers/${original.student_id}/voucher-balance-${voucherId}-${Date.now()}.pdf`;
+            unpaidPdfUrl = await this.storage.upload(key, unpaidPdfBuffer);
+        }
+
+        const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
+
+        const paidTotal = paidHeads.reduce(
+            (s, h) => s.add(new Prisma.Decimal(h.amount_deposited as any ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        const unpaidTotal = unpaidHeads.reduce(
+            (s, h) => s.add(new Prisma.Decimal(h.balance as any ?? 0)),
+            new Prisma.Decimal(0),
+        );
+
+        const { paidVoucher, unpaidVoucher } = await this.prisma.$transaction(async (tx) => {
+            const commonFields = {
+                student_id: original.student_id,
+                campus_id: original.campus_id,
+                class_id: original.class_id,
+                section_id: original.section_id,
+                bank_account_id: original.bank_account_id,
+                academic_year: original.academic_year,
+                month: original.month,
+                fee_date: original.fee_date,
+                late_fee_charge: original.late_fee_charge,
+            };
+
+            // --- 1. Create the PAID voucher ---
+            const paid = await tx.vouchers.create({
                 data: {
-                    student_id: original.student_id,
-                    campus_id: original.campus_id,
-                    class_id: original.class_id,
-                    section_id: original.section_id,
-                    bank_account_id: original.bank_account_id,
-                    issue_date: issueDate,
-                    due_date: dueDate,
-                    validity_date: validityDate,
-                    late_fee_charge: original.late_fee_charge,
-                    academic_year: original.academic_year,
-                    month: original.month,
-                    fee_date: original.fee_date,
-                    status: 'UNPAID',
-                    total_payable_before_due: 0,
-                    total_payable_after_due: 0,
+                    ...commonFields,
+                    issue_date: original.issue_date,
+                    due_date: original.due_date,
+                    validity_date: original.validity_date,
+                    status: 'PAID',
+                    total_payable_before_due: paidTotal,
+                    total_payable_after_due: paidTotal,
+                    pdf_url: paidPdfUrl,
                 },
             });
 
-            let totalBalance = new Prisma.Decimal(0);
-            const newHeadsData = headsWithBalance.map((h) => {
-                const balance = new Prisma.Decimal(h.balance as any ?? 0);
-                totalBalance = totalBalance.add(balance);
-                return {
-                    voucher_id: created.id,
+            await tx.voucher_heads.createMany({
+                data: paidHeads.map(h => ({
+                    voucher_id: paid.id,
                     student_fee_id: h.student_fee_id,
                     discount_amount: new Prisma.Decimal(0),
                     discount_label: h.discount_label,
-                    net_amount: balance,
-                    amount_deposited: new Prisma.Decimal(0),
-                    balance: balance,
-                };
+                    net_amount: new Prisma.Decimal(h.amount_deposited as any ?? 0),
+                    amount_deposited: new Prisma.Decimal(h.amount_deposited as any ?? 0),
+                    balance: new Prisma.Decimal(0),
+                })),
             });
 
-            await tx.voucher_heads.createMany({ data: newHeadsData });
-
-            const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
-            await tx.vouchers.update({
-                where: { id: created.id },
+            // --- 2. Create the UNPAID voucher ---
+            const unpaid = await tx.vouchers.create({
                 data: {
-                    total_payable_before_due: totalBalance,
-                    total_payable_after_due: totalBalance.add(lateFeeVal),
+                    ...commonFields,
+                    issue_date: issueDate,
+                    due_date: dueDate,
+                    validity_date: validityDate,
+                    status: 'UNPAID',
+                    total_payable_before_due: unpaidTotal,
+                    total_payable_after_due: unpaidTotal.add(lateFeeVal),
+                    pdf_url: unpaidPdfUrl,
                 },
             });
 
-            return created;
-        }, { timeout: 15000 });
+            await tx.voucher_heads.createMany({
+                data: unpaidHeads.map(h => ({
+                    voucher_id: unpaid.id,
+                    student_fee_id: h.student_fee_id,
+                    discount_amount: new Prisma.Decimal(0),
+                    discount_label: h.discount_label,
+                    net_amount: new Prisma.Decimal(h.balance as any ?? 0),
+                    amount_deposited: new Prisma.Decimal(0),
+                    balance: new Prisma.Decimal(h.balance as any ?? 0),
+                })),
+            });
 
-        // Upload PDF outside transaction
-        if (pdfBuffer) {
-            try {
-                const key = `vouchers/${original.student_id}/voucher-${newVoucher.id}-${Date.now()}.pdf`;
-                const pdfUrl = await this.storage.upload(key, pdfBuffer);
-                await this.prisma.vouchers.update({ where: { id: newVoucher.id }, data: { pdf_url: pdfUrl } });
-            } catch (err) {
-                this.logger.error(`Failed to upload split PDF for voucher ${newVoucher.id}: ${(err as Error).message}`);
-            }
-        }
+            // --- 3. Reassign deposit_allocations to new paid voucher, then delete the original ---
+            await tx.deposit_allocations.updateMany({
+                where: { voucher_id: voucherId },
+                data: { voucher_id: paid.id },
+            });
 
-        return this.findOne(newVoucher.id);
+            await tx.vouchers.delete({ where: { id: voucherId } });
+
+            return { paidVoucher: paid, unpaidVoucher: unpaid };
+        }, { timeout: 30000 });
+
+        return {
+            paid_voucher_id: paidVoucher.id,
+            unpaid_voucher_id: unpaidVoucher.id,
+        };
     }
 
     private normalizeVoucher(voucher: any) {
