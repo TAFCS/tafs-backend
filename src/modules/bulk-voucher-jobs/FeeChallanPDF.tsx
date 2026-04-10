@@ -556,25 +556,17 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                         {(() => {
                             const arrearFees = fees.filter(f => f.isArrear);
                             const currentFees = fees.filter(f => !f.isArrear);
+                            const arrearTotal = arrearFees.reduce((s, f) => s + f.amount, 0);
                             return (
                                 <>
+                                    {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
                                     {arrearFees.length > 0 && (
-                                        <>
-                                            <View style={styles.sectionLabelRowArrear}>
-                                                <Text style={styles.sectionLabelArrear}>▲ ARREARS</Text>
-                                            </View>
-                                            {arrearFees.map((fee, idx) => renderFeeRow(fee, `a-${idx}`))}
-                                        </>
-                                    )}
-                                    {currentFees.length > 0 && (
-                                        <>
-                                            {arrearFees.length > 0 && (
-                                                <View style={styles.sectionLabelRow}>
-                                                    <Text style={styles.sectionLabel}>CURRENT FEES</Text>
-                                                </View>
-                                            )}
-                                            {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
-                                        </>
+                                        <View style={styles.tableRow}>
+                                            <Text style={styles.colDesc}>Arrears</Text>
+                                            <Text style={styles.colAmount}>
+                                                {Math.round(arrearTotal).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                            </Text>
+                                        </View>
                                     )}
                                 </>
                             );
