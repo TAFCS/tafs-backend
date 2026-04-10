@@ -915,6 +915,8 @@ export class VouchersService {
             amount: string;
             amount_paid: string;
             outstanding: string;
+            target_month: number;
+            academic_year: string;
         }[] = [];
 
         let totalArrears = new Prisma.Decimal(0);
@@ -941,6 +943,8 @@ export class VouchersService {
                 amount: amount.toFixed(2),
                 amount_paid: paid.toFixed(2),
                 outstanding: outstanding.toFixed(2),
+                target_month: fee.target_month,
+                academic_year: fee.academic_year,
             });
         }
 

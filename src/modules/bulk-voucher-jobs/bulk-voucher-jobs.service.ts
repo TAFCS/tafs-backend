@@ -503,18 +503,89 @@ export class BulkVoucherJobsService {
             (student.student_guardians || []).find((g: any) => g.is_primary_contact);
         const fatherName = fatherG?.guardians?.full_name || 'N/A';
 
-        const feeHeadsForPdf = feesForThisVoucher.map((f: any) => {
-            const gross = Number(f.amount_before_discount || f.amount || 0);
-            const net = Number(f.amount || 0);
-            const disc = Math.max(0, gross - net);
+        // Group tuition fees to consolidate consecutive months
+        const tuitionGroups: Record<string, any[]> = {};
+        const otherHeads: any[] = [];
+
+        feesForThisVoucher.forEach((f: any) => {
             const baseDesc = f.fee_types?.description || 'Fee';
             const isTuition = baseDesc.toLowerCase().includes('tuition');
-            const m = f.target_month || f.month;
-            const description = isTuition && m
-                ? `${baseDesc} (${getMonthYearLabel(m, dto.academic_year).toUpperCase()})`
-                : baseDesc;
-            return { description, amount: gross, discount: disc, netAmount: net, discountLabel: disc > 0 ? 'Discount' : '' };
+            if (isTuition) {
+                if (!tuitionGroups[baseDesc]) tuitionGroups[baseDesc] = [];
+                tuitionGroups[baseDesc].push(f);
+            } else {
+                const gross = Number(f.amount_before_discount || f.amount || 0);
+                const net = Number(f.amount || 0);
+                const disc = Math.max(0, gross - net);
+                let desc = baseDesc;
+                const m = f.target_month || f.month;
+                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, dto.academic_year).toUpperCase()})`;
+
+                otherHeads.push({ 
+                    description: desc, 
+                    amount: gross, 
+                    discount: disc, 
+                    netAmount: net, 
+                    discountLabel: disc > 0 ? 'Discount' : '' 
+                });
+            }
         });
+
+        const mergedTuitionHeads: any[] = [];
+        Object.keys(tuitionGroups).forEach(baseDesc => {
+            const group = tuitionGroups[baseDesc];
+            
+            // Helper for sequencing (Aug=0... Jul=11)
+            const getSeq = (m: number) => {
+                const startYear = parseInt(dto.academic_year.split('-')[0]) || 0;
+                return startYear * 12 + (m >= 8 ? m - 8 : m + 4);
+            };
+
+            group.sort((a, b) => getSeq(a.target_month || a.month || 0) - getSeq(b.target_month || b.month || 0));
+
+            // Identify consecutive ranges
+            const ranges: any[][] = [];
+            let currentRange: any[] = [];
+            group.forEach((f, idx) => {
+                const m = f.target_month || f.month || 0;
+                if (idx === 0) {
+                    currentRange.push(f);
+                } else {
+                    const prevM = group[idx - 1].target_month || group[idx - 1].month || 0;
+                    if (getSeq(m) === getSeq(prevM) + 1) {
+                        currentRange.push(f);
+                    } else {
+                        ranges.push(currentRange);
+                        currentRange = [f];
+                    }
+                }
+            });
+            ranges.push(currentRange);
+
+            // Consolidate each range
+            ranges.forEach(range => {
+                const firstM = range[0].target_month || range[0].month || 0;
+                const lastM = range[range.length - 1].target_month || range[range.length - 1].month || 0;
+                const gross = range.reduce((s, f) => s + Number(f.amount_before_discount || f.amount || 0), 0);
+                const net = range.reduce((s, f) => s + Number(f.amount || 0), 0);
+                const disc = Math.max(0, gross - net);
+
+                let labelSuffix = `(${getMonthYearLabel(firstM, dto.academic_year).toUpperCase()})`;
+                if (range.length > 1) {
+                    labelSuffix = `(${getMonthYearLabel(firstM, dto.academic_year).toUpperCase()} - ${getMonthYearLabel(lastM, dto.academic_year).toUpperCase()})`;
+                }
+
+                mergedTuitionHeads.push({
+                    description: `${baseDesc} ${labelSuffix}`,
+                    amount: gross,
+                    discount: disc,
+                    netAmount: net,
+                    discountLabel: disc > 0 ? 'Discount' : ''
+                });
+            });
+        });
+
+        const feeHeadsForPdf = [...otherHeads, ...mergedTuitionHeads];
 
         const monthNums = [...new Set(
             feesForThisVoucher.map((f: any) => f.target_month || f.month).filter(Boolean) as number[]
