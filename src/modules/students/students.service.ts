@@ -466,6 +466,18 @@ export class StudentsService {
 
     const financial = await this.getFinancialDigest(s.cc);
 
+    let resolvedClassId = s.class_id;
+    if (!resolvedClassId && s.status === 'SOFT_ADMISSION') {
+      const requestedGrade = s.student_admissions?.[0]?.requested_grade;
+      if (requestedGrade) {
+        const matchedClass = await this.prisma.classes.findFirst({
+          where: { class_code: requestedGrade },
+          select: { id: true }
+        });
+        resolvedClassId = matchedClass?.id ?? null;
+      }
+    }
+
     return {
       cc: s.cc,
       student_full_name: s.full_name,
@@ -474,7 +486,7 @@ export class StudentsService {
       campus: s.campuses?.campus_name,
       campus_code: s.campuses?.campus_code,
       campus_id: s.campus_id,
-      class_id: s.class_id,
+      class_id: resolvedClassId,
       section_id: s.section_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,

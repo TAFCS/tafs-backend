@@ -498,7 +498,7 @@ export class StudentFeesService {
                 ...(classId ? { class_id: classId } : {}),
                 ...(sectionId ? { section_id: sectionId } : {}),
                 deleted_at: null,
-                status: 'ENROLLED',
+                status: { in: ['ENROLLED', 'SOFT_ADMISSION'] },
             },
             select: {
                 cc: true,
