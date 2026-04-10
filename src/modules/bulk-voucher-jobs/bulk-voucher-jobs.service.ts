@@ -176,6 +176,7 @@ export class BulkVoucherJobsService {
                 success_count: 0,
                 skip_count: 0,
                 fail_count: 0,
+                updated_at: new Date(),
             },
         });
 
