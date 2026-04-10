@@ -64,5 +64,8 @@ export class BulkSaveStudentFeesDto {
     @ValidateNested({ each: true })
     @Type(() => SaveStudentFeeBundleDto)
     bundles?: SaveStudentFeeBundleDto[];
-}
 
+    @IsString()
+    @IsOptional()
+    academic_year?: string;
+}

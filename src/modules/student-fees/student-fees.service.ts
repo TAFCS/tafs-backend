@@ -169,7 +169,7 @@ export class StudentFeesService {
     async bulkSave(dto: BulkSaveStudentFeesDto) {
         const { student_id, items, bundles } = dto;
 
-        if (items.length === 0) {
+        if (items.length === 0 && !dto.academic_year) {
             return this.findByStudent(student_id);
         }
 
@@ -182,6 +182,13 @@ export class StudentFeesService {
 
         // Get the unique years involved in this save
         const years = Array.from(new Set(items.map((i) => i.academic_year)));
+        if (items.length === 0 && dto.academic_year) {
+            years.push(dto.academic_year);
+        }
+
+        if (years.length === 0) {
+            return this.findByStudent(student_id);
+        }
 
         return this.prisma.$transaction(
             async (tx) => {
