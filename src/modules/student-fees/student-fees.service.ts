@@ -293,8 +293,6 @@ export class StudentFeesService {
 
                         if (bundleFees.length > 0) {
                             const firstFee = bundleFees[0];
-                            // Use the provided target_month from the bundle DTO, or fall back 
-                            // to the first member fee's period identity (target_month).
                             const bundleMonth = b.target_month ?? firstFee.target_month;
 
                             const calculatedTotal = bundleFees.reduce(
@@ -328,6 +326,39 @@ export class StudentFeesService {
                                 },
                             });
                         }
+                    }
+                }
+
+                // 4. Cleanup & Sync Existing Bundles
+                // Recalculate totals for all bundles involved or existing in these years
+                const refreshedFees = await tx.student_fees.findMany({
+                    where: { student_id, academic_year: { in: years } },
+                    select: { bundle_id: true, amount: true, amount_before_discount: true },
+                });
+
+                const affectedBundleIds = new Set<number>();
+                refreshedFees.forEach(f => { if (f.bundle_id) affectedBundleIds.add(f.bundle_id); });
+
+                // Also find bundles that might now be empty for these years
+                const existingBundles = await tx.student_fee_bundles.findMany({
+                    where: { student_id, academic_year: { in: years } },
+                    select: { id: true },
+                });
+                existingBundles.forEach(b => affectedBundleIds.add(b.id));
+
+                for (const bId of affectedBundleIds) {
+                    const members = refreshedFees.filter(f => f.bundle_id === bId);
+                    if (members.length === 0) {
+                        await tx.student_fee_bundles.delete({ where: { id: bId } });
+                    } else {
+                        const syncTotal = members.reduce(
+                            (sum, f) => sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
+                            new Prisma.Decimal(0),
+                        );
+                        await tx.student_fee_bundles.update({
+                            where: { id: bId },
+                            data: { total_amount: syncTotal },
+                        });
                     }
                 }
 
