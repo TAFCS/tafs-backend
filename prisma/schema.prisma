@@ -43,7 +43,7 @@ model bulk_voucher_jobs {
   fail_count          Int           @default(0)
   merged_pdf_url      String?
   created_at          DateTime      @default(now()) @db.Timestamp(6)
-  updated_at          DateTime      @updatedAt @db.Timestamp(6)
+  updated_at          DateTime      @updatedAt
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -255,8 +255,8 @@ model student_admissions {
   academic_system  String    @db.VarChar(20)
   requested_grade  String    @db.VarChar(20)
   academic_year    String?   @db.VarChar(10)
-  discipline       String?   @db.VarChar(50)
   application_date DateTime? @default(now()) @db.Timestamp(6)
+  discipline       String?   @db.VarChar(50)
   students         students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")

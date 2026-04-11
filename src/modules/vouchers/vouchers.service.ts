@@ -159,6 +159,39 @@ export class VouchersService {
                 },
             });
 
+            // 6. Void any superseded vouchers — older vouchers for the same student
+            //    that share one or more of the fee IDs now absorbed by this new voucher.
+            //    This prevents double-payment of arrear heads that have been rolled in.
+            const feeIdsInNewVoucher = dto.orderedFeeIds ?? [];
+            if (feeIdsInNewVoucher.length > 0) {
+                // Find heads from OTHER vouchers that reference the same student_fee rows
+                const supersededHeads = await tx.voucher_heads.findMany({
+                    where: {
+                        student_fee_id: { in: feeIdsInNewVoucher },
+                        voucher_id: { not: newVoucher.id },
+                    },
+                    select: { voucher_id: true },
+                });
+
+                const supersededVoucherIds = [
+                    ...new Set(supersededHeads.map((h) => h.voucher_id)),
+                ];
+
+                if (supersededVoucherIds.length > 0) {
+                    await tx.vouchers.updateMany({
+                        where: {
+                            id: { in: supersededVoucherIds },
+                            student_id: dto.student_id,
+                            status: { notIn: ['PAID', 'VOID'] },
+                        },
+                        data: { status: 'VOID' },
+                    });
+                    this.logger.log(
+                        `[Voucher ${newVoucher.id}] Voided ${supersededVoucherIds.length} superseded voucher(s): [${supersededVoucherIds.join(', ')}]`,
+                    );
+                }
+            }
+
             return newVoucher;
         }, { timeout: 15000 });
 
@@ -431,6 +464,12 @@ export class VouchersService {
 
         if (!voucher) {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+        }
+
+        if (voucher.status === 'VOID') {
+            throw new BadRequestException(
+                `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
+            );
         }
 
         const voucherHeadMap = new Map(
