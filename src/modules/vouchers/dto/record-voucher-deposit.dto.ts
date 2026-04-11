@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsObject, IsOptional, Min } from 'class-validator';
+import { IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
 
 export class RecordVoucherDepositDto {
     @Type(() => Number)
@@ -15,4 +15,12 @@ export class RecordVoucherDepositDto {
     @Min(0)
     @IsOptional()
     late_fee?: number;
+
+    @IsString()
+    @IsOptional()
+    payment_method?: string;
+
+    @IsString()
+    @IsOptional()
+    reference_number?: string;
 }

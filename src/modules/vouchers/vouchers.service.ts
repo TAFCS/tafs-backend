@@ -523,7 +523,7 @@ export class VouchersService {
         await this.prisma.$transaction(
             async (tx) => {
 
-
+            // ── Step A: Update voucher_heads balances ──────────────────────
             await Promise.all(
                 parsedDistributions.map(({ headId, amount }) => {
                     if (amount.eq(0)) return Promise.resolve();
@@ -537,7 +537,46 @@ export class VouchersService {
                 }),
             );
 
-            // Batch update affected student fees
+            // ── Step B: Write to deposits + deposit_allocations ───────────
+            const depositRecord = await tx.deposits.create({
+                data: {
+                    student_id: voucher.student_id,
+                    total_amount: depositAmount,
+                    payment_method: dto.payment_method ?? null,
+                    reference_number: dto.reference_number ?? null,
+                },
+            });
+
+            // One allocation per non-zero head distribution
+            const allocationData = parsedDistributions
+                .filter(({ amount }) => amount.gt(0))
+                .map(({ headId, amount }) => {
+                    const head = voucherHeadMap.get(headId)!;
+                    return {
+                        deposit_id: depositRecord.id,
+                        student_fee_id: head.student_fee_id ?? null,
+                        voucher_id: voucherId,
+                        amount,
+                        type: 'FEE_HEAD',
+                    };
+                });
+
+            // One allocation for late fee if applicable
+            if (lateFeeAmount.gt(0)) {
+                allocationData.push({
+                    deposit_id: depositRecord.id,
+                    student_fee_id: null,
+                    voucher_id: voucherId,
+                    amount: lateFeeAmount,
+                    type: 'LATE_FEE',
+                });
+            }
+
+            if (allocationData.length > 0) {
+                await tx.deposit_allocations.createMany({ data: allocationData });
+            }
+
+            // ── Step C: Update student_fees (amount_paid + status) ─────────
             if (affectedStudentFeeIds.length > 0) {
                 const totalDeposits = await tx.voucher_heads.groupBy({
                     by: ['student_fee_id'],
@@ -576,13 +615,14 @@ export class VouchersService {
                             where: { id: fee.id },
                             data: {
                                 status: nextFeeStatus as any,
-                                amount_paid: totalDeposited,   // keep this in sync for arrears computation
+                                amount_paid: totalDeposited,
                             },
                         });
                     }),
                 );
             }
 
+            // ── Step D: Update late_fee_deposited on voucher ───────────────
             if (lateFeeAmount.gt(0)) {
                 await tx.vouchers.update({
                     where: { id: voucherId },
@@ -592,6 +632,7 @@ export class VouchersService {
                 });
             }
 
+            // ── Step E: Recalculate voucher status ─────────────────────────
                 // Minimal refresh for calculation - much faster than full VOUCHER_INCLUDE
                 const refreshed = await tx.vouchers.findUnique({
                     where: { id: voucherId },
