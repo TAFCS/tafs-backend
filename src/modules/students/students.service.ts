@@ -116,38 +116,24 @@ export class StudentsService {
   }
 
   async findAll(query: GetStudentsDto) {
-    const { page = 1, limit = 10, search, campus_id, status, fields } = query;
+    const { page = 1, limit = 10, search, campus_id, class_id, section_id, house_id, status, fields } = query;
     const offset = calculateOffset(page, limit);
 
-    // Build modern dynamic where clause
-    const where: Prisma.studentsWhereInput = {
-      deleted_at: null,
-    };
+    const where: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
       where.OR = [
         { full_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
         ...(/^\d+$/.test(search) ? [{ cc: Number(search) }] : []),
-        {
-          student_guardians: {
-            some: {
-              guardians: {
-                cnic: { contains: search, mode: 'insensitive' },
-              },
-            },
-          },
-        },
+        { student_guardians: { some: { guardians: { cnic: { contains: search, mode: 'insensitive' } } } } },
       ];
     }
-
-    if (campus_id) {
-      where.campus_id = campus_id;
-    }
-
-    if (status) {
-      where.status = status;
-    }
+    if (campus_id)   where.campus_id  = campus_id;
+    if (class_id)    where.class_id   = class_id;
+    if (section_id)  where.section_id = section_id;
+    if (house_id)    where.house_id   = house_id;
+    if (status)      where.status     = status;
 
     // Determine what relations to include based on user's selected fields
     // If fields is undefined, we return ALL categories by default.
@@ -164,10 +150,15 @@ export class StudentsService {
     if (requestedFields.has('core')) {
       selectArgs.full_name = true;
       selectArgs.gr_number = true;
-      selectArgs.class_id = true;
+      selectArgs.class_id  = true;
+      selectArgs.section_id = true;
+      selectArgs.house_id  = true;
       selectArgs.status = true;
       selectArgs.photograph_url = true;
-      selectArgs.campuses = { select: { campus_name: true, campus_code: true } };
+      selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
+      selectArgs.classes   = { select: { description: true, class_code: true } };
+      selectArgs.sections  = { select: { description: true } };
+      selectArgs.houses    = { select: { house_name: true, house_color: true } };
     }
 
     if (requestedFields.has('academic')) {
@@ -323,6 +314,11 @@ export class StudentsService {
           gr_number: s.gr_number,
           campus_name: s.campuses?.campus_name,
           campus_code: s.campuses?.campus_code,
+          class_description: s.classes?.description,
+          class_code: s.classes?.class_code,
+          section_description: s.sections?.description,
+          house_name: s.houses?.house_name,
+          house_color: s.houses?.house_color,
           enrollment_status: s.status,
           photograph_url: s.photograph_url,
         };

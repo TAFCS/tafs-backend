@@ -77,6 +77,11 @@ export class CreateGuardianDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(50)
   education_level?: string;
 

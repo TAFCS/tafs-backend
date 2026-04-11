@@ -25,6 +25,21 @@ export class GetStudentsDto {
   campus_id?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  class_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  section_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  house_id?: number;
+
+  @IsOptional()
   @IsEnum(StudentStatus)
   status?: StudentStatus;
 

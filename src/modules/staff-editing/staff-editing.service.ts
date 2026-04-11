@@ -179,15 +179,12 @@ export class StaffEditingService {
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
-        houses: { select: { house_name: true } },
-        student_admissions: {
-          orderBy: { application_date: 'desc' },
-          take: 1,
-        },
-        student_guardians: {
-          include: { guardians: true },
-          orderBy: { guardian_id: 'asc' },
-        },
+        houses: { select: { house_name: true, house_color: true } },
+        student_admissions: { orderBy: { application_date: 'desc' } },
+        student_guardians: { include: { guardians: true }, orderBy: { guardian_id: 'asc' } },
+        student_activities: true,
+        student_languages: true,
+        student_previous_schools: { orderBy: { id: 'desc' } },
       },
     });
 
@@ -391,6 +388,10 @@ export class StaffEditingService {
 
     // Convert dob string to Date if present
     const guardianData: any = { ...guardianFields };
+    if (guardianFields.email && !guardianFields.email_address) {
+      guardianData.email_address = guardianFields.email;
+      delete (guardianData as any).email;
+    }
     if (guardianFields.dob) {
       guardianData.dob = this.parseDateFromFrontend(guardianFields.dob);
     }
@@ -433,15 +434,18 @@ export class StaffEditingService {
       dob: this.formatDateToFrontend(guardian.dob),
     };
   }
-
   async updateGuardian(id: number, dto: UpdateGuardianDto) {
     const { dob, ...rest } = dto;
     const data: Record<string, unknown> = {
       ...rest,
-      ...(dob !== undefined
-        ? { dob: this.parseDateFromFrontend(dob as string) }
-        : {}),
     };
+    if (dto.email && !dto.email_address) {
+      data.email_address = dto.email;
+      delete data.email;
+    }
+    if (dob !== undefined) {
+      data.dob = this.parseDateFromFrontend(dob as string);
+    }
 
     try {
       const guardian = await this.prisma.guardians.update({
@@ -482,6 +486,10 @@ export class StaffEditingService {
     if (is_emergency_contact !== undefined) relationshipData.is_emergency_contact = is_emergency_contact;
 
     const guardianData: Record<string, any> = { ...guardianFields };
+    if (dto.email && !dto.email_address) {
+      guardianData.email_address = dto.email;
+      delete guardianData.email;
+    }
     if (dob !== undefined) {
       guardianData.dob = dob ? this.parseDateFromFrontend(dob as string) : null;
     }
@@ -642,6 +650,7 @@ export class StaffEditingService {
       gender: s.gender,
       nationality: s.nationality,
       religion: s.religion,
+      place_of_birth: (s as any).place_of_birth,
       status: s.status,
       whatsapp_number: s.whatsapp_number,
       whatsapp_country_code: s.whatsapp_country_code,
@@ -658,6 +667,7 @@ export class StaffEditingService {
       section_name: s.sections?.description ?? null,
       house_id: s.house_id,
       house_name: s.houses?.house_name ?? null,
+      house_color: s.houses?.house_color ?? null,
       admission_age_years: s.admission_age_years,
       country: s.country,
       province: s.province,
@@ -668,16 +678,98 @@ export class StaffEditingService {
       medical_info: s.medical_info,
       interests: s.interests,
       photograph_url: s.photograph_url,
+      // Latest for backward compat
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
+      // All sub-tables
+      admissions: s.student_admissions ?? [],
+      activities: s.student_activities ?? [],
+      languages: s.student_languages ?? [],
+      previous_schools: s.student_previous_schools ?? [],
       guardians: s.student_guardians?.map((link: any) => ({
         guardian_id: link.guardian_id,
         relationship: link.relationship,
         is_primary_contact: link.is_primary_contact,
         is_emergency_contact: link.is_emergency_contact,
         ...link.guardians,
+        dob: this.formatDateToFrontend(link.guardians.dob),
       })) ?? [],
     };
+  }
+
+  // ─── Sub-table CRUD ────────────────────────────────────────────────────────
+
+  async upsertAdmission(studentId: number, dto: any) {
+    const data: any = {
+      student_id: studentId,
+      academic_system: dto.academic_system,
+      requested_grade: dto.requested_grade,
+      academic_year: dto.academic_year,
+      application_date: dto.application_date ? new Date(dto.application_date) : new Date(),
+    };
+    if (dto.id) {
+      return this.prisma.student_admissions.update({ where: { id: dto.id }, data });
+    }
+    return this.prisma.student_admissions.create({ data });
+  }
+
+  async deleteAdmission(id: number) {
+    return this.prisma.student_admissions.delete({ where: { id } }).catch(() => null);
+  }
+
+  async upsertActivity(studentId: number, dto: any) {
+    const data: any = {
+      student_id: studentId,
+      activity_name: dto.activity_name,
+      grade: dto.grade,
+      honors_awards: dto.honors_awards,
+      continue_at_tafs: dto.continue_at_tafs ?? true,
+    };
+    if (dto.id) {
+      return this.prisma.student_activities.update({ where: { id: dto.id }, data });
+    }
+    return this.prisma.student_activities.create({ data });
+  }
+
+  async deleteActivity(id: number) {
+    return this.prisma.student_activities.delete({ where: { id } }).catch(() => null);
+  }
+
+  async upsertLanguage(studentId: number, dto: any) {
+    const data: any = {
+      student_id: studentId,
+      language_name: dto.language_name,
+      can_speak: dto.can_speak ?? false,
+      can_read: dto.can_read ?? false,
+      can_write: dto.can_write ?? false,
+    };
+    if (dto.id) {
+      return this.prisma.student_languages.update({ where: { id: dto.id }, data });
+    }
+    return this.prisma.student_languages.create({ data });
+  }
+
+  async deleteLanguage(id: number) {
+    return this.prisma.student_languages.delete({ where: { id } }).catch(() => null);
+  }
+
+  async upsertPreviousSchool(studentId: number, dto: any) {
+    const data: any = {
+      student_id: studentId,
+      school_name: dto.school_name,
+      location: dto.location,
+      class_studied_from: dto.class_studied_from,
+      class_studied_to: dto.class_studied_to,
+      reason_for_leaving: dto.reason_for_leaving,
+    };
+    if (dto.id) {
+      return this.prisma.student_previous_schools.update({ where: { id: dto.id }, data });
+    }
+    return this.prisma.student_previous_schools.create({ data });
+  }
+
+  async deletePreviousSchool(id: number) {
+    return this.prisma.student_previous_schools.delete({ where: { id } }).catch(() => null);
   }
 }

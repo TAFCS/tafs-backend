@@ -159,4 +159,54 @@ export class StaffEditingController {
       STAFF_EDITING_MESSAGES.GUARDIAN_RETRIEVE_SUCCESS,
     );
   }
+
+  // ─── Sub-table CRUD ──────────────────────────────────────────────────────
+
+  @Post('students/:id/admissions')
+  async upsertAdmission(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return createApiResponse(await this.staffEditingService.upsertAdmission(id, dto), HttpStatus.OK, 'Saved');
+  }
+
+  @Delete('admissions/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteAdmission(@Param('id', ParseIntPipe) id: number) {
+    await this.staffEditingService.deleteAdmission(id);
+    return createApiResponse(null, HttpStatus.OK, 'Deleted');
+  }
+
+  @Post('students/:id/activities')
+  async upsertActivity(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return createApiResponse(await this.staffEditingService.upsertActivity(id, dto), HttpStatus.OK, 'Saved');
+  }
+
+  @Delete('activities/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteActivity(@Param('id', ParseIntPipe) id: number) {
+    await this.staffEditingService.deleteActivity(id);
+    return createApiResponse(null, HttpStatus.OK, 'Deleted');
+  }
+
+  @Post('students/:id/languages')
+  async upsertLanguage(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return createApiResponse(await this.staffEditingService.upsertLanguage(id, dto), HttpStatus.OK, 'Saved');
+  }
+
+  @Delete('languages/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteLanguage(@Param('id', ParseIntPipe) id: number) {
+    await this.staffEditingService.deleteLanguage(id);
+    return createApiResponse(null, HttpStatus.OK, 'Deleted');
+  }
+
+  @Post('students/:id/schools')
+  async upsertPreviousSchool(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return createApiResponse(await this.staffEditingService.upsertPreviousSchool(id, dto), HttpStatus.OK, 'Saved');
+  }
+
+  @Delete('schools/:id')
+  @HttpCode(HttpStatus.OK)
+  async deletePreviousSchool(@Param('id', ParseIntPipe) id: number) {
+    await this.staffEditingService.deletePreviousSchool(id);
+    return createApiResponse(null, HttpStatus.OK, 'Deleted');
+  }
 }
