@@ -548,7 +548,13 @@ export class VouchersService {
             });
 
             // One allocation per non-zero head distribution
-            const allocationData = parsedDistributions
+            const allocationData: {
+                deposit_id: number;
+                student_fee_id: number | null;
+                voucher_id: number;
+                amount: Prisma.Decimal;
+                type: string;
+            }[] = parsedDistributions
                 .filter(({ amount }) => amount.gt(0))
                 .map(({ headId, amount }) => {
                     const head = voucherHeadMap.get(headId)!;
