@@ -53,4 +53,8 @@ export class GetStudentsDto {
     return value;
   })
   fields?: ('core' | 'academic' | 'family' | 'contact' | 'demographic' | 'medical' | 'history')[];
+
+  @IsOptional()
+  @IsString()
+  is_abnormal?: string;
 }

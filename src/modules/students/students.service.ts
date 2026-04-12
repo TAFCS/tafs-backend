@@ -135,6 +135,23 @@ export class StudentsService {
     if (house_id)    where.house_id   = house_id;
     if (status)      where.status     = status;
 
+    // TEMP: Data Audit Filter (using raw SQL fallback for compatibility)
+    if (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true) {
+      const abnormalStudents: any[] = await this.prisma.$queryRaw`
+        SELECT cc FROM students s 
+        WHERE 
+          NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id = s.cc)
+          OR 
+          cc IN (
+            SELECT student_id FROM student_guardians 
+            GROUP BY student_id 
+            HAVING COUNT(*) > 2
+          )
+      `;
+      const abnormalCcs = abnormalStudents.map(s => s.cc);
+      where.cc = { in: abnormalCcs };
+    }
+
     // Determine what relations to include based on user's selected fields
     // If fields is undefined, we return ALL categories by default.
     const requestedFields = fields && fields.length > 0
@@ -290,10 +307,7 @@ export class StudentsService {
         where,
         skip: offset,
         take: limit,
-        orderBy: [
-          { student_guardians: { _count: 'desc' } },
-          { created_at: 'desc' }
-        ],
+        orderBy: { cc: 'desc' },
         select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true }, // Ensure at least cc is selected
       }),
     ]);
