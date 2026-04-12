@@ -493,7 +493,32 @@ export class StaffEditingService {
     }
 
     // Upsert by CNIC to prevent duplicates; create new if no CNIC provided.
-    // No `select` — get the full guardian row back to avoid an extra round-trip.
+    const isAddressEmpty = !guardianData.house_appt_name && !guardianData.city;
+    
+    if (isAddressEmpty) {
+        // Try to inherit from family
+        const student = await this.prisma.students.findUnique({
+            where: { cc: studentCc },
+            select: { family_id: true }
+        });
+        if (student?.family_id) {
+            const familyMember = await this.prisma.student_guardians.findFirst({
+                where: { students: { family_id: student.family_id } },
+                include: { guardians: true }
+            });
+            if (familyMember?.guardians) {
+                const g = familyMember.guardians;
+                guardianData.house_appt_name = g.house_appt_name;
+                guardianData.area_block = g.area_block;
+                guardianData.city = g.city;
+                guardianData.postal_code = g.postal_code;
+                guardianData.province = g.province;
+                guardianData.country = g.country;
+                guardianData.work_phone = g.work_phone;
+            }
+        }
+    }
+
     const guardian = guardianData.cnic
       ? await this.prisma.guardians.upsert({
         where: { cnic: guardianData.cnic as string },

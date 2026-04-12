@@ -169,6 +169,11 @@ export class CreateGuardianDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(255)
   photo_url?: string;
 }
