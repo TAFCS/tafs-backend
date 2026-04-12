@@ -218,12 +218,13 @@ export class IdentityService {
       }
 
       // ── 7. Admission record ──────────────────────────────────────────────
+      const resolvedGrade = await this.resolveGradeCode(tx, dto.admission.requested_grade);
       await tx.student_admissions.create({
         data: {
           student_id: student.cc,
           academic_system: dto.admission.academic_system,
-          requested_grade: dto.admission.requested_grade,
-          academic_year: dto.admission.academic_year,
+          requested_grade: resolvedGrade,
+          academic_year: new Date().getFullYear().toString(),
           discipline: dto.admission.discipline,
         },
       });
@@ -312,22 +313,24 @@ export class IdentityService {
             where: { student_id: student.cc },
           });
           if (existingAdm) {
+            const resolvedGrade = await this.resolveGradeCode(tx, dto.admission.requested_grade);
             await tx.student_admissions.update({
               where: { id: existingAdm.id },
               data: {
                 academic_system: dto.admission.academic_system,
-                requested_grade: dto.admission.requested_grade,
-                academic_year: dto.admission.academic_year,
+                requested_grade: resolvedGrade,
+                academic_year: new Date().getFullYear().toString(),
                 discipline: dto.admission.discipline,
               },
             });
           } else {
+            const resolvedGrade = await this.resolveGradeCode(tx, dto.admission.requested_grade);
             await tx.student_admissions.create({
               data: {
                 student_id: student.cc,
                 academic_system: dto.admission.academic_system,
-                requested_grade: dto.admission.requested_grade,
-                academic_year: dto.admission.academic_year,
+                requested_grade: resolvedGrade,
+                academic_year: new Date().getFullYear().toString(),
                 discipline: dto.admission.discipline,
               },
             });
@@ -547,6 +550,27 @@ export class IdentityService {
     }
 
     return tx.guardians.create({ data: payload as any });
+  }
+
+  /**
+   * Resolves a grade string (either a code or description) to a standard class_code.
+   * If no match is found, it returns the original string.
+   */
+  private async resolveGradeCode(tx: TxClient, grade: string): Promise<string> {
+    if (!grade) return 'N/A';
+    
+    // Try to find a class where the class_code or description matches
+    const matched = await tx.classes.findFirst({
+      where: {
+        OR: [
+          { class_code: { equals: grade, mode: 'insensitive' } },
+          { description: { equals: grade, mode: 'insensitive' } },
+        ],
+      },
+      select: { class_code: true },
+    });
+
+    return matched?.class_code || grade;
   }
 
   /**
