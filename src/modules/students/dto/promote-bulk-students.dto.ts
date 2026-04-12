@@ -41,6 +41,10 @@ export class PromoteBulkStudentsDto {
   reason?: string;
 
   @IsOptional()
+  @IsString()
+  academic_year?: string;
+
+  @IsOptional()
   @IsBoolean()
   dry_run?: boolean;
 }

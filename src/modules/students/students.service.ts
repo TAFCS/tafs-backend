@@ -625,6 +625,10 @@ export class StudentsService {
       where.section_id = dto.section_id;
     }
 
+    if (dto.academic_year !== undefined) {
+      where.academic_year = dto.academic_year;
+    }
+
     if (distinctStudentIds && distinctStudentIds.length > 0) {
       where.cc = { in: distinctStudentIds };
     } else {
