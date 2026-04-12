@@ -42,8 +42,9 @@ export class StorageService {
             const isBucketQualifiedEndpoint = rawHost.startsWith(bucketPrefix);
             this.uploadEndpoint = isBucketQualifiedEndpoint ? regionEndpoint : (normalizedEndpoint || regionEndpoint);
             this.cdnEndpoint =
-                this.config.get<string>('DO_SPACES_CDN_ENDPOINT') ??
-                `${this.uploadEndpoint}/${this.bucket}`;
+                (this.config.get<string>('DO_SPACES_CDN_ENDPOINT') || `${this.uploadEndpoint}/${this.bucket}`)
+                .trim()
+                .replace(/\/+$/, '');
 
             this.client = new S3Client({
                 region: region!,

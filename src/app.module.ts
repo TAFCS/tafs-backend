@@ -20,6 +20,7 @@ import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-jobs.module';
 import { EnrollmentModule } from './modules/enrollments/enrollment.module';
+import { MediaModule } from './modules/media/media.module';
 
 
 @Module({
@@ -43,6 +44,7 @@ import { EnrollmentModule } from './modules/enrollments/enrollment.module';
     VouchersModule,
     BulkVoucherJobsModule,
     EnrollmentModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [AppService],
