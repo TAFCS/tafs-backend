@@ -517,7 +517,12 @@ export class StudentsService {
       const requestedGrade = s.student_admissions?.[0]?.requested_grade;
       if (requestedGrade) {
         const matchedClass = await this.prisma.classes.findFirst({
-          where: { class_code: requestedGrade },
+          where: {
+            OR: [
+              { class_code: requestedGrade },
+              { description: requestedGrade },
+            ],
+          },
           select: { id: true }
         });
         resolvedClassId = matchedClass?.id ?? null;
