@@ -6,6 +6,7 @@ import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
+import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 
 @Injectable()
 export class StaffEditingService {
@@ -391,6 +392,48 @@ export class StaffEditingService {
 
   // ─── Guardians ────────────────────────────────────────────────────────────
 
+  async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: { family_id: true }
+    });
+ 
+    if (!student || !student.family_id) {
+      // Fallback: If no family_id, just update guardians directly linked to this student
+      const links = await this.prisma.student_guardians.findMany({
+        where: { student_id: studentCc },
+        select: { guardian_id: true }
+      });
+      const ids = links.map(l => l.guardian_id);
+      if (ids.length > 0) {
+        await this.prisma.guardians.updateMany({
+          where: { id: { in: ids } },
+          data: dto as any
+        });
+      }
+      return { success: true, count: ids.length };
+    }
+ 
+    // Find all guardians linked to ANY student in this family
+    const familyLinks = await this.prisma.student_guardians.findMany({
+      where: {
+        students: { family_id: student.family_id }
+      },
+      select: { guardian_id: true }
+    });
+ 
+    const uniqueGuardianIds = [...new Set(familyLinks.map(l => l.guardian_id))];
+ 
+    if (uniqueGuardianIds.length > 0) {
+      await this.prisma.guardians.updateMany({
+        where: { id: { in: uniqueGuardianIds } },
+        data: dto as any
+      });
+    }
+ 
+    return { success: true, count: uniqueGuardianIds.length };
+  }
+ 
   async getStudentGuardians(studentCc: number) {
     await this.assertStudentExists(studentCc);
 

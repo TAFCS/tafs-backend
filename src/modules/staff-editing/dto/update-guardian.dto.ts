@@ -137,6 +137,11 @@ export class UpdateGuardianDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @IsOptional()
+  @IsString()
   cnic_pic_url?: string;
 
   @IsOptional()

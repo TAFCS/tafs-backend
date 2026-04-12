@@ -58,6 +58,19 @@ export class StaffEditingController {
       STAFF_EDITING_MESSAGES.STUDENT_UPDATE_SUCCESS,
     );
   }
+ 
+  @Patch('students/:id/family-address')
+  async updateFamilyAddress(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any, // Using any temporarily or import DTO
+  ) {
+    const result = await this.staffEditingService.updateFamilyAddress(id, dto);
+    return createApiResponse(
+      result,
+      HttpStatus.OK,
+      'Family mailing address updated successfully',
+    );
+  }
 
   // ─── Student → Guardians ────────────────────────────────────────────────
 
