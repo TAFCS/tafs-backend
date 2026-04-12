@@ -57,4 +57,16 @@ export class IdentityController {
       data: student,
     };
   }
+
+  @Get('guardians/by-cnic/:cnic')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async getGuardianByCnic(@Param('cnic') cnic: string) {
+    const guardian = await this.identityService.getGuardianByCnic(cnic);
+    return {
+      success: true,
+      message: 'Guardian fetched successfully',
+      data: guardian,
+    };
+  }
 }

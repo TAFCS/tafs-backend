@@ -139,6 +139,7 @@ export class StaffEditingService {
         house_id: true,
         admission_age_years: true,
         academic_year: true,
+        place_of_birth: true,
         country: true,
         province: true,
         city: true,
@@ -173,22 +174,49 @@ export class StaffEditingService {
   }
 
   async getStudent(cc: number) {
-    const s = await this.prisma.students.findUnique({
+    const s: any = await this.prisma.students.findUnique({
       where: { cc },
       include: {
-        campuses: { select: { campus_name: true, campus_code: true } },
-        classes: { select: { description: true, class_code: true } },
-        sections: { select: { description: true } },
-        houses: { select: { house_name: true, house_color: true } },
-        student_admissions: { orderBy: { application_date: 'desc' } },
+        campuses: true,
+        classes: true,
+        sections: true,
+        houses: true,
+        student_admissions: { orderBy: { application_date: 'desc' }, take: 5 },
         student_guardians: { include: { guardians: true }, orderBy: { guardian_id: 'asc' } },
         student_activities: true,
         student_languages: true,
         student_previous_schools: { orderBy: { id: 'desc' } },
+        families: {
+          include: {
+            students: {
+              where: { deleted_at: null },
+              include: {
+                student_guardians: { include: { guardians: true }, take: 1 }
+              }
+            }
+          }
+        }
       },
     });
 
     if (!s || s.deleted_at) throw new NotFoundException(`Student #${cc} not found`);
+
+    // Add inherited guardians if direct ones are missing
+    if (s.student_guardians.length === 0 && s.family_id) {
+       const inherited = await this.prisma.student_guardians.findMany({
+         where: { students: { family_id: s.family_id } },
+         include: { guardians: true },
+         orderBy: { guardian_id: 'asc' }
+       });
+       // Deduplicate inherited guardians by CNIC or Name
+       const seen = new Set();
+       s.student_guardians = inherited.filter(link => {
+         const key = link.guardians?.cnic || `${link.relationship}:${link.guardians?.full_name}`;
+         if (seen.has(key)) return false;
+         seen.add(key);
+         return true;
+       });
+    }
 
     return this.flattenStudentFull(s);
   }
@@ -332,6 +360,7 @@ export class StaffEditingService {
         house_id: true,
         admission_age_years: true,
         academic_year: true,
+        place_of_birth: true,
         country: true,
         province: true,
         city: true,
@@ -365,19 +394,43 @@ export class StaffEditingService {
   async getStudentGuardians(studentCc: number) {
     await this.assertStudentExists(studentCc);
 
-    const links = await this.prisma.student_guardians.findMany({
+    let links = await this.prisma.student_guardians.findMany({
       where: { student_id: studentCc },
       include: { guardians: true },
       orderBy: { guardian_id: 'asc' },
     });
+
+    // Inheritance fallback: if no direct links, check family siblings
+    if (links.length === 0) {
+      const student = await this.prisma.students.findUnique({
+        where: { cc: studentCc },
+        select: { family_id: true },
+      });
+
+      if (student?.family_id) {
+        links = await this.prisma.student_guardians.findMany({
+          where: { students: { family_id: student.family_id } },
+          include: { guardians: true },
+          orderBy: { guardian_id: 'asc' },
+        });
+        // Deduplicate guardians by CNIC or Name to avoid repeats from duplicates in DB
+        const seen = new Set();
+        links = links.filter(link => {
+          const key = link.guardians?.cnic || `${link.relationship}:${link.guardians?.full_name}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+    }
 
     return links.map((link) => ({
       guardian_id: link.guardian_id,
       relationship: link.relationship,
       is_primary_contact: link.is_primary_contact,
       is_emergency_contact: link.is_emergency_contact,
-      ...link.guardians,
-      dob: this.formatDateToFrontend(link.guardians.dob),
+      ...(link.guardians || {}),
+      dob: link.guardians ? this.formatDateToFrontend(link.guardians.dob) : null,
     }));
   }
 
@@ -610,6 +663,7 @@ export class StaffEditingService {
       primary_phone: s.primary_phone,
       primary_phone_country_code: s.primary_phone_country_code,
       email: s.email,
+      place_of_birth: s.place_of_birth,
       campus_id: s.campus_id,
       campus_name: s.campuses?.campus_name ?? null,
       campus_code: s.campuses?.campus_code ?? null,
@@ -650,7 +704,7 @@ export class StaffEditingService {
       gender: s.gender,
       nationality: s.nationality,
       religion: s.religion,
-      place_of_birth: (s as any).place_of_birth,
+      place_of_birth: s.place_of_birth ?? null,
       status: s.status,
       whatsapp_number: s.whatsapp_number,
       whatsapp_country_code: s.whatsapp_country_code,
@@ -692,8 +746,8 @@ export class StaffEditingService {
         relationship: link.relationship,
         is_primary_contact: link.is_primary_contact,
         is_emergency_contact: link.is_emergency_contact,
-        ...link.guardians,
-        dob: this.formatDateToFrontend(link.guardians.dob),
+        ...(link.guardians || {}),
+        dob: link.guardians ? this.formatDateToFrontend(link.guardians.dob) : null,
       })) ?? [],
     };
   }

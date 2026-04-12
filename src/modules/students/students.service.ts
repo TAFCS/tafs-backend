@@ -159,6 +159,15 @@ export class StudentsService {
       selectArgs.classes   = { select: { description: true, class_code: true } };
       selectArgs.sections  = { select: { description: true } };
       selectArgs.houses    = { select: { house_name: true, house_color: true } };
+      selectArgs.family_id = true;
+      selectArgs.families  = {
+        include: {
+          students: {
+            where: { deleted_at: null },
+            include: { student_guardians: { include: { guardians: true }, take: 1 } }
+          }
+        }
+      };
     }
 
     if (requestedFields.has('academic')) {
@@ -205,7 +214,6 @@ export class StudentsService {
       selectArgs.primary_phone = true;
       selectArgs.whatsapp_number = true;
       selectArgs.student_guardians = {
-        where: { is_primary_contact: true },
         take: 1,
         select: {
           relationship: true,
@@ -282,7 +290,10 @@ export class StudentsService {
         where,
         skip: offset,
         take: limit,
-        orderBy: { created_at: 'desc' },
+        orderBy: [
+          { student_guardians: { _count: 'desc' } },
+          { created_at: 'desc' }
+        ],
         select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true }, // Ensure at least cc is selected
       }),
     ]);
@@ -297,6 +308,14 @@ export class StudentsService {
         emergencyGuardianNode = s.student_guardians.find((g: any) => g.is_emergency_contact === true);
         // fallback for when only one record exists but explicit booleans aren't returned safely
         if (!primaryGuardianNode && s.student_guardians.length > 0) primaryGuardianNode = s.student_guardians[0];
+      }
+
+      // Inheritance fallback for list view if core guardian is missing
+      if (!primaryGuardianNode && s.family_id && s.families?.students) {
+        const siblingWithGuardian = s.families.students.find((sib: any) => sib.cc !== s.cc && sib.student_guardians?.length > 0);
+        if (siblingWithGuardian) {
+          primaryGuardianNode = siblingWithGuardian.student_guardians[0];
+        }
       }
 
       const primaryGuardian = primaryGuardianNode?.guardians;
@@ -321,6 +340,8 @@ export class StudentsService {
           house_color: s.houses?.house_color,
           enrollment_status: s.status,
           photograph_url: s.photograph_url,
+          primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
+          guardian_relationship: primaryGuardianNode?.relationship,
         };
       }
 
@@ -455,6 +476,21 @@ export class StudentsService {
     });
 
     if (!s) throw new NotFoundException(`Student #${id} not found`);
+
+    // Inheritance fallback for guardians
+    if (s.student_guardians.length === 0 && s.family_id) {
+       const inherited = await this.prisma.student_guardians.findMany({
+         where: { students: { family_id: s.family_id } },
+         include: { guardians: true },
+         orderBy: { guardian_id: 'asc' }
+       });
+       const seen = new Set();
+       s.student_guardians = inherited.filter(link => {
+         if (seen.has(link.guardian_id)) return false;
+         seen.add(link.guardian_id);
+         return true;
+       });
+    }
 
     const primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact === true) || s.student_guardians[0];
     const primaryGuardian = primaryGuardianNode?.guardians;

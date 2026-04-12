@@ -461,6 +461,22 @@ export class IdentityService {
     return student;
   }
 
+  async getGuardianByCnic(cnic: string) {
+    if (!cnic) {
+      throw new NotFoundException('CNIC is required');
+    }
+
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { cnic: cnic.trim() },
+    });
+
+    if (!guardian) {
+      throw new NotFoundException(`Guardian with CNIC ${cnic} not found`);
+    }
+
+    return guardian;
+  }
+
   // ─── Private helpers ───────────────────────────────────────────────────────
 
   private defaultStudentInclude(): Prisma.studentsInclude {
