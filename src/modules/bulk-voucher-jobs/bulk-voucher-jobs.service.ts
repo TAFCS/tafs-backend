@@ -9,7 +9,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
-import { VoucherPdfService } from './voucher-pdf.service';
+import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { StorageService } from '../../common/storage/storage.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -470,7 +470,19 @@ export class BulkVoucherJobsService {
     ): Promise<Buffer> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
-        const feeLines = feesForThisVoucher.map((f: any) => {
+        // ── Fetch arrears (unpaid fees whose fee_date < this voucher's fee_date) ──
+        const arrearsResult = await this.vouchersService.computeArrears(cc, new Date(dateStr));
+        const arrearFeeIds = arrearsResult.arrear_fee_ids ?? [];
+        const arrearRows = arrearsResult.rows ?? [];
+
+        // Arrear lines use outstanding balance as net (no discount)
+        const arrearFeeLines = arrearRows.map((r) => ({
+            student_fee_id: r.student_fee_id,
+            discount_amount: 0,
+            discount_label: '',
+        }));
+
+        const currentFeeLines = feesForThisVoucher.map((f: any) => {
             const gross = Number(f.amount_before_discount || f.amount || 0);
             const net = Number(f.amount || 0);
             return {
@@ -479,6 +491,10 @@ export class BulkVoucherJobsService {
                 discount_label: gross > net ? 'Discount' : '',
             };
         });
+
+        // Arrear IDs go first (same order as single-voucher flow)
+        const allOrderedFeeIds = [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)];
+        const allFeeLines = [...arrearFeeLines, ...currentFeeLines];
 
         const voucher = await this.vouchersService.create({
             student_id: cc,
@@ -494,8 +510,8 @@ export class BulkVoucherJobsService {
             academic_year: dto.academic_year,
             fee_date: dateStr,
             precedence: 1,
-            orderedFeeIds: feesForThisVoucher.map((f: any) => f.id),
-            fee_lines: feeLines,
+            orderedFeeIds: allOrderedFeeIds,
+            fee_lines: allFeeLines,
         });
 
         const fatherG =
@@ -587,6 +603,21 @@ export class BulkVoucherJobsService {
 
         const feeHeadsForPdf = [...otherHeads, ...mergedTuitionHeads];
 
+        // ── Prepend arrear heads to PDF (same style as single-voucher flow) ──
+        const arrearHeadsForPdf = arrearRows.map((r) => ({
+            description: `${r.fee_type} (ARREAR – ${r.fee_date})`,
+            amount: Number(r.outstanding),
+            discount: 0,
+            netAmount: Number(r.outstanding),
+            discountLabel: '',
+            isArrear: true,
+        }));
+
+        const allPdfHeads = [...arrearHeadsForPdf, ...feeHeadsForPdf];
+        const currentFeesTotal = feesForThisVoucher.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0);
+        const arrearsTotal = arrearRows.reduce((sum, r) => sum + Number(r.outstanding), 0);
+        const grandTotal = currentFeesTotal + arrearsTotal;
+
         const monthNums = [...new Set(
             feesForThisVoucher.map((f: any) => f.target_month || f.month).filter(Boolean) as number[]
         )].sort((a, b) => a - b);
@@ -628,16 +659,84 @@ export class BulkVoucherJobsService {
                 iban: bankAccount?.iban || 'N/A',
                 address: bankAccount?.bank_address || 'N/A',
             },
-            feeHeads: feeHeadsForPdf,
-            totalAmount: feesForThisVoucher.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0),
+            feeHeads: allPdfHeads,
+            totalAmount: grandTotal,
             lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
-            qrUrl: this.storage.getPublicUrl(`vouchers/${student.cc}/voucher-${voucher.id}-${Date.now()}.pdf`),
+            qrUrl: undefined, // will be set after upload
+            arrearsHistory: arrearRows.map((r, idx) => {
+                const runningTotal = arrearRows
+                    .slice(0, idx + 1)
+                    .reduce((sum, row) => sum + Number(row.outstanding), 0);
+                return {
+                    date: r.fee_date,
+                    head: r.fee_type,
+                    amount: Number(r.outstanding).toLocaleString(),
+                    totalAmount: runningTotal.toLocaleString(),
+                    target_month: r.target_month,
+                    academic_year: r.academic_year,
+                };
+            }),
         });
 
+        // Upload PDF without QR to get the real DO URL
         const key = `vouchers/${student.cc}/voucher-${voucher.id}-${Date.now()}.pdf`;
         const pdfUrl = await this.storage.upload(key, pdfBuffer);
         await this.prisma.vouchers.update({ where: { id: voucher.id }, data: { pdf_url: pdfUrl } });
 
-        return pdfBuffer;
+        // Regenerate PDF with the real QR URL (same pattern as single-voucher flow)
+        const pdfBufferWithQr = await this.voucherPdfService.generateVoucherPdf({
+            voucherNumber: voucher.id.toString(),
+            student: {
+                cc: student.cc,
+                classId: student.class_id,
+                fullName: student.full_name,
+                fatherName,
+                gender: student.gender || 'N/A',
+                grNumber: student.gr_number || 'N/A',
+                className: student.classes?.description || 'N/A',
+                sectionName: student.sections?.description || 'N/A',
+            },
+            siblings: (siblingsMap.get(student.family_id) || [])
+                .filter((s: any) => s.cc !== student.cc)
+                .map((s: any) => ({
+                    cc: s.cc,
+                    fullName: s.full_name,
+                    grNumber: s.gr_number || 'N/A',
+                    className: s.classes?.description || 'N/A',
+                    sectionName: s.sections?.description || 'N/A',
+                })),
+            campusName: student.campuses?.campus_name || 'Main Campus',
+            academicYear: dto.academic_year,
+            month: monthLabel,
+            issueDate: dto.issue_date,
+            dueDate: dto.due_date,
+            validityDate: dto.validity_date || 'N/A',
+            bank: {
+                name: bankAccount?.bank_name || 'N/A',
+                title: bankAccount?.account_title || 'N/A',
+                account: bankAccount?.account_number || 'N/A',
+                iban: bankAccount?.iban || 'N/A',
+                address: bankAccount?.bank_address || 'N/A',
+            },
+            feeHeads: allPdfHeads,
+            totalAmount: grandTotal,
+            lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
+            qrUrl: pdfUrl,
+            arrearsHistory: arrearRows.map((r, idx) => {
+                const runningTotal = arrearRows
+                    .slice(0, idx + 1)
+                    .reduce((sum, row) => sum + Number(row.outstanding), 0);
+                return {
+                    date: r.fee_date,
+                    head: r.fee_type,
+                    amount: Number(r.outstanding).toLocaleString(),
+                    totalAmount: runningTotal.toLocaleString(),
+                    target_month: r.target_month,
+                    academic_year: r.academic_year,
+                };
+            }),
+        });
+
+        return pdfBufferWithQr;
     }
 }
