@@ -817,6 +817,7 @@ export class StaffEditingService {
         ...(link.guardians || {}),
         dob: link.guardians ? this.formatDateToFrontend(link.guardians.dob) : null,
       })) ?? [],
+      date_of_admission: s.doa,
     };
   }
 

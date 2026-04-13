@@ -559,6 +559,7 @@ export class StudentsService {
       residential_address: s.families?.primary_address,
       photograph_url: s.photograph_url,
       photo_blue_bg_url: s.photo_blue_bg_url,
+      date_of_admission: s.doa,
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)
         ?.map((sib: any) => ({
