@@ -8,14 +8,17 @@ import { ClassSelectorDto } from './dto/class-selector.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 
-type PromotionStatus = 'promoted' | 'skipped' | 'failed';
+type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'skipped' | 'failed';
 
 type PromotionReasonCode =
   | 'STUDENT_NOT_FOUND'
   | 'FROM_CLASS_MISMATCH'
   | 'ALREADY_AT_TARGET'
+  | 'ALREADY_GRADUATED'
+  | 'ALREADY_EXPELLED'
   | 'TARGET_CLASS_INACTIVE_FOR_CAMPUS'
   | 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS'
+  | 'MISSING_TARGET'
   | 'INTERNAL_ERROR';
 
 type PromotionOutcome = {
@@ -24,9 +27,21 @@ type PromotionOutcome = {
   reason_code?: PromotionReasonCode;
   message: string;
   from_class_id?: number | null;
-  to_class_id?: number;
+  to_class_id?: number | null;
   from_academic_year?: string | null;
   to_academic_year?: string;
+  /**
+   * Filter candidates by their CURRENT academic year.
+   * Useful when a class contains students from multiple years (e.g. held-back students
+   * from 2023-2024 mixed with current 2024-2025 students) and you only want to
+   * promote those in a specific year.
+   *
+   * This is a SOURCE filter on `students.academic_year`.
+   * To override the DESTINATION year, use `target_academic_year` instead.
+   */
+  academic_year?: string;
+  graduated?: boolean;
+  expelled?: boolean;
   dry_run: boolean;
 };
 
@@ -596,6 +611,9 @@ export class StudentsService {
     const result = await this.promoteBulk({
       from: dto.from,
       to: dto.to,
+      graduate: dto.graduate,
+      expel: dto.expel,
+      target_academic_year: dto.target_academic_year,
       to_section_id: dto.to_section_id,
       student_ids: [dto.student_id],
       reason: dto.reason,
@@ -609,10 +627,22 @@ export class StudentsService {
   }
 
   async promoteBulk(dto: PromoteBulkStudentsDto) {
-    const fromClass = await this.resolveClassSelector(dto.from, 'from');
-    const toClass = await this.resolveClassSelector(dto.to, 'to');
+    // Validate: exactly one of `to`, `graduate`, or `expel` must be set
+    const isGraduating = !!dto.graduate;
+    const isExpelling = !!dto.expel;
 
-    if (fromClass.id === toClass.id) {
+    if (!isGraduating && !isExpelling && !dto.to) {
+      throw new BadRequestException('Either `to` (target class), `graduate: true`, or `expel: true` must be provided');
+    }
+    const actionCount = [!!dto.to, isGraduating, isExpelling].filter(Boolean).length;
+    if (actionCount > 1) {
+      throw new BadRequestException('Only one of `to`, `graduate`, or `expel` may be specified at a time');
+    }
+
+    const fromClass = await this.resolveClassSelector(dto.from, 'from');
+    const toClass = isGraduating || isExpelling ? null : await this.resolveClassSelector(dto.to!, 'to');
+
+    if (!isGraduating && !isExpelling && toClass && fromClass.id === toClass.id) {
       throw new BadRequestException('From and to class must be different for promotion');
     }
 
@@ -620,24 +650,33 @@ export class StudentsService {
     const distinctStudentIds = dto.student_ids?.length
       ? Array.from(new Set(dto.student_ids))
       : undefined;
+    const isExplicitIds = !!(distinctStudentIds && distinctStudentIds.length > 0);
 
-    const where: Prisma.studentsWhereInput = {
-      deleted_at: null,
-    };
+    // Campus, section and source academic_year filters only apply in batch (class-wide) mode.
+    // When explicit student_ids are provided, we look up exactly those students by cc —
+    // no extra filters, because the user explicitly asked for those IDs. Mismatches
+    // (wrong class, wrong campus) are handled gracefully in processPromotionForStudent.
+    const where: Prisma.studentsWhereInput = { deleted_at: null };
 
-    if (dto.campus_id !== undefined) {
-      where.campus_id = dto.campus_id;
+    if (!isExplicitIds) {
+      if (dto.campus_id !== undefined) {
+        where.campus_id = dto.campus_id;
+      }
+
+      if (dto.section_id !== undefined) {
+        where.section_id = dto.section_id;
+      }
+
+      // Filter candidates by their current academic year.
+      // This is a SOURCE filter — it narrows which students are picked up for promotion.
+      // A class can have students from different years (e.g. held-back students from a
+      // prior year). Use this to target only those currently in a specific year.
+      if (dto.academic_year !== undefined) {
+        where.academic_year = dto.academic_year;
+      }
     }
 
-    if (dto.section_id !== undefined) {
-      where.section_id = dto.section_id;
-    }
-
-    if (dto.academic_year !== undefined) {
-      where.academic_year = dto.academic_year;
-    }
-
-    if (distinctStudentIds && distinctStudentIds.length > 0) {
+    if (isExplicitIds) {
       where.cc = { in: distinctStudentIds };
     } else {
       where.class_id = fromClass.id;
@@ -651,6 +690,7 @@ export class StudentsService {
         section_id: true,
         campus_id: true,
         academic_year: true,
+        status: true,
       },
       orderBy: { cc: 'asc' },
     });
@@ -659,9 +699,9 @@ export class StudentsService {
     const sectionActiveCache = new Map<string, boolean>();
     const results: PromotionOutcome[] = [];
 
-    if (distinctStudentIds && distinctStudentIds.length > 0) {
+    if (isExplicitIds) {
       const byId = new Map(candidates.map((s) => [s.cc, s]));
-      for (const studentId of distinctStudentIds) {
+      for (const studentId of distinctStudentIds!) {
         const student = byId.get(studentId);
         if (!student) {
           results.push({
@@ -678,8 +718,12 @@ export class StudentsService {
           student,
           fromClass,
           toClass,
+          isGraduating,
+          isExpelling,
+          isExplicitIds,
           dto.to_section_id,
           dto.reason,
+          dto.target_academic_year,
           dryRun,
           classActiveCache,
           sectionActiveCache,
@@ -692,8 +736,12 @@ export class StudentsService {
           student,
           fromClass,
           toClass,
+          isGraduating,
+          isExpelling,
+          isExplicitIds,
           dto.to_section_id,
           dto.reason,
+          dto.target_academic_year,
           dryRun,
           classActiveCache,
           sectionActiveCache,
@@ -703,16 +751,22 @@ export class StudentsService {
     }
 
     const total_promoted = results.filter((r) => r.status === 'promoted').length;
+    const total_graduated = results.filter((r) => r.status === 'graduated').length;
+    const total_expelled = results.filter((r) => r.status === 'expelled').length;
     const total_skipped = results.filter((r) => r.status === 'skipped').length;
     const total_failed = results.filter((r) => r.status === 'failed').length;
 
     return {
       summary: {
         total_requested: results.length,
-        total_promoted,
+        total_promoted: total_promoted + total_graduated + total_expelled,
+        total_promoted_only: total_promoted,
+        total_graduated,
+        total_expelled,
         total_skipped,
         total_failed,
         dry_run: dryRun,
+        mode: isGraduating ? 'graduation' : isExpelling ? 'expulsion' : 'promotion',
       },
       from_class: fromClass,
       to_class: toClass,
@@ -727,124 +781,221 @@ export class StudentsService {
       section_id: number | null;
       campus_id: number | null;
       academic_year: string | null;
+      status: string;
     },
     fromClass: ResolvedClass,
-    toClass: ResolvedClass,
+    toClass: ResolvedClass | null,
+    isGraduating: boolean,
+    isExpelling: boolean,
+    isExplicitIds: boolean,
     toSectionId: number | undefined,
     _reason: string | undefined,
+    targetAcademicYear: string | undefined,
     dryRun: boolean,
     classActiveCache: Map<string, boolean>,
     sectionActiveCache: Map<string, boolean>,
   ): Promise<PromotionOutcome> {
-    if (student.class_id !== fromClass.id) {
-      return {
-        student_id: student.cc,
-        status: 'failed',
-        reason_code: 'FROM_CLASS_MISMATCH',
-        message: 'Student is not currently assigned to the selected from class',
-        from_class_id: student.class_id,
-        to_class_id: toClass.id,
-        from_academic_year: student.academic_year,
-        dry_run: dryRun,
-      };
-    }
-
-    const nextAcademicYear = this.incrementAcademicYear(student.academic_year);
-
-    if (student.class_id === toClass.id && student.academic_year === nextAcademicYear) {
+    // ── Already expelled guard ───────────────────────────────────────────────
+    if (student.status === 'EXPELLED') {
       return {
         student_id: student.cc,
         status: 'skipped',
-        reason_code: 'ALREADY_AT_TARGET',
-        message: 'Student already exists at the target class and academic year',
+        reason_code: 'ALREADY_EXPELLED',
+        message: 'Student is already expelled',
         from_class_id: student.class_id,
-        to_class_id: toClass.id,
+        to_class_id: student.class_id,
         from_academic_year: student.academic_year,
-        to_academic_year: nextAcademicYear,
+        expelled: true,
         dry_run: dryRun,
       };
     }
 
-    const mappingValidation = await this.validateTargetMapping(
-      student.campus_id,
-      toClass.id,
-      toSectionId,
-      classActiveCache,
-      sectionActiveCache,
-    );
-
-    if (!mappingValidation.valid) {
+    // ── Already graduated guard ──────────────────────────────────────────────
+    if (student.status === 'GRADUATED') {
       return {
         student_id: student.cc,
-        status: 'failed',
-        reason_code: mappingValidation.reason_code,
-        message: mappingValidation.message,
+        status: 'skipped',
+        reason_code: 'ALREADY_GRADUATED',
+        message: 'Student is already graduated',
         from_class_id: student.class_id,
-        to_class_id: toClass.id,
+        to_class_id: toClass?.id ?? null,
         from_academic_year: student.academic_year,
-        to_academic_year: nextAcademicYear,
+        graduated: true,
         dry_run: dryRun,
       };
     }
 
+    // ── From-class mismatch ──────────────────────────────────────────────────
+    // For bulk (no explicit IDs): strict failure — the student shouldn't be in this batch.
+    // For explicit IDs: softer skip — the caller asked for this specific student
+    // but they're not in the expected class. Log it but don't inflate failure count.
+    if (student.class_id !== fromClass.id) {
+      return {
+        student_id: student.cc,
+        status: isExplicitIds ? 'skipped' : 'failed',
+        reason_code: 'FROM_CLASS_MISMATCH',
+        message: isExplicitIds
+          ? `Student is in a different class (id=${student.class_id}) — skipped`
+          : 'Student is not currently assigned to the selected from class',
+        from_class_id: student.class_id,
+        to_class_id: toClass?.id ?? null,
+        from_academic_year: student.academic_year,
+        dry_run: dryRun,
+      };
+    }
+
+    // ── Compute target academic year ─────────────────────────────────────────
+    // Priority: explicit request override > auto-increment from student's year
+    const nextAcademicYear = targetAcademicYear?.trim()
+      ? targetAcademicYear.trim()
+      : this.incrementAcademicYear(student.academic_year);
+
+    // ── Already at target guard ──────────────────────────────────────────────
+    if (!isGraduating && toClass) {
+      // Student is already in target class AND already has the target academic year
+      if (student.class_id === toClass.id && student.academic_year === nextAcademicYear) {
+        return {
+          student_id: student.cc,
+          status: 'skipped',
+          reason_code: 'ALREADY_AT_TARGET',
+          message: 'Student is already in the target class and academic year',
+          from_class_id: student.class_id,
+          to_class_id: toClass.id,
+          from_academic_year: student.academic_year,
+          to_academic_year: nextAcademicYear,
+          dry_run: dryRun,
+        };
+      }
+    }
+
+    // ── Campus/class mapping validation (promotion only) ─────────────────────
+    if (!isGraduating && toClass) {
+      const mappingValidation = await this.validateTargetMapping(
+        student.campus_id,
+        toClass.id,
+        toSectionId,
+        classActiveCache,
+        sectionActiveCache,
+      );
+
+      if (!mappingValidation.valid) {
+        return {
+          student_id: student.cc,
+          status: 'failed',
+          reason_code: mappingValidation.reason_code,
+          message: mappingValidation.message,
+          from_class_id: student.class_id,
+          to_class_id: toClass.id,
+          from_academic_year: student.academic_year,
+          to_academic_year: nextAcademicYear,
+          dry_run: dryRun,
+        };
+      }
+    }
+
+    // ── Dry-run early return ─────────────────────────────────────────────────
     if (dryRun) {
       return {
         student_id: student.cc,
-        status: 'promoted',
-        message: 'Student validated successfully for promotion (dry-run)',
+        status: isGraduating ? 'graduated' : isExpelling ? 'expelled' : 'promoted',
+        message: isGraduating
+          ? 'Student validated for graduation (dry-run)'
+          : isExpelling
+          ? 'Student validated for expulsion (dry-run)'
+          : 'Student validated successfully for promotion (dry-run)',
         from_class_id: student.class_id,
-        to_class_id: toClass.id,
+        to_class_id: isGraduating ? null : toClass?.id ?? student.class_id,
         from_academic_year: student.academic_year,
-        to_academic_year: nextAcademicYear,
+        to_academic_year: isExpelling ? undefined : nextAcademicYear,
+        graduated: isGraduating,
+        expelled: isExpelling,
         dry_run: true,
       };
     }
 
+    // ── Commit to DB ─────────────────────────────────────────────────────────
     try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          await tx.students.update({
-            where: { cc: student.cc },
-            data: {
-              class_id: toClass.id,
-              section_id: toSectionId !== undefined ? toSectionId : student.section_id,
-              academic_year: nextAcademicYear,
-            },
-          });
+      if (isGraduating) {
+        // Graduation: set status to GRADUATED, null out class_id, all other data preserved
+        await this.prisma.students.update({
+          where: { cc: student.cc },
+          data: {
+            status: 'GRADUATED',
+            class_id: null,
+            academic_year: nextAcademicYear,
+          },
+        });
+        return {
+          student_id: student.cc,
+          status: 'graduated',
+          message: 'Student graduated successfully',
+          from_class_id: student.class_id,
+          to_class_id: null,
+          from_academic_year: student.academic_year,
+          to_academic_year: nextAcademicYear,
+          graduated: true,
+          dry_run: false,
+        };
+      } else if (isExpelling) {
+        // Expulsion: set status to EXPELLED, ALL data preserved (class_id stays)
+        await this.prisma.students.update({
+          where: { cc: student.cc },
+          data: { status: 'EXPELLED' },
+        });
+        return {
+          student_id: student.cc,
+          status: 'expelled',
+          message: 'Student expelled successfully',
+          from_class_id: student.class_id,
+          to_class_id: student.class_id, // unchanged
+          from_academic_year: student.academic_year,
+          expelled: true,
+          dry_run: false,
+        };
+      } else {
+        // Normal promotion
+        await this.prisma.$transaction(
+          async (tx) => {
+            await tx.students.update({
+              where: { cc: student.cc },
+              data: {
+                class_id: toClass!.id,
+                section_id: toSectionId !== undefined ? toSectionId : student.section_id,
+                academic_year: nextAcademicYear,
+              },
+            });
 
-          await tx.student_admissions.create({
-            data: {
-              student_id: student.cc,
-              academic_system: toClass.academic_system,
-              requested_grade: toClass.description,
-              academic_year: nextAcademicYear,
-            },
-          });
-        },
-        {
-          maxWait: 5000,
-          timeout: 15000,
-        },
-      );
+            await tx.student_admissions.create({
+              data: {
+                student_id: student.cc,
+                academic_system: toClass!.academic_system,
+                requested_grade: toClass!.description,
+                academic_year: nextAcademicYear,
+              },
+            });
+          },
+          { maxWait: 5000, timeout: 15000 },
+        );
 
-      return {
-        student_id: student.cc,
-        status: 'promoted',
-        message: 'Student promoted successfully',
-        from_class_id: student.class_id,
-        to_class_id: toClass.id,
-        from_academic_year: student.academic_year,
-        to_academic_year: nextAcademicYear,
-        dry_run: false,
-      };
+        return {
+          student_id: student.cc,
+          status: 'promoted',
+          message: 'Student promoted successfully',
+          from_class_id: student.class_id,
+          to_class_id: toClass!.id,
+          from_academic_year: student.academic_year,
+          to_academic_year: nextAcademicYear,
+          dry_run: false,
+        };
+      }
     } catch {
       return {
         student_id: student.cc,
         status: 'failed',
         reason_code: 'INTERNAL_ERROR',
-        message: 'Unexpected error occurred while promoting student',
+        message: 'Unexpected error occurred during promotion/graduation/expulsion',
         from_class_id: student.class_id,
-        to_class_id: toClass.id,
+        to_class_id: toClass?.id ?? null,
         from_academic_year: student.academic_year,
         to_academic_year: nextAcademicYear,
         dry_run: false,
@@ -967,6 +1118,7 @@ export class StudentsService {
   }
 
   private incrementAcademicYear(currentAcademicYear: string | null): string {
+    // YYYY-YYYY range format (e.g. "2024-2025" → "2025-2026")
     const yearRangeMatch = currentAcademicYear?.match(/^(\d{4})-(\d{4})$/);
     if (yearRangeMatch) {
       const start = Number(yearRangeMatch[1]);
@@ -974,12 +1126,14 @@ export class StudentsService {
       return `${start + 1}-${end + 1}`;
     }
 
+    // Single YYYY format (e.g. "2024" → "2025-2026")
     const yearOnlyMatch = currentAcademicYear?.match(/^(\d{4})$/);
     if (yearOnlyMatch) {
       const year = Number(yearOnlyMatch[1]);
       return `${year + 1}-${year + 2}`;
     }
 
+    // Fallback: use next calendar year as start
     const fallbackStartYear = new Date().getFullYear() + 1;
     return `${fallbackStartYear}-${fallbackStartYear + 1}`;
   }

@@ -7,10 +7,39 @@ import { CreateClassDto } from './dto/create-class.dto';
 export class ClassesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Extract a numeric ordering rank from a class code or description.
+   * Examples: "G1", "Grade 1", "1", "Class-10", "PlayGroup" → 1, 1, 1, 10, 0
+   * PlayGroup / Nursery / KG are ranked as 0, -1, -2 for meaningful sort.
+   */
+  private classOrder(code: string, description: string): number {
+    // Concatenate both code AND description so patterns are matched against the full label.
+    // e.g. code="PN", description="Pre Nursery" → checks "pn pre nursery", hits 'nursery' → -2
+    const label = (code + ' ' + description).toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    if (label.includes('playgroup')) return -3;
+    if (label.includes('nursery') || label.includes('nur ')) return -2;
+    if (label.includes('prep') || label.includes('kindergarten')) return -1;
+    // Standalone "kg" — only match if it's a standalone token, not part of another word
+    if (/\bkg\b/.test(label)) return -1;
+
+    // Extract the first integer from the combined string (e.g. "Grade 10", "G10", "Class 10")
+    const numeric = (code + ' ' + description).match(/\d+/);
+    if (numeric) return parseInt(numeric[0], 10);
+
+    return 999; // Unknown — sort last
+  }
+
   async findAll() {
-    return this.prisma.classes.findMany({
-      orderBy: { description: 'asc' },
+    const rows = await this.prisma.classes.findMany({
+      orderBy: { id: 'asc' },
     });
+
+    return rows
+      .map((cls) => ({
+        ...cls,
+        class_order: this.classOrder(cls.class_code, cls.description),
+      }))
+      .sort((a, b) => a.class_order - b.class_order);
   }
 
   async create(dto: CreateClassDto) {
