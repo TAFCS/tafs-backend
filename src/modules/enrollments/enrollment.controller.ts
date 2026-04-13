@@ -44,4 +44,15 @@ export class EnrollmentController {
       'Student enrolled successfully'
     );
   }
+
+  @Get(':cc/admission-order')
+  @ApiOperation({ summary: 'Get student data for admission order PDF' })
+  async getAdmissionOrder(@Param('cc', ParseIntPipe) cc: number) {
+    const data = await this.enrollmentService.getAdmissionOrderData(cc);
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Admission order data retrieved successfully'
+    );
+  }
 }

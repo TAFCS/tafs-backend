@@ -103,6 +103,54 @@ export class EnrollmentService {
     };
   }
 
+  async getAdmissionOrderData(cc: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      include: {
+        campuses: true,
+        classes: true,
+        sections: true,
+        families: true,
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+        },
+        student_guardians: {
+          include: {
+            guardians: true,
+          },
+        },
+      },
+    });
+
+    if (!student) {
+      throw new NotFoundException(`Student with CC #${cc} not found`);
+    }
+
+    const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
+    const motherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'mother');
+
+    return {
+      cc: student.cc,
+      gr_number: student.gr_number,
+      full_name: student.full_name,
+      dob: student.dob,
+      gender: student.gender,
+      doa: student.doa,
+      academic_year: student.academic_year || student.student_admissions[0]?.academic_year,
+      campus_name: student.campuses?.campus_name,
+      class_name: student.classes?.description,
+      section_name: student.sections?.description,
+      address: fatherLink?.guardians?.mailing_address || student.families?.primary_address,
+      home_phone: student.families?.home_phone,
+      father_name: fatherLink?.guardians?.full_name,
+      father_cell: fatherLink?.guardians?.primary_phone,
+      mother_cell: motherLink?.guardians?.primary_phone,
+      email: student.email || student.families?.email,
+      fax: fatherLink?.guardians?.fax_number,
+    };
+  }
+
   async enroll(cc: number, dto: EnrollStudentDto) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
