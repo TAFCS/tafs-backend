@@ -679,11 +679,12 @@ export class VouchersService {
                         const totalDeposited = new Prisma.Decimal(
                             deposit?._sum.amount_deposited ?? 0,
                         );
-                        const grossAmount = new Prisma.Decimal(
-                            fee.amount_before_discount ?? 0,
+                        // student_fees.amount is the canonical net amount (source of truth)
+                        const canonicalAmount = new Prisma.Decimal(
+                            fee.amount ?? fee.amount_before_discount ?? 0,
                         );
                         const nextFeeBalance = Prisma.Decimal.max(
-                            grossAmount.sub(totalDeposited),
+                            canonicalAmount.sub(totalDeposited),
                             new Prisma.Decimal(0),
                         );
 
@@ -942,49 +943,54 @@ export class VouchersService {
     private normalizeVoucher(voucher: any) {
         if (!voucher) return null;
 
-        const heads: any[] = voucher.voucher_heads || [];
+        // VOID is a manual override (superseded voucher) — never recalculate it.
+        if (voucher.status === 'VOID') return voucher;
 
-        // ── Compute totals from student_fees (single source of truth for amounts) ──
-        const sfNetTotal = heads.reduce(
-            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)),
-            new Prisma.Decimal(0),
-        );
-        const sfGrossTotal = heads.reduce(
-            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.net_amount ?? 0)),
-            new Prisma.Decimal(0),
-        );
-        const sfDiscountTotal = sfGrossTotal.sub(sfNetTotal);
-
-        if (voucher.status === 'PAID' || voucher.status === 'VOID') {
-            return {
-                ...voucher,
-                sf_net_total: sfNetTotal.toFixed(2),
-                sf_gross_total: sfGrossTotal.toFixed(2),
-                sf_discount_total: sfDiscountTotal.toFixed(2),
-            };
-        }
-
-        // ── Per-head balance correction using student_fees as source of truth ──
+        const originalHeads: any[] = voucher.voucher_heads || [];
+        const updatedHeads: any[] = [];
         let totalRemHeads = new Prisma.Decimal(0);
         let anyHeadPaidSomewhere = false;
 
-        const updatedHeads = heads.map((h: any) => {
+        this.logger.debug(`Normalizing Voucher #${voucher.id} (DB Status: ${voucher.status})`);
+
+        for (const h of originalHeads) {
             const fee = h.student_fees;
-            if (!fee) return h;
+            if (!fee) {
+                const bal = new Prisma.Decimal(h.balance ?? 0);
+                totalRemHeads = totalRemHeads.add(bal);
+                updatedHeads.push(h);
+                continue;
+            }
 
-            const grossAmount = new Prisma.Decimal(fee.amount_before_discount ?? 0);
+            // student_fees is the SINGLE SOURCE OF TRUTH for amounts and paid state.
+            const canonicalAmount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
             const totalPaidOnFee = new Prisma.Decimal(fee.amount_paid ?? 0);
-            const totalRemOnFee = Prisma.Decimal.max(grossAmount.sub(totalPaidOnFee), new Prisma.Decimal(0));
+            const headRem = Prisma.Decimal.max(canonicalAmount.sub(totalPaidOnFee), new Prisma.Decimal(0));
 
-            // This head's logical balance cannot exceed the overall fee debt
-            const headRem = Prisma.Decimal.min(new Prisma.Decimal(h.balance as any ?? 0), totalRemOnFee);
+            this.logger.debug(`  Head #${h.id}: SF Amount=${canonicalAmount}, SF Paid=${totalPaidOnFee} => Derived Balance=${headRem}`);
 
             if (totalPaidOnFee.gt(0)) anyHeadPaidSomewhere = true;
             totalRemHeads = totalRemHeads.add(headRem);
 
-            return { ...h, balance: headRem };
-        });
+            // Overwrite stored balance with the canonical derived value
+            updatedHeads.push({ 
+                ...h, 
+                balance: headRem.toString() // Stringify for reliable JSON serialization
+            });
+        }
 
+        // ── sf totals (for frontend display) ────────────────────────────────────
+        const sfNetTotal = originalHeads.reduce(
+            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        const sfGrossTotal = originalHeads.reduce(
+            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.student_fees?.amount ?? head.net_amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        const sfDiscountTotal = sfGrossTotal.sub(sfNetTotal);
+
+        // ── Late-fee surcharge ────────────────────────────────────────────────────
         const tAfter = new Prisma.Decimal((voucher as any).total_payable_after_due ?? 0);
         const tBefore = new Prisma.Decimal((voucher as any).total_payable_before_due ?? 0);
         const depLS = new Prisma.Decimal((voucher as any).late_fee_deposited ?? 0);
@@ -994,15 +1000,20 @@ export class VouchersService {
         const isOverdue = new Date() > new Date(voucher.due_date);
         const remOverall = isOverdue ? totalRemHeads.add(remLS) : totalRemHeads;
 
-        let computedStatus = voucher.status;
-        if (remOverall.eq(0)) {
+        this.logger.debug(`  Voucher #${voucher.id} Final Calculation: headRemTotal=${totalRemHeads}, remLS=${remLS}, isOverdue=${isOverdue} => remOverall=${remOverall}`);
+
+        // ── Compute status entirely from derived state ──────────────────────────
+        let computedStatus: string;
+        if (remOverall.lte(0)) {
             computedStatus = 'PAID';
         } else if (isOverdue) {
             computedStatus = 'OVERDUE';
         } else {
-            const anyDep = updatedHeads.some((h: any) => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0)) || depLS.gt(0) || anyHeadPaidSomewhere;
+            const anyDep = anyHeadPaidSomewhere || depLS.gt(0);
             computedStatus = anyDep ? 'PARTIALLY_PAID' : 'UNPAID';
         }
+
+        this.logger.debug(`  Voucher #${voucher.id} Result: Computed Status=${computedStatus}`);
 
         return {
             ...voucher,
