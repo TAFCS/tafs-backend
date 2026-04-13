@@ -44,6 +44,7 @@ model bulk_voucher_jobs {
   merged_pdf_url      String?
   created_at          DateTime      @default(now()) @db.Timestamp(6)
   updated_at          DateTime      @updatedAt
+  report              Json?         @default("[]")
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses            campuses      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

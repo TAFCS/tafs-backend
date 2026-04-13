@@ -122,11 +122,23 @@ export class StudentsService {
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
+      const isNumeric = /^\d+$/.test(search);
+      const isShortNumeric = isNumeric && search.length <= 5;
+
       where.OR = [
         { full_name: { contains: search, mode: 'insensitive' } },
         { gr_number: { contains: search, mode: 'insensitive' } },
-        ...(/^\d+$/.test(search) ? [{ cc: Number(search) }] : []),
-        { student_guardians: { some: { guardians: { cnic: { contains: search, mode: 'insensitive' } } } } },
+        ...(isNumeric ? [{ cc: Number(search) }] : []),
+        // Only search CNIC if it's not a short numeric string (likely intended for CC/GR)
+        ...(!isShortNumeric ? [{ 
+          student_guardians: { 
+            some: { 
+              guardians: { 
+                cnic: { contains: search, mode: 'insensitive' } 
+              } 
+            } 
+          } 
+        }] : []),
       ];
     }
     if (campus_id)   where.campus_id  = campus_id;
