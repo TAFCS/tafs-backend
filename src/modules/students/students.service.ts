@@ -134,7 +134,7 @@ export class StudentsService {
           student_guardians: { 
             some: { 
               guardians: { 
-                cnic: { contains: search, mode: 'insensitive' } 
+                cnic: { contains: search, mode: Prisma.QueryMode.insensitive } 
               } 
             } 
           } 
