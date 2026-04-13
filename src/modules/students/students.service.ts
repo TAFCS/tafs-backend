@@ -30,16 +30,6 @@ type PromotionOutcome = {
   to_class_id?: number | null;
   from_academic_year?: string | null;
   to_academic_year?: string;
-  /**
-   * Filter candidates by their CURRENT academic year.
-   * Useful when a class contains students from multiple years (e.g. held-back students
-   * from 2023-2024 mixed with current 2024-2025 students) and you only want to
-   * promote those in a specific year.
-   *
-   * This is a SOURCE filter on `students.academic_year`.
-   * To override the DESTINATION year, use `target_academic_year` instead.
-   */
-  academic_year?: string;
   graduated?: boolean;
   expelled?: boolean;
   dry_run: boolean;
