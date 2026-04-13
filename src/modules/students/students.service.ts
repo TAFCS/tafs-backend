@@ -516,10 +516,12 @@ export class StudentsService {
     if (!resolvedClassId && s.status === 'SOFT_ADMISSION') {
       const requestedGrade = s.student_admissions?.[0]?.requested_grade;
       if (requestedGrade) {
+        const normalized = requestedGrade.replace(/[-\s]/g, '').toUpperCase();
         const matchedClass = await this.prisma.classes.findFirst({
           where: {
             OR: [
               { class_code: requestedGrade },
+              { class_code: normalized },
               { description: requestedGrade },
             ],
           },

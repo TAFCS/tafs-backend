@@ -51,8 +51,15 @@ export class EnrollmentService {
     if (!resolvedClassId) {
       const requestedGrade = student.student_admissions?.[0]?.requested_grade;
       if (requestedGrade) {
+        // Match against class_code (e.g. 'JRIII') or normalized version of requestedGrade (e.g. 'JR-III' -> 'JRIII')
+        const normalized = requestedGrade.replace(/[-\s]/g, '').toUpperCase();
         const matched = await this.prisma.classes.findFirst({
-          where: { class_code: requestedGrade },
+          where: {
+            OR: [
+              { class_code: requestedGrade },
+              { class_code: normalized },
+            ],
+          },
           select: { id: true },
         });
         resolvedClassId = matched?.id ?? null;
@@ -117,8 +124,14 @@ export class EnrollmentService {
     if (!resolvedClassId) {
       const requestedGrade = student.student_admissions?.[0]?.requested_grade;
       if (requestedGrade) {
+        const normalized = requestedGrade.replace(/[-\s]/g, '').toUpperCase();
         const matched = await this.prisma.classes.findFirst({
-          where: { class_code: requestedGrade },
+          where: {
+            OR: [
+              { class_code: requestedGrade },
+              { class_code: normalized },
+            ],
+          },
           select: { id: true },
         });
         resolvedClassId = matched?.id ?? null;
