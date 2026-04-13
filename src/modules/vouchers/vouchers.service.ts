@@ -112,7 +112,8 @@ export class VouchersService {
 
             const voucherHeadsData = feeRecords.map((fee) => {
                 const discountInfo = feeLineMap.get(fee.id);
-                const gross = fee.amount_before_discount ?? new Prisma.Decimal(0);
+                // Fall back to amount when amount_before_discount is null (no discount record)
+                const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
                 const discount = new Prisma.Decimal(discountInfo?.discount_amount ?? 0);
                 const netAmount = new Prisma.Decimal(gross).sub(discount);
                 
@@ -228,6 +229,7 @@ export class VouchersService {
             academic_year: dto.academic_year,
             month: dto.month,
             fee_date: dto.fee_date,
+            issue_date: dto.issue_date,
         });
 
         return {
@@ -256,6 +258,7 @@ export class VouchersService {
             academic_year: dto.academic_year,
             month: dto.month,
             fee_date: dto.fee_date,
+            issue_date: dto.issue_date,
         });
 
         const generated: number[] = [];
@@ -280,11 +283,7 @@ export class VouchersService {
                     fee_date: dto.fee_date,
                     precedence: 1,
                     orderedFeeIds: item.fee_ids,
-                    fee_lines: item.fee_ids.map((feeId) => ({
-                        student_fee_id: feeId,
-                        discount_amount: 0,
-                        discount_label: '',
-                    })),
+                    fee_lines: item.fee_lines,
                 };
 
                 const created = await this.create(voucherDto);
@@ -942,9 +941,30 @@ export class VouchersService {
 
     private normalizeVoucher(voucher: any) {
         if (!voucher) return null;
-        if (voucher.status === 'PAID' || voucher.status === 'VOID') return voucher;
 
-        const heads = voucher.voucher_heads || [];
+        const heads: any[] = voucher.voucher_heads || [];
+
+        // ── Compute totals from student_fees (single source of truth for amounts) ──
+        const sfNetTotal = heads.reduce(
+            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        const sfGrossTotal = heads.reduce(
+            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.net_amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        const sfDiscountTotal = sfGrossTotal.sub(sfNetTotal);
+
+        if (voucher.status === 'PAID' || voucher.status === 'VOID') {
+            return {
+                ...voucher,
+                sf_net_total: sfNetTotal.toFixed(2),
+                sf_gross_total: sfGrossTotal.toFixed(2),
+                sf_discount_total: sfDiscountTotal.toFixed(2),
+            };
+        }
+
+        // ── Per-head balance correction using student_fees as source of truth ──
         let totalRemHeads = new Prisma.Decimal(0);
         let anyHeadPaidSomewhere = false;
 
@@ -954,28 +974,23 @@ export class VouchersService {
 
             const grossAmount = new Prisma.Decimal(fee.amount_before_discount ?? 0);
             const totalPaidOnFee = new Prisma.Decimal(fee.amount_paid ?? 0);
-            const totalRemOnFee = Prisma.Decimal.max(grossAmount.sub(totalPaidOnFee), 0);
+            const totalRemOnFee = Prisma.Decimal.max(grossAmount.sub(totalPaidOnFee), new Prisma.Decimal(0));
 
-            // This head's logical balance on this voucher cannot exceed the overall fee debt
+            // This head's logical balance cannot exceed the overall fee debt
             const headRem = Prisma.Decimal.min(new Prisma.Decimal(h.balance as any ?? 0), totalRemOnFee);
-            
-            if (totalPaidOnFee.gt(0)) {
-                anyHeadPaidSomewhere = true;
-            }
+
+            if (totalPaidOnFee.gt(0)) anyHeadPaidSomewhere = true;
             totalRemHeads = totalRemHeads.add(headRem);
 
-            return {
-                ...h,
-                balance: headRem,
-            };
+            return { ...h, balance: headRem };
         });
 
         const tAfter = new Prisma.Decimal((voucher as any).total_payable_after_due ?? 0);
         const tBefore = new Prisma.Decimal((voucher as any).total_payable_before_due ?? 0);
         const depLS = new Prisma.Decimal((voucher as any).late_fee_deposited ?? 0);
-        const totalLS = Prisma.Decimal.max(tAfter.sub(tBefore), 0);
-        const remLS = Prisma.Decimal.max(totalLS.sub(depLS), 0);
-        
+        const totalLS = Prisma.Decimal.max(tAfter.sub(tBefore), new Prisma.Decimal(0));
+        const remLS = Prisma.Decimal.max(totalLS.sub(depLS), new Prisma.Decimal(0));
+
         const isOverdue = new Date() > new Date(voucher.due_date);
         const remOverall = isOverdue ? totalRemHeads.add(remLS) : totalRemHeads;
 
@@ -992,6 +1007,9 @@ export class VouchersService {
         return {
             ...voucher,
             voucher_heads: updatedHeads,
+            sf_net_total: sfNetTotal.toFixed(2),
+            sf_gross_total: sfGrossTotal.toFixed(2),
+            sf_discount_total: sfDiscountTotal.toFixed(2),
             status: computedStatus,
         };
     }
@@ -1003,6 +1021,7 @@ export class VouchersService {
         academic_year: string;
         month?: number;
         fee_date?: string;
+        issue_date?: string;
     }) {
         const students = await this.prisma.students.findMany({
             where: {
@@ -1029,6 +1048,7 @@ export class VouchersService {
                     class_id: number;
                     section_id: number | null;
                     fee_ids: number[];
+                    fee_lines: Array<{ student_fee_id: number; discount_amount: number; discount_label?: string }>;
                 }>,
                 skippedNoFeeSchedule: [] as number[],
                 skippedAlreadyIssued: [] as number[],
@@ -1059,14 +1079,28 @@ export class VouchersService {
             select: {
                 id: true,
                 student_id: true,
+                amount: true,
+                amount_before_discount: true,
             },
         });
 
+        interface FeeLine { student_fee_id: number; discount_amount: number; discount_label?: string; }
         const feeIdsByStudent = new Map<number, number[]>();
+        const feeLinesByStudent = new Map<number, FeeLine[]>();
         for (const fee of fees) {
             const list = feeIdsByStudent.get(fee.student_id) ?? [];
             list.push(fee.id);
             feeIdsByStudent.set(fee.student_id, list);
+
+            const lineList = feeLinesByStudent.get(fee.student_id) ?? [];
+            const net = Number(fee.amount ?? 0);
+            // When amount_before_discount is null there is no discount — treat gross = net
+            const gross = Number(fee.amount_before_discount ?? fee.amount ?? 0);
+            lineList.push({
+                student_fee_id: fee.id,
+                discount_amount: Math.max(0, gross - net),
+            });
+            feeLinesByStudent.set(fee.student_id, lineList);
         }
 
         // Deduplicate: fee_date-based (new) or month-based (legacy)
@@ -1087,6 +1121,7 @@ export class VouchersService {
             class_id: number;
             section_id: number | null;
             fee_ids: number[];
+            fee_lines: Array<{ student_fee_id: number; discount_amount: number; discount_label?: string }>;
         }> = [];
         const skippedNoFeeSchedule: number[] = [];
         const skippedAlreadyIssued: number[] = [];
@@ -1115,7 +1150,53 @@ export class VouchersService {
                 class_id: student.class_id,
                 section_id: student.section_id ?? null,
                 fee_ids: feeIds,
+                fee_lines: feeLinesByStudent.get(student.cc) ?? feeIds.map(id => ({ student_fee_id: id, discount_amount: 0 })),
             });
+        }
+
+        // ── Batch arrear lookup ──────────────────────────────────────────────
+        // Use fee_date as the cutoff; fall back to issue_date so arrears are
+        // always included regardless of whether the bulk job is date- or month-based.
+        const arrearCutoff = feeDateObj ?? (filters.issue_date ? new Date(filters.issue_date) : null);
+
+        if (arrearCutoff && studentIds.length > 0) {
+            const arrearFees = await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    fee_date: { lt: arrearCutoff },
+                    status: { notIn: ['PAID'] as any[] },
+                },
+                select: {
+                    id: true,
+                    student_id: true,
+                    amount: true,
+                    amount_before_discount: true,
+                    amount_paid: true,
+                },
+                orderBy: { fee_date: 'asc' },
+            });
+
+            for (const fee of arrearFees) {
+                const amount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
+                const paid = new Prisma.Decimal(fee.amount_paid ?? 0);
+                const outstanding = amount.sub(paid);
+                if (outstanding.lte(0)) continue;
+
+                // Prepend arrear ID (avoid double-adding if already in current month list)
+                const existingIds = feeIdsByStudent.get(fee.student_id) ?? [];
+                if (!existingIds.includes(fee.id)) {
+                    feeIdsByStudent.set(fee.student_id, [fee.id, ...existingIds]);
+                }
+
+                // Prepend arrear fee line with discount=0 (uses outstanding via amount field)
+                const existingLines = feeLinesByStudent.get(fee.student_id) ?? [];
+                if (!existingLines.some(l => l.student_fee_id === fee.id)) {
+                    feeLinesByStudent.set(fee.student_id, [
+                        { student_fee_id: fee.id, discount_amount: 0 },
+                        ...existingLines,
+                    ]);
+                }
+            }
         }
 
         return {
