@@ -9,7 +9,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
-import { VoucherPdfService } from './voucher-pdf.service';
+import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { StorageService } from '../../common/storage/storage.service';
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -239,18 +239,11 @@ export class VouchersController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    @UseInterceptors(FileFieldsInterceptor([
-        { name: 'paid_pdf', maxCount: 1 },
-        { name: 'unpaid_pdf', maxCount: 1 },
-    ]))
     async splitPartiallyPaid(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: SplitPartiallyPaidDto,
-        @UploadedFiles() files?: { paid_pdf?: Express.Multer.File[]; unpaid_pdf?: Express.Multer.File[] },
     ) {
-        const paidPdf = files?.paid_pdf?.[0]?.buffer;
-        const unpaidPdf = files?.unpaid_pdf?.[0]?.buffer;
-        const result = await this.vouchersService.splitPartiallyPaid(id, dto, paidPdf, unpaidPdf);
+        const result = await this.vouchersService.splitPartiallyPaid(id, dto);
         return {
             success: true,
             message: 'Voucher split into paid and unpaid records successfully.',

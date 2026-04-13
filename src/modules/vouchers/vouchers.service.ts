@@ -14,6 +14,7 @@ import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
+import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
 const VOUCHER_INCLUDE = {
     students: {
@@ -50,6 +51,7 @@ export class VouchersService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
+        private readonly pdfService: VoucherPdfService,
     ) {}
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
@@ -370,6 +372,82 @@ export class VouchersService {
                 `Voucher query failed: ${err?.message ?? 'Unknown error'}`,
             );
         }
+    }
+
+    /** Helper to prepare data for VoucherPdfService */
+    private async prepareVoucherPdfData(voucher: any, paidStamp?: boolean, descriptionPrefix?: string) {
+        // 1. Fetch siblings if family_id exists
+        let siblings: any[] = [];
+        if (voucher.students?.family_id) {
+            siblings = await this.prisma.students.findMany({
+                where: { family_id: voucher.students.family_id, deleted_at: null, status: 'ENROLLED' },
+                include: { classes: true, sections: true }
+            });
+        }
+
+        // 2. Map heads correctly
+        const feeHeads = voucher.voucher_heads.map((h: any) => ({
+            description: `${descriptionPrefix || ''}${h.student_fees?.fee_types?.description || 'Fee'}`,
+            amount: Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
+            discount: Number(h.discount_amount || 0),
+            netAmount: Number(h.net_amount),
+            discountLabel: h.discount_label || '',
+        }));
+
+        const totalAmount = Number(voucher.total_payable_before_due || 0);
+        const lateFeeAmount = voucher.late_fee_charge ? 1000 : 0;
+
+        // Resolve Month Label
+        const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+        const monthLabel = voucher.month ? monthNames[voucher.month] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
+
+        // Prepare Key & QR URL
+        const ts = Date.now();
+        const key = `vouchers/${voucher.student_id}/voucher-${voucher.id}-${ts}.pdf`;
+        const qrUrl = this.storage.getPublicUrl(key);
+
+        return {
+            voucherData: {
+                voucherNumber: voucher.id.toString(),
+                student: {
+                    cc: voucher.students.cc,
+                    classId: voucher.class_id,
+                    fullName: voucher.students.full_name,
+                    fatherName: (voucher.students as any).father_name || 'N/A',
+                    gender: (voucher.students as any).gender || 'N/A',
+                    grNumber: voucher.students.gr_number || 'N/A',
+                    className: voucher.classes?.description || 'N/A',
+                    sectionName: voucher.sections?.description || 'N/A',
+                },
+                siblings: siblings.filter(s => s.cc !== voucher.student_id).map(s => ({
+                    cc: s.cc,
+                    fullName: s.full_name,
+                    grNumber: s.gr_number || 'N/A',
+                    className: s.classes?.description || 'N/A',
+                    sectionName: s.sections?.description || 'N/A',
+                })),
+                campusName: voucher.campuses?.campus_name || 'Main Campus',
+                academicYear: voucher.academic_year || 'N/A',
+                month: monthLabel,
+                issueDate: voucher.issue_date.toISOString().split('T')[0],
+                dueDate: voucher.due_date.toISOString().split('T')[0],
+                validityDate: voucher.validity_date ? voucher.validity_date.toISOString().split('T')[0] : 'N/A',
+                bank: {
+                    name: voucher.bank_accounts?.bank_name || 'N/A',
+                    title: voucher.bank_accounts?.account_title || 'N/A',
+                    account: voucher.bank_accounts?.account_number || 'N/A',
+                    iban: voucher.bank_accounts?.iban || 'N/A',
+                    address: voucher.bank_accounts?.bank_address || 'N/A',
+                },
+                feeHeads,
+                totalAmount,
+                lateFeeAmount,
+                qrUrl,
+                paidStamp,
+                showDiscount: true,
+            },
+            key
+        };
     }
 
     async findOne(id: number) {
@@ -710,14 +788,10 @@ export class VouchersService {
      *  1. Create a new PAID voucher   (heads = amount_deposited, prefix "Partial Payment of —")
      *  2. Create a new UNPAID voucher (heads = balance,          prefix "Balance Payment of —")
      *  3. Delete the original voucher (voucher_heads cascade, deposit_allocations reassigned)
-     * All DB work runs in a single transaction. PDF uploads happen before the transaction commits;
-     * if either upload fails the transaction is never committed.
      */
     async splitPartiallyPaid(
         voucherId: number,
         dto: SplitPartiallyPaidDto,
-        paidPdfBuffer?: Buffer,
-        unpaidPdfBuffer?: Buffer,
     ) {
         const original = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
@@ -747,19 +821,6 @@ export class VouchersService {
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
-        // Upload both PDFs BEFORE the transaction so we can roll back cleanly on failure
-        let paidPdfUrl: string | null = null;
-        let unpaidPdfUrl: string | null = null;
-
-        if (paidPdfBuffer) {
-            const key = `vouchers/${original.student_id}/paid-voucher-split-${voucherId}-${Date.now()}.pdf`;
-            paidPdfUrl = await this.storage.upload(key, paidPdfBuffer);
-        }
-        if (unpaidPdfBuffer) {
-            const key = `vouchers/${original.student_id}/voucher-balance-${voucherId}-${Date.now()}.pdf`;
-            unpaidPdfUrl = await this.storage.upload(key, unpaidPdfBuffer);
-        }
-
         const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
 
         const paidTotal = paidHeads.reduce(
@@ -771,6 +832,7 @@ export class VouchersService {
             new Prisma.Decimal(0),
         );
 
+        // --- Execute Split Transaction ---
         const { paidVoucher, unpaidVoucher } = await this.prisma.$transaction(async (tx) => {
             const commonFields = {
                 student_id: original.student_id,
@@ -784,7 +846,7 @@ export class VouchersService {
                 late_fee_charge: original.late_fee_charge,
             };
 
-            // --- 1. Create the PAID voucher ---
+            // --- 1. Create the PAID portion voucher ---
             const paid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -794,7 +856,6 @@ export class VouchersService {
                     status: 'PAID',
                     total_payable_before_due: paidTotal,
                     total_payable_after_due: paidTotal,
-                    pdf_url: paidPdfUrl,
                 },
             });
 
@@ -810,7 +871,7 @@ export class VouchersService {
                 })),
             });
 
-            // --- 2. Create the UNPAID voucher ---
+            // --- 2. Create the UNPAID balance voucher ---
             const unpaid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -820,7 +881,6 @@ export class VouchersService {
                     status: 'UNPAID',
                     total_payable_before_due: unpaidTotal,
                     total_payable_after_due: unpaidTotal.add(lateFeeVal),
-                    pdf_url: unpaidPdfUrl,
                 },
             });
 
@@ -847,20 +907,68 @@ export class VouchersService {
             return { paidVoucher: paid, unpaidVoucher: unpaid };
         }, { timeout: 30000 });
 
+        // --- Generate and Upload PDFs on Backend ---
+        // Fetch full models for prepareVoucherPdfData
+        const paidFull = await this.prisma.vouchers.findUnique({ where: { id: paidVoucher.id }, include: VOUCHER_INCLUDE });
+        const unpaidFull = await this.prisma.vouchers.findUnique({ where: { id: unpaidVoucher.id }, include: VOUCHER_INCLUDE });
+
+        const [pData, uData] = await Promise.all([
+            this.prepareVoucherPdfData(paidFull, true, 'Partial Payment of — '),
+            this.prepareVoucherPdfData(unpaidFull, false, 'Balance Payment of — '),
+        ]);
+
+        const [pBuf, uBuf] = await Promise.all([
+            this.pdfService.generateVoucherPdf(pData.voucherData),
+            this.pdfService.generateVoucherPdf(uData.voucherData),
+        ]);
+
+        const [pUrl, uUrl] = await Promise.all([
+            this.storage.upload(pData.key, pBuf),
+            this.storage.upload(uData.key, uBuf),
+        ]);
+
+        await Promise.all([
+            this.prisma.vouchers.update({ where: { id: paidVoucher.id }, data: { pdf_url: pUrl } }),
+            this.prisma.vouchers.update({ where: { id: unpaidVoucher.id }, data: { pdf_url: uUrl } }),
+        ]);
+
         return {
             paid_voucher_id: paidVoucher.id,
             unpaid_voucher_id: unpaidVoucher.id,
+            paid_pdf_url: pUrl,
+            unpaid_pdf_url: uUrl,
         };
     }
 
     private normalizeVoucher(voucher: any) {
         if (!voucher) return null;
-        if (voucher.status === 'PAID') return voucher;
+        if (voucher.status === 'PAID' || voucher.status === 'VOID') return voucher;
 
-        const remHeads = (voucher.voucher_heads || []).reduce(
-            (sum, head) => sum.add(new Prisma.Decimal(head.balance as any ?? 0)),
-            new Prisma.Decimal(0),
-        );
+        const heads = voucher.voucher_heads || [];
+        let totalRemHeads = new Prisma.Decimal(0);
+        let anyHeadPaidSomewhere = false;
+
+        const updatedHeads = heads.map((h: any) => {
+            const fee = h.student_fees;
+            if (!fee) return h;
+
+            const grossAmount = new Prisma.Decimal(fee.amount_before_discount ?? 0);
+            const totalPaidOnFee = new Prisma.Decimal(fee.amount_paid ?? 0);
+            const totalRemOnFee = Prisma.Decimal.max(grossAmount.sub(totalPaidOnFee), 0);
+
+            // This head's logical balance on this voucher cannot exceed the overall fee debt
+            const headRem = Prisma.Decimal.min(new Prisma.Decimal(h.balance as any ?? 0), totalRemOnFee);
+            
+            if (totalPaidOnFee.gt(0)) {
+                anyHeadPaidSomewhere = true;
+            }
+            totalRemHeads = totalRemHeads.add(headRem);
+
+            return {
+                ...h,
+                balance: headRem,
+            };
+        });
 
         const tAfter = new Prisma.Decimal((voucher as any).total_payable_after_due ?? 0);
         const tBefore = new Prisma.Decimal((voucher as any).total_payable_before_due ?? 0);
@@ -869,7 +977,7 @@ export class VouchersService {
         const remLS = Prisma.Decimal.max(totalLS.sub(depLS), 0);
         
         const isOverdue = new Date() > new Date(voucher.due_date);
-        const remOverall = isOverdue ? remHeads.add(remLS) : remHeads;
+        const remOverall = isOverdue ? totalRemHeads.add(remLS) : totalRemHeads;
 
         let computedStatus = voucher.status;
         if (remOverall.eq(0)) {
@@ -877,12 +985,13 @@ export class VouchersService {
         } else if (isOverdue) {
             computedStatus = 'OVERDUE';
         } else {
-            const anyDep = (voucher.voucher_heads || []).some(h => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0)) || depLS.gt(0);
+            const anyDep = updatedHeads.some((h: any) => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0)) || depLS.gt(0) || anyHeadPaidSomewhere;
             computedStatus = anyDep ? 'PARTIALLY_PAID' : 'UNPAID';
         }
 
         return {
             ...voucher,
+            voucher_heads: updatedHeads,
             status: computedStatus,
         };
     }
