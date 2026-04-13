@@ -42,11 +42,21 @@ export interface VoucherPdfData {
         discount?: number;
         netAmount: number;
         discountLabel?: string;
+        isArrear?: boolean;
     }>;
     totalAmount: number;
     lateFeeAmount: number;
     /** Portal URL to encode in QR code on each challan copy */
     qrUrl?: string;
+    /** Rows shown in the ARREAR'S HISTORY sidebar column */
+    arrearsHistory?: Array<{
+        date: string;
+        head: string;
+        amount: string;
+        totalAmount: string;
+        target_month?: number;
+        academic_year?: string;
+    }>;
 }
 
 @Injectable()
@@ -102,6 +112,7 @@ export class VoucherPdfService {
                 netAmount: f.netAmount,
                 discount: f.discount,
                 discountLabel: f.discountLabel,
+                isArrear: f.isArrear,
             })),
             totalAmount: data.totalAmount,
             showDiscount: true,
@@ -114,6 +125,7 @@ export class VoucherPdfService {
                 sectionName: s.sectionName,
             })),
             qrUrl: data.qrUrl,
+            arrearsHistory: data.arrearsHistory,
         };
 
         try {
