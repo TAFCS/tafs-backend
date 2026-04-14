@@ -501,8 +501,9 @@ export class StudentsService {
         student_guardians: {
           include: { guardians: true }
         },
-        student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
+         student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
         student_activities: true,
+        student_flags: { where: { work_done: false } },
       }
     });
 
