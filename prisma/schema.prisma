@@ -195,7 +195,7 @@ model fee_types {
 model guardians {
   id                         Int                 @id @default(autoincrement())
   cnic                       String?             @unique @db.VarChar(15)
-  full_name                  String              @db.VarChar(100)
+  full_name                  String?             @db.VarChar(100)
   dob                        DateTime?           @db.Date
   primary_phone              String?             @db.VarChar(20)
   whatsapp_number            String?             @db.VarChar(20)

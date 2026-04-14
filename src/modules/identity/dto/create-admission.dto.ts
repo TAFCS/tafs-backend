@@ -57,9 +57,9 @@ export class PreviousSchoolDto {
 
 export class GuardianDto {
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(100)
-  full_name: string;
+  full_name?: string;
 
   @IsString()
   @IsOptional()
