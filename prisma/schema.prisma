@@ -20,6 +20,20 @@ model bank_accounts {
   vouchers          vouchers[]
 }
 
+model student_flags {
+  id            Int       @id @default(autoincrement())
+  student_id    Int
+  flag          String    @db.VarChar(100)
+  reminder_date DateTime? @db.Date
+  work_done     Boolean   @default(false)
+  created_at    DateTime  @default(now()) @db.Timestamp(6)
+  students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+
+  @@unique([student_id, flag])
+  @@index([student_id])
+  @@index([flag])
+}
+
 model bulk_voucher_jobs {
   id                  Int           @id @default(autoincrement())
   created_by          String        @db.VarChar(255)
@@ -482,20 +496,6 @@ model vouchers {
   classes                  classes               @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                 sections?             @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students                 students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model student_flags {
-  id            Int       @id @default(autoincrement())
-  student_id    Int
-  flag          String    @db.VarChar(100)
-  created_at    DateTime  @default(now()) @db.Timestamp(6)
-  reminder_date DateTime? @db.Date
-  work_done     Boolean   @default(false)
-  students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade)
-
-  @@unique([student_id, flag])
-  @@index([flag])
-  @@index([student_id])
 }
 
 enum BulkJobStatus {
