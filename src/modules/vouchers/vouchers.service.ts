@@ -496,7 +496,7 @@ export class VouchersService {
 
     async findByStudentCC(cc: number, familyId?: number) {
         const vouchers = await this.prisma.vouchers.findMany({
-            where: { 
+            where: {
                 student_id: cc,
                 ...(familyId ? { students: { family_id: familyId } } : {})
             },
@@ -585,18 +585,11 @@ export class VouchersService {
             voucher.voucher_heads.map((h) => [h.id, h]),
         );
 
-        for (const { headId, amount } of parsedDistributions) {
+        for (const { headId } of parsedDistributions) {
             const head = voucherHeadMap.get(headId);
             if (!head) {
                 throw new BadRequestException(
                     `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
-                );
-            }
-
-            const currentBalance = new Prisma.Decimal(head.balance ?? 0);
-            if (amount.gt(currentBalance)) {
-                throw new BadRequestException(
-                    `Distribution for head #${headId} exceeds its balance.`,
                 );
             }
         }
@@ -620,17 +613,80 @@ export class VouchersService {
             );
         }
 
-        const affectedStudentFeeIds: number[] = [
-            ...new Set(
-                parsedDistributions
-                    .map((d) => voucherHeadMap.get(d.headId)?.student_fee_id)
-                    .filter(Boolean) as number[],
-            ),
-        ];
-
         // 2. LEAN TRANSACTION
         await this.prisma.$transaction(
             async (tx) => {
+                const distributionHeadIds = parsedDistributions.map((d) => d.headId);
+                const txHeads = await tx.voucher_heads.findMany({
+                    where: {
+                        voucher_id: voucherId,
+                        id: { in: distributionHeadIds },
+                    },
+                    select: {
+                        id: true,
+                        student_fee_id: true,
+                    },
+                });
+
+                const txHeadMap = new Map(txHeads.map((head) => [head.id, head]));
+
+                for (const { headId } of parsedDistributions) {
+                    if (!txHeadMap.has(headId)) {
+                        throw new BadRequestException(
+                            `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
+                        );
+                    }
+                }
+
+                const affectedStudentFeeIds: number[] = [
+                    ...new Set(
+                        txHeads
+                            .map((head) => head.student_fee_id)
+                            .filter(Boolean) as number[],
+                    ),
+                ];
+
+                const studentFees = affectedStudentFeeIds.length
+                    ? await tx.student_fees.findMany({
+                          where: { id: { in: affectedStudentFeeIds } },
+                          select: {
+                              id: true,
+                              amount: true,
+                              amount_paid: true,
+                          },
+                      })
+                    : [];
+                const studentFeeMap = new Map(studentFees.map((fee) => [fee.id, fee]));
+
+                for (const { headId, amount } of parsedDistributions) {
+                    const head = txHeadMap.get(headId)!;
+
+                    if (!head.student_fee_id) {
+                        throw new BadRequestException(
+                            `Voucher head #${headId} is not linked to a student fee.`,
+                        );
+                    }
+
+                    const fee = studentFeeMap.get(head.student_fee_id);
+                    if (!fee) {
+                        throw new BadRequestException(
+                            `Student fee #${head.student_fee_id} not found for voucher head #${headId}.`,
+                        );
+                    }
+
+                    const allowedAmount = Prisma.Decimal.max(
+                        new Prisma.Decimal(fee.amount ?? 0).sub(
+                            new Prisma.Decimal(fee.amount_paid ?? 0),
+                        ),
+                        new Prisma.Decimal(0),
+                    );
+
+                    if (amount.gt(allowedAmount)) {
+                        throw new BadRequestException(
+                            `Distribution for head #${headId} exceeds its balance.`,
+                        );
+                    }
+                }
 
             // ── Step A: Update voucher_heads balances ──────────────────────
             await Promise.all(
@@ -640,11 +696,21 @@ export class VouchersService {
                         where: { id: headId },
                         data: {
                             amount_deposited: { increment: amount },
-                            balance: { decrement: amount },
                         },
                     });
                 }),
             );
+
+            if (distributionHeadIds.length > 0) {
+                await tx.$executeRaw`
+                    UPDATE voucher_heads
+                    SET balance = GREATEST(
+                        COALESCE(net_amount, 0) - COALESCE(amount_deposited, 0),
+                        0
+                    )
+                    WHERE id IN (${Prisma.join(distributionHeadIds)})
+                `;
+            }
 
             // ── Step B: Write to deposits + deposit_allocations ───────────
             const depositRecord = await tx.deposits.create({
@@ -666,7 +732,7 @@ export class VouchersService {
             }[] = parsedDistributions
                 .filter(({ amount }) => amount.gt(0))
                 .map(({ headId, amount }) => {
-                    const head = voucherHeadMap.get(headId)!;
+                    const head = txHeadMap.get(headId)!;
                     return {
                         deposit_id: depositRecord.id,
                         student_fee_id: head.student_fee_id ?? null,
@@ -1005,8 +1071,8 @@ export class VouchersService {
             totalRemHeads = totalRemHeads.add(headRem);
 
             // Overwrite stored balance with the canonical derived value
-            updatedHeads.push({ 
-                ...h, 
+            updatedHeads.push({
+                ...h,
                 balance: headRem.toString() // Stringify for reliable JSON serialization
             });
         }
@@ -1301,8 +1367,8 @@ export class VouchersService {
 
             if (outstanding.lte(0)) continue;
 
-            // We no longer skip 'alreadyActive' fees because we want to allow users 
-            // to pull unpaid historical debt into new consolidated vouchers. 
+            // We no longer skip 'alreadyActive' fees because we want to allow users
+            // to pull unpaid historical debt into new consolidated vouchers.
             // The 'lt: targetFeeDate' filter ensures we don't double-count current-month fees.
 
             totalArrears = totalArrears.add(outstanding);
