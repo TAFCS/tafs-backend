@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     Body,
     Controller,
     Get,
@@ -267,6 +268,43 @@ export class VouchersController {
             success: true,
             message: 'Vouchers retrieved successfully',
             data: vouchers,
+        };
+    }
+
+    @Get('parent/student/:cc/resolve')
+    @UseGuards(JwtParentGuard)
+    @HttpCode(HttpStatus.OK)
+    async resolveVoucherForParentByMonth(
+        @Param('cc', ParseIntPipe) cc: number,
+        @Query('academic_year') academicYear: string,
+        @Query('target_month') targetMonth: string,
+        @Req() req: any,
+    ) {
+        const parsedTargetMonth = Number(targetMonth);
+        if (!academicYear || Number.isNaN(parsedTargetMonth)) {
+            throw new BadRequestException(
+                'academic_year and target_month query parameters are required.',
+            );
+        }
+
+        if (parsedTargetMonth < 1 || parsedTargetMonth > 12) {
+            throw new BadRequestException(
+                'target_month must be between 1 and 12.',
+            );
+        }
+
+        const familyId = req.user.familyId;
+        const result = await this.vouchersService.resolveVoucherForParentByMonth(
+            cc,
+            familyId,
+            academicYear,
+            parsedTargetMonth,
+        );
+
+        return {
+            success: true,
+            message: 'Voucher resolution completed',
+            data: result,
         };
     }
 }

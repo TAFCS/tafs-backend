@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ForbiddenException,
+    Injectable,
+    NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
@@ -7,6 +12,159 @@ import { CreateBundleDto } from './dto/create-bundle.dto';
 @Injectable()
 export class StudentFeesService {
     constructor(private readonly prisma: PrismaService) { }
+
+    async getMonthlyStatusForParent(studentCc: number, familyId: number) {
+        const student = await this.prisma.students.findFirst({
+            where: {
+                cc: studentCc,
+                family_id: familyId,
+                deleted_at: null,
+            },
+            select: { cc: true },
+        });
+
+        if (!student) {
+            throw new ForbiddenException(
+                `Student #${studentCc} not linked to your family`,
+            );
+        }
+
+        const fees = await this.prisma.student_fees.findMany({
+            where: { student_id: studentCc },
+            select: {
+                academic_year: true,
+                target_month: true,
+                month: true,
+                status: true,
+                amount: true,
+                amount_before_discount: true,
+                amount_paid: true,
+                fee_date: true,
+            },
+        });
+
+        if (fees.length === 0) {
+            return [];
+        }
+
+        type Bucket = {
+            academicYear: string;
+            targetMonth: number;
+            monthLabel: string;
+            totalAmount: number;
+            totalPaid: number;
+            outstanding: number;
+            rowCount: number;
+            notIssuedCount: number;
+            feeDate: Date | null;
+        };
+
+        const grouped = new Map<string, Bucket>();
+
+        for (const fee of fees) {
+            const academicYear = fee.academic_year;
+            const targetMonth = fee.target_month ?? fee.month ?? 0;
+            if (!academicYear || targetMonth < 1 || targetMonth > 12) {
+                continue;
+            }
+
+            const amount = Number(fee.amount ?? fee.amount_before_discount ?? 0);
+            const paidRaw = Number(fee.amount_paid ?? 0);
+            const paid = Math.min(Math.max(paidRaw, 0), Math.max(amount, 0));
+            const outstanding = Math.max(amount - paid, 0);
+
+            const key = `${academicYear}|${targetMonth}`;
+            const existing = grouped.get(key);
+
+            if (!existing) {
+                grouped.set(key, {
+                    academicYear,
+                    targetMonth,
+                    monthLabel: this.getMonthLabel(targetMonth),
+                    totalAmount: amount,
+                    totalPaid: paid,
+                    outstanding,
+                    rowCount: 1,
+                    notIssuedCount: fee.status === 'NOT_ISSUED' ? 1 : 0,
+                    feeDate: fee.fee_date ?? null,
+                });
+                continue;
+            }
+
+            existing.totalAmount += amount;
+            existing.totalPaid += paid;
+            existing.outstanding += outstanding;
+            existing.rowCount += 1;
+            if (fee.status === 'NOT_ISSUED') {
+                existing.notIssuedCount += 1;
+            }
+            if (!existing.feeDate && fee.fee_date) {
+                existing.feeDate = fee.fee_date;
+            }
+        }
+
+        const buckets = Array.from(grouped.values()).sort((a, b) => {
+            const yearCmp = this.getAcademicYearSortKey(a.academicYear) - this.getAcademicYearSortKey(b.academicYear);
+            if (yearCmp !== 0) return yearCmp;
+            return a.targetMonth - b.targetMonth;
+        });
+
+        let runningOutstanding = 0;
+
+        return buckets.map((bucket) => {
+            runningOutstanding += bucket.outstanding;
+
+            const monthStatus =
+                bucket.outstanding <= 0
+                    ? 'PAID'
+                    : bucket.totalPaid > 0
+                        ? 'PARTIALLY_PAID'
+                        : bucket.notIssuedCount === bucket.rowCount
+                            ? 'NOT_ISSUED'
+                            : 'ISSUED';
+
+            return {
+                academic_year: bucket.academicYear,
+                target_month: bucket.targetMonth,
+                month_label: bucket.monthLabel,
+                month_total_amount: Number(bucket.totalAmount.toFixed(2)),
+                month_total_paid: Number(bucket.totalPaid.toFixed(2)),
+                month_total_outstanding: Number(bucket.outstanding.toFixed(2)),
+                running_outstanding_total: Number(runningOutstanding.toFixed(2)),
+                month_status: monthStatus,
+                fee_date: bucket.feeDate,
+            };
+        });
+    }
+
+    private getAcademicYearSortKey(academicYear: string) {
+        const start = academicYear.split('-')[0]?.trim();
+        const parsed = Number(start);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private getMonthLabel(month: number) {
+        const labels = [
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
+        ];
+
+        if (month < 1 || month > 12) {
+            return 'Unknown';
+        }
+
+        return labels[month - 1];
+    }
 
     async findByStudent(studentId: number) {
         return this.prisma.student_fees.findMany({
@@ -474,8 +632,8 @@ export class StudentFeesService {
             if (fee_ids || target_month !== undefined) {
                 // 1. Revert fees currently in this bundle to their original target_month
                 await tx.$executeRaw`
-                    UPDATE student_fees 
-                    SET month = target_month 
+                    UPDATE student_fees
+                    SET month = target_month
                     WHERE bundle_id = ${id}
                 `;
 
@@ -509,8 +667,8 @@ export class StudentFeesService {
         return this.prisma.$transaction(async (tx) => {
             // Revert member fees' month to their target_month (original period)
             await tx.$executeRaw`
-                UPDATE student_fees 
-                SET month = target_month 
+                UPDATE student_fees
+                SET month = target_month
                 WHERE bundle_id = ${id}
             `;
 
@@ -749,7 +907,7 @@ export class StudentFeesService {
 
             const added = result.count;
             const skipped = student_ids.length - added;
-            
+
             totalAddedNum += added;
             totalSkippedNum += skipped;
             monthSummary.push({ month, added, skipped });

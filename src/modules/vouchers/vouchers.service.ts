@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     InternalServerErrorException,
     Logger,
@@ -47,6 +48,8 @@ const VOUCHER_INCLUDE = {
 @Injectable()
 export class VouchersService {
     private readonly logger = new Logger(VouchersService.name);
+    private static readonly missingVoucherMessage =
+        'Challan not yet generated — please contact the school office.';
 
     constructor(
         private readonly prisma: PrismaService,
@@ -122,7 +125,7 @@ export class VouchersService {
 
             for (const fee of feeRecords) {
                 const discountInfo = feeLineMap.get(fee.id);
-                
+
                 // 1. Calculate net balance after any prior partial payments.
                 // Rule: net_amount = student_fees.amount - student_fees.amount_paid
                 const amount = new Prisma.Decimal(fee.amount ?? 0);
@@ -134,7 +137,7 @@ export class VouchersService {
                     continue;
                 }
 
-                // 3. Keep the discount snapshot consistent. 
+                // 3. Keep the discount snapshot consistent.
                 // discount_amount = amount_before_discount - amount
                 // This ensures we show the discount that was originally granted.
                 const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
@@ -417,7 +420,7 @@ export class VouchersService {
         // 2. Map heads correctly
         const feeHeads = voucher.voucher_heads.map((h: any) => {
             const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
-            
+
             // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
             // the description must be prefixed with "BALANCE PAYMENT OF — ".
             const fullAmount = Number(h.student_fees?.amount ?? 0);
@@ -427,7 +430,7 @@ export class VouchersService {
 
             return {
                 description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}`,
-                // Rule: For balance payments, do not show original discounts. 
+                // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
                 discount: isPartialPayment ? 0 : Number(h.discount_amount || 0),
@@ -515,6 +518,77 @@ export class VouchersService {
             orderBy: { issue_date: 'asc' },
         });
         return vouchers.map((v) => this.normalizeVoucher(v));
+    }
+
+    async resolveVoucherForParentByMonth(
+        studentCc: number,
+        familyId: number,
+        academicYear: string,
+        targetMonth: number,
+    ) {
+        const student = await this.prisma.students.findFirst({
+            where: {
+                cc: studentCc,
+                family_id: familyId,
+                deleted_at: null,
+            },
+            select: { cc: true },
+        });
+
+        if (!student) {
+            throw new ForbiddenException(
+                `Student #${studentCc} not linked to your family`,
+            );
+        }
+
+        const voucher = await this.prisma.vouchers.findFirst({
+            where: {
+                student_id: studentCc,
+                status: { not: 'VOID' },
+                OR: [
+                    { academic_year: academicYear },
+                    {
+                        voucher_heads: {
+                            some: {
+                                student_fees: {
+                                    academic_year: academicYear,
+                                },
+                            },
+                        },
+                    },
+                ],
+                AND: [
+                    {
+                        OR: [
+                            { month: targetMonth },
+                            {
+                                voucher_heads: {
+                                    some: {
+                                        student_fees: {
+                                            target_month: targetMonth,
+                                        },
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            include: VOUCHER_INCLUDE,
+            orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+        });
+
+        if (!voucher) {
+            return {
+                exists: false,
+                message: VouchersService.missingVoucherMessage,
+            };
+        }
+
+        return {
+            exists: true,
+            voucher: this.normalizeVoucher(voucher),
+        };
     }
 
     async update(id: number, dto: UpdateVoucherDto) {
