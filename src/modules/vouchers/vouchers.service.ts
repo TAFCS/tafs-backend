@@ -840,21 +840,20 @@ export class VouchersService {
 
                 const isOverdue = new Date() > new Date(refreshed.due_date);
                 const remainingOverall = isOverdue ? remainingHeads.add(remainingLS) : remainingHeads;
+                const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
+                    new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
+                );
+                const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0);
 
                 let nextVoucherStatus = refreshed.status ?? 'UNPAID';
                 if (remainingOverall.eq(0)) {
                     nextVoucherStatus = 'PAID';
+                } else if (hasAnyDeposit) {
+                    nextVoucherStatus = 'PARTIALLY_PAID';
                 } else if (isOverdue) {
                     nextVoucherStatus = 'OVERDUE';
                 } else {
-                    const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
-                        new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
-                    );
-                    if (anyHeadDeposited || depositedLS.gt(0)) {
-                        nextVoucherStatus = 'PARTIALLY_PAID';
-                    } else {
-                        nextVoucherStatus = 'UNPAID';
-                    }
+                    nextVoucherStatus = 'UNPAID';
                 }
 
                 if (nextVoucherStatus !== refreshed.status) {
