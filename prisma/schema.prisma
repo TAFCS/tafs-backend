@@ -24,9 +24,9 @@ model student_flags {
   id            Int       @id @default(autoincrement())
   student_id    Int
   flag          String    @db.VarChar(100)
+  created_at    DateTime  @default(now()) @db.Timestamp(6)
   reminder_date DateTime? @db.Date
   work_done     Boolean   @default(false)
-  created_at    DateTime  @default(now()) @db.Timestamp(6)
   students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade)
 
   @@unique([student_id, flag])
@@ -195,7 +195,7 @@ model fee_types {
 model guardians {
   id                         Int                 @id @default(autoincrement())
   cnic                       String?             @unique @db.VarChar(15)
-  full_name                  String?             @db.VarChar(100)
+  full_name                  String              @db.VarChar(100)
   dob                        DateTime?           @db.Date
   primary_phone              String?             @db.VarChar(20)
   whatsapp_number            String?             @db.VarChar(20)

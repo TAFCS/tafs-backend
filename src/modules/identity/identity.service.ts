@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
@@ -516,8 +516,11 @@ export class IdentityService {
    * This ensures siblings share the same guardian records.
    */
   private async upsertGuardian(tx: TxClient, data: GuardianDto) {
+    const guardianFullName = data.full_name?.trim();
+    if (!guardianFullName) throw new BadRequestException('Guardian full_name is required');
+
     const payload = {
-      full_name: data.full_name,
+      full_name: guardianFullName,
       primary_phone_country_code: data.primary_phone_country_code ?? '+92',
       primary_phone: data.primary_phone ?? null,
       whatsapp_country_code: data.whatsapp_country_code ?? '+92',
@@ -558,7 +561,7 @@ export class IdentityService {
    */
   private async resolveGradeCode(tx: TxClient, grade: string): Promise<string> {
     if (!grade) return 'N/A';
-    
+
     // Try to find a class where the class_code or description matches
     const matched = await tx.classes.findFirst({
       where: {
