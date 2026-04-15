@@ -7,6 +7,7 @@ import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
 import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
+import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 
 @Injectable()
 export class StaffEditingService {
@@ -546,6 +547,35 @@ export class StaffEditingService {
       is_emergency_contact,
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
+    };
+  }
+
+  async linkExistingGuardian(studentCc: number, dto: LinkExistingGuardianDto) {
+    await this.assertStudentExists(studentCc);
+
+    const { guardian_id, relationship, is_primary_contact = false, is_emergency_contact = false } = dto;
+
+    const guardian = await this.prisma.guardians.findUnique({ where: { id: guardian_id } });
+    if (!guardian) throw new NotFoundException(`Guardian #${guardian_id} not found`);
+
+    const joinData = { relationship, is_primary_contact, is_emergency_contact };
+    
+    const link = await this.prisma.student_guardians.upsert({
+      where: {
+        student_id_guardian_id: { student_id: studentCc, guardian_id },
+      },
+      update: joinData,
+      create: { student_id: studentCc, guardian_id, ...joinData },
+      include: { guardians: true },
+    });
+
+    return {
+      guardian_id: link.guardian_id,
+      relationship: link.relationship,
+      is_primary_contact: link.is_primary_contact,
+      is_emergency_contact: link.is_emergency_contact,
+      ...link.guardians,
+      dob: this.formatDateToFrontend(link.guardians.dob),
     };
   }
 

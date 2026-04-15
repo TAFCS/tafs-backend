@@ -17,6 +17,7 @@ import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
+import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 
@@ -100,6 +101,22 @@ export class StaffEditingController {
       guardian,
       HttpStatus.CREATED,
       STAFF_EDITING_MESSAGES.GUARDIAN_CREATE_SUCCESS,
+    );
+  }
+
+  @Post('students/:studentId/guardians/link-existing')
+  async linkExistingGuardian(
+    @Param('studentId', ParseIntPipe) studentId: number,
+    @Body() dto: LinkExistingGuardianDto,
+  ) {
+    const guardian = await this.staffEditingService.linkExistingGuardian(
+      studentId,
+      dto,
+    );
+    return createApiResponse(
+      guardian,
+      HttpStatus.OK,
+      STAFF_EDITING_MESSAGES.GUARDIAN_LINKED_SUCCESS || 'Guardian linked successfully',
     );
   }
 
