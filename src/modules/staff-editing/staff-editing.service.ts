@@ -225,6 +225,7 @@ export class StaffEditingService {
   async updateStudent(cc: number, dto: UpdateStudentDto) {
     const {
       dob,
+      doa,
       father_name,
       father_cnic,
       mother_name,
@@ -235,6 +236,7 @@ export class StaffEditingService {
     const studentData: Record<string, unknown> = {
       ...rest,
       ...(dob !== undefined ? { dob: new Date(dob) } : {}),
+      ...(doa !== undefined ? { doa: doa ? new Date(doa) : null } : {}),
     };
 
     try {
