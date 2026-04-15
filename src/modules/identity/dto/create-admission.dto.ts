@@ -172,6 +172,17 @@ export class GuardianDto {
   fax_number?: string;
 }
 
+export class StudentFlagDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  description: string;
+
+  @IsOptional()
+  @IsDateString()
+  reminder_date?: string;
+}
+
 export class EmergencyContactDto {
   @IsString()
   @ValidateIf((o) => o.full_name !== 'N/A')
@@ -336,18 +347,11 @@ export class CreateAdmissionDto {
   @Type(() => AdmissionDetailsDto)
   admission: AdmissionDetailsDto;
 
-  // ── Previous schools ──
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StudentFlagDto)
   @IsOptional()
-  @IsBoolean()
-  is_flagged?: boolean;
-
-  @IsOptional()
-  @IsDateString()
-  flag_reminder_date?: string;
-
-  @IsOptional()
-  @IsString()
-  flag_description?: string;
+  flags?: StudentFlagDto[];
 
   @IsArray()
   @ValidateNested({ each: true })

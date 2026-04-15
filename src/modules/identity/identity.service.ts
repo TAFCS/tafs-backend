@@ -233,13 +233,15 @@ export class IdentityService {
         },
       });
 
-      // ── 8. Handle Flag (Universal) ──────────────────────────────────────
-      if (dto.is_flagged) {
-        await this.flagsSvc.addFlag(
-          student.cc,
-          dto.flag_description || 'Universal FLAG',
-          dto.flag_reminder_date ? new Date(dto.flag_reminder_date) : undefined
-        );
+      // ── 8. Handle Flags (Universal) ─────────────────────────────────────
+      if (dto.flags?.length) {
+        for (const f of dto.flags) {
+          await this.flagsSvc.addFlag(
+            student.cc,
+            f.description,
+            f.reminder_date ? new Date(f.reminder_date) : undefined
+          );
+        }
       }
 
       // ── 9. Return full record ────────────────────────────────────────────
