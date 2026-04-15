@@ -122,19 +122,23 @@ export class VouchersService {
 
             for (const fee of feeRecords) {
                 const discountInfo = feeLineMap.get(fee.id);
-                // Fall back to amount when amount_before_discount is null (no discount record)
-                const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
-                const discount = new Prisma.Decimal(discountInfo?.discount_amount ?? 0);
-                // net after discount (= student_fees.amount)
-                const netAfterDiscount = new Prisma.Decimal(gross).sub(discount);
-                // deduct any prior partial payment
+                
+                // 1. Calculate net balance after any prior partial payments.
+                // Rule: net_amount = student_fees.amount - student_fees.amount_paid
+                const amount = new Prisma.Decimal(fee.amount ?? 0);
                 const amountPaid = new Prisma.Decimal(fee.amount_paid ?? 0);
-                const netAmount = netAfterDiscount.sub(amountPaid);
+                const netAmount = amount.sub(amountPaid);
 
-                // Skip heads that are fully (or over-) paid
+                // 2. Skip heads that are already fully (or over-) paid
                 if (netAmount.lte(0)) {
                     continue;
                 }
+
+                // 3. Keep the discount snapshot consistent. 
+                // discount_amount = amount_before_discount - amount
+                // This ensures we show the discount that was originally granted.
+                const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
+                const discount = new Prisma.Decimal(gross).sub(amount);
 
                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
@@ -149,7 +153,7 @@ export class VouchersService {
                 });
             }
 
-            // Reject if every fee head is already fully paid
+            // 4. Reject if every fee head is already fully paid
             if (voucherHeadsData.length === 0) {
                 throw new BadRequestException(
                     'All fee heads for this date are already fully paid. No voucher needed.',
@@ -413,15 +417,22 @@ export class VouchersService {
         // 2. Map heads correctly
         const feeHeads = voucher.voucher_heads.map((h: any) => {
             const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
-            const amountPaid = Number(h.student_fees?.amount_paid ?? 0);
-            const isPartialPayment = amountPaid > 0;
-            const balancePrefix = isPartialPayment ? 'BALANCE PAYMENT OF — ' : '';
+            
+            // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
+            // the description must be prefixed with "BALANCE PAYMENT OF — ".
+            const fullAmount = Number(h.student_fees?.amount ?? 0);
+            const netAmount = Number(h.net_amount);
+            const isPartialPayment = netAmount < fullAmount;
+            const balancePrefix = isPartialPayment ? 'BALANCE PAYMENT OF ' : '';
+
             return {
                 description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}`,
-                amount: Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
-                discount: Number(h.discount_amount || 0),
-                netAmount: Number(h.net_amount),
-                discountLabel: h.discount_label || '',
+                // Rule: For balance payments, do not show original discounts. 
+                // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
+                amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
+                discount: isPartialPayment ? 0 : Number(h.discount_amount || 0),
+                netAmount: netAmount,
+                discountLabel: isPartialPayment ? '' : (h.discount_label || ''),
             };
         });
 
