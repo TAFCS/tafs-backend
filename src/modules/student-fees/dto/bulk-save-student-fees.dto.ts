@@ -1,4 +1,4 @@
-import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, IsISO8601 } from 'class-validator';
+import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, IsISO8601, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SaveStudentFeeItemDto {
@@ -18,12 +18,12 @@ export class SaveStudentFeeItemDto {
 
     /** Gross price for this fee before any student-specific discount is applied (template price). */
     @IsNumber({ maxDecimalPlaces: 2 })
-    @IsPositive()
+    @Min(0)
     amount_before_discount: number;
 
     /** Net amount for this student (after specific override). */
     @IsNumber({ maxDecimalPlaces: 2 })
-    @IsPositive()
+    @Min(0)
     @IsOptional()
     amount?: number;
 

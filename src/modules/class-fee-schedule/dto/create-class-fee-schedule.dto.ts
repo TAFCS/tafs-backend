@@ -1,4 +1,4 @@
-import { IsNumber, IsPositive, IsOptional } from 'class-validator';
+import { IsNumber, IsPositive, IsOptional, Min } from 'class-validator';
 
 export class CreateClassFeeScheduleDto {
   @IsNumber()
@@ -10,7 +10,7 @@ export class CreateClassFeeScheduleDto {
   fee_id: number;
 
   @IsNumber()
-  @IsPositive()
+  @Min(0)
   amount: number;
 
   @IsNumber()

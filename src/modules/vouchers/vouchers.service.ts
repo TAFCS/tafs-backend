@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     InternalServerErrorException,
     Logger,
@@ -47,6 +48,8 @@ const VOUCHER_INCLUDE = {
 @Injectable()
 export class VouchersService {
     private readonly logger = new Logger(VouchersService.name);
+    private static readonly missingVoucherMessage =
+        'Challan not yet generated — please contact the school office.';
 
     constructor(
         private readonly prisma: PrismaService,
@@ -122,7 +125,7 @@ export class VouchersService {
 
             for (const fee of feeRecords) {
                 const discountInfo = feeLineMap.get(fee.id);
-                
+
                 // 1. Calculate net balance after any prior partial payments.
                 // Rule: net_amount = student_fees.amount - student_fees.amount_paid
                 const amount = new Prisma.Decimal(fee.amount ?? 0);
@@ -134,7 +137,7 @@ export class VouchersService {
                     continue;
                 }
 
-                // 3. Keep the discount snapshot consistent. 
+                // 3. Keep the discount snapshot consistent.
                 // discount_amount = amount_before_discount - amount
                 // This ensures we show the discount that was originally granted.
                 const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
@@ -417,7 +420,7 @@ export class VouchersService {
         // 2. Map heads correctly
         const feeHeads = voucher.voucher_heads.map((h: any) => {
             const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
-            
+
             // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
             // the description must be prefixed with "BALANCE PAYMENT OF — ".
             const fullAmount = Number(h.student_fees?.amount ?? 0);
@@ -427,7 +430,7 @@ export class VouchersService {
 
             return {
                 description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}`,
-                // Rule: For balance payments, do not show original discounts. 
+                // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
                 discount: isPartialPayment ? 0 : Number(h.discount_amount || 0),
@@ -515,6 +518,77 @@ export class VouchersService {
             orderBy: { issue_date: 'asc' },
         });
         return vouchers.map((v) => this.normalizeVoucher(v));
+    }
+
+    async resolveVoucherForParentByMonth(
+        studentCc: number,
+        familyId: number,
+        academicYear: string,
+        targetMonth: number,
+    ) {
+        const student = await this.prisma.students.findFirst({
+            where: {
+                cc: studentCc,
+                family_id: familyId,
+                deleted_at: null,
+            },
+            select: { cc: true },
+        });
+
+        if (!student) {
+            throw new ForbiddenException(
+                `Student #${studentCc} not linked to your family`,
+            );
+        }
+
+        const voucher = await this.prisma.vouchers.findFirst({
+            where: {
+                student_id: studentCc,
+                status: { not: 'VOID' },
+                OR: [
+                    { academic_year: academicYear },
+                    {
+                        voucher_heads: {
+                            some: {
+                                student_fees: {
+                                    academic_year: academicYear,
+                                },
+                            },
+                        },
+                    },
+                ],
+                AND: [
+                    {
+                        OR: [
+                            { month: targetMonth },
+                            {
+                                voucher_heads: {
+                                    some: {
+                                        student_fees: {
+                                            target_month: targetMonth,
+                                        },
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            include: VOUCHER_INCLUDE,
+            orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+        });
+
+        if (!voucher) {
+            return {
+                exists: false,
+                message: VouchersService.missingVoucherMessage,
+            };
+        }
+
+        return {
+            exists: true,
+            voucher: this.normalizeVoucher(voucher),
+        };
     }
 
     async update(id: number, dto: UpdateVoucherDto) {
@@ -850,14 +924,17 @@ export class VouchersService {
                 const remainingLS = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLS), 0);
 
                 const isOverdue = new Date() > new Date(refreshed.due_date);
-                const remainingOverall = isOverdue ? remainingHeads.add(remainingLS) : remainingHeads;
+                
+                // Rule: If all main heads are paid, the voucher is marked as PAID.
+                const allMainHeadsPaid = remainingHeads.lte(0);
+
                 const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
                     new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
                 );
                 const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0);
 
                 let nextVoucherStatus = refreshed.status ?? 'UNPAID';
-                if (remainingOverall.eq(0)) {
+                if (allMainHeadsPaid) {
                     nextVoucherStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextVoucherStatus = 'PARTIALLY_PAID';
@@ -1112,7 +1189,11 @@ export class VouchersService {
 
         // ── Compute status entirely from derived state ──────────────────────────
         let computedStatus: string;
-        if (remOverall.lte(0)) {
+        
+        // Rule: If all main fee heads are fully paid (remTotal <= 0), it's PAID regardless of late fees.
+        const allHeadsPaid = totalRemHeads.lte(0);
+
+        if (allHeadsPaid) {
             computedStatus = 'PAID';
         } else if (isOverdue) {
             computedStatus = 'OVERDUE';
