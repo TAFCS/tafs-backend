@@ -3,8 +3,10 @@ import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
 import { AuthModule } from '../auth/auth.module';
 
+import { StudentFlagsModule } from '../student-flags/student-flags.module';
+
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, StudentFlagsModule],
   controllers: [IdentityController],
   providers: [IdentityService],
 })

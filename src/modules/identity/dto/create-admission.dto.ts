@@ -337,6 +337,18 @@ export class CreateAdmissionDto {
   admission: AdmissionDetailsDto;
 
   // ── Previous schools ──
+  @IsOptional()
+  @IsBoolean()
+  is_flagged?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  flag_reminder_date?: string;
+
+  @IsOptional()
+  @IsString()
+  flag_description?: string;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PreviousSchoolDto)

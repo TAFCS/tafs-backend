@@ -27,6 +27,7 @@ model student_flags {
   created_at    DateTime  @default(now()) @db.Timestamp(6)
   reminder_date DateTime? @db.Date
   work_done     Boolean   @default(false)
+  comment       String?
   students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade)
 
   @@unique([student_id, flag])

@@ -5,13 +5,17 @@ import {
   CreateAdmissionDto,
   GuardianDto,
 } from './dto/create-admission.dto';
+import { StudentFlagsService } from '../student-flags/student-flags.service';
 import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 
 type TxClient = Prisma.TransactionClient;
 
 @Injectable()
 export class IdentityService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly flagsSvc: StudentFlagsService,
+  ) { }
 
   async registerAdmission(dto: CreateAdmissionDto) {
     return this.prisma.$transaction(async (tx) => {
@@ -229,7 +233,16 @@ export class IdentityService {
         },
       });
 
-      // ── 8. Return full record ────────────────────────────────────────────
+      // ── 8. Handle Flag (Universal) ──────────────────────────────────────
+      if (dto.is_flagged) {
+        await this.flagsSvc.addFlag(
+          student.cc,
+          dto.flag_description || 'Universal FLAG',
+          dto.flag_reminder_date ? new Date(dto.flag_reminder_date) : undefined
+        );
+      }
+
+      // ── 9. Return full record ────────────────────────────────────────────
       return tx.students.findUnique({
         where: { cc: student.cc },
         include: this.defaultStudentInclude(),
