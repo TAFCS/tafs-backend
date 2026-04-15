@@ -924,14 +924,17 @@ export class VouchersService {
                 const remainingLS = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLS), 0);
 
                 const isOverdue = new Date() > new Date(refreshed.due_date);
-                const remainingOverall = isOverdue ? remainingHeads.add(remainingLS) : remainingHeads;
+                
+                // Rule: If all main heads are paid, the voucher is marked as PAID.
+                const allMainHeadsPaid = remainingHeads.lte(0);
+
                 const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
                     new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
                 );
                 const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0);
 
                 let nextVoucherStatus = refreshed.status ?? 'UNPAID';
-                if (remainingOverall.eq(0)) {
+                if (allMainHeadsPaid) {
                     nextVoucherStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextVoucherStatus = 'PARTIALLY_PAID';
@@ -1186,7 +1189,11 @@ export class VouchersService {
 
         // ── Compute status entirely from derived state ──────────────────────────
         let computedStatus: string;
-        if (remOverall.lte(0)) {
+        
+        // Rule: If all main fee heads are fully paid (remTotal <= 0), it's PAID regardless of late fees.
+        const allHeadsPaid = totalRemHeads.lte(0);
+
+        if (allHeadsPaid) {
             computedStatus = 'PAID';
         } else if (isOverdue) {
             computedStatus = 'OVERDUE';
