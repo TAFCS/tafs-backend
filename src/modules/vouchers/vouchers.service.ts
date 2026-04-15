@@ -110,16 +110,35 @@ export class VouchersService {
 
             let totalBeforeDueDecimal = new Prisma.Decimal(0);
 
-            const voucherHeadsData = feeRecords.map((fee) => {
+            const voucherHeadsData: {
+                voucher_id: number;
+                student_fee_id: number;
+                discount_amount: Prisma.Decimal;
+                discount_label: string | null;
+                net_amount: Prisma.Decimal;
+                amount_deposited: number;
+                balance: Prisma.Decimal;
+            }[] = [];
+
+            for (const fee of feeRecords) {
                 const discountInfo = feeLineMap.get(fee.id);
                 // Fall back to amount when amount_before_discount is null (no discount record)
                 const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
                 const discount = new Prisma.Decimal(discountInfo?.discount_amount ?? 0);
-                const netAmount = new Prisma.Decimal(gross).sub(discount);
-                
+                // net after discount (= student_fees.amount)
+                const netAfterDiscount = new Prisma.Decimal(gross).sub(discount);
+                // deduct any prior partial payment
+                const amountPaid = new Prisma.Decimal(fee.amount_paid ?? 0);
+                const netAmount = netAfterDiscount.sub(amountPaid);
+
+                // Skip heads that are fully (or over-) paid
+                if (netAmount.lte(0)) {
+                    continue;
+                }
+
                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
-                return {
+                voucherHeadsData.push({
                     voucher_id: newVoucher.id,
                     student_fee_id: fee.id,
                     discount_amount: discount,
@@ -127,8 +146,15 @@ export class VouchersService {
                     net_amount: netAmount,
                     amount_deposited: 0,
                     balance: netAmount,
-                };
-            });
+                });
+            }
+
+            // Reject if every fee head is already fully paid
+            if (voucherHeadsData.length === 0) {
+                throw new BadRequestException(
+                    'All fee heads for this date are already fully paid. No voucher needed.',
+                );
+            }
 
             await tx.voucher_heads.createMany({
                 data: voucherHeadsData,
@@ -385,13 +411,19 @@ export class VouchersService {
         }
 
         // 2. Map heads correctly
-        const feeHeads = voucher.voucher_heads.map((h: any) => ({
-            description: `${descriptionPrefix || ''}${h.student_fees?.fee_types?.description || 'Fee'}`,
-            amount: Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
-            discount: Number(h.discount_amount || 0),
-            netAmount: Number(h.net_amount),
-            discountLabel: h.discount_label || '',
-        }));
+        const feeHeads = voucher.voucher_heads.map((h: any) => {
+            const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
+            const amountPaid = Number(h.student_fees?.amount_paid ?? 0);
+            const isPartialPayment = amountPaid > 0;
+            const balancePrefix = isPartialPayment ? 'BALANCE PAYMENT OF — ' : '';
+            return {
+                description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}`,
+                amount: Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
+                discount: Number(h.discount_amount || 0),
+                netAmount: Number(h.net_amount),
+                discountLabel: h.discount_label || '',
+            };
+        });
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
         const lateFeeAmount = voucher.late_fee_charge ? 1000 : 0;
