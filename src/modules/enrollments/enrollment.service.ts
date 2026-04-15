@@ -110,7 +110,17 @@ export class EnrollmentService {
         campuses: true,
         classes: true,
         sections: true,
-        families: true,
+        families: {
+          include: {
+            students: {
+              where: { gr_number: { not: null } },
+              select: { 
+                cc: true,
+                gr_number: true,
+              },
+            },
+          },
+        },
         student_admissions: {
           orderBy: { application_date: 'desc' },
           take: 1,
@@ -129,23 +139,118 @@ export class EnrollmentService {
 
     const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
     const motherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'mother');
+    const emergencyContact = student.student_guardians.find(g => g.is_emergency_contact);
+
+    // Scholastic year formatting
+    const academicYear = student.academic_year || student.student_admissions[0]?.academic_year;
+    let scholasticYear = '';
+    if (academicYear) {
+      const parts = academicYear.split('-');
+      if (parts.length === 2) {
+        scholasticYear = `${parts[0]}-${parts[1]}`;
+      } else {
+        scholasticYear = academicYear;
+      }
+    }
+
+    // Get link_gr_number from other family members (siblings)
+    const linkGrNumber = student.families?.students.find(s => s.gr_number && s.cc !== student.cc)?.gr_number;
+
+    // Auto-fetch current Day and Date
+    const now = new Date();
+    const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+    const monthNames = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+    const currentDay = dayNames[now.getDay()];
+    const currentDate = `${monthNames[now.getMonth()]} ${now.getDate().toString().padStart(2, '0')}, ${now.getFullYear()}`;
+
+    // Segment head based on class
+    let segmentHead = '';
+    if (student.classes?.academic_system === 'CAMBRIDGE') {
+      const classCode = student.classes.class_code.toUpperCase();
+      if (classCode.includes('JUNIOR')) {
+        segmentHead = 'JUNIOR CAMBRIDGE';
+      } else {
+        segmentHead = 'CAMBRIDGE';
+      }
+    } else {
+      segmentHead = student.classes?.academic_system || '';
+    }
+
+    // Construct address from available fields
+    let address = '';
+
+    // First, try to get mailing_address from any guardian
+    for (const sg of student.student_guardians) {
+      if (sg.guardians?.mailing_address) {
+        address = sg.guardians.mailing_address;
+        break; // Use the first available mailing_address
+      }
+    }
+
+    // If no mailing_address found, try family primary_address
+    if (!address) {
+      address = student.families?.primary_address || '';
+    }
+
+    // If still no address, try to construct from any guardian's address components
+    if (!address) {
+      for (const sg of student.student_guardians) {
+        if (sg.guardians) {
+          const guardian = sg.guardians;
+          const addressParts = [
+            guardian.house_appt_name,
+            guardian.house_appt_number,
+            guardian.area_block,
+            guardian.city,
+            guardian.province,
+            guardian.country
+          ].filter(Boolean);
+          if (addressParts.length > 0) {
+            address = addressParts.join(', ');
+            break; // Use the first guardian with address components
+          }
+        }
+      }
+    }
+
+    const formatPhone = (phone: string | null | undefined) => {
+      if (!phone) return '';
+      let cleaned = phone.toString().replace(/\D/g, ''); // Remove non-digits
+      if (!cleaned) return '';
+      
+      // If starts with 0, remove it (e.g., 0300 -> 300)
+      if (cleaned.startsWith('0')) cleaned = cleaned.substring(1);
+      // If already starts with 92, just prepend +
+      if (cleaned.startsWith('92')) return `+${cleaned}`;
+      // Otherwise prepend +92
+      return `+92${cleaned}`;
+    };
 
     return {
       cc: student.cc,
       gr_number: student.gr_number,
+      reg_number: student.cc.toString(),
+      link_gr_number: linkGrNumber || '',
+      day: currentDay,
+      date: currentDate,
       full_name: student.full_name,
       dob: student.dob,
       gender: student.gender,
       doa: student.doa,
-      academic_year: student.academic_year || student.student_admissions[0]?.academic_year,
+      scholastic_year: scholasticYear,
+      academic_year: academicYear,
       campus_name: student.campuses?.campus_name,
       class_name: student.classes?.description,
       section_name: student.sections?.description,
-      address: fatherLink?.guardians?.mailing_address || student.families?.primary_address,
+      segment_head: segmentHead,
+      address: address,
       home_phone: student.families?.home_phone,
       father_name: fatherLink?.guardians?.full_name,
-      father_cell: fatherLink?.guardians?.primary_phone,
-      mother_cell: motherLink?.guardians?.primary_phone,
+      father_cell: formatPhone(fatherLink?.guardians?.primary_phone),
+      mother_cell: formatPhone(motherLink?.guardians?.primary_phone),
+      nearest_name: emergencyContact?.guardians?.full_name || '',
+      nearest_phone: formatPhone(emergencyContact?.guardians?.primary_phone),
+      nearest_relationship: emergencyContact?.relationship || '',
       email: student.email || student.families?.email,
       fax: fatherLink?.guardians?.fax_number,
     };
