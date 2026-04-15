@@ -44,4 +44,10 @@ export class MediaService {
 
     return { url };
   }
+
+  async getPhotoBuffer(url: string) {
+    // Extract the key from the full CDN URL
+    const key = this.storage.extractKeyFromUrl(url);
+    return this.storage.getFile(key);
+  }
 }

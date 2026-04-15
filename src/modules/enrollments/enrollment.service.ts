@@ -253,6 +253,7 @@ export class EnrollmentService {
       nearest_relationship: emergencyContact?.relationship || '',
       email: student.email || student.families?.email,
       fax: fatherLink?.guardians?.fax_number,
+      photograph_url: student.photograph_url || student.photo_blue_bg_url,
     };
   }
 

@@ -1,13 +1,18 @@
 import {
   Controller,
   Post,
+  Get,
   Param,
+  Query,
+  Res,
   UploadedFile,
   UseInterceptors,
   ParseIntPipe,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { MediaService } from './media.service';
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
 
@@ -64,5 +69,29 @@ export class MediaController {
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
     return this.mediaService.uploadGuardianPhoto(id, file);
+  }
+
+  @Get('proxy')
+  @ApiOperation({ summary: 'Proxy an image from the CDN to bypass CORS' })
+  async getProxy(
+    @Query('url') url: string,
+    @Res() res: any,
+  ) {
+    if (!url) throw new BadRequestException('URL query parameter is required');
+    
+    // Security check: only allow TAFS CDN URLs
+    const cdnBase = process.env.DO_SPACES_CDN_ENDPOINT?.replace(/\/+$/, '');
+    if (cdnBase && !url.startsWith(cdnBase)) {
+      throw new BadRequestException('Only internal CDN URLs can be proxied');
+    }
+
+    try {
+      const { buffer, mime } = await this.mediaService.getPhotoBuffer(url);
+      res.set('Content-Type', mime);
+      res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+      res.send(buffer);
+    } catch (err) {
+      throw new NotFoundException('Could not proxy image');
+    }
   }
 }

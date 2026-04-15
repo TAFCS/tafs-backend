@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
     S3Client,
@@ -65,6 +65,11 @@ export class StorageService {
         return `${this.cdnEndpoint}/${key}`;
     }
 
+    /** Extracts the storage key from a full CDN URL. */
+    extractKeyFromUrl(url: string): string {
+        return url.replace(`${this.cdnEndpoint}/`, '');
+    }
+
     /**
      * Upload a buffer to DigitalOcean Spaces and return the public CDN URL.
      *
@@ -108,6 +113,38 @@ export class StorageService {
             );
         } catch (err: any) {
             this.logger.warn(`Failed to delete object at ${url}`, err?.message);
+        }
+    }
+
+    /**
+     * Fetch an object from DigitalOcean Spaces as a buffer.
+     */
+    async getFile(key: string): Promise<{ buffer: Buffer; mime: string }> {
+        if (!this.client) {
+            throw new InternalServerErrorException('Storage not configured');
+        }
+        try {
+            const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+            const response = await this.client.send(
+                new GetObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                }),
+            );
+
+            const streamToBuffer = (stream: any): Promise<Buffer> =>
+                new Promise((resolve, reject) => {
+                    const chunks: any[] = [];
+                    stream.on('data', (chunk: any) => chunks.push(chunk));
+                    stream.on('error', reject);
+                    stream.on('end', () => resolve(Buffer.concat(chunks)));
+                });
+
+            const buffer = await streamToBuffer(response.Body);
+            return { buffer, mime: response.ContentType || 'application/octet-stream' };
+        } catch (err: any) {
+            this.logger.error(`Failed to fetch ${key}`, err?.message);
+            throw new NotFoundException('File not found in storage');
         }
     }
 }
