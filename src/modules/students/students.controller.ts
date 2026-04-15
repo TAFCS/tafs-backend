@@ -64,6 +64,17 @@ export class StudentsController {
     );
   }
 
+  @Patch(':id/unexpel')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async unexpelStudent(@Param('id', ParseIntPipe) id: number) {
+    const updated = await this.studentsService.unexpelStudent(id);
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      'Student unexpelled successfully',
+    );
+  }
+
   @Post('promotion/single')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
   async promoteSingle(@Body() dto: PromoteSingleStudentDto) {

@@ -184,6 +184,7 @@ export class StaffEditingService {
         sections: true,
         houses: true,
         student_admissions: { orderBy: { application_date: 'desc' }, take: 5 },
+        student_flags: { orderBy: { created_at: 'desc' } },
         student_guardians: { include: { guardians: true }, orderBy: { guardian_id: 'asc' } },
         student_activities: true,
         student_languages: true,
@@ -400,7 +401,7 @@ export class StaffEditingService {
       where: { cc: studentCc },
       select: { family_id: true }
     });
- 
+
     if (!student || !student.family_id) {
       // Fallback: If no family_id, just update guardians directly linked to this student
       const links = await this.prisma.student_guardians.findMany({
@@ -416,7 +417,7 @@ export class StaffEditingService {
       }
       return { success: true, count: ids.length };
     }
- 
+
     // Find all guardians linked to ANY student in this family
     const familyLinks = await this.prisma.student_guardians.findMany({
       where: {
@@ -424,19 +425,19 @@ export class StaffEditingService {
       },
       select: { guardian_id: true }
     });
- 
+
     const uniqueGuardianIds = [...new Set(familyLinks.map(l => l.guardian_id))];
- 
+
     if (uniqueGuardianIds.length > 0) {
       await this.prisma.guardians.updateMany({
         where: { id: { in: uniqueGuardianIds } },
         data: dto as any
       });
     }
- 
+
     return { success: true, count: uniqueGuardianIds.length };
   }
- 
+
   async getStudentGuardians(studentCc: number) {
     await this.assertStudentExists(studentCc);
 
@@ -497,7 +498,7 @@ export class StaffEditingService {
 
     // Upsert by CNIC to prevent duplicates; create new if no CNIC provided.
     const isAddressEmpty = !guardianData.house_appt_name && !guardianData.city;
-    
+
     if (isAddressEmpty) {
         // Try to inherit from family
         const student = await this.prisma.students.findUnique({
@@ -559,7 +560,7 @@ export class StaffEditingService {
     if (!guardian) throw new NotFoundException(`Guardian #${guardian_id} not found`);
 
     const joinData = { relationship, is_primary_contact, is_emergency_contact };
-    
+
     const link = await this.prisma.student_guardians.upsert({
       where: {
         student_id_guardian_id: { student_id: studentCc, guardian_id },
@@ -796,6 +797,7 @@ export class StaffEditingService {
 
   private flattenStudentFull(s: any) {
     const admission = s.student_admissions?.[0];
+    const actionLogs = this.buildStudentActionLogs(s);
     return {
       cc: s.cc,
       gr_number: s.gr_number,
@@ -841,6 +843,7 @@ export class StaffEditingService {
       activities: s.student_activities ?? [],
       languages: s.student_languages ?? [],
       previous_schools: s.student_previous_schools ?? [],
+      action_logs: actionLogs,
       guardians: s.student_guardians?.map((link: any) => ({
         guardian_id: link.guardian_id,
         relationship: link.relationship,
@@ -851,6 +854,96 @@ export class StaffEditingService {
       })) ?? [],
       date_of_admission: s.doa,
     };
+  }
+
+  private buildStudentActionLogs(s: any) {
+    const logs: Array<{
+      id: string;
+      type: string;
+      title: string;
+      description?: string | null;
+      occurred_at: Date | null;
+    }> = [];
+
+    if (s.created_at) {
+      logs.push({
+        id: `student-created-${s.cc}`,
+        type: 'PROFILE_CREATED',
+        title: 'Student profile created',
+        description: null,
+        occurred_at: s.created_at,
+      });
+    }
+
+    const admissions = [...(s.student_admissions ?? [])].sort((a: any, b: any) => {
+      const at = a?.application_date ? new Date(a.application_date).getTime() : 0;
+      const bt = b?.application_date ? new Date(b.application_date).getTime() : 0;
+      return at - bt;
+    });
+
+    admissions.forEach((admission: any, index: number) => {
+      const isFirstAdmission = index === 0;
+      const grade = admission?.requested_grade || 'Unknown grade';
+      const title = isFirstAdmission
+        ? `Admission recorded in ${grade}`
+        : `Promoted to ${grade}`;
+      const details = [admission?.academic_system, admission?.academic_year]
+        .filter(Boolean)
+        .join(' • ');
+
+      logs.push({
+        id: `admission-${admission.id}`,
+        type: isFirstAdmission ? 'ADMISSION' : 'PROMOTION',
+        title,
+        description: details || null,
+        occurred_at: admission?.application_date ?? null,
+      });
+    });
+
+    for (const flag of s.student_flags ?? []) {
+      const rawFlag = String(flag?.flag || '');
+      const upperFlag = rawFlag.toUpperCase();
+
+      if (upperFlag === 'EXPELLED') {
+        logs.push({
+          id: `flag-${flag.id}`,
+          type: 'EXPELLED',
+          title: 'Student expelled',
+          description: flag?.comment || null,
+          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
+        });
+        continue;
+      }
+
+      if (upperFlag.startsWith('UNEXPELLED_LOG_')) {
+        logs.push({
+          id: `flag-${flag.id}`,
+          type: 'UNEXPELLED',
+          title: 'Student unexpelled',
+          description: flag?.comment || null,
+          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
+        });
+        continue;
+      }
+
+      if (upperFlag.startsWith('GRADUATED_LOG_')) {
+        logs.push({
+          id: `flag-${flag.id}`,
+          type: 'GRADUATED',
+          title: 'Student graduated',
+          description: flag?.comment || null,
+          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
+        });
+      }
+    }
+
+    logs.sort((a, b) => {
+      const at = a.occurred_at ? new Date(a.occurred_at).getTime() : 0;
+      const bt = b.occurred_at ? new Date(b.occurred_at).getTime() : 0;
+      return bt - at;
+    });
+
+    return logs;
   }
 
   // ─── Sub-table CRUD ────────────────────────────────────────────────────────

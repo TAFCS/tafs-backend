@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { ClassSelectorDto } from './dto/class-selector.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
+import { StudentStatus } from '../../constants/student-status.constant';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'skipped' | 'failed';
 
@@ -55,11 +56,11 @@ export class StudentsService {
 
   private async getFinancialDigest(studentId: number) {
     const [fees, deposits, allocations] = await Promise.all([
-      this.prisma.student_fees.findMany({ 
+      this.prisma.student_fees.findMany({
         where: { student_id: studentId },
         select: { amount: true, amount_paid: true, due_date: true, status: true }
       }),
-      this.prisma.deposits.findMany({ 
+      this.prisma.deposits.findMany({
         where: { student_id: studentId },
         select: { total_amount: true }
       }),
@@ -102,13 +103,13 @@ export class StudentsService {
     let badge = 'Cleared';
     if (anyOverdue) badge = 'Overdue';
     else if (outstanding.gt(0)) badge = anyPartial ? 'Partial' : 'Partial'; // default to Partial if any unpaid
-    
+
     // If outstanding > 0 but not overdue or partial, it's just 'Partial' (or we could add 'Pending')
-    // Existing frontend only handles Cleared, Overdue, Partial. 
+    // Existing frontend only handles Cleared, Overdue, Partial.
     // I'll map anything with balance to 'Partial' for now to fit existing styles, or just use the logic below.
     if (anyOverdue) badge = 'Overdue';
     else if (outstanding.gt(0)) {
-        badge = anyPartial ? 'Partial' : 'Partial'; 
+        badge = anyPartial ? 'Partial' : 'Partial';
     } else {
         badge = 'Cleared';
     }
@@ -135,14 +136,14 @@ export class StudentsService {
         { gr_number: { contains: search, mode: 'insensitive' } },
         ...(isNumeric ? [{ cc: Number(search) }] : []),
         // Only search CNIC if it's not a short numeric string (likely intended for CC/GR)
-        ...(!isShortNumeric ? [{ 
-          student_guardians: { 
-            some: { 
-              guardians: { 
-                cnic: { contains: search, mode: Prisma.QueryMode.insensitive } 
-              } 
-            } 
-          } 
+        ...(!isShortNumeric ? [{
+          student_guardians: {
+            some: {
+              guardians: {
+                cnic: { contains: search, mode: Prisma.QueryMode.insensitive }
+              }
+            }
+          }
         }] : []),
       ];
     }
@@ -155,13 +156,13 @@ export class StudentsService {
     // TEMP: Data Audit Filter (using raw SQL fallback for compatibility)
     if (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true) {
       const abnormalStudents: any[] = await this.prisma.$queryRaw`
-        SELECT cc FROM students s 
-        WHERE 
+        SELECT cc FROM students s
+        WHERE
           NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id = s.cc)
-          OR 
+          OR
           cc IN (
-            SELECT student_id FROM student_guardians 
-            GROUP BY student_id 
+            SELECT student_id FROM student_guardians
+            GROUP BY student_id
             HAVING COUNT(*) > 2
           )
       `;
@@ -610,6 +611,58 @@ export class StudentsService {
     });
   }
 
+  async unexpelStudent(id: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: id },
+      select: {
+        cc: true,
+        status: true,
+        deleted_at: true,
+      },
+    });
+
+    if (!student || student.deleted_at) {
+      throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    if (student.status !== StudentStatus.EXPELLED) {
+      throw new BadRequestException('Only expelled students can be unexpelled');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.students.update({
+        where: { cc: id },
+        data: {
+          status: StudentStatus.ENROLLED,
+        },
+        include: this.assignmentInclude,
+      });
+
+      await tx.student_flags.updateMany({
+        where: {
+          student_id: id,
+          flag: 'EXPELLED',
+          work_done: false,
+        },
+        data: {
+          work_done: true,
+        },
+      });
+
+      await tx.student_flags.create({
+        data: {
+          student_id: id,
+          flag: `UNEXPELLED_LOG_${Date.now()}`,
+          reminder_date: new Date(),
+          work_done: true,
+          comment: 'Student status restored to ENROLLED',
+        },
+      });
+
+      return updated;
+    });
+  }
+
   async promoteSingle(dto: PromoteSingleStudentDto) {
     const result = await this.promoteBulk({
       from: dto.from,
@@ -792,19 +845,21 @@ export class StudentsService {
     isExpelling: boolean,
     isExplicitIds: boolean,
     toSectionId: number | undefined,
-    _reason: string | undefined,
+    reason: string | undefined,
     targetAcademicYear: string | undefined,
     dryRun: boolean,
     classActiveCache: Map<string, boolean>,
     sectionActiveCache: Map<string, boolean>,
   ): Promise<PromotionOutcome> {
     // ── Already expelled guard ───────────────────────────────────────────────
-    if (student.status === 'EXPELLED') {
+    if (student.status === StudentStatus.EXPELLED) {
       return {
         student_id: student.cc,
         status: 'skipped',
         reason_code: 'ALREADY_EXPELLED',
-        message: 'Student is already expelled',
+        message: isExpelling
+          ? 'Student is already expelled'
+          : 'Expelled student cannot be promoted',
         from_class_id: student.class_id,
         to_class_id: student.class_id,
         from_academic_year: student.academic_year,
@@ -814,7 +869,7 @@ export class StudentsService {
     }
 
     // ── Already graduated guard ──────────────────────────────────────────────
-    if (student.status === 'GRADUATED') {
+    if (student.status === StudentStatus.GRADUATED) {
       return {
         student_id: student.cc,
         status: 'skipped',
@@ -920,13 +975,25 @@ export class StudentsService {
     try {
       if (isGraduating) {
         // Graduation: set status to GRADUATED, null out class_id, all other data preserved
-        await this.prisma.students.update({
-          where: { cc: student.cc },
-          data: {
-            status: 'GRADUATED',
-            class_id: null,
-            academic_year: nextAcademicYear,
-          },
+        await this.prisma.$transaction(async (tx) => {
+          await tx.students.update({
+            where: { cc: student.cc },
+            data: {
+              status: StudentStatus.GRADUATED,
+              class_id: null,
+              academic_year: nextAcademicYear,
+            },
+          });
+
+          await tx.student_flags.create({
+            data: {
+              student_id: student.cc,
+              flag: `GRADUATED_LOG_${Date.now()}`,
+              reminder_date: new Date(),
+              work_done: true,
+              comment: reason?.trim() || null,
+            },
+          });
         });
         return {
           student_id: student.cc,
@@ -940,11 +1007,38 @@ export class StudentsService {
           dry_run: false,
         };
       } else if (isExpelling) {
-        // Expulsion: set status to EXPELLED, ALL data preserved (class_id stays)
-        await this.prisma.students.update({
-          where: { cc: student.cc },
-          data: { status: 'EXPELLED' },
+        // Expulsion: set status to EXPELLED and store expulsion metadata.
+        const expulsionDate = new Date();
+        const expulsionReason = reason?.trim() || null;
+
+        await this.prisma.$transaction(async (tx) => {
+          await tx.students.update({
+            where: { cc: student.cc },
+            data: { status: StudentStatus.EXPELLED },
+          });
+
+          await tx.student_flags.upsert({
+            where: {
+              student_id_flag: {
+                student_id: student.cc,
+                flag: 'EXPELLED',
+              },
+            },
+            update: {
+              reminder_date: expulsionDate,
+              comment: expulsionReason,
+              work_done: false,
+            },
+            create: {
+              student_id: student.cc,
+              flag: 'EXPELLED',
+              reminder_date: expulsionDate,
+              comment: expulsionReason,
+              work_done: false,
+            },
+          });
         });
+
         return {
           student_id: student.cc,
           status: 'expelled',
