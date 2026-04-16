@@ -1246,13 +1246,16 @@ export class VouchersService {
         // Rule: If all main fee heads are fully paid (remTotal <= 0), it's PAID regardless of late fees.
         const allHeadsPaid = totalRemHeads.lte(0);
 
+        const anyDep = anyHeadPaidSomewhere || depLS.gt(0);
+
         if (allHeadsPaid) {
             computedStatus = 'PAID';
+        } else if (anyDep) {
+            computedStatus = 'PARTIALLY_PAID';
         } else if (isOverdue) {
             computedStatus = 'OVERDUE';
         } else {
-            const anyDep = anyHeadPaidSomewhere || depLS.gt(0);
-            computedStatus = anyDep ? 'PARTIALLY_PAID' : 'UNPAID';
+            computedStatus = 'UNPAID';
         }
 
         this.logger.debug(`  Voucher #${voucher.id} Result: Computed Status=${computedStatus}`);
