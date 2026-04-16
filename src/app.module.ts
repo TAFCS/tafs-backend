@@ -22,6 +22,7 @@ import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-
 import { EnrollmentModule } from './modules/enrollments/enrollment.module';
 import { MediaModule } from './modules/media/media.module';
 import { StudentFlagsModule } from './modules/student-flags/student-flags.module';
+import { TransferModule } from './modules/transfers/transfer.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { StudentFlagsModule } from './modules/student-flags/student-flags.module
     EnrollmentModule,
     MediaModule,
     StudentFlagsModule,
+    TransferModule,
   ],
   controllers: [AppController],
   providers: [AppService],
