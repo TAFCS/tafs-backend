@@ -91,6 +91,8 @@ export class FamiliesController {
     @Param('id', ParseIntPipe) familyId: number,
     @Body() dto: AssignStudentDto,
   ) {
+    // eslint-disable-next-line no-console
+    console.log(`[FamiliesController] familyId: ${familyId}, Raw Body: ${JSON.stringify(dto)}`);
     const student = await this.familiesService.assignChildToFamily(
       familyId,
       dto.student_id,

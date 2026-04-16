@@ -32,6 +32,10 @@ export class FamiliesService {
             { email: { contains: search, mode: 'insensitive' as const } },
             { legacy_pid: { contains: search, mode: 'insensitive' as const } },
             ...(isNumeric ? [{ id: Number(search) }] : []),
+            // Search by sibling CC (if numeric)
+            ...(isNumeric ? [{ students: { some: { cc: Number(search), deleted_at: null } } }] : []),
+            // Search by sibling GR Number
+            { students: { some: { gr_number: { contains: search, mode: 'insensitive' as const }, deleted_at: null } } },
             // Search by guardian CNIC  →  families → students → student_guardians → guardians
             {
               students: {

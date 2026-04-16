@@ -247,6 +247,10 @@ export class CreateAdmissionDto {
   @IsOptional()
   existing_family_id?: number;
 
+  @IsBoolean()
+  @IsOptional()
+  should_create_family?: boolean;
+
   // ── Student personal data ──
   @IsString()
   @IsOptional()

@@ -20,7 +20,7 @@ export class IdentityService {
   async registerAdmission(dto: CreateAdmissionDto) {
     return this.prisma.$transaction(async (tx) => {
       // ── 1. Resolve or create family ──────────────────────────────────────
-      let familyId: number;
+      let familyId: number | null = null;
 
       if (dto.existing_family_id) {
         const existing = await tx.families.findUnique({
@@ -75,7 +75,8 @@ export class IdentityService {
               data: { home_phone: dto.home_phone },
             });
           }
-        } else {
+        } else if (dto.should_create_family !== false) {
+          // Create new family only if explicitly requested or default (undefined)
           const familyName = dto.father.full_name
             ? dto.father.full_name
             : dto.full_name;
