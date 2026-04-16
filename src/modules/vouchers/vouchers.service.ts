@@ -418,8 +418,20 @@ export class VouchersService {
         }
 
         // 2. Map heads correctly
+        const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         const feeHeads = voucher.voucher_heads.map((h: any) => {
             const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
+
+            // Append month label for tuition fees, e.g. "Monthly Tuition Fee (APR 25)"
+            const isTuition = feeDescription.toLowerCase().includes('tuition');
+            const targetMonth: number | null = h.student_fees?.target_month ?? null;
+            let monthSuffix = '';
+            if (isTuition && targetMonth) {
+                const monthName = (monthNames[targetMonth] || '').slice(0, 3).toUpperCase();
+                const acYear: string = voucher.academic_year || '';
+                const yrShort = acYear.split('-')[0]?.slice(-2) ?? '';
+                monthSuffix = ` (${monthName}${yrShort ? ' ' + yrShort : ''})`;
+            }
 
             // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
             // the description must be prefixed with "BALANCE PAYMENT OF — ".
@@ -429,7 +441,7 @@ export class VouchersService {
             const balancePrefix = isPartialPayment ? 'BALANCE PAYMENT OF ' : '';
 
             return {
-                description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}`,
+                description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}${monthSuffix}`,
                 // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
@@ -443,7 +455,6 @@ export class VouchersService {
         const lateFeeAmount = voucher.late_fee_charge ? 1000 : 0;
 
         // Resolve Month Label
-        const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         const monthLabel = voucher.month ? monthNames[voucher.month] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
 
         // Prepare Key & QR URL
