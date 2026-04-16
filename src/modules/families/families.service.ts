@@ -286,6 +286,51 @@ export class FamiliesService {
     return updated;
   }
 
+  async initializeFamilyFromStudent(studentId: number) {
+    const student = await this.prisma.students.findFirst({
+      where: { cc: studentId, deleted_at: null },
+      include: {
+        student_guardians: {
+          include: { guardians: true },
+          where: { is_primary_contact: true },
+        },
+      },
+    });
+
+    if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+    if (student.family_id) {
+      throw new ConflictException(`Student #${studentId} already has a family assigned`);
+    }
+
+    const primaryGuardian = student.student_guardians[0]?.guardians;
+    const householdName = primaryGuardian?.full_name
+      ? `Family of ${primaryGuardian.full_name}`
+      : `Family of ${student.full_name}`;
+
+    const addressChunks = primaryGuardian
+      ? [primaryGuardian.house_appt_name, primaryGuardian.area_block, primaryGuardian.city]
+      : [];
+    const address = addressChunks.filter(Boolean).join(', ') || null;
+
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. Create Family
+      const family = await tx.families.create({
+        data: {
+          household_name: householdName,
+          primary_address: address,
+        },
+      });
+
+      // 2. Link Student
+      await tx.students.update({
+        where: { cc: studentId },
+        data: { family_id: family.id },
+      });
+
+      return { ...family, students: [student] };
+    });
+  }
+
   // ── Remove child from family ──────────────────────────────────────────────
 
   async removeChildFromFamily(familyId: number, studentId: number) {

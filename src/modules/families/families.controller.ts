@@ -104,6 +104,21 @@ export class FamiliesController {
     };
   }
 
+  // POST /api/v1/families/from-student/:studentId
+  @Post('from-student/:studentId')
+  @HttpCode(HttpStatus.CREATED)
+  @CheckPolicies((ability) => ability.can(Action.Create, 'Family'))
+  async initializeFromStudent(
+    @Param('studentId', ParseIntPipe) studentId: number,
+  ) {
+    const student = await this.familiesService.initializeFamilyFromStudent(studentId);
+    return {
+      success: true,
+      message: 'Family initialized successfully from student data',
+      data: student,
+    };
+  }
+
   // DELETE /api/v1/families/:id/students/:studentId
   @Delete(':id/students/:studentId')
   @HttpCode(HttpStatus.OK)

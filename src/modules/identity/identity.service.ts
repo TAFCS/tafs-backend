@@ -75,20 +75,6 @@ export class IdentityService {
               data: { home_phone: dto.home_phone },
             });
           }
-        } else if (dto.should_create_family !== false) {
-          // Create new family only if explicitly requested or default (undefined)
-          const familyName = dto.father.full_name
-            ? dto.father.full_name
-            : dto.full_name;
-
-          const family = await tx.families.create({
-            data: {
-              household_name: familyName,
-              primary_address: [dto.father.house_appt_name, dto.father.area_block].filter(Boolean).join(', ') || null,
-              home_phone: dto.home_phone || null,
-            },
-          });
-          familyId = family.id;
         }
       }
 
