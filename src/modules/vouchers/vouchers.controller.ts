@@ -25,6 +25,7 @@ import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
+import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -171,6 +172,31 @@ export class VouchersController {
         };
     }
 
+    /** Generate (or regenerate) the voucher PDF server-side, store it, and return the URL. */
+    @Post(':id/generate-pdf')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async generatePdf(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: GenerateVoucherPdfDto,
+    ) {
+        const result = await this.vouchersService.generatePdf(
+            id,
+            dto.show_discount ?? true,
+            dto.paid_stamp ?? false,
+        );
+        return {
+            success: true,
+            message: 'Voucher PDF generated successfully',
+            data: result,
+        };
+    }
+
     @Post(':id/deposit')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
@@ -231,7 +257,7 @@ export class VouchersController {
         return { success: true, message: 'Paid PDF saved.', data: result };
     }
 
-    /** Split a PARTIALLY_PAID voucher into a new PAID voucher + a new UNPAID voucher, then delete the original. */
+    /** Split a PARTIALLY_PAID voucher into a new PAID audit record + a new UNPAID balance voucher. The original voucher and its deposit_allocations are preserved. */
     @Post(':id/split-partially-paid')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)

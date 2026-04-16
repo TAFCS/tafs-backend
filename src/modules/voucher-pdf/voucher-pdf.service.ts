@@ -46,6 +46,10 @@ export interface VoucherPdfData {
     }>;
     totalAmount: number;
     lateFeeAmount: number;
+    /** When true, overlay a PAID stamp on all three challan copies */
+    paidStamp?: boolean;
+    /** When false, hide the discount column. Default: true */
+    showDiscount?: boolean;
     /** Portal URL to encode in QR code on each challan copy */
     qrUrl?: string;
     /** Rows shown in the ARREAR'S HISTORY sidebar column */
@@ -115,8 +119,8 @@ export class VoucherPdfService {
                 isArrear: f.isArrear,
             })),
             totalAmount: data.totalAmount,
-            showDiscount: true,
-            paidStamp: false,
+            showDiscount: data.showDiscount ?? true,
+            paidStamp: data.paidStamp ?? false,
             siblings: data.siblings?.filter(s => s.cc !== data.student.cc).map(s => ({
                 full_name: s.fullName,
                 cc: s.cc,
