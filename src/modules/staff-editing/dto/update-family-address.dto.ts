@@ -35,4 +35,7 @@ export class UpdateFamilyAddressDto {
   @IsString()
   @MaxLength(20)
   work_phone?: string; // Mapped to Home Phone #
+
+  @IsOptional()
+  bulk_sync?: boolean;
 }

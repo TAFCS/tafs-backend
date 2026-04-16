@@ -71,8 +71,10 @@ export class FamiliesService {
           created_at: true,
           students: {
             where: { deleted_at: null },
-            take: 1,
             select: {
+              cc: true,
+              full_name: true,
+              gr_number: true,
               student_guardians: {
                 where: { is_primary_contact: true },
                 take: 1,
@@ -94,14 +96,19 @@ export class FamiliesService {
 
     return {
       families: families.map((f) => {
-        const primaryGuardian = f.students?.[0]?.student_guardians?.[0]?.guardians;
+        const primaryGuardian = f.students?.find(s => s.student_guardians?.[0])?.student_guardians?.[0]?.guardians;
         return {
           ...f,
+          students: f.students.map(s => ({
+            cc: s.cc,
+            full_name: s.full_name,
+            gr_number: s.gr_number
+          })),
           primary_guardian: primaryGuardian ? {
             name: primaryGuardian.full_name,
             cnic: primaryGuardian.cnic,
           } : null,
-          student_count: null,
+          student_count: f.students.length,
         };
       }),
       meta: createPaginationMeta(page, limit, total),
@@ -242,42 +249,110 @@ export class FamiliesService {
       );
     }
 
-    // Identify target guardians to link to (from existing siblings)
-    const targetStudentId = family.students?.[0]?.cc;
-    const targetGuardians = targetStudentId
-      ? await this.prisma.student_guardians.findMany({
-        where: { student_id: targetStudentId },
-      })
-      : [];
+    // Fetch target family siblings and the incoming student's current guardians
+    const [targetSiblings, incomingGuardians] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { family_id: familyId, deleted_at: null },
+        include: { student_guardians: { include: { guardians: true } } },
+      }),
+      this.prisma.student_guardians.findMany({
+        where: { student_id: studentId },
+        include: { guardians: true },
+      }),
+    ]);
+
+    const allSiblingIds = [...targetSiblings.map((s) => s.cc), studentId];
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // 1. Update the student's family link
+      // 1. Update the incoming student's family link
       const s = await tx.students.update({
         where: { cc: studentId },
         data: { family_id: familyId },
-        select: {
-          cc: true,
-          full_name: true,
-          family_id: true,
-        },
+        select: { cc: true, full_name: true, family_id: true },
       });
 
-      // 2. Remove old family guardian links
-      await tx.student_guardians.deleteMany({
-        where: { student_id: studentId },
-      });
+      // 2. Smart Merge Guardians by Relationship
+      // We'll collect all relationships from both sides
+      const incomingByRel = new Map(
+        incomingGuardians
+          .filter(g => !!g.relationship)
+          .map(g => [g.relationship.trim().toUpperCase(), g])
+      );
+      
+      const isPlaceholder = (g: any) => {
+        const name = (g?.guardians?.full_name || '').trim().toUpperCase();
+        return !name || name === 'NOT PROVIDED' || name === 'NULL' || name === 'N/A' || name === 'NONE';
+      };
 
-      // 3. Link to new family's guardians
-      if (targetGuardians.length > 0) {
-        await tx.student_guardians.createMany({
-          data: targetGuardians.map((tg) => ({
-            student_id: studentId,
-            guardian_id: tg.guardian_id,
-            relationship: tg.relationship,
-            is_primary_contact: tg.is_primary_contact,
-            is_emergency_contact: tg.is_emergency_contact,
-          })),
+      // Aggressively collect the BEST guardian for each relationship from ANY existing sibling
+      const hostByRel = new Map();
+      for (const sib of targetSiblings) {
+        for (const g of sib.student_guardians) {
+          if (!g.relationship) continue;
+          const rel = g.relationship.trim().toUpperCase();
+          const currentBest = hostByRel.get(rel);
+          
+          // A link is better if it's the first one we find, or if the current one is a placeholder and this one isn't
+          if (!currentBest || (isPlaceholder(currentBest) && !isPlaceholder(g))) {
+            hostByRel.set(rel, g);
+          }
+        }
+      }
+
+      const allRels = new Set([...incomingByRel.keys(), ...hostByRel.keys()]);
+      const bestLinks = new Map<string, any>();
+
+      for (const rel of allRels) {
+        const iG = incomingByRel.get(rel);
+        const hG = hostByRel.get(rel);
+        
+        let bestG: any = null;
+        const iIsReal = iG && !isPlaceholder(iG);
+        const hIsReal = hG && !isPlaceholder(hG);
+
+        if (iIsReal) {
+          // If incoming is real, it either uplifts a placeholder host or replaces a real host (per preference)
+          bestG = iG;
+        } else if (hIsReal) {
+          // If incoming is a placeholder but host is real, host MUST win to prevent data loss
+          bestG = hG;
+        } else {
+          // Both are placeholders or one is missing, keep whatever exists
+          bestG = iG || hG;
+        }
+
+        if (bestG) {
+          bestLinks.set(rel, bestG);
+        }
+      }
+
+      // 3. Sync ALL siblings to these best guardians
+      // Since student_guardians has a unique constraint on (student_id, guardian_id),
+      // we must deduplicate in case the same person is the 'best' for multiple relationships.
+      for (const sid of allSiblingIds) {
+        // Clear all existing links for these students to start fresh for the household
+        await tx.student_guardians.deleteMany({ where: { student_id: sid } });
+
+        // Map to ensure one entry per guardian_id
+        const uniqueGuardians = new Map<number, any>();
+        bestLinks.forEach((link, rel) => {
+          if (!uniqueGuardians.has(link.guardian_id)) {
+            uniqueGuardians.set(link.guardian_id, { ...link, relationship: rel });
+          }
         });
+
+        // Recreate the consolidated links
+        for (const link of uniqueGuardians.values()) {
+          await tx.student_guardians.create({
+            data: {
+              student_id: sid,
+              guardian_id: link.guardian_id,
+              relationship: link.relationship,
+              is_primary_contact: link.is_primary_contact,
+              is_emergency_contact: link.is_emergency_contact,
+            },
+          });
+        }
       }
 
       return s;

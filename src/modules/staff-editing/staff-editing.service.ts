@@ -139,6 +139,14 @@ export class StaffEditingService {
         class_id: true,
         section_id: true,
         house_id: true,
+        family_id: true,
+        families: {
+          select: { 
+            id: true,
+            household_name: true, 
+            legacy_pid: true
+          }
+        },
         admission_age_years: true,
         academic_year: true,
         place_of_birth: true,
@@ -397,45 +405,49 @@ export class StaffEditingService {
   // ─── Guardians ────────────────────────────────────────────────────────────
 
   async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto) {
-    const student = await this.prisma.students.findUnique({
-      where: { cc: studentCc },
-      select: { family_id: true }
-    });
-
-    if (!student || !student.family_id) {
-      // Fallback: If no family_id, just update guardians directly linked to this student
-      const links = await this.prisma.student_guardians.findMany({
-        where: { student_id: studentCc },
-        select: { guardian_id: true }
-      });
-      const ids = links.map(l => l.guardian_id);
-      if (ids.length > 0) {
-        await this.prisma.guardians.updateMany({
-          where: { id: { in: ids } },
-          data: dto as any
-        });
-      }
-      return { success: true, count: ids.length };
-    }
-
-    // Find all guardians linked to ANY student in this family
-    const familyLinks = await this.prisma.student_guardians.findMany({
-      where: {
-        students: { family_id: student.family_id }
-      },
+    const { bulk_sync, ...addressData } = dto;
+    
+    // Find the current student's links
+    const currentLinks = await this.prisma.student_guardians.findMany({
+      where: { student_id: studentCc },
       select: { guardian_id: true }
     });
+    const currentGuardianIds = currentLinks.map(l => l.guardian_id);
 
-    const uniqueGuardianIds = [...new Set(familyLinks.map(l => l.guardian_id))];
-
-    if (uniqueGuardianIds.length > 0) {
-      await this.prisma.guardians.updateMany({
-        where: { id: { in: uniqueGuardianIds } },
-        data: dto as any
+    if (bulk_sync) {
+      const student = await this.prisma.students.findUnique({
+        where: { cc: studentCc },
+        select: { family_id: true }
       });
+
+      if (student?.family_id) {
+        // Find all guardians linked to ANY student in this family
+        const familyLinks = await this.prisma.student_guardians.findMany({
+          where: {
+            students: { family_id: student.family_id }
+          },
+          select: { guardian_id: true }
+        });
+        const uniqueIds = [...new Set(familyLinks.map(l => l.guardian_id))];
+        
+        if (uniqueIds.length > 0) {
+          await this.prisma.guardians.updateMany({
+            where: { id: { in: uniqueIds } },
+            data: addressData as any
+          });
+        }
+        return { success: true, count: uniqueIds.length, target: 'household' };
+      }
     }
 
-    return { success: true, count: uniqueGuardianIds.length };
+    // Default or Fallback: Only update guardians of this specific student
+    if (currentGuardianIds.length > 0) {
+      await this.prisma.guardians.updateMany({
+        where: { id: { in: currentGuardianIds } },
+        data: addressData as any
+      });
+    }
+    return { success: true, count: currentGuardianIds.length, target: 'individual' };
   }
 
   async getStudentGuardians(studentCc: number) {
@@ -788,6 +800,8 @@ export class StaffEditingService {
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
+      family_id: s.family_id,
+      household_name: s.families?.household_name ?? null,
       father_name: fatherLink?.guardians?.full_name ?? null,
       father_cnic: fatherLink?.guardians?.cnic ?? null,
       mother_name: motherLink?.guardians?.full_name ?? null,
@@ -853,6 +867,15 @@ export class StaffEditingService {
         dob: link.guardians ? this.formatDateToFrontend(link.guardians.dob) : null,
       })) ?? [],
       date_of_admission: s.doa,
+      family_id: s.family_id,
+      household_name: s.families?.household_name ?? null,
+      families: s.families ? {
+        id: s.families.id,
+        household_name: s.families.household_name,
+        legacy_pid: s.families.legacy_pid,
+        students: s.families.students || []
+      } : null,
+      siblings: (s.families?.students || []).filter((sib: any) => sib.cc !== s.cc),
     };
   }
 
