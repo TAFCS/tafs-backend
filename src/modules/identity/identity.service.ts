@@ -147,29 +147,31 @@ export class IdentityService {
       if (dto.emergency_contact) {
         const ec = dto.emergency_contact;
 
-        const isFather =
-          father.full_name === ec.full_name &&
-          father.primary_phone === ec.primary_phone;
-        const isMother =
-          mother.full_name === ec.full_name &&
-          mother.primary_phone === ec.primary_phone;
+        let matchedGuardianId: number | null = null;
 
-        if (isFather) {
+        if (ec.role === 'father') {
+          matchedGuardianId = father.id;
+        } else if (ec.role === 'mother') {
+          matchedGuardianId = mother.id;
+        } else if (!ec.role) {
+          // Fallback to legacy string-matching if role is not provided
+          const isFather =
+            father.full_name === ec.full_name &&
+            father.primary_phone === ec.primary_phone;
+          const isMother =
+            mother.full_name === ec.full_name &&
+            mother.primary_phone === ec.primary_phone;
+
+          if (isFather) matchedGuardianId = father.id;
+          else if (isMother) matchedGuardianId = mother.id;
+        }
+
+        if (matchedGuardianId) {
           await tx.student_guardians.update({
             where: {
               student_id_guardian_id: {
                 student_id: student.cc,
-                guardian_id: father.id,
-              },
-            },
-            data: { is_emergency_contact: true },
-          });
-        } else if (isMother) {
-          await tx.student_guardians.update({
-            where: {
-              student_id_guardian_id: {
-                student_id: student.cc,
-                guardian_id: mother.id,
+                guardian_id: matchedGuardianId,
               },
             },
             data: { is_emergency_contact: true },

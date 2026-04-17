@@ -204,6 +204,10 @@ export class EmergencyContactDto {
   @IsNotEmpty()
   @MaxLength(50)
   relationship: string;
+
+  @IsString()
+  @IsOptional()
+  role?: 'father' | 'mother' | 'other';
 }
 
 export class AdmissionDetailsDto {
