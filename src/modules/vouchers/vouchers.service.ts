@@ -377,7 +377,8 @@ export class VouchersService {
                     ...(campusId ? { campus_id: campusId } : {}),
                     ...(classId ? { class_id: classId } : {}),
                     ...(sectionId ? { section_id: sectionId } : {}),
-                    ...(status ? { status } : {}),
+                    // If a specific status is requested show only that; otherwise exclude VOIDs.
+                    ...(status ? { status } : { status: { not: 'VOID' } }),
                     ...(dateFrom || dateTo
                         ? {
                               fee_date: {
@@ -1141,7 +1142,13 @@ export class VouchersService {
                 }),
             });
 
-            // --- 3. Original voucher stays untouched — deposit_allocations remain on it ---
+            // --- 3. Void the original — deposit_allocations remain intact on it for audit.
+            // Deletion is not possible because deposit_allocations has a FK on voucher_id.
+            await tx.vouchers.update({
+                where: { id: voucherId },
+                data: { status: 'VOID' },
+            });
+
             return { paidVoucher: paid, unpaidVoucher: unpaid };
         }, { timeout: 30000 });
 
@@ -1182,7 +1189,10 @@ export class VouchersService {
         if (!voucher) return null;
 
         // VOID is a manual override (superseded voucher) — never recalculate it.
-        if (voucher.status === 'VOID') return voucher;
+        // PAID is also definitional — hardcoded by deposit flow or split transaction.
+        // Re-deriving it from student_fees breaks split vouchers where a head only
+        // covers a *portion* of the underlying student_fee amount.
+        if (voucher.status === 'VOID' || voucher.status === 'PAID') return voucher;
 
         const originalHeads: any[] = voucher.voucher_heads || [];
         const updatedHeads: any[] = [];
@@ -1207,7 +1217,11 @@ export class VouchersService {
 
             this.logger.debug(`  Head #${h.id}: SF Amount=${canonicalAmount}, SF Paid=${totalPaidOnFee} => Derived Balance=${headRem}`);
 
-            if (totalPaidOnFee.gt(0)) anyHeadPaidSomewhere = true;
+            // Use the head's own amount_deposited, NOT student_fees.amount_paid.
+            // student_fees.amount_paid is a GLOBAL counter — it is also non-zero on the
+            // balance voucher's heads after a split, which would falsely flag it as
+            // PARTIALLY_PAID even though this specific head never received a deposit.
+            if (new Prisma.Decimal(h.amount_deposited ?? 0).gt(0)) anyHeadPaidSomewhere = true;
             totalRemHeads = totalRemHeads.add(headRem);
 
             // Overwrite stored balance with the canonical derived value
