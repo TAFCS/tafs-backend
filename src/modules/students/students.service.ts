@@ -460,7 +460,7 @@ export class StudentsService {
         primary_guardian_name: mappedData.contact?.primary_guardian_name,
         whatsapp_number: mappedData.contact?.whatsapp_number,
         enrollment_status: mappedData.core?.enrollment_status,
-        financial_status_badge: 'CLEARED', // Basic list view stays simple or we can add a check later
+        financial_status_badge: null, // List view shouldn't guess; modal will fetch actual status
         family_id: mappedData.family?.family_id,
         household_name: mappedData.family?.household_name,
         primary_guardian_cnic: mappedData.contact?.guardian_cnic,
