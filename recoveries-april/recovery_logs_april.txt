@@ -1,0 +1,859 @@
+Recovery Reconciliation Logs - 2026-04-15T14:33:43.917Z
+Mode: LIVE
+
+[SUCCESS] CC: 4594 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5178 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5313 | Receivable: 13775 | DB Total: 13775 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5827 | Receivable: 5392 | DB Total: 5392 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7584 | Receivable: 9550 | DB Sum: 19100 | Diff: -9550
+[SUCCESS] CC: 4188 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4330 | Receivable: 3893 | DB Total: 3893 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5063 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6318 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6616 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7252 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7419 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7622 | Receivable: 9550 | DB Total: 9550 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7697 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7703 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7724 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4132 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4338 | Receivable: 3893 | DB Total: 3893 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4354 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4451 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6996 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7356 | Receivable: 13975 | DB Sum: 30125 | Diff: -16150
+[MISMATCH] CC: 7582 | Receivable: 10550 | DB Sum: 21100 | Diff: -10550
+[SUCCESS] CC: 7590 | Receivable: 9550 | DB Total: 9550 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7690 | Receivable: 10000 | DB Sum: 20000 | Diff: -10000
+[SUCCESS] CC: 7696 | Receivable: 13575 | DB Total: 13575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4150 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4181 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4309 | Receivable: 10500 | DB Total: 10500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4784 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4797 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5286 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6580 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6903 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7307 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7571 | Receivable: 10550 | DB Total: 10550 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7591 | Receivable: 10550 | DB Total: 10550 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7595 | Receivable: 10550 | DB Sum: 21100 | Diff: -10550
+[SUCCESS] CC: 7604 | Receivable: 10550 | DB Total: 10550 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3896 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3923 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4003 | Receivable: 4192 | DB Total: 4192 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4178 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4316 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4583 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4929 | Receivable: 13975 | DB Sum: 27950 | Diff: -13975
+[SUCCESS] CC: 5882 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISSING] CC: 6357 | Receivable: 13975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6737 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6770 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7044 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7071 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7093 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7163 | Receivable: 13975 | DB Sum: 27950 | Diff: -13975
+[MISMATCH] CC: 7375 | Receivable: 11975 | DB Sum: 23950 | Diff: -11975
+[MISMATCH] CC: 7392 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 7412 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4031 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4148 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4290 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4479 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 4655 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4994 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5021 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5369 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6319 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 6588 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6724 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6758 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7052 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7146 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7278 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7289 | Receivable: 12500 | DB Total: 12500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7290 | Receivable: 12500 | DB Total: 12500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7352 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7378 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7192 | Receivable: 32500 | DB Sum: 7500 | Diff: 25000
+[SUCCESS] CC: 7199 | Receivable: 7500 | DB Total: 7500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7204 | Receivable: 8000 | DB Total: 8000 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7213 | Receivable: 37000 | DB Sum: 12000 | Diff: 25000
+[MISMATCH] CC: 7240 | Receivable: 42500 | DB Sum: 17500 | Diff: 25000
+[SUCCESS] CC: 7261 | Receivable: 21250 | DB Total: 21250 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7331 | Receivable: 8750 | DB Total: 8750 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7397 | Receivable: 5000 | DB Total: 5000 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7413 | Receivable: 15575 | DB Total: 15575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7410 | Receivable: 41250 | DB Sum: 16250 | Diff: 25000
+[SUCCESS] CC: 7380 | Receivable: 22500 | DB Total: 22500 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7396 | Receivable: 41250 | DB Sum: 16250 | Diff: 25000
+[MISMATCH] CC: 7409 | Receivable: 36250 | DB Sum: 11250 | Diff: 25000
+[SUCCESS] CC: 7429 | Receivable: 22500 | DB Total: 22500 | Match: (EXACT MATCH)
+[MISSING] CC: 7452 | Receivable: 27500 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7474 | Receivable: 10000 | DB Total: 10000 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7495 | Receivable: 30000 | DB Sum: 5000 | Diff: 25000
+[SUCCESS] CC: 7492 | Receivable: 16250 | DB Total: 16250 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7489 | Receivable: 22500 | DB Total: 22500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7512 | Receivable: 11250 | DB Total: 11250 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7501 | Receivable: 32500 | DB Sum: 7500 | Diff: 25000
+[SUCCESS] CC: 7523 | Receivable: 5000 | DB Total: 5000 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7528 | Receivable: 7500 | DB Total: 7500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7518 | Receivable: 25000 | DB Total: 25000 | Match: (EXACT MATCH)
+[MISSING] CC: 7525 | Receivable: 11250 | Reason: No fees found for 2026-04-01 or earlier.
+[MISMATCH] CC: 7554 | Receivable: 35000 | DB Sum: 5000 | Diff: 30000
+[MISMATCH] CC: 7560 | Receivable: 45000 | DB Sum: 20000 | Diff: 25000
+[MISMATCH] CC: 7737 | Receivable: 22500 | DB Sum: 27500 | Diff: -5000
+[SUCCESS] CC: 7515 | Receivable: 27500 | DB Total: 27500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7543 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7572 | Receivable: 14575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7640 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7654 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7666 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7673 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7598 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7720 | Receivable: 18575 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7731 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7686 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4223 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4224 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4258 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4267 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4279 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4284 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4300 | Receivable: 0 | DB Sum: 19575 | Diff: -19575
+[SUCCESS] CC: 4350 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4388 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4398 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4847 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISSING] CC: 4934 | Receivable: 19975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 5016 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5130 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5134 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5305 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5400 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5402 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5762 | Receivable: 18975 | DB Sum: 56925 | Diff: -37950
+[SUCCESS] CC: 6379 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6400 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6422 | Receivable: 5993 | DB Total: 5993 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6507 | Receivable: 19975 | DB Sum: 39950 | Diff: -19975
+[SUCCESS] CC: 6717 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7046 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7246 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7253 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7273 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7336 | Receivable: 0 | DB Sum: 59925 | Diff: -59925
+[MISSING] CC: 7341 | Receivable: 22575 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7365 | Receivable: 22575 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7372 | Receivable: 18975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7376 | Receivable: 22575 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7539 | Receivable: 19575 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7570 | Receivable: 20575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7579 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7588 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7605 | Receivable: 20575 | DB Sum: 41150 | Diff: -20575
+[SUCCESS] CC: 7630 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7635 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7657 | Receivable: 11788 | DB Total: 11788 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7656 | Receivable: 11788 | DB Total: 11788 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7664 | Receivable: 20575 | DB Sum: 41150 | Diff: -20575
+[MISMATCH] CC: 7726 | Receivable: 22575 | DB Sum: 19975 | Diff: 2600
+[SUCCESS] CC: 7728 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7740 | Receivable: 22575 | DB Total: 22575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5697 | Receivable: 15975 | DB Sum: 16975 | Diff: -1000
+[SUCCESS] CC: 5747 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6273 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6394 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6425 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 6784 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7448 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7565 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7602 | Receivable: 15575 | DB Total: 15575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4577 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5079 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5205 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5344 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5345 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5450 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6141 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6451 | Receivable: 19975 | DB Sum: 39950 | Diff: -19975
+[SUCCESS] CC: 7275 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7308 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 7403 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7634 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7727 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 5059 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6113 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 6353 | Receivable: 14975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6423 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6503 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7244 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7255 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7265 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7524 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7574 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7593 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7650 | Receivable: 24469 | DB Total: 24469 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7680 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7736 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4554 | Receivable: 5092 | DB Total: 5092 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4575 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4585 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4587 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4708 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4848 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4914 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5116 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5543 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[SUCCESS] CC: 6744 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7180 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7294 | Receivable: 17975 | DB Sum: 18975 | Diff: -1000
+[SUCCESS] CC: 7325 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7339 | Receivable: 15000 | DB Sum: 30000 | Diff: -15000
+[SUCCESS] CC: 7735 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7741 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4471 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4533 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4574 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4588 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4613 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4837 | Receivable: 15106 | DB Total: 15106 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4961 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4997 | Receivable: 13832 | DB Total: 13832 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5051 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5115 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 5149 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISMATCH] CC: 5189 | Receivable: 15975 | DB Sum: 47925 | Diff: -31950
+[SUCCESS] CC: 5363 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5801 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6258 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6641 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 4561 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4608 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4607 | Receivable: 18975 | DB Sum: 37950 | Diff: -18975
+[SUCCESS] CC: 4971 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5119 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5846 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 6355 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 5724 | Receivable: 15075 | DB Total: 15075 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7104 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7284 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 7564 | Receivable: 18575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7648 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7704 | Receivable: 15575 | DB Total: 15575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7718 | Receivable: 20575 | DB Total: 20575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4444 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4534 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4578 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4612 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 4735 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4770 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4962 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5304 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 5333 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 5416 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5752 | Receivable: 22975 | DB Total: 22975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5782 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[MISSING] CC: 5937 | Receivable: 0 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6278 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6587 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6705 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6711 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISSING] CC: 7125 | Receivable: 18575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7238 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7242 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7256 | Receivable: 21975 | DB Total: 21975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7338 | Receivable: 15000 | DB Sum: 30000 | Diff: -15000
+[MISMATCH] CC: 7509 | Receivable: 18975 | DB Sum: 56925 | Diff: -37950
+[SUCCESS] CC: 7587 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7601 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7674 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7679 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4289 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4296 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4728 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4768 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4785 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4870 | Receivable: 5392 | DB Total: 5392 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5347 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6647 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6963 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7029 | Receivable: 18975 | DB Sum: 56925 | Diff: -37950
+[SUCCESS] CC: 7555 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7625 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7627 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4348 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4353 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4431 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4467 | Receivable: 22975 | DB Total: 22975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5133 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5208 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5371 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5761 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5828 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5983 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6213 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6271 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6482 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6781 | Receivable: 0 | DB Sum: 20975 | Diff: -20975
+[SUCCESS] CC: 6806 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7111 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7274 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7287 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7438 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7450 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7469 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7561 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7652 | Receivable: 24316 | DB Total: 24316 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7719 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7732 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 7671 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7223 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7369 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7377 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7386 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7427 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7447 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7462 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7531 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7637 | Receivable: 8288 | DB Total: 8288 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7653 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7669 | Receivable: 16575 | DB Sum: 33150 | Diff: -16575
+[SUCCESS] CC: 7691 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7729 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 7291 | Receivable: 16575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7414 | Receivable: 19575 | DB Total: 19575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7463 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7527 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 7670 | Receivable: 18575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7715 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6997 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7018 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7049 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7135 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[MISSING] CC: 7156 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISMATCH] CC: 7201 | Receivable: 16975 | DB Sum: 67900 | Diff: -50925
+[SUCCESS] CC: 7313 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7342 | Receivable: 5092 | DB Total: 5092 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7351 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7385 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7522 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7597 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7655 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7682 | Receivable: 16575 | DB Sum: 33150 | Diff: -16575
+[SUCCESS] CC: 7759 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7749 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7750 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7083 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7134 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[MISSING] CC: 7203 | Receivable: 13975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7226 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7233 | Receivable: 13832 | DB Total: 13832 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7251 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7268 | Receivable: 10975 | DB Total: 10975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7300 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7323 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7359 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7374 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7389 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7390 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7428 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7446 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7002 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7006 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7016 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7064 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7149 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7177 | Receivable: 5975 | DB Total: 5975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7217 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7235 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7301 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7326 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7355 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7387 | Receivable: 0 | DB Sum: 31950 | Diff: -31950
+[MISMATCH] CC: 7406 | Receivable: 17975 | DB Sum: 53925 | Diff: -35950
+[SUCCESS] CC: 7422 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7548 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7694 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6749 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[MISSING] CC: 6792 | Receivable: 16575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6826 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6908 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 6972 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 7127 | Receivable: 16575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7283 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISSING] CC: 7395 | Receivable: 16575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7578 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7629 | Receivable: 10575 | DB Total: 10575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6739 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6942 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6949 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6957 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7090 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 7190 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7292 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[MISSING] CC: 7644 | Receivable: 15550 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6622 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6688 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6743 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6974 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7035 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7062 | Receivable: 8975 | DB Total: 8975 | Match: (EXACT MATCH)
+[MISSING] CC: 7113 | Receivable: 13975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7116 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7243 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7269 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7354 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7436 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6761 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6924 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 7114 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7124 | Receivable: 15975 | DB Sum: 43925 | Diff: -27950
+[SUCCESS] CC: 7169 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7171 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7430 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7453 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7568 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7592 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7621 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7678 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6393 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6615 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6671 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7120 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7132 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7346 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7358 | Receivable: 12975 | DB Total: 12975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7658 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6461 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6741 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6756 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6704 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6788 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6841 | Receivable: 4792 | DB Total: 4792 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6601 | Receivable: 13675 | DB Sum: 13575 | Diff: 100
+[SUCCESS] CC: 7347 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7420 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6399 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6514 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6621 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6649 | Receivable: 15815 | DB Total: 15815 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6730 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6766 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7129 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7624 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6377 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6397 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6928 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7186 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7216 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7288 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7348 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7368 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7431 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6366 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6513 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6626 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6682 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6680 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6747 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6825 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6977 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 7304 | Receivable: 15000 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7327 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 6354 | Receivable: 14166 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6367 | Receivable: 5392 | DB Total: 5392 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6323 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6432 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[MISMATCH] CC: 6679 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[MISSING] CC: 7034 | Receivable: 15975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISMATCH] CC: 7028 | Receivable: 15975 | DB Sum: 47925 | Diff: -31950
+[SUCCESS] CC: 7566 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7633 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7651 | Receivable: 24316 | DB Total: 24316 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6593 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6607 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6611 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6670 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6767 | Receivable: -79875 | DB Sum: 15975 | Diff: -95850
+[SUCCESS] CC: 7021 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7236 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7259 | Receivable: 15325 | DB Total: 15325 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7297 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7314 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7575 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7638 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5816 | Receivable: 4975 | DB Total: 4975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5863 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5874 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 5877 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5981 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 6089 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6130 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6136 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6222 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6398 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6606 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 7130 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7181 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7357 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 7402 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7576 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7672 | Receivable: 16575 | DB Sum: 33150 | Diff: -16575
+[MISMATCH] CC: 5783 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[SUCCESS] CC: 5866 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5962 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5963 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6128 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6378 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6460 | Receivable: 16975 | DB Sum: 50925 | Diff: -33950
+[SUCCESS] CC: 6706 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 7126 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7589 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7714 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5813 | Receivable: 17975 | DB Sum: 35950 | Diff: -17975
+[SUCCESS] CC: 5921 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5925 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5927 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 6087 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 6106 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6223 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6638 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6681 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6774 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 6888 | Receivable: 18975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6935 | Receivable: 5392 | DB Total: 5392 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7379 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7755 | Receivable: 18575 | DB Sum: 37150 | Diff: -18575
+[SUCCESS] CC: 5426 | Receivable: 4493 | DB Total: 4493 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5531 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5591 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 5833 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5849 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5864 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5958 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5959 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5982 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6452 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 6678 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6831 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 7224 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7234 | Receivable: 13832 | DB Total: 13832 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7239 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7328 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7349 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7623 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6421 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6672 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6713 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6748 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7058 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7109 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7123 | Receivable: 15975 | DB Sum: 31950 | Diff: -15975
+[MISSING] CC: 7128 | Receivable: 15975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7187 | Receivable: 37950 | DB Total: 37950 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7237 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7675 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5514 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5665 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5710 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5741 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5750 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5756 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5960 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6504 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7033 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7054 | Receivable: 18975 | DB Total: 17975 | Match: (LATE FEE MATCH)
+[SUCCESS] CC: 5723 | Receivable: 13991 | DB Total: 13991 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7103 | Receivable: 13975 | DB Total: 12975 | Match: (LATE FEE MATCH)
+[SUCCESS] CC: 7296 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7603 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7693 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7725 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5428 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5447 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5530 | Receivable: 10532 | DB Total: 10532 | Match: (EXACT MATCH)
+[MISSING] CC: 5553 | Receivable: 18975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 5675 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5802 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6131 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6288 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[MISSING] CC: 6356 | Receivable: 12575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 6391 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6540 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[SUCCESS] CC: 6572 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7227 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7260 | Receivable: 15324 | DB Total: 15324 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7285 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7298 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7315 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7350 | Receivable: 15975 | DB Total: 15975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7594 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7628 | Receivable: 11575 | DB Total: 11575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 3851 | Receivable: 39950 | DB Sum: 19975 | Diff: 19975
+[SUCCESS] CC: 3974 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3980 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3992 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4053 | Receivable: 37950 | DB Sum: 18975 | Diff: 18975
+[MISSING] CC: 4074 | Receivable: 18975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 4228 | Receivable: 5993 | DB Total: 5993 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4334 | Receivable: 30420 | DB Sum: 15210 | Diff: 15210
+[MISMATCH] CC: 4390 | Receivable: 18975 | DB Sum: 75900 | Diff: -56925
+[MISMATCH] CC: 4445 | Receivable: 39950 | DB Sum: 19975 | Diff: 19975
+[SUCCESS] CC: 4917 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5117 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5227 | Receivable: 37950 | DB Sum: 18975 | Diff: 18975
+[SUCCESS] CC: 5493 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5643 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6617 | Receivable: 41950 | DB Sum: 20975 | Diff: 20975
+[SUCCESS] CC: 6659 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6787 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7045 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7220 | Receivable: 41950 | DB Sum: 20975 | Diff: 20975
+[SUCCESS] CC: 7248 | Receivable: 21975 | DB Total: 21975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7254 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7266 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7276 | Receivable: 39950 | DB Sum: 19975 | Diff: 19975
+[SUCCESS] CC: 7312 | Receivable: 21975 | DB Total: 21975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7334 | Receivable: 21975 | DB Total: 21975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7639 | Receivable: 43150 | DB Sum: 21575 | Diff: 21575
+[MISMATCH] CC: 7692 | Receivable: 39150 | DB Sum: 19575 | Diff: 19575
+[SUCCESS] CC: 3518 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3486 | Receivable: 7490 | DB Total: 7490 | Match: (EXACT MATCH)
+[MISMATCH] CC: 3475 | Receivable: 39950 | DB Sum: 19975 | Diff: 19975
+[MISSING] CC: 3669 | Receivable: 21975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 3717 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3758 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3819 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3807 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 3868 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4411 | Receivable: 37950 | DB Sum: 18975 | Diff: 18975
+[MISMATCH] CC: 4660 | Receivable: 37950 | DB Sum: 18975 | Diff: 18975
+[SUCCESS] CC: 4996 | Receivable: 18232 | DB Total: 18232 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5012 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5365 | Receivable: 21975 | DB Total: 21975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5781 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6306 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6326 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 6437 | Receivable: 24575 | DB Sum: 49150 | Diff: -24575
+[SUCCESS] CC: 6712 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6750 | Receivable: 18975 | DB Total: 18975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6962 | Receivable: 13950 | DB Total: 13950 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6966 | Receivable: 22975 | DB Total: 22975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7055 | Receivable: 23925 | DB Total: 23925 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7057 | Receivable: 43950 | DB Sum: 21975 | Diff: 21975
+[SUCCESS] CC: 7081 | Receivable: 19975 | DB Total: 19975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7286 | Receivable: 41950 | DB Sum: 20975 | Diff: 20975
+[MISSING] CC: 7371 | Receivable: 15975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISMATCH] CC: 7583 | Receivable: 10575 | DB Sum: 19575 | Diff: -9000
+[SUCCESS] CC: 7702 | Receivable: 11975 | DB Total: 11975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7508 | Receivable: 2500 | DB Total: 2500 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7529 | Receivable: 40000 | DB Sum: 15000 | Diff: 25000
+[MISMATCH] CC: 6287 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 6365 | Receivable: 10325 | DB Total: 10325 | Match: (EXACT MATCH)
+[SUCCESS] CC: 6512 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 6889 | Receivable: 17975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7010 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7019 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7270 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7299 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7556 | Receivable: 16175 | DB Sum: 16575 | Diff: -400
+[SUCCESS] CC: 7659 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7421 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5542 | Receivable: 16975 | DB Sum: 33950 | Diff: -16975
+[MISMATCH] CC: 7800 | Receivable: 13975 | DB Sum: 41925 | Diff: -27950
+[SUCCESS] CC: 7807 | Receivable: 22575 | DB Total: 22575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7808 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7809 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7812 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7811 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7783 | Receivable: 10975 | DB Total: 10975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 4915 | Receivable: 14025 | DB Total: 14025 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5078 | Receivable: 14975 | DB Sum: 29950 | Diff: -14975
+[SUCCESS] CC: 5372 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5385 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 4846 | Receivable: 0 | DB Sum: 71911 | Diff: -71911
+[SUCCESS] CC: 5195 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISSING] CC: 5560 | Receivable: 16975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 5108 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5359 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5382 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 5343 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7789 | Receivable: 18975 | DB Sum: 56925 | Diff: -37950
+[MISMATCH] CC: 7768 | Receivable: 20575 | DB Sum: 60525 | Diff: -39950
+[SUCCESS] CC: 7802 | Receivable: 20975 | DB Total: 20975 | Match: (EXACT MATCH)
+[MISSING] CC: 7788 | Receivable: 19975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7784 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7769 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7804 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7797 | Receivable: 6191 | DB Total: 6191 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7803 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[MISSING] CC: 7787 | Receivable: 12975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7813 | Receivable: 15000 | DB Total: 15000 | Match: (EXACT MATCH)
+[MISMATCH] CC: 5346 | Receivable: 28292 | DB Sum: 56584 | Diff: -28292
+[MISSING] CC: 7817 | Receivable: 23575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7818 | Receivable: 23500 | DB Total: 23500 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7822 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7823 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7780 | Receivable: 13575 | DB Total: 13575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7779 | Receivable: 13575 | DB Total: 13575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7775 | Receivable: 15575 | DB Total: 15575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7830 | Receivable: 18575 | DB Sum: 37150 | Diff: -18575
+[MISMATCH] CC: 7829 | Receivable: 18575 | DB Sum: 37150 | Diff: -18575
+[SUCCESS] CC: 7831 | Receivable: 11820 | DB Total: 11820 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7832 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7833 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7751 | Receivable: 16975 | DB Total: 16975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7835 | Receivable: 33571 | DB Sum: 3571 | Diff: 30000
+[SUCCESS] CC: 7837 | Receivable: 18575 | DB Total: 18575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7842 | Receivable: 19095 | DB Sum: 32670 | Diff: -13575
+[SUCCESS] CC: 7844 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7846 | Receivable: 17975 | DB Total: 17975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7848 | Receivable: 17575 | DB Total: 17575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7849 | Receivable: 16575 | DB Total: 16575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7856 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7857 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7858 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7859 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7862 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7872 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7874 | Receivable: 0 | DB Sum: 19975 | Diff: -19975
+[SUCCESS] CC: 7880 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7881 | Receivable: 13975 | DB Total: 13975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7889 | Receivable: 54666 | DB Total: 54666 | Match: (EXACT MATCH)
+[MISSING] CC: 7899 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7904 | Receivable: 19975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7905 | Receivable: 19975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7906 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7910 | Receivable: 45950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7911 | Receivable: 43950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7912 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7915 | Receivable: 19950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7914 | Receivable: 19975 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7916 | Receivable: 172600 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7917 | Receivable: 47950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7918 | Receivable: 39975 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7665 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7608 | Receivable: 10575 | DB Sum: 21150 | Diff: -10575
+[SUCCESS] CC: 7620 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7631 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7649 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7701 | Receivable: 10575 | DB Total: 10575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7721 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7738 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7739 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7746 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7747 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7753 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7614 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7626 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7700 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7730 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7748 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7754 | Receivable: 14575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7596 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7689 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7600 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7641 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7607 | Receivable: 11575 | DB Total: 11575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7647 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7606 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7819 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7798 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7790 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7770 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7764 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7766 | Receivable: 14575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7765 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7767 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7799 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7821 | Receivable: 14575 | DB Sum: 29150 | Diff: -14575
+[SUCCESS] CC: 7827 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7828 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7834 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7773 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7847 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7852 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7855 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7876 | Receivable: 0 | DB Sum: 14975 | Diff: -14975
+[MISMATCH] CC: 7877 | Receivable: 0 | DB Sum: 14975 | Diff: -14975
+[SUCCESS] CC: 7878 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7879 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7884 | Receivable: 24962 | DB Total: 24962 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7885 | Receivable: 24962 | DB Total: 24962 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7887 | Receivable: 24962 | DB Sum: 49924 | Diff: -24962
+[MISMATCH] CC: 7891 | Receivable: 54925 | DB Sum: 14975 | Diff: 39950
+[SUCCESS] CC: 7900 | Receivable: 30000 | DB Total: 30000 | Match: (EXACT MATCH)
+[MISSING] CC: 7901 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7902 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7907 | Receivable: 40000 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7913 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7909 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7908 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7665 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7608 | Receivable: 10575 | DB Sum: 21150 | Diff: -10575
+[SUCCESS] CC: 7620 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7631 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7649 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7701 | Receivable: 10575 | DB Total: 10575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7721 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7738 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7739 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7746 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7747 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7753 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7614 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7626 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7700 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7730 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7748 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7754 | Receivable: 14575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7596 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7689 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7600 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7641 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7607 | Receivable: 11575 | DB Total: 11575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7647 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7606 | Receivable: 12575 | DB Total: 12575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7819 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7798 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7790 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7770 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7764 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISSING] CC: 7766 | Receivable: 14575 | Reason: No fees found for 2026-04-01 or earlier.
+[SUCCESS] CC: 7765 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7767 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7799 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7821 | Receivable: 14575 | DB Sum: 29150 | Diff: -14575
+[SUCCESS] CC: 7827 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7828 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7834 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7773 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7847 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7852 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7855 | Receivable: 14575 | DB Total: 14575 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7876 | Receivable: 0 | DB Sum: 14975 | Diff: -14975
+[MISMATCH] CC: 7877 | Receivable: 0 | DB Sum: 14975 | Diff: -14975
+[SUCCESS] CC: 7878 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7879 | Receivable: 14975 | DB Total: 14975 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7884 | Receivable: 24962 | DB Total: 24962 | Match: (EXACT MATCH)
+[SUCCESS] CC: 7885 | Receivable: 24962 | DB Total: 24962 | Match: (EXACT MATCH)
+[MISMATCH] CC: 7887 | Receivable: 24962 | DB Sum: 49924 | Diff: -24962
+[MISMATCH] CC: 7891 | Receivable: 54925 | DB Sum: 14975 | Diff: 39950
+[SUCCESS] CC: 7900 | Receivable: 30000 | DB Total: 30000 | Match: (EXACT MATCH)
+[MISSING] CC: 7901 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7902 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7907 | Receivable: 40000 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7913 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7909 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+[MISSING] CC: 7908 | Receivable: 39950 | Reason: No fees found for 2026-04-01 or earlier.
+
+--- PROGRESS SUMMARY ---
+Total Records: 849
+Exact Matches: 648
+Late Fee Matches: 2
+Mismatches: 119
+Missing Fees: 79
+------------------------
