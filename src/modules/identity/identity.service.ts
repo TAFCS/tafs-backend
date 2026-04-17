@@ -473,15 +473,35 @@ export class IdentityService {
       throw new NotFoundException('CNIC is required');
     }
 
-    const guardian = await this.prisma.guardians.findUnique({
+    const guardian: any = await this.prisma.guardians.findUnique({
       where: { cnic: cnic.trim() },
+      include: {
+        student_guardians: {
+          take: 1,
+          include: {
+            students: {
+              include: {
+                families: {
+                  select: { home_phone: true }
+                }
+              }
+            }
+          }
+        }
+      }
     });
 
     if (!guardian) {
       throw new NotFoundException(`Guardian with CNIC ${cnic} not found`);
     }
 
-    return guardian;
+    // Extract home_phone from the family relationship
+    const homePhone = guardian.student_guardians?.[0]?.students?.families?.home_phone;
+    
+    return {
+      ...guardian,
+      home_phone: homePhone || null,
+    };
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
