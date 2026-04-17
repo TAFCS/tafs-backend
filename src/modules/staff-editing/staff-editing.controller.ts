@@ -60,6 +60,16 @@ export class StaffEditingController {
     );
   }
  
+  @Delete('students/:id/hard-delete')
+  async hardDeleteStudent(@Param('id', ParseIntPipe) id: number) {
+    const result = await this.staffEditingService.hardDeleteStudent(id);
+    return createApiResponse(
+      result,
+      HttpStatus.OK,
+      STAFF_EDITING_MESSAGES.STUDENT_DELETE_SUCCESS || 'Student permanently deleted',
+    );
+  }
+
   @Patch('students/:id/family-address')
   async updateFamilyAddress(
     @Param('id', ParseIntPipe) id: number,

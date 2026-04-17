@@ -1043,4 +1043,58 @@ export class StaffEditingService {
   async deletePreviousSchool(id: number) {
     return this.prisma.student_previous_schools.delete({ where: { id } }).catch(() => null);
   }
+
+  async hardDeleteStudent(cc: number) {
+    // 1. Verify student exists
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { cc: true, full_name: true }
+    });
+    if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
+
+    // 2. Comprehensive Transactional Wipe
+    return this.prisma.$transaction(async (tx) => {
+      // A. Clear Financial Linked Tables (Order: Allocations -> Heads -> Vouchers/Fees/Deposits)
+      // These tables don't have student_id directly, so we use subqueries or relation filters
+      
+      // Delete deposit allocations linked to student's records
+      await tx.deposit_allocations.deleteMany({
+        where: {
+          OR: [
+            { deposits: { student_id: cc } },
+            { student_fees: { student_id: cc } },
+            { vouchers: { student_id: cc } }
+          ]
+        }
+      });
+
+      // Delete voucher heads linked to student's records
+      await tx.voucher_heads.deleteMany({
+        where: {
+          OR: [
+            { vouchers: { student_id: cc } },
+            { student_fees: { student_id: cc } }
+          ]
+        }
+      });
+
+      // B. Clear Secondary Financial Tables
+      await tx.vouchers.deleteMany({ where: { student_id: cc } });
+      await tx.deposits.deleteMany({ where: { student_id: cc } });
+
+      // C. Clear Academic & Identity Sub-tables
+      await tx.student_activities.deleteMany({ where: { student_id: cc } });
+      await tx.student_admissions.deleteMany({ where: { student_id: cc } });
+      await tx.student_guardians.deleteMany({ where: { student_id: cc } });
+      await tx.student_languages.deleteMany({ where: { student_id: cc } });
+      await tx.student_previous_schools.deleteMany({ where: { student_id: cc } });
+      await tx.relatives_attending_tafs.deleteMany({ where: { student_id: cc } });
+
+      // D. Final Punch: Delete the Student
+      // This will cascade delete: student_flags, student_fees, student_fee_bundles
+      await tx.students.delete({ where: { cc } });
+
+      return { success: true, message: `Student ${student.full_name} (${cc}) permanently deleted.` };
+    });
+  }
 }
