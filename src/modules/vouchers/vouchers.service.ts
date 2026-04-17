@@ -439,7 +439,9 @@ export class VouchersService {
             const fullAmount = Number(h.student_fees?.amount ?? 0);
             const netAmount = Number(h.net_amount);
             const isPartialPayment = netAmount < fullAmount;
-            const balancePrefix = isPartialPayment ? 'BALANCE PAYMENT OF ' : '';
+            // If caller already provided a descriptionPrefix (e.g. "Balance Payment of — "),
+            // avoid adding another balance prefix and duplicating the label.
+            const balancePrefix = isPartialPayment && !descriptionPrefix ? 'BALANCE PAYMENT OF ' : '';
 
             return {
                 description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}${monthSuffix}`,
