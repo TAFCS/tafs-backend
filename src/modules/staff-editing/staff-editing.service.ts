@@ -140,11 +140,13 @@ export class StaffEditingService {
         section_id: true,
         house_id: true,
         family_id: true,
+        home_phone: true,
         families: {
           select: { 
             id: true,
             household_name: true, 
-            legacy_pid: true
+            legacy_pid: true,
+            home_phone: true
           }
         },
         admission_age_years: true,
@@ -415,29 +417,37 @@ export class StaffEditingService {
     const currentGuardianIds = currentLinks.map(l => l.guardian_id);
 
     if (bulk_sync) {
-      const student = await this.prisma.students.findUnique({
-        where: { cc: studentCc },
-        select: { family_id: true }
-      });
-
-      if (student?.family_id) {
-        // Find all guardians linked to ANY student in this family
-        const familyLinks = await this.prisma.student_guardians.findMany({
-          where: {
-            students: { family_id: student.family_id }
-          },
-          select: { guardian_id: true }
+      return this.prisma.$transaction(async (tx) => {
+        const student = await tx.students.findUnique({
+          where: { cc: studentCc },
+          select: { family_id: true }
         });
-        const uniqueIds = [...new Set(familyLinks.map(l => l.guardian_id))];
-        
-        if (uniqueIds.length > 0) {
-          await this.prisma.guardians.updateMany({
-            where: { id: { in: uniqueIds } },
-            data: addressData as any
+
+        if (student?.family_id) {
+          await tx.families.update({
+            where: { id: student.family_id },
+            data: { home_phone: dto.work_phone }
           });
+          
+          // Find all guardians linked to ANY student in this family
+          const familyLinks = await tx.student_guardians.findMany({
+            where: {
+              students: { family_id: student.family_id }
+            },
+            select: { guardian_id: true }
+          });
+          const uniqueIds = [...new Set(familyLinks.map(l => l.guardian_id))];
+          
+          if (uniqueIds.length > 0) {
+            await tx.guardians.updateMany({
+              where: { id: { in: uniqueIds } },
+              data: addressData as any
+            });
+          }
+          return { success: true, count: uniqueIds.length, target: 'household' };
         }
-        return { success: true, count: uniqueIds.length, target: 'household' };
-      }
+        return { success: false, message: 'No family found for bulk sync' };
+      });
     }
 
     // Default or Fallback: Only update guardians of this specific student
@@ -801,6 +811,7 @@ export class StaffEditingService {
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
       family_id: s.family_id,
+      home_phone: s.families?.home_phone || s.home_phone || null,
       household_name: s.families?.household_name ?? null,
       father_name: fatherLink?.guardians?.full_name ?? null,
       father_cnic: fatherLink?.guardians?.cnic ?? null,
@@ -868,11 +879,13 @@ export class StaffEditingService {
       })) ?? [],
       date_of_admission: s.doa,
       family_id: s.family_id,
+      home_phone: s.families?.home_phone || s.home_phone || null,
       household_name: s.families?.household_name ?? null,
       families: s.families ? {
         id: s.families.id,
         household_name: s.families.household_name,
         legacy_pid: s.families.legacy_pid,
+        home_phone: s.families.home_phone,
         students: s.families.students || []
       } : null,
       siblings: (s.families?.students || []).filter((sib: any) => sib.cc !== s.cc),

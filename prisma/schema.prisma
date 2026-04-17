@@ -401,6 +401,7 @@ model students {
   primary_phone_country_code String?                    @default("+92") @db.VarChar(10)
   whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
   academic_year              String?                    @db.VarChar(10)
+  home_phone                 String?                    @db.VarChar(20)
   deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]

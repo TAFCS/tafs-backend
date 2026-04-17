@@ -571,17 +571,30 @@ export class StudentsService {
       primary_guardian_cnic: primaryGuardian?.cnic,
       whatsapp_number: primaryGuardian?.whatsapp_number || s.whatsapp_number,
       primary_phone: primaryGuardian?.primary_phone || s.primary_phone,
+      home_phone: s.families?.home_phone || s.home_phone,
       date_of_birth: s.dob,
       gender: s.gender,
       registration_number: s.cc,
       father_name: fatherNode?.guardians?.full_name || primaryGuardian?.full_name,
-      residential_address: s.families?.primary_address,
+      residential_address: s.families?.primary_address || (() => {
+        const g = primaryGuardian;
+        if (!g) return null;
+        return [
+          g.house_appt_number,
+          g.house_appt_name,
+          g.area_block,
+          g.city,
+          g.province,
+          g.country
+        ].filter(Boolean).join(', ') || null;
+      })(),
       photograph_url: s.photograph_url,
       photo_blue_bg_url: s.photo_blue_bg_url,
       date_of_admission: s.doa,
       families: s.families ? {
         household_name: s.families.household_name,
         legacy_pid: s.families.legacy_pid,
+        home_phone: s.families.home_phone,
       } : null,
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)

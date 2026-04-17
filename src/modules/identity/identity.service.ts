@@ -108,6 +108,7 @@ export class IdentityService {
           whatsapp_country_code: dto.whatsapp_country_code ?? '+92',
           whatsapp_number: dto.whatsapp_number,
           email: dto.email,
+          home_phone: dto.home_phone,
           academic_year: dto.admission.academic_year,
           admission_age_years: this.calcAge(dob),
           status: 'SOFT_ADMISSION',

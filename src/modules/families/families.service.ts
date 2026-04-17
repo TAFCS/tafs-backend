@@ -383,7 +383,15 @@ export class FamiliesService {
       : `Family of ${student.full_name}`;
 
     const addressChunks = primaryGuardian
-      ? [primaryGuardian.house_appt_name, primaryGuardian.area_block, primaryGuardian.city]
+      ? [
+          primaryGuardian.house_appt_number,
+          primaryGuardian.house_appt_name,
+          primaryGuardian.area_block,
+          primaryGuardian.city,
+          primaryGuardian.province,
+          primaryGuardian.country,
+          primaryGuardian.postal_code
+        ]
       : [];
     const address = addressChunks.filter(Boolean).join(', ') || null;
 
@@ -393,6 +401,7 @@ export class FamiliesService {
         data: {
           household_name: householdName,
           primary_address: address,
+          home_phone: student.home_phone,
         },
       });
 
