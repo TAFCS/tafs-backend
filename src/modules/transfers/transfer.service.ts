@@ -1,10 +1,18 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { StorageService } from '../../common/storage/storage.service';
+import { renderToBuffer } from '@react-pdf/renderer';
+import * as React from 'react';
+import { TransferOrderPDF } from './TransferOrderPDF';
 
 @Injectable()
 export class TransferService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(TransferService.name);
 
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
   async searchStudents(q: string) {
     if (!q?.trim()) return [];
     const isNumeric = /^\d+$/.test(q.trim());
@@ -44,11 +52,45 @@ export class TransferService {
     }));
   }
 
-  async getAvailableClasses() {
-    return this.prisma.classes.findMany({
+  async getAvailableClasses(cc: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      include: { classes: { select: { description: true, class_code: true, academic_system: true } } },
+    });
+
+    const currentClass = student?.classes?.description;
+
+    const all = await this.prisma.classes.findMany({
       orderBy: [{ academic_system: 'asc' }, { description: 'asc' }],
       select: { id: true, description: true, class_code: true, academic_system: true },
     });
+
+    if (!currentClass) return [];
+
+    const normalize = (s: string) => s.replace(/^Class\s+/i, '').trim().toUpperCase();
+    const normalizedCurrent = normalize(currentClass);
+
+    const mapping: Record<string, string[]> = {
+      'SR I': ['VI'],
+      'VI': ['SR I'],
+      'SR II': ['VII'],
+      'VII': ['SR II'],
+      'SR III': ['VIII'],
+      'VIII': ['SR III'],
+      'O-I': ['IX'],
+      'IX': ['O-I'],
+      'O-II': ['X'],
+      'O-III': ['X'],
+      'X': ['O-II', 'O-III'],
+    };
+
+    const allowed = mapping[normalizedCurrent];
+
+    if (!allowed) {
+      return [];
+    }
+
+    return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
   async executeTransfer(cc: number, dto: { to_class_id: number; discipline?: string; remarks?: string }) {
@@ -93,6 +135,60 @@ export class TransferService {
 
     // Re-fetch the updated transfer order data for the PDF
     return this.getTransferOrderData(cc);
+  }
+
+  async generateTransferPdf(cc: number, opts: {
+    transfer_from?: string;
+    transfer_to?: string;
+    discipline?: string;
+    remarks?: string;
+    date_of_transfer?: string;
+  }) {
+    const data = await this.getTransferOrderData(cc);
+
+    // Fetch student photo as buffer so it doesn't need CORS in the backend
+    let photographUrl: string | null = null;
+    if (data.photograph_url) {
+      try {
+        const { buffer, mime } = await this.storage.getFile(
+          this.storage.extractKeyFromUrl(data.photograph_url),
+        );
+        const b64 = buffer.toString('base64');
+        photographUrl = `data:${mime};base64,${b64}`;
+      } catch (e) {
+        this.logger.warn(`Could not embed photo for CC ${cc}`, e);
+      }
+    }
+
+    const now = new Date();
+    const months = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
+    const days = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+
+    const pdfData = {
+      ...data,
+      photograph_url: photographUrl,
+      transfer_from: opts.transfer_from || data.academic_system || '',
+      transfer_to: opts.transfer_to || '',
+      discipline: opts.discipline || '',
+      date_of_transfer: opts.date_of_transfer ||
+        `${String(now.getDate()).padStart(2,'0')} ${months[now.getMonth()]} ${now.getFullYear()}`,
+      remarks_footer: opts.remarks || '',
+      day: data.day,
+      date: data.date,
+    };
+
+    try {
+      const element = React.createElement(TransferOrderPDF, { data: pdfData }) as any;
+      const buffer = Buffer.from(await renderToBuffer(element));
+
+      const key = `transfers/${cc}/transfer-order-${Date.now()}.pdf`;
+      const url = await this.storage.upload(key, buffer, 'application/pdf');
+      this.logger.log(`Transfer PDF uploaded for CC ${cc}: ${url}`);
+      return { url };
+    } catch (err: any) {
+      this.logger.error(`Failed to generate/upload Transfer PDF for CC ${cc}`, err?.stack || err);
+      throw new BadRequestException('Failed to generate PDF: ' + (err?.message || 'Unknown error'));
+    }
   }
 
   async getTransferOrderData(cc: number) {
@@ -214,7 +310,7 @@ export class TransferService {
       day: currentDay,
       date: currentDate,
       full_name: student.full_name,
-      dob: student.dob,
+      dob: student.dob ? (student.dob as any instanceof Date ? (student.dob as any).toISOString() : String(student.dob)) : null,
       gender: student.gender,
       scholastic_year: scholasticYear,
       academic_year: academicYear,
