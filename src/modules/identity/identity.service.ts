@@ -474,16 +474,28 @@ export class IdentityService {
       throw new NotFoundException('CNIC is required');
     }
 
+    const cleanedCnic = cnic.trim();
     const guardian: any = await this.prisma.guardians.findUnique({
-      where: { cnic: cnic.trim() },
+      where: { cnic: cleanedCnic },
       include: {
         student_guardians: {
-          take: 1,
+          take: 1, // Get one student link to find the family context
           include: {
             students: {
               include: {
                 families: {
-                  select: { home_phone: true }
+                  include: {
+                    students: {
+                      where: { deleted_at: null },
+                      include: {
+                        student_guardians: {
+                          include: {
+                            guardians: true
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -496,12 +508,34 @@ export class IdentityService {
       throw new NotFoundException(`Guardian with CNIC ${cnic} not found`);
     }
 
-    // Extract home_phone from the family relationship
-    const homePhone = guardian.student_guardians?.[0]?.students?.families?.home_phone;
+    // Extract family context
+    const family = guardian.student_guardians?.[0]?.students?.families;
     
+    // Find other guardians in the family to populate the form (e.g. if searching Father, find Mother)
+    const otherGuardiansMap: Record<string, any> = {};
+    if (family?.students) {
+      for (const student of family.students) {
+        if (student.student_guardians) {
+          for (const sg of student.student_guardians) {
+            const rel = sg.relationship;
+            const g = sg.guardians;
+            if (rel && g && g.cnic !== cleanedCnic) {
+              otherGuardiansMap[rel] = g;
+            }
+          }
+        }
+      }
+    }
+
     return {
       ...guardian,
-      home_phone: homePhone || null,
+      family: family ? {
+        id: family.id,
+        household_name: family.household_name,
+        home_phone: family.home_phone,
+        primary_address: family.primary_address,
+        other_guardians: otherGuardiansMap
+      } : null
     };
   }
 
@@ -567,6 +601,7 @@ export class IdentityService {
       country: data.country ?? null,
       postal_code: data.postal_code ?? null,
       fax_number: data.fax_number ?? null,
+      additional_phones: (data.additional_phones as any) ?? undefined,
     };
 
     if (data.cnic) {

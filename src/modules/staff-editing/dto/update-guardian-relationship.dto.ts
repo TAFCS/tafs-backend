@@ -165,4 +165,7 @@ export class UpdateGuardianRelationshipDto {
   @IsOptional()
   @IsString()
   photo_url?: string;
+
+  @IsOptional()
+  additional_phones?: any[];
 }

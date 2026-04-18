@@ -488,6 +488,12 @@ export class StudentsService {
               select: {
                 cc: true,
                 full_name: true,
+                gr_number: true,
+                student_admissions: {
+                  orderBy: { application_date: "desc" },
+                  take: 1,
+                  select: { requested_grade: true },
+                },
                 student_guardians: {
                   where: { is_primary_contact: true },
                   take: 1,
@@ -602,6 +608,8 @@ export class StudentsService {
           cc: sib.cc,
           full_name: sib.full_name,
           cc_number: sib.cc,
+          gr_number: sib.gr_number,
+          grade: sib.student_admissions?.[0]?.requested_grade,
           father_name: sib.student_guardians?.[0]?.guardians?.full_name,
         })),
     };

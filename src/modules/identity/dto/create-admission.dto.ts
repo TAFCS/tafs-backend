@@ -170,6 +170,10 @@ export class GuardianDto {
   @IsOptional()
   @MaxLength(20)
   fax_number?: string;
+  
+  @IsArray()
+  @IsOptional()
+  additional_phones?: { label: string; number: string }[];
 }
 
 export class StudentFlagDto {

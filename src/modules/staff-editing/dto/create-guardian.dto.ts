@@ -176,4 +176,7 @@ export class CreateGuardianDto {
   @IsString()
   @MaxLength(255)
   photo_url?: string;
+
+  @IsOptional()
+  additional_phones?: any[];
 }
