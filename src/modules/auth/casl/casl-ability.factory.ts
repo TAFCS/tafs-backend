@@ -17,74 +17,59 @@ export type AppAbility = MongoAbility<[Action, AppSubjects]>;
 @Injectable()
 export class CaslAbilityFactory {
   createForStaff(user: IJwtStaffPayload): AppAbility {
-    const { can, cannot, build } = new AbilityBuilder<AppAbility>(
+    const { can, build } = new AbilityBuilder<AppAbility>(
       createMongoAbility,
     );
 
-    switch (user.role) {
-      case StaffRole.SUPER_ADMIN:
-        // Unrestricted access across all campuses and resources
-        can(Action.Manage, 'all');
-        break;
-
-      case StaffRole.CAMPUS_ADMIN:
-        can(Action.Manage, 'Student', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Family');
-        can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
-        can(Action.Manage, 'ClassFeeSchedule');
-        can(Action.Manage, 'StudentFee');
-        can(Action.Manage, 'Class');
-        can(Action.Manage, 'Section');
-        can(Action.Read, 'User', { campusId: user.campusId } as any);
-        cannot(Action.Delete, 'Campus');
-        break;
-
-      case StaffRole.PRINCIPAL:
-        can(Action.Read, 'Student', { campusId: user.campusId } as any);
-        can(Action.Read, 'Family');
-        can(Action.Read, 'Fee', { campusId: user.campusId } as any);
-        can(Action.Read, 'Challan', { campusId: user.campusId } as any);
-        can(Action.Read, 'ClassFeeSchedule');
-        can(Action.Read, 'StudentFee');
-        can(Action.Read, 'Class');
-        can(Action.Read, 'Section');
-        break;
-
-      case StaffRole.FINANCE_CLERK:
-        can(Action.Read, 'Student', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Fee', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Challan', { campusId: user.campusId } as any);
-        can(Action.Manage, 'ClassFeeSchedule');
-        can(Action.Manage, 'StudentFee');
-        can(Action.Manage, 'Voucher', { campusId: user.campusId } as any);
-        can(Action.Read, 'Class');
-        can(Action.Read, 'Section');
-        break;
-
-      case StaffRole.RECEPTIONIST:
-        can(Action.Manage, 'Student', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Family');
-        can(Action.Manage, 'Class');
-        can(Action.Manage, 'Section');
-        break;
-
-      case StaffRole.TEACHER:
-        can(Action.Read, 'Student', { campusId: user.campusId } as any);
-        can(Action.Read, 'Class');
-        can(Action.Read, 'Section');
-        break;
-
-      case StaffRole.STAFF_EDITOR:
-        // Restricted access primarily for staff editing students
-        can(Action.Manage, 'Student', { campusId: user.campusId } as any);
-        can(Action.Manage, 'Class');
-        can(Action.Manage, 'Section');
-        can(Action.Manage, 'Family');
-        can(Action.Manage, 'Campus');
-        can(Action.Read, 'User', { campusId: user.campusId } as any);
-        break;
+    // 1. Handle Super Admin (Unrestricted)
+    if (user.role === StaffRole.SUPER_ADMIN) {
+      can(Action.Manage, 'all');
+      return build();
     }
+
+    // 2. Map new permissions to CASL (for other roles)
+    // This allows us to use existing @CheckPolicies decorators with Action and Subject
+    const permissions = user.permissions || [];
+
+    permissions.forEach((perm) => {
+      const [module, resource, action] = perm.split('.');
+
+      // Simple mapping logic: edit/create/manage maps to Manage, view maps to Read
+      const caslAction = (action === 'view') ? Action.Read : Action.Manage;
+
+      // Map permission resource keys to CASL Subjects
+      let subject: AppSubjects | null = null;
+      switch (resource) {
+        case 'campuses': subject = 'Campus'; break;
+        case 'classes': subject = 'Class'; break;
+        case 'sections': subject = 'Section'; break;
+        case 'registration':
+        case 'enrollment':
+        case 'directory': subject = 'Student'; break;
+        case 'families': subject = 'Family'; break;
+        case 'fee_types': subject = 'Fee'; break;
+        case 'classwise_schedule': subject = 'ClassFeeSchedule'; break;
+        case 'studentwise_schedule': subject = 'StudentFee'; break;
+        case 'vouchers': subject = 'Voucher'; break;
+        case 'deposits': subject = 'Challan'; break; // 'deposits' UI uses Challan subject in guards
+        case 'banks': subject = 'Fee'; break; // Banks are part of fee admin
+        case 'users':
+        case 'permissions': subject = 'User'; break;
+        case 'analytics': subject = 'all'; break;
+      }
+
+      if (subject) {
+        // Apply campus scoping for non-Super Admins
+        const isAdminOrPrincipal = ([StaffRole.CAMPUS_ADMIN, StaffRole.PRINCIPAL] as StaffRole[]).includes(user.role);
+        
+        if (user.campusId && subject !== 'all' && subject !== 'User') {
+           // For Student, Fee, Voucher, etc., restrict to campusId
+           can(caslAction, subject, { campusId: user.campusId } as any);
+        } else {
+           can(caslAction, subject);
+        }
+      }
+    });
 
     return build();
   }

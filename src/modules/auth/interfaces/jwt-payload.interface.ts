@@ -8,6 +8,7 @@ export interface IJwtStaffPayload {
   role: StaffRole;
   campusId: number | null;
   userType: 'STAFF';
+  permissions: string[];
 }
 
 export interface IJwtParentPayload {

@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
+import { PermissionsService } from '../users/permissions.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
   IJwtStaffPayload,
@@ -18,6 +19,7 @@ const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export class AuthService {
   constructor(
     private usersService: UsersService,
+    private permissionsService: PermissionsService,
     private jwtService: JwtService,
     private configService: ConfigService,
     private prisma: PrismaService,
@@ -35,12 +37,15 @@ export class AuthService {
     const isMatch = await bcrypt.compare(dto.password, user.password_hash);
     if (!isMatch) throw new UnauthorizedException('Invalid credentials');
 
+    const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
       role: user.role,
       campusId: user.campus_id,
       userType: 'STAFF',
+      permissions,
     };
 
     const { accessToken, refreshToken } =
@@ -57,6 +62,7 @@ export class AuthService {
         role: user.role,
         campusId: user.campus_id,
         campusName: user.campuses?.campus_name ?? null,
+        permissions,
       },
     };
   }
@@ -89,12 +95,15 @@ export class AuthService {
       throw new UnauthorizedException('Account is inactive');
     }
 
+    const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
       role: user.role,
       campusId: user.campus_id,
       userType: 'STAFF',
+      permissions,
     };
 
     const { accessToken, refreshToken } =
@@ -111,6 +120,7 @@ export class AuthService {
         role: user.role,
         campusId: user.campus_id,
         campusName: user.campuses?.campus_name ?? null,
+        permissions,
       },
     };
   }
