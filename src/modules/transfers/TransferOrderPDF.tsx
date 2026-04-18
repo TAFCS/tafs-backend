@@ -42,7 +42,7 @@ const styles = StyleSheet.create({
     checkbox: { width: 9, height: 9, borderWidth: 1, borderColor: '#000', marginLeft: 4, marginRight: 6 },
     checkboxFilled: { backgroundColor: '#000' },
     footer: { marginTop: 'auto', paddingTop: 4 },
-    copiesToText: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', fontStyle: 'italic', textAlign: 'center', marginBottom: 6, borderTopWidth: 0.5, borderTopColor: '#000', paddingTop: 4 },
+    copiesToText: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', textAlign: 'center', marginBottom: 6, borderTopWidth: 0.5, borderTopColor: '#000', paddingTop: 4 },
     ccListItem: { fontSize: 7.5, marginBottom: 1 },
     segmentHeadRow: { flexDirection: 'row', alignItems: 'center' },
     signatureSection: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 28 },
