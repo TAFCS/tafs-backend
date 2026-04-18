@@ -53,8 +53,8 @@ export class CaslAbilityFactory {
         case 'vouchers': subject = 'Voucher'; break;
         case 'deposits': subject = 'Challan'; break; // 'deposits' UI uses Challan subject in guards
         case 'banks': subject = 'Fee'; break; // Banks are part of fee admin
-        case 'users':
-        case 'permissions': subject = 'User'; break;
+        case 'users': subject = 'User'; break;
+        case 'permissions': subject = 'Permission'; break;
         case 'analytics': subject = 'all'; break;
       }
 

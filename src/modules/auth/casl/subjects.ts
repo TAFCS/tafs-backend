@@ -8,6 +8,7 @@ export type AppSubjects =
   | 'Fee'
   | 'ClassFeeSchedule'
   | 'User'
+  | 'Permission'
   | 'Campus'
   | 'Challan'
   | 'Class'
