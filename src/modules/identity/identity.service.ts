@@ -23,6 +23,7 @@ export class IdentityService {
       let familyId: number | null = null;
 
       if (dto.existing_family_id) {
+        // Admin explicitly chose to link to an existing family
         const existing = await tx.families.findUnique({
           where: { id: dto.existing_family_id },
         });
@@ -32,8 +33,15 @@ export class IdentityService {
           );
         }
         familyId = existing.id;
-      } else {
-        // Try to resolve family by Father's or Mother's CNIC
+        // Update home_phone if provided
+        if (dto.home_phone) {
+          await tx.families.update({
+            where: { id: familyId },
+            data: { home_phone: dto.home_phone },
+          });
+        }
+      } else if (!dto.should_create_family) {
+        // Auto-resolve family via Father's or Mother's CNIC (default behaviour)
         let resolvedFamilyId: number | null = null;
 
         if (dto.father.cnic) {
@@ -41,29 +49,63 @@ export class IdentityService {
             where: { cnic: dto.father.cnic },
             include: {
               student_guardians: {
+                where: { relationship: 'FATHER' },
                 include: {
-                  students: true,
+                  students: {
+                    include: {
+                      student_guardians: {
+                        where: { relationship: 'MOTHER' },
+                        include: { guardians: true },
+                      },
+                    },
+                  },
                 },
               },
             },
           });
-          const family = existingGuardian?.student_guardians[0]?.students?.family_id;
-          if (family) resolvedFamilyId = family;
+
+          if (existingGuardian && existingGuardian.student_guardians.length > 0) {
+            const familyId = existingGuardian.student_guardians[0].students?.family_id;
+            
+            // Check Spouse (Mother) match to allow auto-linking
+            const existingMother = existingGuardian.student_guardians[0].students?.student_guardians?.find(
+              (sg) => sg.relationship === 'MOTHER'
+            )?.guardians;
+
+            const dtoMotherCnic = dto.mother.cnic?.replace(/-/g, '');
+            const existingMotherCnic = existingMother?.cnic?.replace(/-/g, '');
+
+            const isMotherMatch = 
+              (dtoMotherCnic && existingMotherCnic && dtoMotherCnic === existingMotherCnic) ||
+              (dto.mother.full_name?.toUpperCase() === existingMother?.full_name?.toUpperCase() && dto.mother.full_name);
+
+            if (familyId && isMotherMatch) {
+              resolvedFamilyId = familyId;
+            } else {
+              // Different mother detected or no family assigned yet
+              // We skip auto-linking so the admin can choose in the Student Profile Modal
+              console.log(`Auto-link skipped for father ${dto.father.cnic}: mother mismatch or no existing family.`);
+            }
+          }
         }
 
         if (!resolvedFamilyId && dto.mother.cnic) {
+          // Fallback to mother's CNIC if father didn't resolve
           const existingGuardian = await tx.guardians.findFirst({
             where: { cnic: dto.mother.cnic },
             include: {
               student_guardians: {
+                where: { relationship: 'MOTHER' },
                 include: {
                   students: true,
                 },
               },
             },
           });
-          const family = existingGuardian?.student_guardians[0]?.students?.family_id;
-          if (family) resolvedFamilyId = family;
+          if (existingGuardian && existingGuardian.student_guardians.length > 0) {
+            const family = existingGuardian.student_guardians[0].students?.family_id;
+            if (family) resolvedFamilyId = family;
+          }
         }
 
         if (resolvedFamilyId) {
@@ -77,6 +119,8 @@ export class IdentityService {
           }
         }
       }
+      // If should_create_family === true: familyId stays null → no family is linked.
+      // The admin can then use "Create New Family" in the student profile modal.
 
       // ── 2. Create student ────────────────────────────────────────────────
       const dob = new Date(dto.dob);

@@ -602,6 +602,47 @@ export class StudentsService {
       }
     }
 
+    // ── Potential Family Detection (for unlinked students) ───────────────────
+    let potentialFamilyMatch: any = null;
+    if (!s.family_id) {
+        // Look for families where father or mother are already linked to other students
+        const guardianCnics = s.student_guardians
+            .map(sg => sg.guardians.cnic)
+            .filter(Boolean);
+            
+        if (guardianCnics.length > 0) {
+            const siblingLink = await this.prisma.student_guardians.findFirst({
+                where: {
+                    guardian_id: { in: s.student_guardians.map(sg => sg.guardian_id) },
+                    student_id: { not: s.cc },
+                    students: { family_id: { not: null } }
+                },
+                include: {
+                    students: {
+                        include: {
+                            families: true,
+                            student_guardians: {
+                                where: { relationship: 'MOTHER' },
+                                include: { guardians: true }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            if (siblingLink && siblingLink.students && siblingLink.students.families) {
+                const fam = siblingLink.students.families;
+                const mother = siblingLink.students.student_guardians.find(sg => sg.relationship === 'MOTHER')?.guardians;
+                potentialFamilyMatch = {
+                    id: fam.id,
+                    household_name: fam.household_name,
+                    spouse_name: mother?.full_name,
+                    spouse_cnic: mother?.cnic,
+                };
+            }
+        }
+    }
+
     return {
       cc: s.cc,
       student_full_name: s.full_name,
@@ -619,6 +660,7 @@ export class StudentsService {
       advance_credit_balance: financial.advance,
       family_id: s.family_id,
       household_name: s.families?.household_name,
+      potential_family_match: potentialFamilyMatch,
       primary_guardian_name: primaryGuardian?.full_name,
       primary_guardian_cnic: primaryGuardian?.cnic,
       whatsapp_number: primaryGuardian?.whatsapp_number || s.whatsapp_number,
@@ -659,6 +701,7 @@ export class StudentsService {
           father_name: sib.student_guardians?.[0]?.guardians?.full_name,
         })),
     };
+
   }
 
   async assignStudent(id: number, dto: any) {
