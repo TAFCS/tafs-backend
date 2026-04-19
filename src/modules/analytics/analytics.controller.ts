@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, HttpStatus } from '@nestjs/common';
+import { Controller, Get, UseGuards, HttpStatus, Query } from '@nestjs/common';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -12,9 +12,10 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get('dashboard')
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'all')) // Restrict to Super Admins (who have manage 'all')
-  async getDashboardData() {
-    const stats = await this.analyticsService.getDashboardStats();
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'all'))
+  async getDashboardData(@Query('campusId') campusId?: string) {
+    const cid = campusId ? parseInt(campusId, 10) : undefined;
+    const stats = await this.analyticsService.getDashboardStats(cid);
     return createApiResponse(stats, HttpStatus.OK, 'Dashboard analytics retrieved successfully');
   }
 }

@@ -8,18 +8,29 @@ export class AnalyticsService {
   private getCurrentAcademicYear(): string {
     const now = new Date();
     const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth(); // 0 is January, 7 is August
+    const currentMonth = now.getMonth(); 
     const startYear = currentMonth >= 7 ? currentYear : currentYear - 1;
     return `${startYear}-${startYear + 1}`;
   }
 
-  async getDashboardStats() {
+  async getDashboardStats(campusId?: number) {
     const currentYear = this.getCurrentAcademicYear();
+
+    const studentFilter: any = {
+      status: 'ENROLLED',
+      ...(campusId ? { campus_id: campusId } : {}),
+      deleted_at: null,
+    };
+
+    const feeFilter: any = {
+      students: studentFilter,
+    };
 
     // 1. Current Year Financials
     const collectionStats = await this.prisma.student_fees.aggregate({
       where: {
         academic_year: currentYear,
+        ...feeFilter,
       },
       _sum: {
         amount: true,
@@ -37,6 +48,7 @@ export class AnalyticsService {
       where: {
         academic_year: { not: currentYear },
         status: { not: 'PAID' },
+        ...feeFilter,
       },
       _sum: {
         amount: true,
@@ -48,20 +60,23 @@ export class AnalyticsService {
 
     // 3. Student Strength
     const totalStudents = await this.prisma.students.count({
-      where: { deleted_at: null },
+      where: studentFilter,
     });
 
     const branchCounts = await this.prisma.students.groupBy({
       by: ['campus_id'],
-      where: { deleted_at: null },
+      where: { status: 'ENROLLED', deleted_at: null }, 
       _count: {
         cc: true,
       },
     });
 
-    // Resolve campus names
-    const campuses = await this.prisma.campuses.findMany();
-    const campusMap = new Map(campuses.map((c) => [c.id, c.campus_name]));
+    // Resolve campus names and list
+    const campusesList = await this.prisma.campuses.findMany({
+        select: { id: true, campus_name: true },
+        orderBy: { campus_name: 'asc' }
+    });
+    const campusMap = new Map(campusesList.map((c) => [c.id, c.campus_name]));
 
     const branchwiseStrength = branchCounts.map((b) => ({
       campus_id: b.campus_id,
@@ -82,6 +97,7 @@ export class AnalyticsService {
         total: totalStudents,
         branchwise: branchwiseStrength,
       },
+      campuses: campusesList
     };
   }
 }
