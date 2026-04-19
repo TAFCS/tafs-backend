@@ -57,4 +57,8 @@ export class GetStudentsDto {
   @IsOptional()
   @IsString()
   is_abnormal?: string;
+
+  @IsOptional()
+  @IsEnum(['missing_guardian', 'no_family', 'abnormal'])
+  audit_type?: 'missing_guardian' | 'no_family' | 'abnormal';
 }

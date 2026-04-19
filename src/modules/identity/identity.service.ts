@@ -578,7 +578,9 @@ export class IdentityService {
     const guardianFullName = data.full_name?.trim();
     if (!guardianFullName) throw new BadRequestException('Guardian full_name is required');
 
+    const cnic = (data.cnic && data.cnic !== "N/A") ? data.cnic : null;
     const payload = {
+      cnic,
       full_name: guardianFullName,
       primary_phone_country_code: data.primary_phone_country_code ?? '+92',
       primary_phone: data.primary_phone ?? null,
@@ -604,10 +606,10 @@ export class IdentityService {
       additional_phones: (data.additional_phones as any) ?? undefined,
     };
 
-    if (data.cnic) {
+    if (cnic) {
       return tx.guardians.upsert({
-        where: { cnic: data.cnic },
-        create: { cnic: data.cnic, ...payload },
+        where: { cnic },
+        create: payload,
         update: payload,
       });
     }

@@ -611,10 +611,15 @@ export class StaffEditingService {
     };
   }
   async updateGuardian(id: number, dto: UpdateGuardianDto) {
-    const { dob, ...rest } = dto;
+    const { dob, cnic, ...rest } = dto;
     const data: Record<string, unknown> = {
       ...rest,
     };
+    
+    if (cnic !== undefined) {
+      data.cnic = (cnic && cnic !== "N/A") ? cnic : null;
+    }
+
     if (dto.email && !dto.email_address) {
       data.email_address = dto.email;
       delete data.email;

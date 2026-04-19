@@ -155,21 +155,26 @@ export class StudentsService {
     if (house_id)    where.house_id   = house_id;
     if (status)      where.status     = status;
 
-    // TEMP: Data Audit Filter (using raw SQL fallback for compatibility)
-    if (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true) {
-      const abnormalStudents: any[] = await this.prisma.$queryRaw`
-        SELECT cc FROM students s
-        WHERE
-          NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id = s.cc)
-          OR
-          cc IN (
-            SELECT student_id FROM student_guardians
-            GROUP BY student_id
-            HAVING COUNT(*) > 2
-          )
-      `;
-      const abnormalCcs = abnormalStudents.map(s => s.cc);
-      where.cc = { in: abnormalCcs };
+    // Data Audit Filters
+    const auditType = query.audit_type || (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true ? 'abnormal' : null);
+    
+    if (auditType) {
+      if (auditType === 'no_family') {
+        where.family_id = null;
+      } else {
+        const abnormalStudents: any[] = await this.prisma.$queryRaw`
+          SELECT cc FROM students s
+          WHERE
+            ${auditType === 'missing_guardian' || auditType === 'abnormal' ? Prisma.sql`NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id = s.cc)` : Prisma.sql`1=0`}
+            ${auditType === 'abnormal' ? Prisma.sql`OR cc IN (
+              SELECT student_id FROM student_guardians
+              GROUP BY student_id
+              HAVING COUNT(*) > 2
+            )` : Prisma.sql``}
+        `;
+        const abnormalCcs = abnormalStudents.map(s => s.cc);
+        where.cc = { in: abnormalCcs };
+      }
     }
 
     // Determine what relations to include based on user's selected fields
