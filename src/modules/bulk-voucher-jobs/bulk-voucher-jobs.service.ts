@@ -53,6 +53,48 @@ function getMonthYearLabel(m: number, academicYear: string): string {
     return `${monthName.slice(0, 3)} ${year.slice(-2)}`;
 }
 
+function getConsolidatedMonthsLabel(items: { month: number; academicYear: string }[]): string {
+    if (!items || items.length === 0) return "";
+
+    const getSeq = (m: number, ay: string) => {
+        const startYear = parseInt(ay.split('-')[0]) || 0;
+        return startYear * 12 + (m >= 8 ? m - 8 : m + 4);
+    };
+
+    // Extract unique month/year pairs and sort by sequence
+    const uniqueMonths = Array.from(new Set(items.map(f => JSON.stringify({ m: f.month, ay: f.academicYear }))))
+        .map(s => JSON.parse(s))
+        .sort((a, b) => getSeq(a.m, a.ay) - getSeq(b.m, b.ay));
+
+    const ranges: { m: number; ay: string }[][] = [];
+    let currentRange: { m: number; ay: string }[] = [];
+
+    uniqueMonths.forEach((item, idx) => {
+        if (idx === 0) {
+            currentRange.push(item);
+        } else {
+            const prevSeq = getSeq(uniqueMonths[idx - 1].m, uniqueMonths[idx - 1].ay);
+            const currSeq = getSeq(item.m, item.ay);
+            if (currSeq === prevSeq + 1) {
+                currentRange.push(item);
+            } else {
+                ranges.push(currentRange);
+                currentRange = [item];
+            }
+        }
+    });
+    ranges.push(currentRange);
+
+    return ranges.map(range => {
+        const first = range[0];
+        const last = range[range.length - 1];
+        const firstLabel = getMonthYearLabel(first.m, first.ay).toUpperCase();
+        if (range.length === 1) return firstLabel;
+        const lastLabel = getMonthYearLabel(last.m, last.ay).toUpperCase();
+        return `${firstLabel} - ${lastLabel}`;
+    }).join(", ");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -618,11 +660,13 @@ export class BulkVoucherJobsService {
         const arrearsTotal = arrearRows.reduce((sum, r) => sum + Number(r.outstanding), 0);
         const grandTotal = currentFeesTotal + arrearsTotal;
 
-        const monthNums = [...new Set(
-            feesForThisVoucher.map((f: any) => f.target_month || f.month).filter(Boolean) as number[]
-        )].sort((a, b) => a - b);
-        const monthLabel = monthNums.length > 0
-            ? monthNums.map(m => getMonthYearLabel(m, dto.academic_year)).join(' / ')
+        const monthLabelItems = feesForThisVoucher.map((f: any) => ({
+            month: f.target_month || f.month,
+            academicYear: dto.academic_year,
+        })).filter(x => x.month);
+
+        const monthLabel = monthLabelItems.length > 0
+            ? getConsolidatedMonthsLabel(monthLabelItems)
             : new Date(dateStr).toLocaleString('default', { month: 'long', year: 'numeric' });
 
         const pdfBuffer = await this.voucherPdfService.generateVoucherPdf({
