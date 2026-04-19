@@ -330,9 +330,57 @@ export class StudentsService {
         skip: offset,
         take: limit,
         orderBy: { cc: 'desc' },
-        select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true }, // Ensure at least cc is selected
+        select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true },
       }),
     ]);
+
+    // ── Batch Financial Status (NEW) ────────────────────────────────────────
+    // To avoid N+1 queries when populating financial badges for the list view,
+    // we fetch relevant data for all students in the current page upfront.
+    const studentIds = studentsData.map(s => s.cc);
+    const financialBadges = new Map<number, string>();
+
+    if (studentIds.length > 0) {
+      const now = new Date();
+      const allFees = await this.prisma.student_fees.findMany({
+        where: { student_id: { in: studentIds } },
+        select: { student_id: true, amount: true, amount_paid: true, due_date: true }
+      });
+
+      // Group fees by student
+      const feesByStudent = new Map<number, typeof allFees>();
+      for (const fee of allFees) {
+        if (!feesByStudent.has(fee.student_id)) feesByStudent.set(fee.student_id, []);
+        feesByStudent.get(fee.student_id)!.push(fee);
+      }
+
+      for (const sid of studentIds) {
+        const studentFees = feesByStudent.get(sid) || [];
+        if (studentFees.length === 0) {
+          financialBadges.set(sid, 'NO_SCHEDULE');
+          continue;
+        }
+
+        let outstanding = new Prisma.Decimal(0);
+        let anyOverdue = false;
+        let anyPartial = false;
+
+        for (const fee of studentFees) {
+          const balance = new Prisma.Decimal(fee.amount || 0).sub(fee.amount_paid || 0);
+          if (balance.gt(0)) {
+            outstanding = outstanding.add(balance);
+            if (fee.due_date && fee.due_date < now) anyOverdue = true;
+            if (new Prisma.Decimal(fee.amount_paid || 0).gt(0)) anyPartial = true;
+          }
+        }
+
+        let badge = 'Cleared';
+        if (anyOverdue) badge = 'Overdue';
+        else if (outstanding.gt(0)) badge = 'Partial';
+        
+        financialBadges.set(sid, badge);
+      }
+    }
 
     // Map and flatten response structure
     const mappedItems = studentsData.map((s: any) => {
@@ -342,16 +390,12 @@ export class StudentsService {
       if (s.student_guardians) {
         primaryGuardianNode = s.student_guardians.find((g: any) => g.is_primary_contact !== false);
         emergencyGuardianNode = s.student_guardians.find((g: any) => g.is_emergency_contact === true);
-        // fallback for when only one record exists but explicit booleans aren't returned safely
         if (!primaryGuardianNode && s.student_guardians.length > 0) primaryGuardianNode = s.student_guardians[0];
       }
 
-      // Inheritance fallback for list view if core guardian is missing
       if (!primaryGuardianNode && s.family_id && s.families?.students) {
         const siblingWithGuardian = s.families.students.find((sib: any) => sib.cc !== s.cc && sib.student_guardians?.length > 0);
-        if (siblingWithGuardian) {
-          primaryGuardianNode = siblingWithGuardian.student_guardians[0];
-        }
+        if (siblingWithGuardian) primaryGuardianNode = siblingWithGuardian.student_guardians[0];
       }
 
       const primaryGuardian = primaryGuardianNode?.guardians;
@@ -451,11 +495,8 @@ export class StudentsService {
         };
       }
 
-      // Add a flattened "legacy" root map for the frontend's existing datatable usage
-      // This bridges the gap between the new nested structure and what the frontend expects.
       return {
         ...mappedData,
-        // Frontend compatibility flattened fields:
         student_full_name: mappedData.core?.full_name,
         gr_number: mappedData.core?.gr_number,
         cc_number: mappedData.core?.cc_number,
@@ -465,7 +506,7 @@ export class StudentsService {
         primary_guardian_name: mappedData.contact?.primary_guardian_name,
         whatsapp_number: mappedData.contact?.whatsapp_number,
         enrollment_status: mappedData.core?.enrollment_status,
-        financial_status_badge: null, // List view shouldn't guess; modal will fetch actual status
+        financial_status_badge: financialBadges.get(s.cc) || 'NO_SCHEDULE',
         family_id: mappedData.family?.family_id,
         household_name: mappedData.family?.household_name,
         primary_guardian_cnic: mappedData.contact?.guardian_cnic,
@@ -786,56 +827,65 @@ export class StudentsService {
     const sectionActiveCache = new Map<string, boolean>();
     const results: PromotionOutcome[] = [];
 
+    const CHUNK_SIZE = 25;
     if (isExplicitIds) {
       const byId = new Map(candidates.map((s) => [s.cc, s]));
-      for (const studentId of distinctStudentIds!) {
-        const student = byId.get(studentId);
-        if (!student) {
-          results.push({
-            student_id: studentId,
-            status: 'failed',
-            reason_code: 'STUDENT_NOT_FOUND',
-            message: 'Student not found or does not match provided filters',
-            dry_run: dryRun,
-          });
-          continue;
-        }
+      const studentIds = distinctStudentIds!;
+      
+      for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+        const chunk = studentIds.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(async (studentId) => {
+          const student = byId.get(studentId);
+          if (!student) {
+            results.push({
+              student_id: studentId,
+              status: 'failed',
+              reason_code: 'STUDENT_NOT_FOUND',
+              message: 'Student not found or does not match provided filters',
+              dry_run: dryRun,
+            });
+            return;
+          }
 
-        const outcome = await this.processPromotionForStudent(
-          student,
-          fromClass,
-          toClass,
-          isGraduating,
-          isExpelling,
-          isLeaving,
-          isExplicitIds,
-          dto.to_section_id,
-          dto.reason,
-          dto.target_academic_year,
-          dryRun,
-          classActiveCache,
-          sectionActiveCache,
-        );
-        results.push(outcome);
+          const outcome = await this.processPromotionForStudent(
+            student,
+            fromClass,
+            toClass,
+            isGraduating,
+            isExpelling,
+            isLeaving,
+            isExplicitIds,
+            dto.to_section_id,
+            dto.reason,
+            dto.target_academic_year,
+            dryRun,
+            classActiveCache,
+            sectionActiveCache,
+          );
+          results.push(outcome);
+        }));
       }
     } else {
-      for (const student of candidates) {
-        const outcome = await this.processPromotionForStudent(
-          student,
-          fromClass,
-          toClass,
-          isGraduating,
-          isExpelling,
-          isLeaving,
-          isExplicitIds,
-          dto.to_section_id,
-          dto.reason,
-          dto.target_academic_year,
-          dryRun,
-          classActiveCache,
-          sectionActiveCache,
-        );
-        results.push(outcome);
+      for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
+        const chunk = candidates.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(async (student) => {
+          const outcome = await this.processPromotionForStudent(
+            student,
+            fromClass,
+            toClass,
+            isGraduating,
+            isExpelling,
+            isLeaving,
+            isExplicitIds,
+            dto.to_section_id,
+            dto.reason,
+            dto.target_academic_year,
+            dryRun,
+            classActiveCache,
+            sectionActiveCache,
+          );
+          results.push(outcome);
+        }));
       }
     }
 

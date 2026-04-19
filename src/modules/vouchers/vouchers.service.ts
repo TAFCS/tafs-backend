@@ -309,41 +309,46 @@ export class VouchersService {
         const generatedVoucherIds: number[] = [];
         const failed: { student_id: number; reason: string }[] = [];
 
-        for (const item of selection.eligibleStudents) {
-            try {
-                const voucherDto: CreateVoucherDto = {
-                    student_id: item.student_id,
-                    campus_id: item.campus_id,
-                    class_id: item.class_id,
-                    section_id: item.section_id ?? undefined,
-                    bank_account_id: dto.bank_account_id,
-                    issue_date: dto.issue_date,
-                    due_date: dto.due_date,
-                    validity_date: dto.validity_date,
-                    late_fee_charge: dto.late_fee_charge ?? true,
-                    late_fee_amount: dto.late_fee_amount,
-                    academic_year: dto.academic_year,
-                    month: dto.month ?? undefined,
-                    fee_date: dto.fee_date,
-                    precedence: 1,
-                    orderedFeeIds: item.fee_ids,
-                    fee_lines: item.fee_lines,
-                };
+        const CHUNK_SIZE = 25;
+        for (let i = 0; i < selection.eligibleStudents.length; i += CHUNK_SIZE) {
+            const chunk = selection.eligibleStudents.slice(i, i + CHUNK_SIZE);
+            
+            await Promise.all(chunk.map(async (item) => {
+                try {
+                    const voucherDto: CreateVoucherDto = {
+                        student_id: item.student_id,
+                        campus_id: item.campus_id,
+                        class_id: item.class_id,
+                        section_id: item.section_id ?? undefined,
+                        bank_account_id: dto.bank_account_id,
+                        issue_date: dto.issue_date,
+                        due_date: dto.due_date,
+                        validity_date: dto.validity_date,
+                        late_fee_charge: dto.late_fee_charge ?? true,
+                        late_fee_amount: dto.late_fee_amount,
+                        academic_year: dto.academic_year,
+                        month: dto.month ?? undefined,
+                        fee_date: dto.fee_date,
+                        precedence: 1,
+                        orderedFeeIds: item.fee_ids,
+                        fee_lines: item.fee_lines,
+                    };
 
-                const created = await this.create(voucherDto);
-                generated.push(item.student_id);
-                if (created?.id) {
-                    generatedVoucherIds.push(created.id);
+                    const created = await this.create(voucherDto);
+                    generated.push(item.student_id);
+                    if (created?.id) {
+                        generatedVoucherIds.push(created.id);
+                    }
+                } catch (error: any) {
+                    this.logger.error(
+                        `Bulk voucher creation failed for student ${item.student_id}: ${error?.message ?? 'Unknown error'}`,
+                    );
+                    failed.push({
+                        student_id: item.student_id,
+                        reason: error?.message ?? 'Failed to create voucher',
+                    });
                 }
-            } catch (error: any) {
-                this.logger.error(
-                    `Bulk voucher creation failed for student ${item.student_id}: ${error?.message ?? 'Unknown error'}`,
-                );
-                failed.push({
-                    student_id: item.student_id,
-                    reason: error?.message ?? 'Failed to create voucher',
-                });
-            }
+            }));
         }
 
         return {
@@ -640,6 +645,15 @@ export class VouchersService {
     async update(id: number, dto: UpdateVoucherDto) {
         await this.findOne(id); // ensure it exists
 
+        const needsPdfInvalidation = 
+            dto.issue_date || 
+            dto.due_date || 
+            dto.validity_date !== undefined || 
+            dto.status !== undefined || 
+            dto.late_fee_charge !== undefined || 
+            dto.bank_account_id || 
+            dto.section_id !== undefined;
+
         return this.prisma.vouchers.update({
             where: { id },
             data: {
@@ -650,6 +664,7 @@ export class VouchersService {
                 ...(dto.late_fee_charge !== undefined ? { late_fee_charge: dto.late_fee_charge } : {}),
                 ...(dto.bank_account_id ? { bank_account_id: dto.bank_account_id } : {}),
                 ...(dto.section_id !== undefined ? { section_id: dto.section_id } : {}),
+                ...(needsPdfInvalidation ? { pdf_url: null } : {}),
             },
             include: VOUCHER_INCLUDE,
         });
