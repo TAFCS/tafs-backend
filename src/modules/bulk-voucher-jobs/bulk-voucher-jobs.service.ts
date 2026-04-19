@@ -304,7 +304,7 @@ export class BulkVoucherJobsService {
         const [bankAccount, studentRecords, allEligibleFees, existingVouchers] = await Promise.all([
             this.prisma.bank_accounts.findUnique({ where: { id: dto.bank_account_id } }),
             this.prisma.students.findMany({
-                where: { cc: { in: dto.student_ccs }, deleted_at: null },
+                where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
                 select: {
                     cc: true,
                     full_name: true,

@@ -1332,6 +1332,7 @@ export class VouchersService {
         const students = await this.prisma.students.findMany({
             where: {
                 deleted_at: null,
+                status: 'ENROLLED',
                 campus_id: filters.campus_id,
                 ...(filters.class_id ? { class_id: filters.class_id } : {}),
                 ...(filters.section_id ? { section_id: filters.section_id } : {}),
