@@ -22,9 +22,9 @@ export class PromoteBulkStudentsDto {
 
   /**
    * Target class to promote students into.
-   * Required when neither `graduate` nor `expel` is true.
+   * Required when neither `graduate`, `expel`, nor `left` is true.
    */
-  @ValidateIf((o) => !o.graduate && !o.expel)
+  @ValidateIf((o) => !o.graduate && !o.expel && !o.left)
   @ValidateNested()
   @Type(() => ClassSelectorDto)
   to?: ClassSelectorDto;
@@ -34,7 +34,7 @@ export class PromoteBulkStudentsDto {
    *   - status = GRADUATED
    *   - class_id = null
    *   - All other data is preserved
-   * Mutually exclusive with `to` and `expel`.
+   * Mutually exclusive with `to`, `expel`, and `left`.
    */
   @IsOptional()
   @IsBoolean()
@@ -45,11 +45,21 @@ export class PromoteBulkStudentsDto {
    *   - status = EXPELLED
    *   - All data (class_id, section_id, etc.) is preserved as-is
    *   - No admission record is created
-   * Mutually exclusive with `to` and `graduate`.
+   * Mutually exclusive with `to`, `graduate`, and `left`.
    */
   @IsOptional()
   @IsBoolean()
   expel?: boolean;
+
+  /**
+   * When true, students are marked as left:
+   *   - status = LEFT
+   *   - All data is preserved as-is
+   * Mutually exclusive with `to`, `graduate`, and `expel`.
+   */
+  @IsOptional()
+  @IsBoolean()
+  left?: boolean;
 
   /**
    * Explicit target academic year (e.g. "2025-2026").

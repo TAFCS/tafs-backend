@@ -9,7 +9,7 @@ import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
 
-type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'skipped' | 'failed';
+type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
 type PromotionReasonCode =
   | 'STUDENT_NOT_FOUND'
@@ -17,6 +17,7 @@ type PromotionReasonCode =
   | 'ALREADY_AT_TARGET'
   | 'ALREADY_GRADUATED'
   | 'ALREADY_EXPELLED'
+  | 'ALREADY_LEFT'
   | 'TARGET_CLASS_INACTIVE_FOR_CAMPUS'
   | 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS'
   | 'MISSING_TARGET'
@@ -33,6 +34,7 @@ type PromotionOutcome = {
   to_academic_year?: string;
   graduated?: boolean;
   expelled?: boolean;
+  left?: boolean;
   dry_run: boolean;
 };
 
@@ -708,22 +710,23 @@ export class StudentsService {
   }
 
   async promoteBulk(dto: PromoteBulkStudentsDto) {
-    // Validate: exactly one of `to`, `graduate`, or `expel` must be set
+    // Validate: exactly one of `to`, `graduate`, `expel`, or `left` must be set
     const isGraduating = !!dto.graduate;
     const isExpelling = !!dto.expel;
+    const isLeaving = !!dto.left;
 
-    if (!isGraduating && !isExpelling && !dto.to) {
-      throw new BadRequestException('Either `to` (target class), `graduate: true`, or `expel: true` must be provided');
+    if (!isGraduating && !isExpelling && !isLeaving && !dto.to) {
+      throw new BadRequestException('Either `to` (target class), `graduate: true`, `expel: true`, or `left: true` must be provided');
     }
-    const actionCount = [!!dto.to, isGraduating, isExpelling].filter(Boolean).length;
+    const actionCount = [!!dto.to, isGraduating, isExpelling, isLeaving].filter(Boolean).length;
     if (actionCount > 1) {
-      throw new BadRequestException('Only one of `to`, `graduate`, or `expel` may be specified at a time');
+      throw new BadRequestException('Only one of `to`, `graduate`, `expel`, or `left` may be specified at a time');
     }
 
     const fromClass = await this.resolveClassSelector(dto.from, 'from');
-    const toClass = isGraduating || isExpelling ? null : await this.resolveClassSelector(dto.to!, 'to');
+    const toClass = isGraduating || isExpelling || isLeaving ? null : await this.resolveClassSelector(dto.to!, 'to');
 
-    if (!isGraduating && !isExpelling && toClass && fromClass.id === toClass.id) {
+    if (!isGraduating && !isExpelling && !isLeaving && toClass && fromClass.id === toClass.id) {
       throw new BadRequestException('From and to class must be different for promotion');
     }
 
@@ -801,6 +804,7 @@ export class StudentsService {
           toClass,
           isGraduating,
           isExpelling,
+          isLeaving,
           isExplicitIds,
           dto.to_section_id,
           dto.reason,
@@ -819,6 +823,7 @@ export class StudentsService {
           toClass,
           isGraduating,
           isExpelling,
+          isLeaving,
           isExplicitIds,
           dto.to_section_id,
           dto.reason,
@@ -834,20 +839,22 @@ export class StudentsService {
     const total_promoted = results.filter((r) => r.status === 'promoted').length;
     const total_graduated = results.filter((r) => r.status === 'graduated').length;
     const total_expelled = results.filter((r) => r.status === 'expelled').length;
+    const total_left = results.filter((r) => r.status === 'left').length;
     const total_skipped = results.filter((r) => r.status === 'skipped').length;
     const total_failed = results.filter((r) => r.status === 'failed').length;
 
     return {
       summary: {
         total_requested: results.length,
-        total_promoted: total_promoted + total_graduated + total_expelled,
+        total_promoted: total_promoted + total_graduated + total_expelled + total_left,
         total_promoted_only: total_promoted,
         total_graduated,
         total_expelled,
+        total_left,
         total_skipped,
         total_failed,
         dry_run: dryRun,
-        mode: isGraduating ? 'graduation' : isExpelling ? 'expulsion' : 'promotion',
+        mode: isGraduating ? 'graduation' : isExpelling ? 'expulsion' : isLeaving ? 'leaving' : 'promotion',
       },
       from_class: fromClass,
       to_class: toClass,
@@ -868,6 +875,7 @@ export class StudentsService {
     toClass: ResolvedClass | null,
     isGraduating: boolean,
     isExpelling: boolean,
+    isLeaving: boolean,
     isExplicitIds: boolean,
     toSectionId: number | undefined,
     reason: string | undefined,
@@ -889,6 +897,23 @@ export class StudentsService {
         to_class_id: student.class_id,
         from_academic_year: student.academic_year,
         expelled: true,
+        dry_run: dryRun,
+      };
+    }
+
+    // ── Already left guard ───────────────────────────────────────────────────
+    if (student.status === StudentStatus.LEFT) {
+      return {
+        student_id: student.cc,
+        status: 'skipped',
+        reason_code: 'ALREADY_LEFT',
+        message: isLeaving
+          ? 'Student has already left'
+          : 'Student who has left cannot be promoted',
+        from_class_id: student.class_id,
+        to_class_id: student.class_id,
+        from_academic_year: student.academic_year,
+        left: true,
         dry_run: dryRun,
       };
     }
@@ -980,18 +1005,21 @@ export class StudentsService {
     if (dryRun) {
       return {
         student_id: student.cc,
-        status: isGraduating ? 'graduated' : isExpelling ? 'expelled' : 'promoted',
+        status: isGraduating ? 'graduated' : isExpelling ? 'expelled' : isLeaving ? 'left' : 'promoted',
         message: isGraduating
           ? 'Student validated for graduation (dry-run)'
           : isExpelling
           ? 'Student validated for expulsion (dry-run)'
+          : isLeaving
+          ? 'Student validated for leaving (dry-run)'
           : 'Student validated successfully for promotion (dry-run)',
         from_class_id: student.class_id,
         to_class_id: isGraduating ? null : toClass?.id ?? student.class_id,
         from_academic_year: student.academic_year,
-        to_academic_year: isExpelling ? undefined : nextAcademicYear,
+        to_academic_year: (isExpelling || isLeaving) ? undefined : nextAcademicYear,
         graduated: isGraduating,
         expelled: isExpelling,
+        left: isLeaving,
         dry_run: true,
       };
     }
@@ -1072,6 +1100,49 @@ export class StudentsService {
           to_class_id: student.class_id, // unchanged
           from_academic_year: student.academic_year,
           expelled: true,
+          dry_run: false,
+        };
+      } else if (isLeaving) {
+        // Leaving: set status to LEFT and store left metadata.
+        const leftDate = new Date();
+        const leftReason = reason?.trim() || null;
+
+        await this.prisma.$transaction(async (tx) => {
+          await tx.students.update({
+            where: { cc: student.cc },
+            data: { status: StudentStatus.LEFT },
+          });
+
+          await tx.student_flags.upsert({
+            where: {
+              student_id_flag: {
+                student_id: student.cc,
+                flag: 'LEFT',
+              },
+            },
+            update: {
+              reminder_date: leftDate,
+              comment: leftReason,
+              work_done: false,
+            },
+            create: {
+              student_id: student.cc,
+              flag: 'LEFT',
+              reminder_date: leftDate,
+              comment: leftReason,
+              work_done: false,
+            },
+          });
+        });
+
+        return {
+          student_id: student.cc,
+          status: 'left',
+          message: 'Student marked as left successfully',
+          from_class_id: student.class_id,
+          to_class_id: student.class_id, // unchanged
+          from_academic_year: student.academic_year,
+          left: true,
           dry_run: false,
         };
       } else {
