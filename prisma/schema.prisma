@@ -403,6 +403,9 @@ model students {
   whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
   academic_year              String?                    @db.VarChar(10)
   home_phone                 String?                    @db.VarChar(20)
+  fee_start_term             String?                    @db.VarChar(10)
+  is_complementary           Boolean                    @default(false)
+  is_fee_endowment           Boolean                    @default(false)
   deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]

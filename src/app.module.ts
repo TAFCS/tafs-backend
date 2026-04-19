@@ -23,6 +23,7 @@ import { EnrollmentModule } from './modules/enrollments/enrollment.module';
 import { MediaModule } from './modules/media/media.module';
 import { StudentFlagsModule } from './modules/student-flags/student-flags.module';
 import { TransferModule } from './modules/transfers/transfer.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { TransferModule } from './modules/transfers/transfer.module';
     MediaModule,
     StudentFlagsModule,
     TransferModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
