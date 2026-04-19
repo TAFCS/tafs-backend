@@ -378,38 +378,59 @@ export class VouchersService {
         id?: number,
         dateFrom?: string,
         dateTo?: string,
+        page: number = 1,
+        limit: number = 50,
     ) {
         try {
-            const vouchers = await this.prisma.vouchers.findMany({
-                where: {
-                    // student_id or cc both resolve to student_id (cc is the student PK)
-                    ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
-                    ...(id ? { id } : {}),
-                    ...(campusId ? { campus_id: campusId } : {}),
-                    ...(classId ? { class_id: classId } : {}),
-                    ...(sectionId ? { section_id: sectionId } : {}),
-                    // If a specific status is requested show only that; otherwise exclude VOIDs.
-                    ...(status ? { status } : { status: { not: 'VOID' } }),
-                    ...(dateFrom || dateTo
-                        ? {
-                              fee_date: {
-                                  ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-                                  ...(dateTo ? { lte: new Date(dateTo) } : {}),
-                              },
-                          }
-                        : {}),
-                    ...(gr
-                        ? {
-                              students: {
-                                  gr_number: { contains: gr, mode: 'insensitive' },
-                              },
-                          }
-                        : {}),
+            const skip = (page - 1) * limit;
+            const take = limit;
+
+            const where: Prisma.vouchersWhereInput = {
+                // student_id or cc both resolve to student_id (cc is the student PK)
+                ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
+                ...(id ? { id } : {}),
+                ...(campusId ? { campus_id: campusId } : {}),
+                ...(classId ? { class_id: classId } : {}),
+                ...(sectionId ? { section_id: sectionId } : {}),
+                // If a specific status is requested show only that; otherwise exclude VOIDs.
+                ...(status ? { status } : { status: { not: 'VOID' } }),
+                ...(dateFrom || dateTo
+                    ? {
+                            fee_date: {
+                                ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+                                ...(dateTo ? { lte: new Date(dateTo) } : {}),
+                            },
+                        }
+                    : {}),
+                ...(gr
+                    ? {
+                            students: {
+                                gr_number: { contains: gr, mode: 'insensitive' },
+                            },
+                        }
+                    : {}),
+            };
+
+            const [total, vouchers] = await Promise.all([
+                this.prisma.vouchers.count({ where }),
+                this.prisma.vouchers.findMany({
+                    where,
+                    include: VOUCHER_INCLUDE,
+                    orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+                    skip,
+                    take,
+                }),
+            ]);
+
+            return {
+                items: vouchers.map((v) => this.normalizeVoucher(v)),
+                meta: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
                 },
-                include: VOUCHER_INCLUDE,
-                orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
-            });
-            return vouchers.map((v) => this.normalizeVoucher(v));
+            };
         } catch (err: any) {
             this.logger.error('findAll failed', err?.message, err?.stack);
             throw new InternalServerErrorException(

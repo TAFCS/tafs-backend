@@ -58,4 +58,16 @@ export class FilterVouchersDto {
     @IsOptional()
     @IsISO8601()
     date_to?: string;
+
+    @ApiPropertyOptional({ description: 'Page number for pagination', default: 1 })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    page?: number = 1;
+
+    @ApiPropertyOptional({ description: 'Number of items per page', default: 50 })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    limit?: number = 50;
 }

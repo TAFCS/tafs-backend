@@ -318,6 +318,8 @@ model student_fees {
 
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
+  @@index([student_id], map: "idx_student_fees_student_id")
+  @@index([status], map: "idx_student_fees_status")
 }
 
 model student_guardians {
@@ -430,6 +432,7 @@ model students {
   @@index([full_name], map: "idx_students_full_name")
   @@index([section_id], map: "idx_students_section_id")
   @@index([status], map: "idx_students_status")
+  @@index([gr_number], map: "idx_students_gr_number")
 }
 
 model user_refresh_tokens {
@@ -537,6 +540,11 @@ model vouchers {
   classes                  classes               @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                 sections?             @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students                 students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([student_id], map: "idx_vouchers_student_id")
+  @@index([campus_id], map: "idx_vouchers_campus_id")
+  @@index([status], map: "idx_vouchers_status")
+  @@index([due_date], map: "idx_vouchers_due_date")
 }
 
 enum BulkJobStatus {

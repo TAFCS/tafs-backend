@@ -20,8 +20,8 @@ export class PromoteSingleStudentDto {
   @Type(() => ClassSelectorDto)
   from!: ClassSelectorDto;
 
-  /** Required when neither `graduate` nor `expel` is true. */
-  @ValidateIf((o) => !o.graduate && !o.expel)
+  /** Required when neither `graduate`, `expel`, nor `left` is true. */
+  @ValidateIf((o) => !o.graduate && !o.expel && !o.left)
   @ValidateNested()
   @Type(() => ClassSelectorDto)
   to?: ClassSelectorDto;
@@ -35,6 +35,11 @@ export class PromoteSingleStudentDto {
   @IsOptional()
   @IsBoolean()
   expel?: boolean;
+
+  /** Marks the student as having left (status = LEFT, all data preserved). */
+  @IsOptional()
+  @IsBoolean()
+  left?: boolean;
 
   @IsOptional()
   @IsString()

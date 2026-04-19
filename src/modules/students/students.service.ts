@@ -161,18 +161,15 @@ export class StudentsService {
     if (auditType) {
       if (auditType === 'no_family') {
         where.family_id = null;
-      } else {
+      } else if (auditType === 'missing_guardian') {
+        where.student_guardians = { none: {} };
+      } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
-          SELECT cc FROM students s
-          WHERE
-            ${auditType === 'missing_guardian' || auditType === 'abnormal' ? Prisma.sql`NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id = s.cc)` : Prisma.sql`1=0`}
-            ${auditType === 'abnormal' ? Prisma.sql`OR cc IN (
-              SELECT student_id FROM student_guardians
-              GROUP BY student_id
-              HAVING COUNT(*) > 2
-            )` : Prisma.sql``}
+          SELECT student_id FROM student_guardians
+          GROUP BY student_id
+          HAVING COUNT(*) > 2
         `;
-        const abnormalCcs = abnormalStudents.map(s => s.cc);
+        const abnormalCcs = abnormalStudents.map(s => s.student_id);
         where.cc = { in: abnormalCcs };
       }
     }
@@ -378,6 +375,7 @@ export class StudentsService {
           house_name: s.houses?.house_name,
           house_color: s.houses?.house_color,
           enrollment_status: s.status,
+          class_id: s.class_id,
           photograph_url: s.photograph_url,
           primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
           guardian_relationship: primaryGuardianNode?.relationship,

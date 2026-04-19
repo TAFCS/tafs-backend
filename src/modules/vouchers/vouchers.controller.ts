@@ -132,6 +132,8 @@ export class VouchersController {
             query.id,
             query.date_from,
             query.date_to,
+            query.page,
+            query.limit,
         );
         return {
             success: true,
