@@ -19,7 +19,18 @@ import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
 const VOUCHER_INCLUDE = {
     students: {
-        select: { cc: true, full_name: true, gr_number: true },
+        select: {
+            cc: true,
+            full_name: true,
+            gr_number: true,
+            gender: true,
+            family_id: true,
+            student_guardians: {
+                where: { relationship: 'FATHER' },
+                take: 1,
+                include: { guardians: { select: { full_name: true } } },
+            },
+        },
     },
     campuses: {
         select: { id: true, campus_name: true },
@@ -472,8 +483,8 @@ export class VouchersService {
                     cc: voucher.students.cc,
                     classId: voucher.class_id,
                     fullName: voucher.students.full_name,
-                    fatherName: (voucher.students as any).father_name || 'N/A',
-                    gender: (voucher.students as any).gender || 'N/A',
+                    fatherName: voucher.students?.student_guardians?.[0]?.guardians?.full_name || 'N/A',
+                    gender: voucher.students?.gender || 'N/A',
                     grNumber: voucher.students.gr_number || 'N/A',
                     className: voucher.classes?.description || 'N/A',
                     sectionName: voucher.sections?.description || 'N/A',
@@ -989,20 +1000,7 @@ export class VouchersService {
     async generatePdf(voucherId: number, showDiscount = true, paidStamp = false) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
-            include: {
-                ...VOUCHER_INCLUDE,
-                // Extended student select — we need family_id, father_name and gender
-                // which the base VOUCHER_INCLUDE omits.
-                students: {
-                    select: {
-                        cc: true,
-                        full_name: true,
-                        gr_number: true,
-                        family_id: true,
-                        gender: true,
-                    },
-                },
-            },
+            include: VOUCHER_INCLUDE,
         });
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
