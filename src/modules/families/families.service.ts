@@ -271,87 +271,72 @@ export class FamiliesService {
         select: { cc: true, full_name: true, family_id: true },
       });
 
-      // 2. Smart Merge Guardians by Relationship
-      // We'll collect all relationships from both sides
-      const incomingByRel = new Map(
-        incomingGuardians
-          .filter(g => !!g.relationship)
-          .map(g => [g.relationship.trim().toUpperCase(), g])
-      );
+      // 2. Smart Merge Guardians for the Incoming Student only
+      // We don't want to touch existing siblings' guardians anymore (prevents overwriting different mothers)
       
       const isPlaceholder = (g: any) => {
         const name = (g?.guardians?.full_name || '').trim().toUpperCase();
         return !name || name === 'NOT PROVIDED' || name === 'NULL' || name === 'N/A' || name === 'NONE';
       };
 
-      // Aggressively collect the BEST guardian for each relationship from ANY existing sibling
-      const hostByRel = new Map();
+      // Collect "Canonical" guardians from the family (from any existing sibling)
+      const hostByRel = new Map<string, any[]>();
       for (const sib of targetSiblings) {
-        for (const g of sib.student_guardians) {
-          if (!g.relationship) continue;
-          const rel = g.relationship.trim().toUpperCase();
-          const currentBest = hostByRel.get(rel);
-          
-          // A link is better if it's the first one we find, or if the current one is a placeholder and this one isn't
-          if (!currentBest || (isPlaceholder(currentBest) && !isPlaceholder(g))) {
-            hostByRel.set(rel, g);
-          }
+        for (const sg of sib.student_guardians) {
+          if (!sg.relationship) continue;
+          const rel = sg.relationship.trim().toUpperCase();
+          if (!hostByRel.has(rel)) hostByRel.set(rel, []);
+          hostByRel.get(rel)!.push(sg);
         }
       }
 
-      const allRels = new Set([...incomingByRel.keys(), ...hostByRel.keys()]);
-      const bestLinks = new Map<string, any>();
-
-      for (const rel of allRels) {
-        const iG = incomingByRel.get(rel);
-        const hG = hostByRel.get(rel);
+      // For each relationship the incoming student has, try to find a match in the family
+      for (const iSG of incomingGuardians) {
+        if (!iSG.relationship) continue;
+        const rel = iSG.relationship.trim().toUpperCase();
+        const familyOptions = hostByRel.get(rel) || [];
         
-        let bestG: any = null;
-        const iIsReal = iG && !isPlaceholder(iG);
-        const hIsReal = hG && !isPlaceholder(hG);
-
-        if (iIsReal) {
-          // If incoming is real, it either uplifts a placeholder host or replaces a real host (per preference)
-          bestG = iG;
-        } else if (hIsReal) {
-          // If incoming is a placeholder but host is real, host MUST win to prevent data loss
-          bestG = hG;
-        } else {
-          // Both are placeholders or one is missing, keep whatever exists
-          bestG = iG || hG;
-        }
-
-        if (bestG) {
-          bestLinks.set(rel, bestG);
-        }
-      }
-
-      // 3. Sync ALL siblings to these best guardians
-      // Since student_guardians has a unique constraint on (student_id, guardian_id),
-      // we must deduplicate in case the same person is the 'best' for multiple relationships.
-      for (const sid of allSiblingIds) {
-        // Clear all existing links for these students to start fresh for the household
-        await tx.student_guardians.deleteMany({ where: { student_id: sid } });
-
-        // Map to ensure one entry per guardian_id
-        const uniqueGuardians = new Map<number, any>();
-        bestLinks.forEach((link, rel) => {
-          if (!uniqueGuardians.has(link.guardian_id)) {
-            uniqueGuardians.set(link.guardian_id, { ...link, relationship: rel });
-          }
+        // Look for a physical match (same person) in the family options
+        const match = familyOptions.find(fSG => {
+          const iCNIC = iSG.guardians.cnic?.trim();
+          const fCNIC = fSG.guardians.cnic?.trim();
+          if (iCNIC && fCNIC && iCNIC === fCNIC) return true;
+          
+          const iName = iSG.guardians.full_name?.trim().toUpperCase();
+          const fName = fSG.guardians.full_name?.trim().toUpperCase();
+          if (iName && fName && iName === fName && !isPlaceholder(iSG)) return true;
+          
+          return false;
         });
 
-        // Recreate the consolidated links
-        for (const link of uniqueGuardians.values()) {
-          await tx.student_guardians.create({
-            data: {
-              student_id: sid,
-              guardian_id: link.guardian_id,
-              relationship: link.relationship,
-              is_primary_contact: link.is_primary_contact,
-              is_emergency_contact: link.is_emergency_contact,
-            },
+        if (match && match.guardian_id !== iSG.guardian_id) {
+          // Sync point: The incoming student's parent is already in the family under a different ID (or we want to converge to one)
+          // Actually, if it's a match, we should update the student_guardian link to point to the family's canonical guardian ID
+          await tx.student_guardians.update({
+            where: { student_id_guardian_id: { student_id: studentId, guardian_id: iSG.guardian_id } },
+            data: { guardian_id: match.guardian_id }
           });
+        }
+      }
+
+      // Enrichment: If the incoming student is missing a relationship that the family HAS, add it
+      const incomingRels = new Set(incomingGuardians.map(g => g.relationship?.trim().toUpperCase()).filter(Boolean));
+      for (const [rel, familyGuardians] of hostByRel.entries()) {
+        if (!incomingRels.has(rel)) {
+          // New student doesn't have this role (e.g. FATHER), but family does. Pick the best one.
+          const bestFamilyG = familyGuardians.find(g => !isPlaceholder(g)) || familyGuardians[0];
+          if (bestFamilyG && !isPlaceholder(bestFamilyG)) {
+             // Create link for the new student
+             await tx.student_guardians.create({
+                data: {
+                  student_id: studentId,
+                  guardian_id: bestFamilyG.guardian_id,
+                  relationship: rel,
+                  is_primary_contact: false,
+                  is_emergency_contact: false,
+                }
+             });
+          }
         }
       }
 
