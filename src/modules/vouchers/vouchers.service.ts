@@ -444,6 +444,59 @@ export class VouchersService {
         }
     }
 
+    /**
+     * When a PARTIALLY_PAID voucher is split, the paid-side PDF uses prefix "Partial Payment of — ".
+     * `generatePdf` calls this helper without that arg; we infer the same prefix for split-style
+     * PAID vouchers so re-downloads match the first generated file.
+     */
+    private inferPartialPaymentPrefixForSplitPaidVoucher(voucher: any): string | undefined {
+        if (voucher.status !== 'PAID' || !voucher.voucher_heads?.length) return undefined;
+        const heads: any[] = voucher.voucher_heads;
+        const tol = 0.02;
+        const currencyEps = 1; // avoid rounding noise vs underlying student_fee.amount
+        const linesLookLikeSplitPaidSlice = heads.every((h) => {
+            const bal = Number(h.balance ?? 0);
+            const net = Number(h.net_amount);
+            const dep = Number(h.amount_deposited ?? 0);
+            const disc = Number(h.discount_amount ?? 0);
+            return (
+                bal <= tol &&
+                Math.abs(net - dep) <= tol &&
+                disc <= tol
+            );
+        });
+        if (!linesLookLikeSplitPaidSlice) return undefined;
+        const anyHeadIsPortionOfLargerFee = heads.some((h) => {
+            const net = Number(h.net_amount);
+            const sfAmt = Number(h.student_fees?.amount ?? 0);
+            return sfAmt > currencyEps && net < sfAmt - currencyEps;
+        });
+        return anyHeadIsPortionOfLargerFee ? 'Partial Payment of — ' : undefined;
+    }
+
+    /**
+     * Split balance voucher PDFs use "Balance Payment of — ". Infer when regenerating without explicit prefix.
+     */
+    private inferBalancePaymentPrefixForSplitBalanceVoucher(voucher: any): string | undefined {
+        if (voucher.status !== 'UNPAID' || !voucher.voucher_heads?.length) return undefined;
+        const heads: any[] = voucher.voucher_heads;
+        const tol = 0.02;
+        const currencyEps = 1;
+        if (!heads.every((h) => Number(h.amount_deposited ?? 0) <= tol)) return undefined;
+        const anyHead = heads.some((h) => {
+            const net = Number(h.net_amount);
+            const sfAmt = Number(h.student_fees?.amount ?? 0);
+            const paidOnFee = Number(h.student_fees?.amount_paid ?? 0);
+            return (
+                paidOnFee > tol &&
+                sfAmt > currencyEps &&
+                net < sfAmt - currencyEps &&
+                net > tol
+            );
+        });
+        return anyHead ? 'Balance Payment of — ' : undefined;
+    }
+
     /** Helper to prepare data for VoucherPdfService */
     private async prepareVoucherPdfData(voucher: any, paidStamp?: boolean, descriptionPrefix?: string) {
         // 1. Fetch siblings if family_id exists
@@ -454,6 +507,11 @@ export class VouchersService {
                 include: { classes: true, sections: true }
             });
         }
+
+        const effectivePrefix =
+            descriptionPrefix ??
+            this.inferPartialPaymentPrefixForSplitPaidVoucher(voucher) ??
+            this.inferBalancePaymentPrefixForSplitBalanceVoucher(voucher);
 
         // 2. Map heads correctly
         const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -478,10 +536,10 @@ export class VouchersService {
             const isPartialPayment = netAmount < fullAmount;
             // If caller already provided a descriptionPrefix (e.g. "Balance Payment of — "),
             // avoid adding another balance prefix and duplicating the label.
-            const balancePrefix = isPartialPayment && !descriptionPrefix ? 'BALANCE PAYMENT OF ' : '';
+            const balancePrefix = isPartialPayment && !effectivePrefix ? 'BALANCE PAYMENT OF ' : '';
 
             return {
-                description: `${descriptionPrefix || ''}${balancePrefix}${feeDescription}${monthSuffix}`,
+                description: `${effectivePrefix || ''}${balancePrefix}${feeDescription}${monthSuffix}`,
                 // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
