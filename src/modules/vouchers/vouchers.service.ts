@@ -17,6 +17,10 @@ import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
+/** Stored on voucher_heads when created by split; must match PDF / UI wording. */
+const SPLIT_VOUCHER_HEAD_PREFIX_PAID = 'Partial Payment of — ';
+const SPLIT_VOUCHER_HEAD_PREFIX_BALANCE = 'Balance Payment of — ';
+
 const VOUCHER_INCLUDE = {
     students: {
         select: {
@@ -508,7 +512,7 @@ export class VouchersService {
             });
         }
 
-        const effectivePrefix =
+        const voucherLevelPrefix =
             descriptionPrefix ??
             this.inferPartialPaymentPrefixForSplitPaidVoucher(voucher) ??
             this.inferBalancePaymentPrefixForSplitBalanceVoucher(voucher);
@@ -529,17 +533,19 @@ export class VouchersService {
                 monthSuffix = ` (${monthName}${yrShort ? ' ' + yrShort : ''})`;
             }
 
+            const rowPrefix =
+                (h.description_prefix && String(h.description_prefix).trim()) || voucherLevelPrefix || '';
+
             // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
             // the description must be prefixed with "BALANCE PAYMENT OF — ".
             const fullAmount = Number(h.student_fees?.amount ?? 0);
             const netAmount = Number(h.net_amount);
             const isPartialPayment = netAmount < fullAmount;
-            // If caller already provided a descriptionPrefix (e.g. "Balance Payment of — "),
-            // avoid adding another balance prefix and duplicating the label.
-            const balancePrefix = isPartialPayment && !effectivePrefix ? 'BALANCE PAYMENT OF ' : '';
+            // If caller or DB already provided a split/balance prefix, avoid duplicating.
+            const balancePrefix = isPartialPayment && !rowPrefix ? 'BALANCE PAYMENT OF ' : '';
 
             return {
-                description: `${effectivePrefix || ''}${balancePrefix}${feeDescription}${monthSuffix}`,
+                description: `${rowPrefix}${balancePrefix}${feeDescription}${monthSuffix}`,
                 // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
@@ -1203,6 +1209,7 @@ export class VouchersService {
                     net_amount: new Prisma.Decimal(h.amount_deposited as any ?? 0),
                     amount_deposited: new Prisma.Decimal(h.amount_deposited as any ?? 0),
                     balance: new Prisma.Decimal(0),
+                    description_prefix: SPLIT_VOUCHER_HEAD_PREFIX_PAID,
                 })),
             });
 
@@ -1232,6 +1239,7 @@ export class VouchersService {
                         net_amount: outstanding,
                         amount_deposited: new Prisma.Decimal(0),
                         balance: outstanding,
+                        description_prefix: SPLIT_VOUCHER_HEAD_PREFIX_BALANCE,
                     };
                 }),
             });
@@ -1252,8 +1260,8 @@ export class VouchersService {
         const unpaidFull = await this.prisma.vouchers.findUnique({ where: { id: unpaidVoucher.id }, include: VOUCHER_INCLUDE });
 
         const [pData, uData] = await Promise.all([
-            this.prepareVoucherPdfData(paidFull, true, 'Partial Payment of — '),
-            this.prepareVoucherPdfData(unpaidFull, false, 'Balance Payment of — '),
+            this.prepareVoucherPdfData(paidFull, true),
+            this.prepareVoucherPdfData(unpaidFull, false),
         ]);
 
         const [pBuf, uBuf] = await Promise.all([

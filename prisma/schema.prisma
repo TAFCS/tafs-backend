@@ -496,16 +496,17 @@ model users {
 }
 
 model voucher_heads {
-  id               Int          @id @default(autoincrement())
-  voucher_id       Int
-  student_fee_id   Int
-  discount_amount  Decimal?     @default(0) @db.Decimal(12, 2)
-  net_amount       Decimal      @db.Decimal(12, 2)
-  amount_deposited Decimal?     @default(0) @db.Decimal(12, 2)
-  balance          Decimal?     @default(0) @db.Decimal(12, 2)
-  discount_label   String?      @db.VarChar(100)
-  student_fees     student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
-  vouchers         vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
+  id                 Int          @id @default(autoincrement())
+  voucher_id         Int
+  student_fee_id     Int
+  discount_amount    Decimal?     @default(0) @db.Decimal(12, 2)
+  net_amount         Decimal      @db.Decimal(12, 2)
+  amount_deposited   Decimal?     @default(0) @db.Decimal(12, 2)
+  balance            Decimal?     @default(0) @db.Decimal(12, 2)
+  discount_label     String?      @db.VarChar(100)
+  description_prefix String?      @db.VarChar(120)
+  student_fees       student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
+  vouchers           vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
 
   @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
   @@index([voucher_id], map: "idx_voucher_heads_voucher")
