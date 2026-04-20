@@ -244,6 +244,7 @@ export class BulkVoucherJobsService {
                 created_at: true,
                 updated_at: true,
                 campuses: { select: { id: true, campus_name: true } },
+                report: true,
             },
         });
 
@@ -274,6 +275,7 @@ export class BulkVoucherJobsService {
                 merged_pdf_url: true,
                 created_at: true,
                 campuses: { select: { campus_name: true } },
+                report: true,
             },
         });
     }
@@ -281,6 +283,7 @@ export class BulkVoucherJobsService {
     // ── Async Pipeline ──────────────────────────────────────────────────────
 
     private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[]) {
+        const jobReport: any[] = [];
         this.logger.log(
             `[Job #${jobId}] Starting: ${dto.student_ccs.length} students × ${expectedFeeDates.length} month(s).`,
         );
@@ -448,15 +451,32 @@ export class BulkVoucherJobsService {
 
             let chunkSuccess = 0;
             let chunkFail = 0;
-            for (const result of results) {
+            for (let j = 0; j < results.length; j++) {
+                const result = results[j];
+                const workItem = chunk[j];
                 if (result.status === 'fulfilled') {
-                    pdfBuffers.push(result.value);
+                    pdfBuffers.push(result.value.buffer);
                     chunkSuccess++;
                     successCount++;
+                    
+                    // Add to report
+                    jobReport.push({
+                        cc: workItem.cc,
+                        student_name: workItem.student.full_name,
+                        pdf_url: result.value.url,
+                        status: 'SUCCESS'
+                    });
                 } else {
                     this.logger.error(`[Job #${jobId}] Work item failed: ${result.reason}`);
                     chunkFail++;
                     failCountTotal++;
+
+                    jobReport.push({
+                        cc: workItem.cc,
+                        student_name: workItem.student.full_name,
+                        status: 'FAILED',
+                        error: result.reason
+                    });
                 }
             }
 
@@ -494,7 +514,11 @@ export class BulkVoucherJobsService {
 
         await this.prisma.bulk_voucher_jobs.update({
             where: { id: jobId },
-            data: { status: finalStatus, merged_pdf_url: mergedPdfUrl },
+            data: { 
+                status: finalStatus, 
+                merged_pdf_url: mergedPdfUrl,
+                report: jobReport as any 
+            },
         });
 
         this.logger.log(
@@ -509,7 +533,7 @@ export class BulkVoucherJobsService {
         dto: StartBulkJobDto,
         bankAccount: any,
         siblingsMap: Map<number, any[]>,
-    ): Promise<Buffer> {
+    ): Promise<{ buffer: Buffer; url: string }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
         // ── Fetch arrears (unpaid fees whose fee_date < this voucher's fee_date) ──
@@ -781,6 +805,6 @@ export class BulkVoucherJobsService {
             }),
         });
 
-        return pdfBufferWithQr;
+        return { buffer: pdfBufferWithQr, url: pdfUrl };
     }
 }
