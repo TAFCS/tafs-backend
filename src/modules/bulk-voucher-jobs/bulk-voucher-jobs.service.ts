@@ -39,6 +39,16 @@ function getMonthlyFeeDates(from: string, to: string): string[] {
     return dates;
 }
 
+function deriveAcademicYear(dateStr: string): string {
+    const d = new Date(dateStr);
+    const m = d.getUTCMonth() + 1; // 1-12
+    const y = d.getUTCFullYear();
+    
+    // August (8) to July (7) logic
+    const startYear = m >= 8 ? y : y - 1;
+    return `${startYear}-${startYear + 1}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Month / PDF label helpers  (shared by processJob & processWorkItem)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,8 +136,9 @@ export class BulkVoucherJobsService {
     // ── Preview ─────────────────────────────────────────────────────────────
 
     async preview(dto: PreviewBulkRequestDto): Promise<BulkStudentPreview[]> {
-        // ... (existing preview code)
-        // 1. Fetch matching students
+        const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
+
+        // 1. Fetch matching student records
         const students = await this.prisma.students.findMany({
             where: {
                 deleted_at: null,
@@ -160,7 +171,7 @@ export class BulkVoucherJobsService {
                     gte: feeDateFrom,
                     lte: feeDateTo,
                 },
-                academic_year: dto.academic_year,
+                academic_year: academicYear,
                 status: { in: ['ISSUED', 'PAID', 'PARTIALLY_PAID'] },
             },
             select: { student_id: true },
@@ -186,6 +197,8 @@ export class BulkVoucherJobsService {
             throw new BadRequestException('student_ccs cannot be empty.');
         }
 
+        const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
+
         const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
         if (feeDates.length === 0) {
             throw new BadRequestException(
@@ -203,7 +216,7 @@ export class BulkVoucherJobsService {
                 campus_id: dto.campus_id,
                 class_id: dto.class_id ?? null,
                 section_id: dto.section_id ?? null,
-                academic_year: dto.academic_year,
+                academic_year: academicYear,
                 fee_date_from: new Date(dto.fee_date_from),
                 fee_date_to: new Date(dto.fee_date_to),
                 issue_date: new Date(dto.issue_date),
@@ -284,6 +297,7 @@ export class BulkVoucherJobsService {
 
     private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[]) {
         const jobReport: any[] = [];
+        const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
         this.logger.log(
             `[Job #${jobId}] Starting: ${dto.student_ccs.length} students × ${expectedFeeDates.length} month(s).`,
         );
@@ -300,11 +314,10 @@ export class BulkVoucherJobsService {
 
         const feeDateFrom = new Date(dto.fee_date_from);
         const feeDateTo = new Date(dto.fee_date_to);
-        const expectedCountPerStudent = expectedFeeDates.length;
         const PDF_BATCH_SIZE = 10;
 
         // ── PHASE 1: BULK PRE-FETCH (4 parallel DB queries) ─────────────────
-        const [bankAccount, studentRecords, allEligibleFees, existingVouchers] = await Promise.all([
+        const [bankAccount, studentRecords, matchingFees, existingVouchers] = await Promise.all([
             this.prisma.bank_accounts.findUnique({ where: { id: dto.bank_account_id } }),
             this.prisma.students.findMany({
                 where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
@@ -332,8 +345,8 @@ export class BulkVoucherJobsService {
             this.prisma.student_fees.findMany({
                 where: {
                     student_id: { in: dto.student_ccs },
-                    fee_date: { gte: feeDateFrom, lte: feeDateTo },
-                    academic_year: dto.academic_year,
+                    fee_date: { lte: feeDateTo },
+                    academic_year: academicYear,
                     status: 'NOT_ISSUED',
                 },
                 select: {
@@ -357,21 +370,6 @@ export class BulkVoucherJobsService {
                 select: { student_id: true, fee_date: true },
             }),
         ]);
-
-        const studentMap = new Map(studentRecords.map((s) => [s.cc, s]));
-
-        // Group fees: cc → dateStr → fees[]
-        type FeeRecord = typeof allEligibleFees[0];
-        const feesByStudentDate = new Map<number, Map<string, FeeRecord[]>>();
-        for (const f of allEligibleFees) {
-            const dateKey = f.fee_date ? f.fee_date.toISOString().split('T')[0] : null;
-            if (!dateKey) continue;
-            if (!feesByStudentDate.has(f.student_id)) feesByStudentDate.set(f.student_id, new Map());
-            const dateMap = feesByStudentDate.get(f.student_id)!;
-            const list = dateMap.get(dateKey) ?? [];
-            list.push(f);
-            dateMap.set(dateKey, list);
-        }
 
         // Set of "cc|dateStr" keys that already have a non-VOID voucher
         const existingVoucherKeys = new Set(
@@ -398,32 +396,60 @@ export class BulkVoucherJobsService {
         }
 
         // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
-        type WorkItem = { cc: number; dateStr: string; fees: FeeRecord[]; student: typeof studentRecords[0] };
+        type WorkItem = { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string };
         const workItems: WorkItem[] = [];
         let skipCountTotal = 0;
 
         for (const cc of dto.student_ccs) {
-            const student = studentMap.get(cc);
-            if (!student || !student.campus_id || !student.class_id) {
-                this.logger.warn(`[Job #${jobId}] CC ${cc} missing campus/class — skipping ${expectedCountPerStudent} units`);
-                skipCountTotal += expectedCountPerStudent;
-                continue;
+            const studentFees = matchingFees.filter((f) => f.student_id === cc);
+            const student = studentRecords.find((s) => s.cc === cc);
+            if (!student) continue;
+
+            // Map fees to their month (1st of month string)
+            const dateMap = new Map<string, any[]>();
+            const priorFees: any[] = [];
+            const startDate = new Date(dto.fee_date_from);
+
+            for (const f of studentFees) {
+                if (!f.fee_date) continue;
+                const fDate = new Date(f.fee_date);
+                if (fDate < startDate) {
+                    priorFees.push(f);
+                } else {
+                    const monthKey = new Date(Date.UTC(fDate.getUTCFullYear(), fDate.getUTCMonth(), 1))
+                        .toISOString()
+                        .split('T')[0];
+                    if (!dateMap.has(monthKey)) dateMap.set(monthKey, []);
+                    dateMap.get(monthKey)!.push(f);
+                }
             }
 
-            const dateMap = feesByStudentDate.get(cc);
-            const datesFound = dateMap ? Array.from(dateMap.keys()) : [];
+            const datesFound = Array.from(dateMap.keys()).sort();
+            
+            const firstDateInRange = expectedFeeDates[0];
+            
+            // Re-calculate datesFound to ensure accumulation target exists
+            if (priorFees.length > 0 && !dateMap.has(firstDateInRange)) {
+                dateMap.set(firstDateInRange, []);
+                if (!datesFound.includes(firstDateInRange)) {
+                    datesFound.push(firstDateInRange);
+                    datesFound.sort();
+                }
+            }
+            
+            // Final pass: inject prior fees into the EARLIEST available month in the range
+            if (priorFees.length > 0) {
+                const targetDate = datesFound[0];
+                dateMap.set(targetDate, [...priorFees, ...(dateMap.get(targetDate) || [])]);
+            }
 
             for (const dateStr of datesFound) {
                 if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
                     skipCountTotal++;
                 } else {
-                    workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student });
+                    workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student, academicYear });
                 }
             }
-
-            // Months with no NOT_ISSUED fees count as skipped
-            const gap = expectedCountPerStudent - datesFound.length;
-            if (gap > 0) skipCountTotal += gap;
         }
 
         if (skipCountTotal > 0) {
@@ -529,7 +555,7 @@ export class BulkVoucherJobsService {
     // ── Per-item worker ─────────────────────────────────────────────────────
 
     private async processWorkItem(
-        item: { cc: number; dateStr: string; fees: any[]; student: any },
+        item: { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string },
         dto: StartBulkJobDto,
         bankAccount: any,
         siblingsMap: Map<number, any[]>,
@@ -573,7 +599,7 @@ export class BulkVoucherJobsService {
             validity_date: dto.validity_date,
             late_fee_charge: dto.apply_late_fee ?? true,
             late_fee_amount: dto.late_fee_amount ?? 1000,
-            academic_year: dto.academic_year,
+            academic_year: item.academicYear,
             fee_date: dateStr,
             precedence: 1,
             orderedFeeIds: allOrderedFeeIds,
@@ -601,7 +627,7 @@ export class BulkVoucherJobsService {
                 const disc = Math.max(0, gross - net);
                 let desc = baseDesc;
                 const m = f.target_month || f.month;
-                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, dto.academic_year).toUpperCase()})`;
+                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear).toUpperCase()})`;
 
                 otherHeads.push({ 
                     description: desc, 
@@ -619,7 +645,7 @@ export class BulkVoucherJobsService {
             
             // Helper for sequencing (Aug=0... Jul=11)
             const getSeq = (m: number) => {
-                const startYear = parseInt(dto.academic_year.split('-')[0]) || 0;
+                const startYear = parseInt(item.academicYear.split('-')[0]) || 0;
                 return startYear * 12 + (m >= 8 ? m - 8 : m + 4);
             };
 
@@ -652,9 +678,9 @@ export class BulkVoucherJobsService {
                 const net = range.reduce((s, f) => s + Number(f.amount || 0), 0);
                 const disc = Math.max(0, gross - net);
 
-                let labelSuffix = `(${getMonthYearLabel(firstM, dto.academic_year).toUpperCase()})`;
+                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear).toUpperCase()})`;
                 if (range.length > 1) {
-                    labelSuffix = `(${getMonthYearLabel(firstM, dto.academic_year).toUpperCase()} - ${getMonthYearLabel(lastM, dto.academic_year).toUpperCase()})`;
+                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear).toUpperCase()})`;
                 }
 
                 mergedTuitionHeads.push({
@@ -686,7 +712,7 @@ export class BulkVoucherJobsService {
 
         const monthLabelItems = feesForThisVoucher.map((f: any) => ({
             month: f.target_month || f.month,
-            academicYear: dto.academic_year,
+            academicYear: item.academicYear,
         })).filter(x => x.month);
 
         const monthLabel = monthLabelItems.length > 0
@@ -715,7 +741,7 @@ export class BulkVoucherJobsService {
                     sectionName: s.sections?.description || 'N/A',
                 })),
             campusName: student.campuses?.campus_name || 'Main Campus',
-            academicYear: dto.academic_year,
+            academicYear: item.academicYear,
             month: monthLabel,
             issueDate: dto.issue_date,
             dueDate: dto.due_date,
@@ -774,7 +800,7 @@ export class BulkVoucherJobsService {
                     sectionName: s.sections?.description || 'N/A',
                 })),
             campusName: student.campuses?.campus_name || 'Main Campus',
-            academicYear: dto.academic_year,
+            academicYear: item.academicYear,
             month: monthLabel,
             issueDate: dto.issue_date,
             dueDate: dto.due_date,

@@ -29,8 +29,8 @@ export class StartBulkJobDto {
     section_id?: number;
 
     @IsString()
-    @IsNotEmpty()
-    academic_year: string;
+    @IsOptional()
+    academic_year?: string;
 
     // ── Date range ─────────────────────────────────────────────────────────
     @IsISO8601()

@@ -28,8 +28,8 @@ export class PreviewBulkRequestDto {
      * Academic year string e.g. "2024-2025".
      */
     @IsString()
-    @IsNotEmpty()
-    academic_year: string;
+    @IsOptional()
+    academic_year?: string;
 
     /**
      * Start of the fee date range (inclusive). Used to check for already-issued vouchers
