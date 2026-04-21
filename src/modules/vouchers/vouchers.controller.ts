@@ -259,7 +259,12 @@ export class VouchersController {
         return { success: true, message: 'Paid PDF saved.', data: result };
     }
 
-    /** Split a PARTIALLY_PAID voucher into a new PAID audit record + a new UNPAID balance voucher. The original voucher and its deposit_allocations are preserved. */
+    /**
+     * Split a PARTIALLY_PAID voucher into a new PAID voucher + a new UNPAID balance voucher.
+     * Per fee head: PARTIALLY_PAID student_fees rows are split into paid + balance rows; PAID/ISSUED
+     * rows are re-linked without renaming. The original voucher is VOID; deposit_allocations stay on
+     * the original voucher_id (Case A updates student_fee_id to the new paid fee row).
+     */
     @Post(':id/split-partially-paid')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)

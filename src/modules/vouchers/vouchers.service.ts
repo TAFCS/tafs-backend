@@ -17,9 +17,36 @@ import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
-/** Stored on voucher_heads when created by split; must match PDF / UI wording. */
-const SPLIT_VOUCHER_HEAD_PREFIX_PAID = 'Partial Payment of — ';
-const SPLIT_VOUCHER_HEAD_PREFIX_BALANCE = 'Balance Payment of — ';
+const SPLIT_PREFIX_MAX_DB_LEN = 255;
+
+/** Fee-type label used for split voucher PDF prefixes (schema has no separate "name"). */
+function feeTypeDescriptionForSplitLabel(studentFee: {
+    fee_types?: { description?: string | null } | null;
+}): string {
+    const d = studentFee.fee_types?.description?.trim();
+    return d && d.length > 0 ? d : 'Fee';
+}
+
+/**
+ * Per-head prefix for split vouchers. Returns null when the label is already prefixed
+ * (case-insensitive) so we never stack "PARTIAL PAYMENT OF" / "BALANCE PAYMENT OF".
+ */
+function splitVoucherHeadDescriptionPrefix(
+    kind: 'paid' | 'balance',
+    studentFee: { fee_types?: { description?: string | null } | null },
+): string | null {
+    const label = feeTypeDescriptionForSplitLabel(studentFee);
+    const upper = label.toUpperCase();
+    if (upper.startsWith('PARTIAL PAYMENT OF') || upper.startsWith('BALANCE PAYMENT OF')) {
+        return null;
+    }
+    const sep = ' — ';
+    const raw =
+        kind === 'paid'
+            ? `PARTIAL PAYMENT OF ${label}${sep}`
+            : `BALANCE PAYMENT OF ${label}${sep}`;
+    return raw.length <= SPLIT_PREFIX_MAX_DB_LEN ? raw : raw.slice(0, SPLIT_PREFIX_MAX_DB_LEN);
+}
 
 const VOUCHER_INCLUDE = {
     students: {
@@ -533,8 +560,8 @@ export class VouchersService {
                 monthSuffix = ` (${monthName}${yrShort ? ' ' + yrShort : ''})`;
             }
 
-            const rowPrefix =
-                (h.description_prefix && String(h.description_prefix).trim()) || voucherLevelPrefix || '';
+            const headPrefixRaw = h.description_prefix && String(h.description_prefix).trim();
+            const rowPrefix = headPrefixRaw || voucherLevelPrefix || '';
 
             // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
             // the description must be prefixed with "BALANCE PAYMENT OF — ".
@@ -542,10 +569,16 @@ export class VouchersService {
             const netAmount = Number(h.net_amount);
             const isPartialPayment = netAmount < fullAmount;
             // If caller or DB already provided a split/balance prefix, avoid duplicating.
-            const balancePrefix = isPartialPayment && !rowPrefix ? 'BALANCE PAYMENT OF ' : '';
+            const balancePrefix =
+                isPartialPayment && !rowPrefix ? 'BALANCE PAYMENT OF ' : '';
+
+            // Per-head split prefixes already embed the fee-type label — do not repeat feeDescription.
+            const description = headPrefixRaw
+                ? `${headPrefixRaw}${monthSuffix}`
+                : `${rowPrefix}${balancePrefix}${feeDescription}${monthSuffix}`;
 
             return {
-                description: `${rowPrefix}${balancePrefix}${feeDescription}${monthSuffix}`,
+                description,
                 // Rule: For balance payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
@@ -1116,10 +1149,14 @@ export class VouchersService {
     }
 
     /**
-     * Split a PARTIALLY_PAID voucher:
-     *  1. Create a new PAID voucher   (heads = amount_deposited, prefix "Partial Payment of —")
-     *  2. Create a new UNPAID voucher (heads = balance,          prefix "Balance Payment of —")
-     *  3. Delete the original voucher (voucher_heads cascade, deposit_allocations reassigned)
+     * Split a PARTIALLY_PAID voucher into a PAID voucher and an UNPAID balance voucher.
+     *
+     * Per head (linked student_fees row):
+     * - PARTIALLY_PAID (Case A): split student_fees into paid + balance rows; optional
+     *   description_prefix lines use "PARTIAL PAYMENT OF …" / "BALANCE PAYMENT OF …" unless
+     *   the fee type label is already prefixed.
+     * - PAID / ISSUED / NOT_ISSUED (Case B): keep student_fees; no description_prefix;
+     *   route fully paid lines to the PAID voucher and outstanding lines to the UNPAID voucher.
      */
     async splitPartiallyPaid(
         voucherId: number,
@@ -1137,22 +1174,128 @@ export class VouchersService {
             );
         }
 
-        // Fetch heads with full student_fees data for descriptions
         const allHeads = await this.prisma.voucher_heads.findMany({
             where: { voucher_id: voucherId },
             include: { student_fees: { include: { fee_types: true } } },
         });
 
-        const paidHeads = allHeads.filter(h => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0));
-        // Single source of truth: outstanding = student_fees.amount - student_fees.amount_paid
-        const unpaidHeads = allHeads.filter(h => {
-            const outstanding = new Prisma.Decimal(h.student_fees?.amount ?? 0)
-                .sub(new Prisma.Decimal(h.student_fees?.amount_paid ?? 0));
-            return outstanding.gt(0);
-        });
+        if (allHeads.length === 0) {
+            throw new BadRequestException('This voucher has no fee heads to split.');
+        }
 
-        if (paidHeads.length === 0) throw new BadRequestException('No deposited amounts found on this voucher.');
-        if (unpaidHeads.length === 0) throw new BadRequestException('No outstanding balance found on this voucher.');
+        const sortedHeads = [...allHeads].sort((a, b) => a.id - b.id);
+
+        type PaidHeadInsert = {
+            student_fee_id: number;
+            discount_amount: Prisma.Decimal;
+            discount_label: string | null;
+            net_amount: Prisma.Decimal;
+            amount_deposited: Prisma.Decimal;
+            balance: Prisma.Decimal;
+            description_prefix: string | null;
+        };
+        type UnpaidHeadInsert = PaidHeadInsert;
+
+        const paidHeadRows: PaidHeadInsert[] = [];
+        const unpaidHeadRows: UnpaidHeadInsert[] = [];
+
+        for (const h of sortedHeads) {
+            const sf = h.student_fees;
+            if (!sf) {
+                throw new BadRequestException(`Voucher head #${h.id} has no linked student_fees row.`);
+            }
+
+            const dep = new Prisma.Decimal(h.amount_deposited as any ?? 0);
+            const canon = new Prisma.Decimal(sf.amount ?? sf.amount_before_discount ?? 0);
+            const paidOnFee = new Prisma.Decimal(sf.amount_paid ?? 0);
+            const outstanding = Prisma.Decimal.max(canon.sub(paidOnFee), new Prisma.Decimal(0));
+            const balanceFromHead = Prisma.Decimal.max(canon.sub(dep), new Prisma.Decimal(0));
+
+            if (sf.status === 'PARTIALLY_PAID') {
+                if (dep.lte(0)) {
+                    throw new BadRequestException(
+                        `Cannot split head #${h.id}: student fee #${sf.id} is PARTIALLY_PAID but this head has no deposit.`,
+                    );
+                }
+                const depPaidDiff = dep.sub(paidOnFee).abs();
+                if (depPaidDiff.gt(0.05)) {
+                    throw new BadRequestException(
+                        `Cannot split head #${h.id}: head deposit (${dep.toFixed(2)}) does not match ` +
+                            `student_fees.amount_paid (${paidOnFee.toFixed(2)}). Reconcile before splitting.`,
+                    );
+                }
+                if (balanceFromHead.lte(0)) {
+                    throw new BadRequestException(
+                        `Cannot split head #${h.id}: student fee #${sf.id} is marked PARTIALLY_PAID but has no outstanding balance.`,
+                    );
+                }
+                const prefixPaid = splitVoucherHeadDescriptionPrefix('paid', sf);
+                const prefixBalance = splitVoucherHeadDescriptionPrefix('balance', sf);
+                paidHeadRows.push({
+                    student_fee_id: sf.id,
+                    discount_amount: new Prisma.Decimal(0),
+                    discount_label: h.discount_label,
+                    net_amount: dep,
+                    amount_deposited: dep,
+                    balance: new Prisma.Decimal(0),
+                    description_prefix: prefixPaid,
+                });
+                unpaidHeadRows.push({
+                    student_fee_id: sf.id,
+                    discount_amount: new Prisma.Decimal(0),
+                    discount_label: h.discount_label,
+                    net_amount: balanceFromHead,
+                    amount_deposited: new Prisma.Decimal(0),
+                    balance: balanceFromHead,
+                    description_prefix: prefixBalance,
+                });
+            } else if (sf.status === 'PAID') {
+                const linePaid = dep.gt(0) ? dep : new Prisma.Decimal(h.net_amount ?? 0);
+                if (linePaid.lte(0)) {
+                    throw new BadRequestException(
+                        `Cannot place head #${h.id} on the paid voucher: no deposited or net amount.`,
+                    );
+                }
+                paidHeadRows.push({
+                    student_fee_id: sf.id,
+                    discount_amount: new Prisma.Decimal(h.discount_amount ?? 0),
+                    discount_label: h.discount_label,
+                    net_amount: linePaid,
+                    amount_deposited: linePaid,
+                    balance: new Prisma.Decimal(0),
+                    description_prefix: null,
+                });
+            } else if (sf.status === 'ISSUED' || sf.status === 'NOT_ISSUED') {
+                const netOutstanding = outstanding.gt(0)
+                    ? outstanding
+                    : new Prisma.Decimal(h.net_amount ?? 0);
+                if (netOutstanding.lte(0)) {
+                    throw new BadRequestException(
+                        `Cannot place head #${h.id} on the unpaid voucher: no outstanding amount.`,
+                    );
+                }
+                unpaidHeadRows.push({
+                    student_fee_id: sf.id,
+                    discount_amount: new Prisma.Decimal(h.discount_amount ?? 0),
+                    discount_label: h.discount_label,
+                    net_amount: netOutstanding,
+                    amount_deposited: new Prisma.Decimal(0),
+                    balance: netOutstanding,
+                    description_prefix: null,
+                });
+            } else {
+                throw new BadRequestException(
+                    `Voucher head #${h.id}: unsupported student_fees.status ${sf.status} for split.`,
+                );
+            }
+        }
+
+        if (paidHeadRows.length === 0) {
+            throw new BadRequestException('No lines could be placed on the paid voucher.');
+        }
+        if (unpaidHeadRows.length === 0) {
+            throw new BadRequestException('No lines could be placed on the unpaid voucher.');
+        }
 
         const issueDate = new Date(dto.issue_date);
         const dueDate = new Date(dto.due_date);
@@ -1160,21 +1303,92 @@ export class VouchersService {
 
         const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
 
-        const paidTotal = paidHeads.reduce(
-            (s, h) => s.add(new Prisma.Decimal(h.amount_deposited as any ?? 0)),
-            new Prisma.Decimal(0),
-        );
-        // Derive outstanding from student_fees (single source of truth)
-        const unpaidTotal = unpaidHeads.reduce(
-            (s, h) => s.add(
-                new Prisma.Decimal(h.student_fees?.amount ?? 0)
-                    .sub(new Prisma.Decimal(h.student_fees?.amount_paid ?? 0))
-            ),
-            new Prisma.Decimal(0),
-        );
+        const paidTotal = paidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
+        const unpaidTotal = unpaidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
 
-        // --- Execute Split Transaction ---
         const { paidVoucher, unpaidVoucher } = await this.prisma.$transaction(async (tx) => {
+            const splitReplacement = new Map<number, { paidId: number; unpaidId: number }>();
+
+            const partialFeeIds = [
+                ...new Set(
+                    sortedHeads
+                        .filter((h) => h.student_fees?.status === 'PARTIALLY_PAID')
+                        .map((h) => h.student_fee_id),
+                ),
+            ];
+
+            for (const oldFeeId of partialFeeIds) {
+                const head = sortedHeads.find((h) => h.student_fee_id === oldFeeId)!;
+                const oldFee = head.student_fees!;
+
+                const paidPortion = new Prisma.Decimal(head.amount_deposited as any ?? 0);
+                const canonAmt = new Prisma.Decimal(oldFee.amount ?? oldFee.amount_before_discount ?? 0);
+
+                const grossOld = new Prisma.Decimal(oldFee.amount_before_discount ?? oldFee.amount ?? 0);
+                const paidGross =
+                    canonAmt.gt(0) ? grossOld.mul(paidPortion).div(canonAmt) : paidPortion;
+                const unpaidGross = Prisma.Decimal.max(grossOld.sub(paidGross), new Prisma.Decimal(0));
+                const unpaidNet = Prisma.Decimal.max(canonAmt.sub(paidPortion), new Prisma.Decimal(0));
+
+                const paidSf = await tx.student_fees.create({
+                    data: {
+                        student_id: oldFee.student_id,
+                        fee_type_id: oldFee.fee_type_id,
+                        month: oldFee.month,
+                        academic_year: oldFee.academic_year,
+                        precedence_override: oldFee.precedence_override,
+                        issue_date: oldFee.issue_date,
+                        due_date: oldFee.due_date,
+                        validity_date: oldFee.validity_date,
+                        status: 'PAID',
+                        amount_before_discount: paidGross,
+                        target_month: oldFee.target_month,
+                        amount: paidPortion,
+                        bundle_id: oldFee.bundle_id,
+                        fee_date: oldFee.fee_date,
+                        amount_paid: paidPortion,
+                    },
+                });
+
+                const unpaidSf = await tx.student_fees.create({
+                    data: {
+                        student_id: oldFee.student_id,
+                        fee_type_id: oldFee.fee_type_id,
+                        month: oldFee.month,
+                        academic_year: oldFee.academic_year,
+                        precedence_override: oldFee.precedence_override,
+                        issue_date: oldFee.issue_date,
+                        due_date: oldFee.due_date,
+                        validity_date: oldFee.validity_date,
+                        status: 'ISSUED',
+                        amount_before_discount: unpaidGross,
+                        target_month: oldFee.target_month,
+                        amount: unpaidNet,
+                        bundle_id: oldFee.bundle_id,
+                        fee_date: oldFee.fee_date,
+                        amount_paid: new Prisma.Decimal(0),
+                    },
+                });
+
+                await tx.deposit_allocations.updateMany({
+                    where: { student_fee_id: oldFeeId, voucher_id: voucherId },
+                    data: { student_fee_id: paidSf.id },
+                });
+
+                await tx.voucher_heads.deleteMany({ where: { student_fee_id: oldFeeId } });
+                await tx.student_fees.delete({ where: { id: oldFeeId } });
+
+                splitReplacement.set(oldFeeId, { paidId: paidSf.id, unpaidId: unpaidSf.id });
+            }
+
+            await tx.voucher_heads.deleteMany({ where: { voucher_id: voucherId } });
+
+            const resolveSfId = (oldId: number, side: 'paid' | 'unpaid'): number => {
+                const rep = splitReplacement.get(oldId);
+                if (!rep) return oldId;
+                return side === 'paid' ? rep.paidId : rep.unpaidId;
+            };
+
             const commonFields = {
                 student_id: original.student_id,
                 campus_id: original.campus_id,
@@ -1187,7 +1401,6 @@ export class VouchersService {
                 late_fee_charge: original.late_fee_charge,
             };
 
-            // --- 1. Create the PAID portion voucher ---
             const paid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -1200,20 +1413,6 @@ export class VouchersService {
                 },
             });
 
-            await tx.voucher_heads.createMany({
-                data: paidHeads.map(h => ({
-                    voucher_id: paid.id,
-                    student_fee_id: h.student_fee_id,
-                    discount_amount: new Prisma.Decimal(0),
-                    discount_label: h.discount_label,
-                    net_amount: new Prisma.Decimal(h.amount_deposited as any ?? 0),
-                    amount_deposited: new Prisma.Decimal(h.amount_deposited as any ?? 0),
-                    balance: new Prisma.Decimal(0),
-                    description_prefix: SPLIT_VOUCHER_HEAD_PREFIX_PAID,
-                })),
-            });
-
-            // --- 2. Create the UNPAID balance voucher ---
             const unpaid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -1227,25 +1426,31 @@ export class VouchersService {
             });
 
             await tx.voucher_heads.createMany({
-                data: unpaidHeads.map(h => {
-                    // Single source of truth: outstanding = student_fees.amount - student_fees.amount_paid
-                    const outstanding = new Prisma.Decimal(h.student_fees?.amount ?? 0)
-                        .sub(new Prisma.Decimal(h.student_fees?.amount_paid ?? 0));
-                    return {
-                        voucher_id: unpaid.id,
-                        student_fee_id: h.student_fee_id,
-                        discount_amount: new Prisma.Decimal(0),
-                        discount_label: h.discount_label,
-                        net_amount: outstanding,
-                        amount_deposited: new Prisma.Decimal(0),
-                        balance: outstanding,
-                        description_prefix: SPLIT_VOUCHER_HEAD_PREFIX_BALANCE,
-                    };
-                }),
+                data: paidHeadRows.map((row) => ({
+                    voucher_id: paid.id,
+                    student_fee_id: resolveSfId(row.student_fee_id, 'paid'),
+                    discount_amount: row.discount_amount,
+                    discount_label: row.discount_label,
+                    net_amount: row.net_amount,
+                    amount_deposited: row.amount_deposited,
+                    balance: row.balance,
+                    description_prefix: row.description_prefix,
+                })),
             });
 
-            // --- 3. Void the original — deposit_allocations remain intact on it for audit.
-            // Deletion is not possible because deposit_allocations has a FK on voucher_id.
+            await tx.voucher_heads.createMany({
+                data: unpaidHeadRows.map((row) => ({
+                    voucher_id: unpaid.id,
+                    student_fee_id: resolveSfId(row.student_fee_id, 'unpaid'),
+                    discount_amount: row.discount_amount,
+                    discount_label: row.discount_label,
+                    net_amount: row.net_amount,
+                    amount_deposited: row.amount_deposited,
+                    balance: row.balance,
+                    description_prefix: row.description_prefix,
+                })),
+            });
+
             await tx.vouchers.update({
                 where: { id: voucherId },
                 data: { status: 'VOID' },

@@ -504,7 +504,7 @@ model voucher_heads {
   amount_deposited   Decimal?     @default(0) @db.Decimal(12, 2)
   balance            Decimal?     @default(0) @db.Decimal(12, 2)
   discount_label     String?      @db.VarChar(100)
-  description_prefix String?      @db.VarChar(120)
+  description_prefix String?      @db.VarChar(255)
   student_fees       student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
   vouchers           vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
 
