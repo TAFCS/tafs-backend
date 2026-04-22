@@ -127,6 +127,8 @@ export class VouchersService {
             );
 
             let totalBeforeDueDecimal = new Prisma.Decimal(0);
+            let totalArrearsDecimal = new Prisma.Decimal(0);
+            let totalArrearSurchargesDecimal = new Prisma.Decimal(0);
 
             const voucherHeadsData: {
                 voucher_id: number;
@@ -159,7 +161,17 @@ export class VouchersService {
                 const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
                 const discount = new Prisma.Decimal(gross).sub(amount);
 
-                totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
+                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
+
+                // Calculate Arrear Totals
+                const isSurcharge = fee.is_arrear_surcharge === true;
+                const isArrear = !isSurcharge && feeDate && fee.fee_date && new Date(fee.fee_date) < feeDate;
+
+                if (isSurcharge) {
+                    totalArrearSurchargesDecimal = totalArrearSurchargesDecimal.add(netAmount);
+                } else if (isArrear) {
+                    totalArrearsDecimal = totalArrearsDecimal.add(netAmount);
+                }
 
                 voucherHeadsData.push({
                     voucher_id: newVoucher.id,
@@ -209,6 +221,8 @@ export class VouchersService {
                 data: {
                     total_payable_before_due: totalBeforeDueDecimal,
                     total_payable_after_due: totalAfterDueDecimal,
+                    total_arrears: totalArrearsDecimal,
+                    total_arrear_surcharge: totalArrearSurchargesDecimal,
                 },
             });
 
@@ -488,14 +502,23 @@ export class VouchersService {
             const description = `${finalPrefix}${feeDescription}${monthSuffix}`;
             const isSplitHead = !!headPrefixRaw;
 
+            // Arrear Logic for Sidebar (History)
+            const isSurchargeTotal = h.student_fees?.is_arrear_surcharge === true;
+            const isArrear = !isSurchargeTotal && h.student_fees?.fee_date && voucher.fee_date && new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
+
             return {
                 description,
+                originalDescription: feeDescription + monthSuffix, // Cache original for history column
                 // Rule: For split payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
                 amount: isSplitHead ? Number(h.net_amount) : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
                 discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
                 netAmount: Number(h.net_amount),
                 discountLabel: isSplitHead ? '' : (h.discount_label || ''),
+                isArrear: isArrear || isSurchargeTotal,
+                feeDate: h.student_fees?.fee_date?.toISOString().split('T')[0],
+                target_month: h.student_fees?.target_month,
+                academic_year: h.student_fees?.academic_year,
             };
         });
 
@@ -549,6 +572,16 @@ export class VouchersService {
                 qrUrl,
                 paidStamp,
                 showDiscount: true,
+                arrearsHistory: feeHeads
+                    .filter(fh => fh.isArrear)
+                    .map(fh => ({
+                        date: fh.feeDate || 'N/A',
+                        head: fh.originalDescription, // USE ORIGINAL NAME WITHOUT PREFIX
+                        amount: fh.netAmount.toLocaleString(),
+                        totalAmount: fh.netAmount.toLocaleString(), // FeeChallanPDF calculates running total
+                        target_month: fh.target_month,
+                        academic_year: fh.academic_year,
+                    })),
             },
             key
         };
@@ -1314,6 +1347,30 @@ export class VouchersService {
                 late_fee_charge: original.late_fee_charge,
             };
 
+            const getTotals = (rows: typeof paidHeadRows) => {
+                let arrears = new Prisma.Decimal(0);
+                let surcharges = new Prisma.Decimal(0);
+                for (const row of rows) {
+                    const head = sortedHeads.find(h => h.student_fee_id === row.student_fee_id);
+                    const fee = head?.student_fees;
+                    if (!fee) continue;
+
+                    const isSurcharge = fee.is_arrear_surcharge === true;
+                    // Arrear: not surcharge AND fee_date < original voucher fee_date
+                    const isArrear = !isSurcharge && fee.fee_date && original.fee_date && new Date(fee.fee_date) < new Date(original.fee_date);
+
+                    if (isSurcharge) {
+                        surcharges = surcharges.add(row.net_amount);
+                    } else if (isArrear) {
+                        arrears = arrears.add(row.net_amount);
+                    }
+                }
+                return { arrears, surcharges };
+            };
+
+            const paidTots = getTotals(paidHeadRows);
+            const unpaidTots = getTotals(unpaidHeadRows);
+
             const paid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -1323,6 +1380,8 @@ export class VouchersService {
                     status: 'PAID',
                     total_payable_before_due: paidTotal,
                     total_payable_after_due: paidTotal,
+                    total_arrears: paidTots.arrears,
+                    total_arrear_surcharge: paidTots.surcharges,
                 },
             });
 
@@ -1335,6 +1394,8 @@ export class VouchersService {
                     status: 'UNPAID',
                     total_payable_before_due: unpaidTotal,
                     total_payable_after_due: unpaidTotal.add(lateFeeVal),
+                    total_arrears: unpaidTots.arrears,
+                    total_arrear_surcharge: unpaidTots.surcharges,
                 },
             });
 
