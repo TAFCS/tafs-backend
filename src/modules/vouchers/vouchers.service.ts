@@ -19,34 +19,7 @@ import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 
-/** Fee-type label used for split voucher PDF prefixes (schema has no separate "name"). */
-function feeTypeDescriptionForSplitLabel(studentFee: {
-    fee_types?: { description?: string | null } | null;
-}): string {
-    const d = studentFee.fee_types?.description?.trim();
-    return d && d.length > 0 ? d : 'Fee';
-}
 
-/**
- * Per-head prefix for split vouchers. Returns null when the label is already prefixed
- * (case-insensitive) so we never stack "PARTIAL PAYMENT OF" / "BALANCE PAYMENT OF".
- */
-function splitVoucherHeadDescriptionPrefix(
-    kind: 'paid' | 'balance',
-    studentFee: { fee_types?: { description?: string | null } | null },
-): string | null {
-    const label = feeTypeDescriptionForSplitLabel(studentFee);
-    const upper = label.toUpperCase();
-    if (upper.startsWith('PARTIAL PAYMENT OF') || upper.startsWith('BALANCE PAYMENT OF')) {
-        return null;
-    }
-    const sep = ' — ';
-    const raw =
-        kind === 'paid'
-            ? `PARTIAL PAYMENT OF ${label}${sep}`
-            : `BALANCE PAYMENT OF ${label}${sep}`;
-    return raw.length <= SPLIT_PREFIX_MAX_DB_LEN ? raw : raw.slice(0, SPLIT_PREFIX_MAX_DB_LEN);
-}
 
 const VOUCHER_INCLUDE = {
     students: {
@@ -163,6 +136,7 @@ export class VouchersService {
                 net_amount: Prisma.Decimal;
                 amount_deposited: number;
                 balance: Prisma.Decimal;
+                description_prefix: string | null;
             }[] = [];
 
             for (const fee of feeRecords) {
@@ -195,6 +169,7 @@ export class VouchersService {
                     net_amount: netAmount,
                     amount_deposited: 0,
                     balance: netAmount,
+                    description_prefix: fee.description_prefix ?? null,
                 });
             }
 
@@ -475,58 +450,7 @@ export class VouchersService {
         }
     }
 
-    /**
-     * When a PARTIALLY_PAID voucher is split, the paid-side PDF uses prefix "Partial Payment of — ".
-     * `generatePdf` calls this helper without that arg; we infer the same prefix for split-style
-     * PAID vouchers so re-downloads match the first generated file.
-     */
-    private inferPartialPaymentPrefixForSplitPaidVoucher(voucher: any): string | undefined {
-        if (voucher.status !== 'PAID' || !voucher.voucher_heads?.length) return undefined;
-        const heads: any[] = voucher.voucher_heads;
-        const tol = 0.02;
-        const currencyEps = 1; // avoid rounding noise vs underlying student_fee.amount
-        const linesLookLikeSplitPaidSlice = heads.every((h) => {
-            const bal = Number(h.balance ?? 0);
-            const net = Number(h.net_amount);
-            const dep = Number(h.amount_deposited ?? 0);
-            const disc = Number(h.discount_amount ?? 0);
-            return (
-                bal <= tol &&
-                Math.abs(net - dep) <= tol &&
-                disc <= tol
-            );
-        });
-        if (!linesLookLikeSplitPaidSlice) return undefined;
-        const anyHeadIsPortionOfLargerFee = heads.some((h) => {
-            const net = Number(h.net_amount);
-            const sfAmt = Number(h.student_fees?.amount ?? 0);
-            return sfAmt > currencyEps && net < sfAmt - currencyEps;
-        });
-        return anyHeadIsPortionOfLargerFee ? 'Partial Payment of — ' : undefined;
-    }
 
-    /**
-     * Split balance voucher PDFs use "Balance Payment of — ". Infer when regenerating without explicit prefix.
-     */
-    private inferBalancePaymentPrefixForSplitBalanceVoucher(voucher: any): string | undefined {
-        if (voucher.status !== 'UNPAID' || !voucher.voucher_heads?.length) return undefined;
-        const heads: any[] = voucher.voucher_heads;
-        const tol = 0.02;
-        const currencyEps = 1;
-        if (!heads.every((h) => Number(h.amount_deposited ?? 0) <= tol)) return undefined;
-        const anyHead = heads.some((h) => {
-            const net = Number(h.net_amount);
-            const sfAmt = Number(h.student_fees?.amount ?? 0);
-            const paidOnFee = Number(h.student_fees?.amount_paid ?? 0);
-            return (
-                paidOnFee > tol &&
-                sfAmt > currencyEps &&
-                net < sfAmt - currencyEps &&
-                net > tol
-            );
-        });
-        return anyHead ? 'Balance Payment of — ' : undefined;
-    }
 
     /** Helper to prepare data for VoucherPdfService */
     private async prepareVoucherPdfData(voucher: any, paidStamp?: boolean, descriptionPrefix?: string) {
@@ -539,10 +463,7 @@ export class VouchersService {
             });
         }
 
-        const voucherLevelPrefix =
-            descriptionPrefix ??
-            this.inferPartialPaymentPrefixForSplitPaidVoucher(voucher) ??
-            this.inferBalancePaymentPrefixForSplitBalanceVoucher(voucher);
+        const voucherLevelPrefix = descriptionPrefix;
 
         // 2. Map heads correctly
         const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -561,30 +482,20 @@ export class VouchersService {
             }
 
             const headPrefixRaw = h.description_prefix && String(h.description_prefix).trim();
-            const rowPrefix = headPrefixRaw || voucherLevelPrefix || '';
+            const prefixToUse = headPrefixRaw || voucherLevelPrefix || '';
+            const finalPrefix = prefixToUse ? `${prefixToUse} — ` : '';
 
-            // Rule: If net_amount < student_fees.amount (meaning a partial payment was made),
-            // the description must be prefixed with "BALANCE PAYMENT OF — ".
-            const fullAmount = Number(h.student_fees?.amount ?? 0);
-            const netAmount = Number(h.net_amount);
-            const isPartialPayment = netAmount < fullAmount;
-            // If caller or DB already provided a split/balance prefix, avoid duplicating.
-            const balancePrefix =
-                isPartialPayment && !rowPrefix ? 'BALANCE PAYMENT OF ' : '';
-
-            // Per-head split prefixes already embed the fee-type label — do not repeat feeDescription.
-            const description = headPrefixRaw
-                ? `${headPrefixRaw}${monthSuffix}`
-                : `${rowPrefix}${balancePrefix}${feeDescription}${monthSuffix}`;
+            const description = `${finalPrefix}${feeDescription}${monthSuffix}`;
+            const isSplitHead = !!headPrefixRaw;
 
             return {
                 description,
-                // Rule: For balance payments, do not show original discounts.
+                // Rule: For split payments, do not show original discounts.
                 // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
-                amount: isPartialPayment ? netAmount : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
-                discount: isPartialPayment ? 0 : Number(h.discount_amount || 0),
-                netAmount: netAmount,
-                discountLabel: isPartialPayment ? '' : (h.discount_label || ''),
+                amount: isSplitHead ? Number(h.net_amount) : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
+                discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
+                netAmount: Number(h.net_amount),
+                discountLabel: isSplitHead ? '' : (h.discount_label || ''),
             };
         });
 
@@ -1229,8 +1140,8 @@ export class VouchersService {
                         `Cannot split head #${h.id}: student fee #${sf.id} is marked PARTIALLY_PAID but has no outstanding balance.`,
                     );
                 }
-                const prefixPaid = splitVoucherHeadDescriptionPrefix('paid', sf);
-                const prefixBalance = splitVoucherHeadDescriptionPrefix('balance', sf);
+                const prefixPaid = 'PARTIAL PAYMENT OF';
+                const prefixBalance = 'BALANCE PAYMENT OF';
                 paidHeadRows.push({
                     student_fee_id: sf.id,
                     discount_amount: new Prisma.Decimal(0),
@@ -1347,6 +1258,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: paidPortion,
+                        description_prefix: 'PARTIAL PAYMENT OF',
                     },
                 });
 
@@ -1367,6 +1279,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: new Prisma.Decimal(0),
+                        description_prefix: 'BALANCE PAYMENT OF',
                     },
                 });
 

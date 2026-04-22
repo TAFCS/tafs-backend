@@ -310,6 +310,8 @@ model student_fees {
   bundle_id              Int?
   fee_date               DateTime?             @db.Date
   amount_paid            Decimal?              @default(0) @db.Decimal(12, 2)
+  description_prefix     String?               @db.VarChar(50)
+  is_arrear_surcharge    Boolean               @default(false)
   deposit_allocations    deposit_allocations[]
   student_fee_bundles    student_fee_bundles?  @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
   fee_types              fee_types             @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -531,6 +533,10 @@ model vouchers {
   total_payable_after_due  Decimal?              @default(0) @db.Decimal(12, 2)
   late_fee_deposited       Decimal?              @default(0) @db.Decimal(12, 2)
   fee_date                 DateTime?             @db.Date
+  total_arrears            Decimal?              @default(0) @db.Decimal(12, 2)
+  total_arrear_surcharge   Decimal?              @default(0) @db.Decimal(12, 2)
+  surcharge_waived         Boolean               @default(false)
+  surcharge_waived_by      String?               @db.VarChar(100)
   deposit_allocations      deposit_allocations[]
   voucher_heads            voucher_heads[]
   bank_accounts            bank_accounts         @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
