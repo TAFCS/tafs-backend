@@ -12,6 +12,7 @@ import {
   IsEmail,
   MaxLength,
   ValidateIf,
+  Allow,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -53,6 +54,14 @@ export class PreviousSchoolDto {
   @IsString()
   @IsOptional()
   reason_for_leaving?: string;
+}
+
+export class AdditionalPhoneDto {
+  @IsString()
+  label: string;
+
+  @IsString()
+  number: string;
 }
 
 export class GuardianDto {
@@ -172,8 +181,10 @@ export class GuardianDto {
   fax_number?: string;
   
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AdditionalPhoneDto)
   @IsOptional()
-  additional_phones?: { label: string; number: string }[];
+  additional_phones?: AdditionalPhoneDto[];
 }
 
 export class StudentFlagDto {
@@ -214,8 +225,10 @@ export class EmergencyContactDto {
   role?: 'father' | 'mother' | 'other';
 
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AdditionalPhoneDto)
   @IsOptional()
-  additional_phones?: { label: string; number: string }[];
+  additional_phones?: AdditionalPhoneDto[];
 }
 
 export class AdmissionDetailsDto {
