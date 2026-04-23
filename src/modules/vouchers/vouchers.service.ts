@@ -90,7 +90,7 @@ export class VouchersService {
 
         const voucher = await this.prisma.$transaction(async (tx) => {
             // 1.a Automatically find and include Arrear Surcharges
-            let finalOrderedFeeIds = [...dto.orderedFeeIds];
+            let finalOrderedFeeIds = [...(dto.orderedFeeIds ?? [])];
             let potentialSurchargeAmount = 0;
 
             if (feeDate) {
