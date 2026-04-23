@@ -212,6 +212,10 @@ export class EmergencyContactDto {
   @IsString()
   @IsOptional()
   role?: 'father' | 'mother' | 'other';
+
+  @IsArray()
+  @IsOptional()
+  additional_phones?: { label: string; number: string }[];
 }
 
 export class AdmissionDetailsDto {

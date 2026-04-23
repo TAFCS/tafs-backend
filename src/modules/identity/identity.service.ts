@@ -227,6 +227,7 @@ export class IdentityService {
               full_name: ec.full_name,
               primary_phone_country_code: ec.primary_phone_country_code ?? '+92',
               primary_phone: ec.primary_phone,
+              additional_phones: (ec.additional_phones as any) ?? undefined,
             } as any,
           });
           await tx.student_guardians.create({
