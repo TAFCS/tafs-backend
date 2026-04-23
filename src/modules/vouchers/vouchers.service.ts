@@ -89,10 +89,29 @@ export class VouchersService {
         const feeDate = dto.fee_date ? new Date(dto.fee_date) : null;
 
         const voucher = await this.prisma.$transaction(async (tx) => {
-            // 1. Fetch the fees to be included in the voucher
+            // 1.a Automatically find and include Arrear Surcharges
+            let finalOrderedFeeIds = [...dto.orderedFeeIds];
+            let potentialSurchargeAmount = 0;
+
+            if (feeDate) {
+                // We ALWAYS compute arrears to get the potential surcharge amount for the waiver note.
+                // We pass persist=true to ensure student_fees exist if not waiving.
+                const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, true, tx);
+                potentialSurchargeAmount = arrearsInfo.total_surcharge;
+
+                if (!dto.waive_surcharge && arrearsInfo.surcharge_fee_ids.length > 0) {
+                    for (const sId of arrearsInfo.surcharge_fee_ids) {
+                        if (!finalOrderedFeeIds.includes(sId)) {
+                            finalOrderedFeeIds.push(sId);
+                        }
+                    }
+                }
+            }
+
+            // 1.b Fetch the fees to be included in the voucher
             const feeRecords = await tx.student_fees.findMany({
                 where: {
-                    id: { in: dto.orderedFeeIds && dto.orderedFeeIds.length > 0 ? dto.orderedFeeIds : [] },
+                    id: { in: finalOrderedFeeIds },
                     student_id: dto.student_id,
                 },
                 include: {
@@ -218,20 +237,13 @@ export class VouchersService {
             const lateFeeVal = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
             const totalAfterDueDecimal = totalBeforeDueDecimal.add(lateFeeVal);
 
-            // If waived, we might need to calculate the amount that WAS waived to store it for audit/PDF
-            let finalSurchargeAmount = totalArrearSurchargesDecimal;
-            if (dto.waive_surcharge && feeDate) {
-                const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, true);
-                finalSurchargeAmount = new Prisma.Decimal(arrearsInfo.total_surcharge);
-            }
-
             await tx.vouchers.update({
                 where: { id: newVoucher.id },
                 data: {
                     total_payable_before_due: totalBeforeDueDecimal,
                     total_payable_after_due: totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
-                    total_arrear_surcharge: finalSurchargeAmount,
+                    total_arrear_surcharge: potentialSurchargeAmount,
                 },
             });
 
@@ -359,6 +371,8 @@ export class VouchersService {
                         month: dto.month ?? undefined,
                         fee_date: dto.fee_date,
                         precedence: 1,
+                        waive_surcharge: dto.waive_surcharge,
+                        waived_by: dto.waived_by,
                         orderedFeeIds: item.fee_ids,
                         fee_lines: item.fee_lines,
                     };
@@ -495,13 +509,22 @@ export class VouchersService {
 
             // Append month label for tuition fees, e.g. "Monthly Tuition Fee (APR 25)"
             const isTuition = feeDescription.toLowerCase().includes('tuition');
+            const isSurcharge = feeDescription.toLowerCase().includes('surcharge');
             const targetMonth: number | null = h.student_fees?.target_month ?? null;
             let monthSuffix = '';
-            if (isTuition && targetMonth) {
-                const monthName = (monthNames[targetMonth] || '').slice(0, 3).toUpperCase();
-                const acYear: string = voucher.academic_year || '';
-                const yrShort = acYear.split('-')[0]?.slice(-2) ?? '';
-                monthSuffix = ` (${monthName}${yrShort ? ' ' + yrShort : ''})`;
+
+            if ((isTuition || isSurcharge) && targetMonth) {
+                const monthName = monthNames[targetMonth] || '';
+                const acYear: string = h.student_fees?.academic_year || voucher.academic_year || '';
+                const parts = acYear.split('-');
+                const year = targetMonth >= 8 ? parts[0] : (parts[1] || parts[0]);
+                
+                if (isSurcharge) {
+                    monthSuffix = ` — ${monthName} ${year}`;
+                } else {
+                    // Tuition keeps the short format (AUG 25)
+                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}${year ? ' ' + year.slice(-2) : ''})`;
+                }
             }
 
             const headPrefixRaw = h.description_prefix && String(h.description_prefix).trim();
@@ -1736,7 +1759,7 @@ export class VouchersService {
         if (arrearCutoff && studentIds.length > 0) {
             for (const student of eligibleStudents) {
                 // Use the refactored computeArrears to handle surcharges and IDs consistently
-                const arrears = await this.computeArrears(student.student_id, arrearCutoff, (filters as any).waive_surcharge);
+                const arrears = await this.computeArrears(student.student_id, arrearCutoff, (filters as any).waive_surcharge, false);
                 
                 // Merge arrear IDs and surcharge IDs into the student's fee list
                 // Prepend them so they appear at the top/as arrears
@@ -1767,16 +1790,17 @@ export class VouchersService {
      * strictly before targetFeeDate, and which are NOT already linked as a head
      * on another active (non-PAID) voucher (to prevent double-counting).
      */
-    async computeArrears(studentId: number, targetFeeDate: Date, waiveSurcharge = false) {
-        console.log(`[Arrears] Computing for Student: ${studentId}, Before: ${targetFeeDate.toISOString()}, Waive: ${waiveSurcharge}`);
+    async computeArrears(studentId: number, targetFeeDate: Date, waiveSurcharge = false, persist = true, tx?: Prisma.TransactionClient) {
+        const client = tx || this.prisma;
+        console.log(`[Arrears] Computing for Student: ${studentId}, Before: ${targetFeeDate.toISOString()}, Waive: ${waiveSurcharge}, Persist: ${persist}`);
         
         // 1. Fetch Candidates (Normal Arrears)
-        const candidates = await this.prisma.student_fees.findMany({
+        const candidates = await client.student_fees.findMany({
             where: {
                 student_id: studentId,
                 fee_date: { lt: targetFeeDate },
                 status: { notIn: ['PAID'] as any[] },
-                is_arrear_surcharge: false, // Exclude surcharges from being arrears themselves
+                is_arrear_surcharge: false,
             },
             include: {
                 fee_types: true,
@@ -1784,13 +1808,9 @@ export class VouchersService {
             orderBy: { fee_date: 'asc' },
         });
 
-        console.log(`[Arrears] Found candidates: ${candidates.length}`);
-
         const rows: any[] = [];
-        let totalArrears = new Prisma.Decimal(0);
+        let totalArrearsCount = new Prisma.Decimal(0);
         const arrearFeeIds: number[] = [];
-
-        // Track unique fee_date groups for surcharge
         const distinctGroups = new Map<string, { date: Date, target_month: number, academic_year: string }>();
 
         for (const fee of candidates) {
@@ -1800,7 +1820,7 @@ export class VouchersService {
 
             if (outstanding.lte(0)) continue;
 
-            totalArrears = totalArrears.add(outstanding);
+            totalArrearsCount = totalArrearsCount.add(outstanding);
             arrearFeeIds.push(fee.id);
 
             const dateStr = fee.fee_date ? fee.fee_date.toISOString().split('T')[0] : 'undated';
@@ -1829,53 +1849,76 @@ export class VouchersService {
         const surchargeFeeIds: number[] = [];
         let totalSurcharge = new Prisma.Decimal(0);
 
-        if (!waiveSurcharge && distinctGroups.size > 0) {
-            const surchargeFeeType = await this.getOrCreateSurchargeFeeType();
-            
-            for (const group of distinctGroups.values()) {
-                // Deduplicate: check for existing surcharge record for this student + date
-                let existingSurcharge = await this.prisma.student_fees.findFirst({
-                    where: {
-                        student_id: studentId,
-                        fee_date: group.date,
-                        is_arrear_surcharge: true,
-                    }
-                });
+        // Potential surcharge is ALWAYS calculated based on distinct months, regardless of waiver
+        if (distinctGroups.size > 0) {
+            totalSurcharge = new Prisma.Decimal(distinctGroups.size * 1000);
 
-                if (!existingSurcharge) {
-                    existingSurcharge = await this.prisma.student_fees.create({
-                        data: {
-                            student_id: studentId,
-                            fee_type_id: surchargeFeeType.id,
-                            amount: new Prisma.Decimal(1000),
-                            amount_before_discount: new Prisma.Decimal(1000),
-                            fee_date: group.date,
-                            target_month: group.target_month,
-                            academic_year: group.academic_year,
-                            status: 'NOT_ISSUED',
-                            is_arrear_surcharge: true,
-                            month: group.target_month,
+            // If we are NOT waiving, we proceed to ensure records exist
+            if (!waiveSurcharge) {
+                const surchargeFeeType = await this.getOrCreateSurchargeFeeType(tx);
+                
+                for (const group of distinctGroups.values()) {
+                    let surchargeRecord: any = null;
+
+                    if (persist) {
+                        // Deduplicate: check for existing surcharge record for this student + date
+                        surchargeRecord = await client.student_fees.findFirst({
+                            where: {
+                                student_id: studentId,
+                                fee_date: group.date,
+                                is_arrear_surcharge: true,
+                            }
+                        });
+
+                        if (!surchargeRecord) {
+                            surchargeRecord = await client.student_fees.create({
+                                data: {
+                                    student_id: studentId,
+                                    fee_type_id: surchargeFeeType.id,
+                                    amount: new Prisma.Decimal(1000),
+                                    amount_before_discount: new Prisma.Decimal(1000),
+                                    fee_date: group.date,
+                                    target_month: group.target_month,
+                                    academic_year: group.academic_year,
+                                    status: 'NOT_ISSUED',
+                                    is_arrear_surcharge: true,
+                                    month: group.target_month,
+                                }
+                            });
                         }
-                    });
-                }
+                    }
 
-                // Only include if it's not already paid (though surcharges are usually new)
-                if (existingSurcharge.status !== 'PAID') {
-                    const sAmt = new Prisma.Decimal(existingSurcharge.amount ?? 1000);
-                    const sPaid = new Prisma.Decimal(existingSurcharge.amount_paid ?? 0);
-                    const sRem = sAmt.sub(sPaid);
+                    // If we persisted (or found existing), add to the list
+                    if (surchargeRecord) {
+                        if (surchargeRecord.status !== 'PAID') {
+                            const sAmt = new Prisma.Decimal(surchargeRecord.amount ?? 1000);
+                            const sPaid = new Prisma.Decimal(surchargeRecord.amount_paid ?? 0);
+                            const sRem = sAmt.sub(sPaid);
 
-                    if (sRem.gt(0)) {
-                        surchargeFeeIds.push(existingSurcharge.id);
-                        totalSurcharge = totalSurcharge.add(sRem);
-                        
+                            if (sRem.gt(0)) {
+                                surchargeFeeIds.push(surchargeRecord.id);
+                                rows.push({
+                                    student_fee_id: surchargeRecord.id,
+                                    fee_type: "Late Payment Surcharge",
+                                    fee_date: group.date.toISOString().split('T')[0],
+                                    amount: sAmt.toFixed(2),
+                                    amount_paid: sPaid.toFixed(2),
+                                    outstanding: sRem.toFixed(2),
+                                    target_month: group.target_month,
+                                    academic_year: group.academic_year,
+                                    isSurcharge: true
+                                });
+                            }
+                        }
+                    } else {
+                        // If not persisting (preview mode), just add a virtual row
                         rows.push({
-                            student_fee_id: existingSurcharge.id,
+                            student_fee_id: -1, // Virtual ID
                             fee_type: "Late Payment Surcharge",
                             fee_date: group.date.toISOString().split('T')[0],
-                            amount: sAmt.toFixed(2),
-                            amount_paid: sPaid.toFixed(2),
-                            outstanding: sRem.toFixed(2),
+                            amount: "1000.00",
+                            amount_paid: "0.00",
+                            outstanding: "1000.00",
                             target_month: group.target_month,
                             academic_year: group.academic_year,
                             isSurcharge: true
@@ -1885,10 +1928,8 @@ export class VouchersService {
             }
         }
 
-        console.log(`[Arrears] Final response: Arrears=${totalArrears}, Surcharge=${totalSurcharge}, Rows=${rows.length}`);
-
         return {
-            total_arrears: Number(totalArrears.toFixed(2)),
+            total_arrears: Number(totalArrearsCount.toFixed(2)),
             total_surcharge: Number(totalSurcharge.toFixed(2)),
             arrear_fee_ids: arrearFeeIds,
             surcharge_fee_ids: surchargeFeeIds,
@@ -1896,13 +1937,14 @@ export class VouchersService {
         };
     }
 
-    private async getOrCreateSurchargeFeeType() {
-        let ft = await this.prisma.fee_types.findFirst({
+    private async getOrCreateSurchargeFeeType(tx?: Prisma.TransactionClient) {
+        const client = tx || this.prisma;
+        let ft = await client.fee_types.findFirst({
             where: { description: 'Late Payment Surcharge' }
         });
 
         if (!ft) {
-            ft = await this.prisma.fee_types.create({
+            ft = await client.fee_types.create({
                 data: {
                     description: 'Late Payment Surcharge',
                     freq: 'ONE_TIME',

@@ -47,8 +47,12 @@ export class VouchersController {
     @UseInterceptors(FileInterceptor('pdf'))
     async create(
         @Body() dto: CreateVoucherDto,
+        @Req() req: any,
         @UploadedFile() pdf?: Express.Multer.File,
     ) {
+        if (dto.waive_surcharge && !dto.waived_by) {
+            dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
+        }
         const voucher = await this.vouchersService.create(dto, pdf?.buffer);
         return {
             success: true,
@@ -82,7 +86,10 @@ export class VouchersController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async createBulk(@Body() dto: CreateBulkVouchersDto) {
+    async createBulk(@Body() dto: CreateBulkVouchersDto, @Req() req: any) {
+        if (dto.waive_surcharge && !dto.waived_by) {
+            dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
+        }
         const result = await this.vouchersService.createBulk(dto);
         return {
             success: true,
@@ -108,7 +115,7 @@ export class VouchersController {
         const feeDate = new Date(feeDateStr);
         const waiveSurcharge = waiveSurchargeStr === 'true';
         
-        const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
+        const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge, false);
         return {
             success: true,
             message: 'Arrears computed successfully',
