@@ -66,4 +66,12 @@ export class CreateBulkVouchersDto {
     @IsNumber()
     @IsOptional()
     late_fee_amount?: number;
+
+    @IsBoolean()
+    @IsOptional()
+    waive_surcharge?: boolean;
+
+    @IsString()
+    @IsOptional()
+    waived_by?: string;
 }

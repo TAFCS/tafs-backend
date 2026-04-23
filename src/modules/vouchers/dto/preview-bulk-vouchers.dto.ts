@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class PreviewBulkVouchersDto {
     @Type(() => Number)
@@ -57,4 +57,8 @@ export class PreviewBulkVouchersDto {
     @IsInt()
     @IsNotEmpty()
     bank_account_id: number;
+
+    @IsBoolean()
+    @IsOptional()
+    waive_surcharge?: boolean;
 }

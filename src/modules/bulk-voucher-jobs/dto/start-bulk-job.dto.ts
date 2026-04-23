@@ -66,6 +66,10 @@ export class StartBulkJobDto {
 
     @IsBoolean()
     @IsOptional()
+    waive_surcharge?: boolean;
+
+    @IsBoolean()
+    @IsOptional()
     apply_late_fee?: boolean;
 
     @Type(() => Number)

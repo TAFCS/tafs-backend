@@ -102,10 +102,13 @@ export class VouchersController {
     async getArrears(
         @Query('student_id') studentIdStr: string,
         @Query('fee_date') feeDateStr: string,
+        @Query('waive_surcharge') waiveSurchargeStr?: string,
     ) {
         const studentId = parseInt(studentIdStr, 10);
         const feeDate = new Date(feeDateStr);
-        const result = await this.vouchersService.computeArrears(studentId, feeDate);
+        const waiveSurcharge = waiveSurchargeStr === 'true';
+        
+        const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
         return {
             success: true,
             message: 'Arrears computed successfully',

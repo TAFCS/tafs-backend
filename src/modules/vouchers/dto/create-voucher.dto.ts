@@ -122,4 +122,13 @@ export class CreateVoucherDto {
     @Type(() => VoucherFeeLineDto)
     @IsOptional()
     fee_lines?: VoucherFeeLineDto[];
+
+    @Transform(({ value }) => (value === 'true' || value === true))
+    @IsBoolean()
+    @IsOptional()
+    waive_surcharge?: boolean;
+
+    @IsString()
+    @IsOptional()
+    waived_by?: string;
 }

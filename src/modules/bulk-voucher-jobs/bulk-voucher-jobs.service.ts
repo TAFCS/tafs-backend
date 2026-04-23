@@ -231,12 +231,13 @@ export class BulkVoucherJobsService {
                 success_count: 0,
                 skip_count: 0,
                 fail_count: 0,
+                waive_surcharge: dto.waive_surcharge ?? false,
                 updated_at: new Date(),
             },
         });
 
         // 2. Fire-and-forget async pipeline (no external queue needed)
-        setImmediate(() => this.processJob(job.id, dto, feeDates));
+        setImmediate(() => this.processJob(job.id, dto, feeDates, createdBy));
 
         return { job_id: job.id };
     }
@@ -295,7 +296,7 @@ export class BulkVoucherJobsService {
 
     // ── Async Pipeline ──────────────────────────────────────────────────────
 
-    private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[]) {
+    private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[], createdBy: string) {
         const jobReport: any[] = [];
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
         this.logger.log(
@@ -472,7 +473,7 @@ export class BulkVoucherJobsService {
             const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
 
             const results = await Promise.allSettled(
-                chunk.map((item) => this.processWorkItem(item, dto, bankAccount, siblingsMap)),
+                chunk.map((item) => this.processWorkItem(item, dto, bankAccount, siblingsMap, createdBy)),
             );
 
             let chunkSuccess = 0;
@@ -559,11 +560,16 @@ export class BulkVoucherJobsService {
         dto: StartBulkJobDto,
         bankAccount: any,
         siblingsMap: Map<number, any[]>,
+        createdBy: string,
     ): Promise<{ buffer: Buffer; url: string }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
         // ── Fetch arrears (unpaid fees whose fee_date < this voucher's fee_date) ──
-        const arrearsResult = await this.vouchersService.computeArrears(cc, new Date(dateStr));
+        const arrearsResult = await this.vouchersService.computeArrears(
+            cc, 
+            new Date(dateStr),
+            dto.waive_surcharge ?? false
+        );
         const arrearFeeIds = arrearsResult.arrear_fee_ids ?? [];
         const arrearRows = arrearsResult.rows ?? [];
 
@@ -599,6 +605,8 @@ export class BulkVoucherJobsService {
             validity_date: dto.validity_date,
             late_fee_charge: dto.apply_late_fee ?? true,
             late_fee_amount: dto.late_fee_amount ?? 1000,
+            waive_surcharge: dto.waive_surcharge ?? false,
+            waived_by: createdBy,
             academic_year: item.academicYear,
             fee_date: dateStr,
             precedence: 1,
@@ -702,7 +710,9 @@ export class BulkVoucherJobsService {
             discount: 0,
             netAmount: Number(r.outstanding),
             discountLabel: '',
-            isArrear: true,
+            isArrear: !r.isSurcharge,
+            isSurcharge: !!r.isSurcharge,
+            feeDate: r.fee_date,
         }));
 
         const allPdfHeads = [...arrearHeadsForPdf, ...feeHeadsForPdf];

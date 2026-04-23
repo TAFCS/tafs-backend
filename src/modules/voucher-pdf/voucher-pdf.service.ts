@@ -61,6 +61,8 @@ export interface VoucherPdfData {
         target_month?: number;
         academic_year?: string;
     }>;
+    surchargeWaived?: boolean;
+    totalSurcharge?: number;
 }
 
 @Injectable()
@@ -108,7 +110,9 @@ export class VoucherPdfService {
                     branch: '',
                     address: data.bank.address,
                     iban: data.bank.iban,
-                }
+                },
+                surchargeWaived: data.surchargeWaived,
+                totalSurcharge: data.totalSurcharge,
             },
             fees: data.feeHeads.map(f => ({
                 description: f.description,

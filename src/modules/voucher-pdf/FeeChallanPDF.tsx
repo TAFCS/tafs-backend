@@ -392,6 +392,7 @@ export interface FeeItem {
     discount?: number;     // discount amount
     discountLabel?: string;
     isArrear?: boolean;    // true = this row belongs to the ARREARS section
+    isSurcharge?: boolean; // true = this row is a surcharge/late fee
     feeDate?: string;      // underlying fee_date (for ARREAR rows)
 }
 
@@ -431,6 +432,8 @@ interface FeeChallanPDFProps {
             fullName: string;
             timestampStr: string;
         };
+        surchargeWaived?: boolean;
+        totalSurcharge?: number;
         bank: {
             name: string;
             title: string;
@@ -592,9 +595,12 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                         </View>
 
                         {(() => {
-                            const arrearFees = fees.filter(f => f.isArrear);
-                            const currentFees = fees.filter(f => !f.isArrear);
-                            const arrearTotal = arrearFees.reduce((s, f) => s + f.amount, 0);
+                            const arrearFees = fees.filter(f => f.isArrear && !f.isSurcharge);
+                            const surchargeFees = fees.filter(f => f.isSurcharge);
+                            const currentFees = fees.filter(f => !f.isArrear && !f.isSurcharge);
+
+                            const arrearTotal = arrearFees.reduce((s, f) => s + (f.netAmount || 0), 0);
+
                             return (
                                 <>
                                     {arrearFees.length > 0 && (
@@ -605,6 +611,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                             </Text>
                                         </View>
                                     )}
+                                    {surchargeFees.map((fee, idx) => renderFeeRow(fee, `s-${idx}`))}
                                     {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
                                 </>
                             );
@@ -628,6 +635,14 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     </>
                 );
             })()}
+
+            {details.surchargeWaived && (details.totalSurcharge || 0) > 0 && (
+                <View style={{ marginTop: 2 }}>
+                    <Text style={{ fontSize: 6, fontStyle: 'italic', color: '#666' }}>
+                        Late payment surcharge of PKR {Math.round(details.totalSurcharge || 0).toLocaleString()} waived.
+                    </Text>
+                </View>
+            )}
 
 
             {details.applyLateFee && (
