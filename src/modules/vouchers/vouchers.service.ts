@@ -1185,8 +1185,10 @@ export class VouchersService {
                         `Cannot split head #${h.id}: student fee #${sf.id} is marked PARTIALLY_PAID but has no outstanding balance.`,
                     );
                 }
-                const prefixPaid = 'PARTIAL PAYMENT OF';
-                const prefixBalance = 'BALANCE PAYMENT OF';
+                const existing = h.description_prefix ? String(h.description_prefix).trim() : '';
+                const prefixPaid = existing ? `PARTIAL PAYMENT OF ${existing}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'PARTIAL PAYMENT OF';
+                const prefixBalance = existing ? `BALANCE PAYMENT OF ${existing}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'BALANCE PAYMENT OF';
+
                 paidHeadRows.push({
                     student_fee_id: sf.id,
                     discount_amount: new Prisma.Decimal(0),
@@ -1219,7 +1221,7 @@ export class VouchersService {
                     net_amount: linePaid,
                     amount_deposited: linePaid,
                     balance: new Prisma.Decimal(0),
-                    description_prefix: null,
+                    description_prefix: h.description_prefix,
                 });
             } else if (sf.status === 'ISSUED' || sf.status === 'NOT_ISSUED') {
                 const netOutstanding = outstanding.gt(0)
@@ -1237,7 +1239,7 @@ export class VouchersService {
                     net_amount: netOutstanding,
                     amount_deposited: new Prisma.Decimal(0),
                     balance: netOutstanding,
-                    description_prefix: null,
+                    description_prefix: h.description_prefix,
                 });
             } else {
                 throw new BadRequestException(
@@ -1286,6 +1288,11 @@ export class VouchersService {
                 const unpaidGross = Prisma.Decimal.max(grossOld.sub(paidGross), new Prisma.Decimal(0));
                 const unpaidNet = Prisma.Decimal.max(canonAmt.sub(paidPortion), new Prisma.Decimal(0));
 
+                // Recalculate prefixes for student_fees specifically
+                const feeExisting = head.description_prefix ? String(head.description_prefix).trim() : '';
+                const feePrefixPaid = feeExisting ? `PARTIAL PAYMENT OF ${feeExisting}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'PARTIAL PAYMENT OF';
+                const feePrefixBalance = feeExisting ? `BALANCE PAYMENT OF ${feeExisting}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'BALANCE PAYMENT OF';
+
                 const paidSf = await tx.student_fees.create({
                     data: {
                         student_id: oldFee.student_id,
@@ -1303,7 +1310,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: paidPortion,
-                        description_prefix: 'PARTIAL PAYMENT OF',
+                        description_prefix: feePrefixPaid,
                     },
                 });
 
@@ -1324,7 +1331,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: new Prisma.Decimal(0),
-                        description_prefix: 'BALANCE PAYMENT OF',
+                        description_prefix: feePrefixBalance,
                     },
                 });
 
@@ -1347,15 +1354,20 @@ export class VouchersService {
                 return side === 'paid' ? rep.paidId : rep.unpaidId;
             };
 
+            const feeRef = allHeads[0]?.student_fees;
+            const targetMonth = feeRef?.target_month ?? original.month;
+            const targetYear = feeRef?.academic_year ?? original.academic_year;
+            const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
+
             const commonFields = {
                 student_id: original.student_id,
                 campus_id: original.campus_id,
                 class_id: original.class_id,
                 section_id: original.section_id,
                 bank_account_id: original.bank_account_id,
-                academic_year: original.academic_year,
-                month: original.month,
-                fee_date: original.fee_date,
+                academic_year: targetYear,
+                month: targetMonth,
+                fee_date: targetFeeDate,
                 late_fee_charge: original.late_fee_charge,
             };
 
