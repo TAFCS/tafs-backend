@@ -70,7 +70,7 @@ export class VouchersService {
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
         private readonly pdfService: VoucherPdfService,
-    ) {}
+    ) { }
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
         // --- Temporary Debug Check for orderedFeeIds ---
@@ -182,7 +182,7 @@ export class VouchersService {
                 const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
                 const discount = new Prisma.Decimal(gross).sub(amount);
 
-                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
+                totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
                 // Calculate Arrear Totals
                 const isSurcharge = fee.is_arrear_surcharge === true;
@@ -353,7 +353,7 @@ export class VouchersService {
         const CHUNK_SIZE = 25;
         for (let i = 0; i < selection.eligibleStudents.length; i += CHUNK_SIZE) {
             const chunk = selection.eligibleStudents.slice(i, i + CHUNK_SIZE);
-            
+
             await Promise.all(chunk.map(async (item) => {
                 try {
                     const voucherDto: CreateVoucherDto = {
@@ -444,18 +444,18 @@ export class VouchersService {
                 ...(status ? { status } : { status: { not: 'VOID' } }),
                 ...(dateFrom || dateTo
                     ? {
-                            fee_date: {
-                                ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-                                ...(dateTo ? { lte: new Date(dateTo) } : {}),
-                            },
-                        }
+                        fee_date: {
+                            ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+                            ...(dateTo ? { lte: new Date(dateTo) } : {}),
+                        },
+                    }
                     : {}),
                 ...(gr
                     ? {
-                            students: {
-                                gr_number: { contains: gr, mode: 'insensitive' },
-                            },
-                        }
+                        students: {
+                            gr_number: { contains: gr, mode: 'insensitive' },
+                        },
+                    }
                     : {}),
             };
 
@@ -513,17 +513,18 @@ export class VouchersService {
             const targetMonth: number | null = h.student_fees?.target_month ?? null;
             let monthSuffix = '';
 
-            if ((isTuition || isSurcharge) && targetMonth) {
+            if (targetMonth) {
                 const monthName = monthNames[targetMonth] || '';
                 const acYear: string = h.student_fees?.academic_year || voucher.academic_year || '';
                 const parts = acYear.split('-');
                 const year = targetMonth >= 8 ? parts[0] : (parts[1] || parts[0]);
-                
+
                 if (isSurcharge) {
-                    monthSuffix = ` — ${monthName} ${year}`;
+                    // Surcharge keeps the short format (APR '25)
+                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}'${year ? ' ' + year.slice(-2) : ''})`;
                 } else {
-                    // Tuition keeps the short format (AUG 25)
-                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}${year ? ' ' + year.slice(-2) : ''})`;
+                    // Tuition keeps the short format (APR '25)
+                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}'${year ? ' ' + year.slice(-2) : ''})`;
                 }
             }
 
@@ -721,13 +722,13 @@ export class VouchersService {
     async update(id: number, dto: UpdateVoucherDto) {
         await this.findOne(id); // ensure it exists
 
-        const needsPdfInvalidation = 
-            dto.issue_date || 
-            dto.due_date || 
-            dto.validity_date !== undefined || 
-            dto.status !== undefined || 
-            dto.late_fee_charge !== undefined || 
-            dto.bank_account_id || 
+        const needsPdfInvalidation =
+            dto.issue_date ||
+            dto.due_date ||
+            dto.validity_date !== undefined ||
+            dto.status !== undefined ||
+            dto.late_fee_charge !== undefined ||
+            dto.bank_account_id ||
             dto.section_id !== undefined;
 
         return this.prisma.vouchers.update({
@@ -824,9 +825,9 @@ export class VouchersService {
         );
         const remainingLateFee = voucher.late_fee_charge
             ? Prisma.Decimal.max(
-                  currentAfterDue.sub(currentBeforeDue),
-                  new Prisma.Decimal(0),
-              )
+                currentAfterDue.sub(currentBeforeDue),
+                new Prisma.Decimal(0),
+            )
             : new Prisma.Decimal(0);
 
         if (lateFeeAmount.gt(remainingLateFee)) {
@@ -870,13 +871,13 @@ export class VouchersService {
 
                 const studentFees = affectedStudentFeeIds.length
                     ? await tx.student_fees.findMany({
-                          where: { id: { in: affectedStudentFeeIds } },
-                          select: {
-                              id: true,
-                              amount: true,
-                              amount_paid: true,
-                          },
-                      })
+                        where: { id: { in: affectedStudentFeeIds } },
+                        select: {
+                            id: true,
+                            amount: true,
+                            amount_paid: true,
+                        },
+                    })
                     : [];
                 const studentFeeMap = new Map(studentFees.map((fee) => [fee.id, fee]));
 
@@ -910,21 +911,21 @@ export class VouchersService {
                     }
                 }
 
-            // ── Step A: Update voucher_heads balances ──────────────────────
-            await Promise.all(
-                parsedDistributions.map(({ headId, amount }) => {
-                    if (amount.eq(0)) return Promise.resolve();
-                    return tx.voucher_heads.update({
-                        where: { id: headId },
-                        data: {
-                            amount_deposited: { increment: amount },
-                        },
-                    });
-                }),
-            );
+                // ── Step A: Update voucher_heads balances ──────────────────────
+                await Promise.all(
+                    parsedDistributions.map(({ headId, amount }) => {
+                        if (amount.eq(0)) return Promise.resolve();
+                        return tx.voucher_heads.update({
+                            where: { id: headId },
+                            data: {
+                                amount_deposited: { increment: amount },
+                            },
+                        });
+                    }),
+                );
 
-            if (distributionHeadIds.length > 0) {
-                await tx.$executeRaw`
+                if (distributionHeadIds.length > 0) {
+                    await tx.$executeRaw`
                     UPDATE voucher_heads
                     SET balance = GREATEST(
                         COALESCE(net_amount, 0) - COALESCE(amount_deposited, 0),
@@ -932,111 +933,111 @@ export class VouchersService {
                     )
                     WHERE id IN (${Prisma.join(distributionHeadIds)})
                 `;
-            }
+                }
 
-            // ── Step B: Write to deposits + deposit_allocations ───────────
-            const depositRecord = await tx.deposits.create({
-                data: {
-                    student_id: voucher.student_id,
-                    total_amount: depositAmount,
-                    payment_method: dto.payment_method ?? null,
-                    reference_number: dto.reference_number ?? null,
-                },
-            });
-
-            // One allocation per non-zero head distribution
-            const allocationData: {
-                deposit_id: number;
-                student_fee_id: number | null;
-                voucher_id: number;
-                amount: Prisma.Decimal;
-                type: string;
-            }[] = parsedDistributions
-                .filter(({ amount }) => amount.gt(0))
-                .map(({ headId, amount }) => {
-                    const head = txHeadMap.get(headId)!;
-                    return {
-                        deposit_id: depositRecord.id,
-                        student_fee_id: head.student_fee_id ?? null,
-                        voucher_id: voucherId,
-                        amount,
-                        type: 'FEE_HEAD',
-                    };
-                });
-
-            // One allocation for late fee if applicable
-            if (lateFeeAmount.gt(0)) {
-                allocationData.push({
-                    deposit_id: depositRecord.id,
-                    student_fee_id: null,
-                    voucher_id: voucherId,
-                    amount: lateFeeAmount,
-                    type: 'LATE_FEE',
-                });
-            }
-
-            if (allocationData.length > 0) {
-                await tx.deposit_allocations.createMany({ data: allocationData });
-            }
-
-            // ── Step C: Update student_fees (amount_paid + status) ─────────
-            if (affectedStudentFeeIds.length > 0) {
-                const totalDeposits = await tx.voucher_heads.groupBy({
-                    by: ['student_fee_id'],
-                    where: { student_fee_id: { in: affectedStudentFeeIds } },
-                    _sum: { amount_deposited: true },
-                });
-
-                const studentFees = await tx.student_fees.findMany({
-                    where: { id: { in: affectedStudentFeeIds } },
-                });
-
-                await Promise.all(
-                    studentFees.map((fee) => {
-                        const deposit = totalDeposits.find(
-                            (d) => d.student_fee_id === fee.id,
-                        );
-                        const totalDeposited = new Prisma.Decimal(
-                            deposit?._sum.amount_deposited ?? 0,
-                        );
-                        // student_fees.amount is the canonical net amount (source of truth)
-                        const canonicalAmount = new Prisma.Decimal(
-                            fee.amount ?? fee.amount_before_discount ?? 0,
-                        );
-                        const nextFeeBalance = Prisma.Decimal.max(
-                            canonicalAmount.sub(totalDeposited),
-                            new Prisma.Decimal(0),
-                        );
-
-                        let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
-                        if (nextFeeBalance.eq(0)) {
-                            nextFeeStatus = 'PAID';
-                        } else if (totalDeposited.gt(0)) {
-                            nextFeeStatus = 'PARTIALLY_PAID';
-                        }
-
-                        return tx.student_fees.update({
-                            where: { id: fee.id },
-                            data: {
-                                status: nextFeeStatus as any,
-                                amount_paid: totalDeposited,
-                            },
-                        });
-                    }),
-                );
-            }
-
-            // ── Step D: Update late_fee_deposited on voucher ───────────────
-            if (lateFeeAmount.gt(0)) {
-                await tx.vouchers.update({
-                    where: { id: voucherId },
+                // ── Step B: Write to deposits + deposit_allocations ───────────
+                const depositRecord = await tx.deposits.create({
                     data: {
-                        late_fee_deposited: { increment: lateFeeAmount },
-                    } as any,
+                        student_id: voucher.student_id,
+                        total_amount: depositAmount,
+                        payment_method: dto.payment_method ?? null,
+                        reference_number: dto.reference_number ?? null,
+                    },
                 });
-            }
 
-            // ── Step E: Recalculate voucher status ─────────────────────────
+                // One allocation per non-zero head distribution
+                const allocationData: {
+                    deposit_id: number;
+                    student_fee_id: number | null;
+                    voucher_id: number;
+                    amount: Prisma.Decimal;
+                    type: string;
+                }[] = parsedDistributions
+                    .filter(({ amount }) => amount.gt(0))
+                    .map(({ headId, amount }) => {
+                        const head = txHeadMap.get(headId)!;
+                        return {
+                            deposit_id: depositRecord.id,
+                            student_fee_id: head.student_fee_id ?? null,
+                            voucher_id: voucherId,
+                            amount,
+                            type: 'FEE_HEAD',
+                        };
+                    });
+
+                // One allocation for late fee if applicable
+                if (lateFeeAmount.gt(0)) {
+                    allocationData.push({
+                        deposit_id: depositRecord.id,
+                        student_fee_id: null,
+                        voucher_id: voucherId,
+                        amount: lateFeeAmount,
+                        type: 'LATE_FEE',
+                    });
+                }
+
+                if (allocationData.length > 0) {
+                    await tx.deposit_allocations.createMany({ data: allocationData });
+                }
+
+                // ── Step C: Update student_fees (amount_paid + status) ─────────
+                if (affectedStudentFeeIds.length > 0) {
+                    const totalDeposits = await tx.voucher_heads.groupBy({
+                        by: ['student_fee_id'],
+                        where: { student_fee_id: { in: affectedStudentFeeIds } },
+                        _sum: { amount_deposited: true },
+                    });
+
+                    const studentFees = await tx.student_fees.findMany({
+                        where: { id: { in: affectedStudentFeeIds } },
+                    });
+
+                    await Promise.all(
+                        studentFees.map((fee) => {
+                            const deposit = totalDeposits.find(
+                                (d) => d.student_fee_id === fee.id,
+                            );
+                            const totalDeposited = new Prisma.Decimal(
+                                deposit?._sum.amount_deposited ?? 0,
+                            );
+                            // student_fees.amount is the canonical net amount (source of truth)
+                            const canonicalAmount = new Prisma.Decimal(
+                                fee.amount ?? fee.amount_before_discount ?? 0,
+                            );
+                            const nextFeeBalance = Prisma.Decimal.max(
+                                canonicalAmount.sub(totalDeposited),
+                                new Prisma.Decimal(0),
+                            );
+
+                            let nextFeeStatus: 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' = 'ISSUED';
+                            if (nextFeeBalance.eq(0)) {
+                                nextFeeStatus = 'PAID';
+                            } else if (totalDeposited.gt(0)) {
+                                nextFeeStatus = 'PARTIALLY_PAID';
+                            }
+
+                            return tx.student_fees.update({
+                                where: { id: fee.id },
+                                data: {
+                                    status: nextFeeStatus as any,
+                                    amount_paid: totalDeposited,
+                                },
+                            });
+                        }),
+                    );
+                }
+
+                // ── Step D: Update late_fee_deposited on voucher ───────────────
+                if (lateFeeAmount.gt(0)) {
+                    await tx.vouchers.update({
+                        where: { id: voucherId },
+                        data: {
+                            late_fee_deposited: { increment: lateFeeAmount },
+                        } as any,
+                    });
+                }
+
+                // ── Step E: Recalculate voucher status ─────────────────────────
                 // Minimal refresh for calculation - much faster than full VOUCHER_INCLUDE
                 const refreshed = await tx.vouchers.findUnique({
                     where: { id: voucherId },
@@ -1061,7 +1062,7 @@ export class VouchersService {
                 const remainingLS = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLS), 0);
 
                 const isOverdue = new Date() > new Date(refreshed.due_date);
-                
+
                 // Rule: If all main heads are paid, the voucher is marked as PAID.
                 const allMainHeadsPaid = remainingHeads.lte(0);
 
@@ -1200,7 +1201,7 @@ export class VouchersService {
                 if (depPaidDiff.gt(0.05)) {
                     throw new BadRequestException(
                         `Cannot split head #${h.id}: head deposit (${dep.toFixed(2)}) does not match ` +
-                            `student_fees.amount_paid (${paidOnFee.toFixed(2)}). Reconcile before splitting.`,
+                        `student_fees.amount_paid (${paidOnFee.toFixed(2)}). Reconcile before splitting.`,
                     );
                 }
                 if (balanceFromHead.lte(0)) {
@@ -1584,7 +1585,7 @@ export class VouchersService {
 
         // ── Compute status entirely from derived state ──────────────────────────
         let computedStatus: string;
-        
+
         // Rule: If all main fee heads are fully paid (remTotal <= 0), it's PAID regardless of late fees.
         const allHeadsPaid = totalRemHeads.lte(0);
 
@@ -1664,13 +1665,13 @@ export class VouchersService {
             ...(feeDateObj
                 ? { fee_date: feeDateObj }
                 : {
-                      academic_year: filters.academic_year,
-                      OR: [
-                          { month: filters.month },
-                          { target_month: filters.month },
-                          { student_fee_bundles: { is: { target_month: filters.month } } },
-                      ],
-                  }),
+                    academic_year: filters.academic_year,
+                    OR: [
+                        { month: filters.month },
+                        { target_month: filters.month },
+                        { student_fee_bundles: { is: { target_month: filters.month } } },
+                    ],
+                }),
         };
 
         const fees = await this.prisma.student_fees.findMany({
@@ -1760,11 +1761,11 @@ export class VouchersService {
             for (const student of eligibleStudents) {
                 // Use the refactored computeArrears to handle surcharges and IDs consistently
                 const arrears = await this.computeArrears(student.student_id, arrearCutoff, (filters as any).waive_surcharge, false);
-                
+
                 // Merge arrear IDs and surcharge IDs into the student's fee list
                 // Prepend them so they appear at the top/as arrears
                 const allArrearIds = [...arrears.arrear_fee_ids, ...arrears.surcharge_fee_ids];
-                
+
                 for (const id of allArrearIds) {
                     if (!student.fee_ids.includes(id)) {
                         student.fee_ids.unshift(id);
@@ -1793,7 +1794,7 @@ export class VouchersService {
     async computeArrears(studentId: number, targetFeeDate: Date, waiveSurcharge = false, persist = true, tx?: Prisma.TransactionClient) {
         const client = tx || this.prisma;
         console.log(`[Arrears] Computing for Student: ${studentId}, Before: ${targetFeeDate.toISOString()}, Waive: ${waiveSurcharge}, Persist: ${persist}`);
-        
+
         // 1. Fetch Candidates (Normal Arrears)
         const candidates = await client.student_fees.findMany({
             where: {
@@ -1856,7 +1857,7 @@ export class VouchersService {
             // If we are NOT waiving, we proceed to ensure records exist
             if (!waiveSurcharge) {
                 const surchargeFeeType = await this.getOrCreateSurchargeFeeType(tx);
-                
+
                 for (const group of distinctGroups.values()) {
                     let surchargeRecord: any = null;
 
