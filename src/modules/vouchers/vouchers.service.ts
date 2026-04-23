@@ -18,6 +18,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
+const SF_PREFIX_MAX = 50;
 
 
 
@@ -1128,6 +1129,35 @@ export class VouchersService {
         return { pdf_url: pdfUrl };
     }
 
+    private stripSplitPrefix(raw: string | null | undefined): string {
+        if (!raw) return '';
+        const s = raw.trim();
+        if (s.startsWith('PARTIAL PAYMENT OF ')) return s.slice('PARTIAL PAYMENT OF '.length).trim();
+        if (s.startsWith('BALANCE PAYMENT OF ')) return s.slice('BALANCE PAYMENT OF '.length).trim();
+        if (s === 'PARTIAL PAYMENT OF' || s === 'BALANCE PAYMENT OF') return '';
+        return s;
+    }
+
+    // Build the new prefix for the paid / balance side.
+    // Reads from student_fees.description_prefix (source of truth), strips any old split
+    // prefix first so re-splitting never stacks.
+    // student_fees.description_prefix is VarChar(50).
+    private buildSplitPrefixes(sfDescriptionPrefix: string | null | undefined): {
+        prefixPaid: string;
+        prefixBalance: string;
+    } {
+        const base = this.stripSplitPrefix(sfDescriptionPrefix); // e.g. "" or "TRANSPORT FEE" (if custom)
+        const prefixPaid = base
+            ? `PARTIAL PAYMENT OF ${base}`.slice(0, SF_PREFIX_MAX)
+            : 'PARTIAL PAYMENT OF';
+        const prefixBalance = base
+            ? `BALANCE PAYMENT OF ${base}`.slice(0, SF_PREFIX_MAX)
+            : 'BALANCE PAYMENT OF';
+        return { prefixPaid, prefixBalance };
+    }
+
+
+
     /**
      * Split a PARTIALLY_PAID voucher into a PAID voucher and an UNPAID balance voucher.
      *
@@ -1165,19 +1195,19 @@ export class VouchersService {
 
         const sortedHeads = [...allHeads].sort((a, b) => a.id - b.id);
 
-        type PaidHeadInsert = {
+        type HeadInsert = {
             student_fee_id: number;
             discount_amount: Prisma.Decimal;
             discount_label: string | null;
             net_amount: Prisma.Decimal;
             amount_deposited: Prisma.Decimal;
             balance: Prisma.Decimal;
+            // This is set from student_fees.description_prefix — always the source of truth.
             description_prefix: string | null;
         };
-        type UnpaidHeadInsert = PaidHeadInsert;
 
-        const paidHeadRows: PaidHeadInsert[] = [];
-        const unpaidHeadRows: UnpaidHeadInsert[] = [];
+        const paidHeadRows: HeadInsert[] = [];
+        const unpaidHeadRows: HeadInsert[] = [];
 
         for (const h of sortedHeads) {
             const sf = h.student_fees;
@@ -1209,12 +1239,14 @@ export class VouchersService {
                         `Cannot split head #${h.id}: student fee #${sf.id} is marked PARTIALLY_PAID but has no outstanding balance.`,
                     );
                 }
-                const existing = h.description_prefix ? String(h.description_prefix).trim() : '';
-                const prefixPaid = existing ? `PARTIAL PAYMENT OF ${existing}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'PARTIAL PAYMENT OF';
-                const prefixBalance = existing ? `BALANCE PAYMENT OF ${existing}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'BALANCE PAYMENT OF';
+
+                // ── Read from student_fees (source of truth), NOT from h.description_prefix.
+                // buildSplitPrefixes strips any existing PARTIAL/BALANCE prefix first,
+                // so splitting twice never produces "PARTIAL PAYMENT OF BALANCE PAYMENT OF".
+                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes(sf.description_prefix);
 
                 paidHeadRows.push({
-                    student_fee_id: sf.id,
+                    student_fee_id: sf.id,   // will be replaced by resolveSfId in tx
                     discount_amount: new Prisma.Decimal(0),
                     discount_label: h.discount_label,
                     net_amount: dep,
@@ -1223,7 +1255,7 @@ export class VouchersService {
                     description_prefix: prefixPaid,
                 });
                 unpaidHeadRows.push({
-                    student_fee_id: sf.id,
+                    student_fee_id: sf.id,   // will be replaced by resolveSfId in tx
                     discount_amount: new Prisma.Decimal(0),
                     discount_label: h.discount_label,
                     net_amount: balanceFromHead,
@@ -1231,6 +1263,7 @@ export class VouchersService {
                     balance: balanceFromHead,
                     description_prefix: prefixBalance,
                 });
+
             } else if (sf.status === 'PAID') {
                 const linePaid = dep.gt(0) ? dep : new Prisma.Decimal(h.net_amount ?? 0);
                 if (linePaid.lte(0)) {
@@ -1238,6 +1271,7 @@ export class VouchersService {
                         `Cannot place head #${h.id} on the paid voucher: no deposited or net amount.`,
                     );
                 }
+                // Read prefix from student_fees — source of truth.
                 paidHeadRows.push({
                     student_fee_id: sf.id,
                     discount_amount: new Prisma.Decimal(h.discount_amount ?? 0),
@@ -1245,8 +1279,9 @@ export class VouchersService {
                     net_amount: linePaid,
                     amount_deposited: linePaid,
                     balance: new Prisma.Decimal(0),
-                    description_prefix: h.description_prefix,
+                    description_prefix: sf.description_prefix ?? null,
                 });
+
             } else if (sf.status === 'ISSUED' || sf.status === 'NOT_ISSUED') {
                 const netOutstanding = outstanding.gt(0)
                     ? outstanding
@@ -1256,6 +1291,7 @@ export class VouchersService {
                         `Cannot place head #${h.id} on the unpaid voucher: no outstanding amount.`,
                     );
                 }
+                // Read prefix from student_fees — source of truth.
                 unpaidHeadRows.push({
                     student_fee_id: sf.id,
                     discount_amount: new Prisma.Decimal(h.discount_amount ?? 0),
@@ -1263,8 +1299,9 @@ export class VouchersService {
                     net_amount: netOutstanding,
                     amount_deposited: new Prisma.Decimal(0),
                     balance: netOutstanding,
-                    description_prefix: h.description_prefix,
+                    description_prefix: sf.description_prefix ?? null,
                 });
+
             } else {
                 throw new BadRequestException(
                     `Voucher head #${h.id}: unsupported student_fees.status ${sf.status} for split.`,
@@ -1284,12 +1321,20 @@ export class VouchersService {
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
         const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
-
         const paidTotal = paidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
         const unpaidTotal = unpaidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
 
         const { paidVoucher, unpaidVoucher } = await this.prisma.$transaction(async (tx) => {
-            const splitReplacement = new Map<number, { paidId: number; unpaidId: number }>();
+
+            // ── Step 1: For every PARTIALLY_PAID student_fees row, create two new rows
+            //           (paid side + balance side) and delete the original.
+            //           The map now carries the correct prefixes derived above.
+            const splitReplacement = new Map<number, {
+                paidId: number;
+                unpaidId: number;
+                prefixPaid: string;
+                prefixBalance: string;
+            }>();
 
             const partialFeeIds = [
                 ...new Set(
@@ -1305,17 +1350,17 @@ export class VouchersService {
 
                 const paidPortion = new Prisma.Decimal(head.amount_deposited as any ?? 0);
                 const canonAmt = new Prisma.Decimal(oldFee.amount ?? oldFee.amount_before_discount ?? 0);
-
                 const grossOld = new Prisma.Decimal(oldFee.amount_before_discount ?? oldFee.amount ?? 0);
-                const paidGross =
-                    canonAmt.gt(0) ? grossOld.mul(paidPortion).div(canonAmt) : paidPortion;
+
+                const paidGross = canonAmt.gt(0)
+                    ? grossOld.mul(paidPortion).div(canonAmt)
+                    : paidPortion;
                 const unpaidGross = Prisma.Decimal.max(grossOld.sub(paidGross), new Prisma.Decimal(0));
                 const unpaidNet = Prisma.Decimal.max(canonAmt.sub(paidPortion), new Prisma.Decimal(0));
 
-                // Recalculate prefixes for student_fees specifically
-                const feeExisting = head.description_prefix ? String(head.description_prefix).trim() : '';
-                const feePrefixPaid = feeExisting ? `PARTIAL PAYMENT OF ${feeExisting}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'PARTIAL PAYMENT OF';
-                const feePrefixBalance = feeExisting ? `BALANCE PAYMENT OF ${feeExisting}`.slice(0, SPLIT_PREFIX_MAX_DB_LEN) : 'BALANCE PAYMENT OF';
+                // ── Compute prefixes from student_fees source of truth, not from head cache.
+                //    stripSplitPrefix ensures 2nd (or 3rd) split never stacks prefixes.
+                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes(oldFee.description_prefix);
 
                 const paidSf = await tx.student_fees.create({
                     data: {
@@ -1334,7 +1379,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: paidPortion,
-                        description_prefix: feePrefixPaid,
+                        description_prefix: prefixPaid,   // ← from source of truth
                     },
                 });
 
@@ -1355,7 +1400,7 @@ export class VouchersService {
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
                         amount_paid: new Prisma.Decimal(0),
-                        description_prefix: feePrefixBalance,
+                        description_prefix: prefixBalance,  // ← from source of truth
                     },
                 });
 
@@ -1367,15 +1412,36 @@ export class VouchersService {
                 await tx.voucher_heads.deleteMany({ where: { student_fee_id: oldFeeId } });
                 await tx.student_fees.delete({ where: { id: oldFeeId } });
 
-                splitReplacement.set(oldFeeId, { paidId: paidSf.id, unpaidId: unpaidSf.id });
+                // ── Store both new IDs AND the prefixes so voucher_heads creation below
+                //    can write the correct description_prefix without going back to the DB.
+                splitReplacement.set(oldFeeId, {
+                    paidId: paidSf.id,
+                    unpaidId: unpaidSf.id,
+                    prefixPaid,
+                    prefixBalance,
+                });
             }
 
+            // ── Step 2: Delete all heads on the original voucher (they'll be re-created
+            //           under the two new vouchers).
             await tx.voucher_heads.deleteMany({ where: { voucher_id: voucherId } });
 
+            // ── Step 3: Helper — resolve student_fee_id for the new split rows.
             const resolveSfId = (oldId: number, side: 'paid' | 'unpaid'): number => {
                 const rep = splitReplacement.get(oldId);
                 if (!rep) return oldId;
                 return side === 'paid' ? rep.paidId : rep.unpaidId;
+            };
+
+            // ── Step 4: Helper — resolve the correct description_prefix for a head row.
+            //    For PARTIALLY_PAID rows that were split, use the prefix stored in the map
+            //    (which came from student_fees, with no stacking).
+            //    For other rows (PAID/ISSUED), the prefix is already on the row itself
+            //    (read from sf.description_prefix in the loop above).
+            const resolvePrefix = (row: HeadInsert, side: 'paid' | 'unpaid'): string | null => {
+                const rep = splitReplacement.get(row.student_fee_id);
+                if (!rep) return row.description_prefix;   // PAID/ISSUED — already correct
+                return side === 'paid' ? rep.prefixPaid : rep.prefixBalance;
             };
 
             const feeRef = allHeads[0]?.student_fees;
@@ -1395,7 +1461,8 @@ export class VouchersService {
                 late_fee_charge: original.late_fee_charge,
             };
 
-            const getTotals = (rows: typeof paidHeadRows) => {
+            // ── Step 5: Compute arrear / surcharge totals for each split side.
+            const getTotals = (rows: HeadInsert[]) => {
                 let arrears = new Prisma.Decimal(0);
                 let surcharges = new Prisma.Decimal(0);
                 for (const row of rows) {
@@ -1404,14 +1471,13 @@ export class VouchersService {
                     if (!fee) continue;
 
                     const isSurcharge = fee.is_arrear_surcharge === true;
-                    // Arrear: not surcharge AND fee_date < original voucher fee_date
-                    const isArrear = !isSurcharge && fee.fee_date && original.fee_date && new Date(fee.fee_date) < new Date(original.fee_date);
+                    const isArrear = !isSurcharge
+                        && fee.fee_date
+                        && original.fee_date
+                        && new Date(fee.fee_date) < new Date(original.fee_date);
 
-                    if (isSurcharge) {
-                        surcharges = surcharges.add(row.net_amount);
-                    } else if (isArrear) {
-                        arrears = arrears.add(row.net_amount);
-                    }
+                    if (isSurcharge) surcharges = surcharges.add(row.net_amount);
+                    else if (isArrear) arrears = arrears.add(row.net_amount);
                 }
                 return { arrears, surcharges };
             };
@@ -1419,6 +1485,7 @@ export class VouchersService {
             const paidTots = getTotals(paidHeadRows);
             const unpaidTots = getTotals(unpaidHeadRows);
 
+            // ── Step 6: Create the two new vouchers.
             const paid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -1447,6 +1514,9 @@ export class VouchersService {
                 },
             });
 
+            // ── Step 7: Create voucher_heads.
+            //    description_prefix is ALWAYS sourced from student_fees — either directly
+            //    (PAID/ISSUED rows) or via splitReplacement (newly split rows).
             await tx.voucher_heads.createMany({
                 data: paidHeadRows.map((row) => ({
                     voucher_id: paid.id,
@@ -1456,7 +1526,7 @@ export class VouchersService {
                     net_amount: row.net_amount,
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
-                    description_prefix: row.description_prefix,
+                    description_prefix: resolvePrefix(row, 'paid'),   // ← always from SF
                 })),
             });
 
@@ -1469,20 +1539,21 @@ export class VouchersService {
                     net_amount: row.net_amount,
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
-                    description_prefix: row.description_prefix,
+                    description_prefix: resolvePrefix(row, 'unpaid'),  // ← always from SF
                 })),
             });
 
+            // ── Step 8: Void the original voucher.
             await tx.vouchers.update({
                 where: { id: voucherId },
                 data: { status: 'VOID' },
             });
 
             return { paidVoucher: paid, unpaidVoucher: unpaid };
+
         }, { timeout: 30000 });
 
-        // --- Generate and Upload PDFs on Backend ---
-        // Fetch full models for prepareVoucherPdfData
+        // ── Generate and upload PDFs (outside transaction to avoid timeout) ────────
         const paidFull = await this.prisma.vouchers.findUnique({ where: { id: paidVoucher.id }, include: VOUCHER_INCLUDE });
         const unpaidFull = await this.prisma.vouchers.findUnique({ where: { id: unpaidVoucher.id }, include: VOUCHER_INCLUDE });
 
