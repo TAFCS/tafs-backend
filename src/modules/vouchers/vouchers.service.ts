@@ -262,9 +262,9 @@ export class VouchersService {
                     select: { voucher_id: true },
                 });
 
-                const supersededVoucherIds = [
-                    ...new Set(supersededHeads.map((h) => h.voucher_id)),
-                ];
+                const supersededVoucherIds = Array.from(
+                    new Set(supersededHeads.map((h) => h.voucher_id))
+                );
 
                 if (supersededVoucherIds.length > 0) {
                     await tx.vouchers.updateMany({
@@ -536,18 +536,55 @@ export class VouchersService {
             const description = `${finalPrefix}${feeDescription}${monthSuffix}`;
             const isSplitHead = !!headPrefixRaw;
 
-            // Arrear Logic for Sidebar (History)
+            // Arrear Logic: Compare academic month/year with voucher's month/year
+            const feeMonth = h.student_fees?.month ?? h.student_fees?.target_month;
+            const feeYear = h.student_fees?.academic_year || '';
+            const voucherMonth = voucher.month;
+            const voucherYear = voucher.academic_year || '';
+
             const isSurchargeTotal = h.student_fees?.is_arrear_surcharge === true;
-            const isArrear = !isSurchargeTotal && h.student_fees?.fee_date && voucher.fee_date && new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
+            let isArrear = false;
+            
+            // Helper to convert calendar month to academic sort index (Aug=0...Jul=11)
+            const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
+
+            // fee_date is the canonical source of truth for "which period does this fee belong to?"
+            // If fee_date matches the voucher's fee_date, this head is NOT an arrear.
+            const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
+            const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
+            const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
+
+            if (!sameFeeDate && !isSurchargeTotal) {
+                if (feeYear && voucherYear && feeMonth != null && voucherMonth != null) {
+                    if (feeYear < voucherYear) {
+                        isArrear = true;
+                    } else if (feeYear === voucherYear) {
+                        const feeMonthIdx = getAcademicMonthIndex(feeMonth);
+                        const voucherMonthIdx = getAcademicMonthIndex(voucherMonth);
+                        if (feeMonthIdx < voucherMonthIdx) {
+                            isArrear = true;
+                        }
+                    }
+                }
+                if (!isArrear && h.student_fees?.fee_date && voucher.fee_date) {
+                    isArrear = new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
+                }
+            }
+
+            const amountPaid = Number(h.amount_deposited || 0);
+            const feePaid = Number(h.student_fees?.amount_paid || 0);
+            const finalPaid = Math.max(amountPaid, feePaid);
+            const netAmount = Number(h.net_amount);
+            const balance = Math.max(netAmount - finalPaid, 0);
 
             return {
                 description,
-                originalDescription: feeDescription + monthSuffix, // Cache original for history column
-                // Rule: For split payments, do not show original discounts.
-                // Set 'amount' equal to 'netAmount' so the PDF doesn't render a discount row.
+                originalDescription: feeDescription + monthSuffix,
                 amount: isSplitHead ? Number(h.net_amount) : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
                 discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
-                netAmount: Number(h.net_amount),
+                netAmount,
+                amountDeposited: finalPaid,
+                balance,
                 discountLabel: isSplitHead ? '' : (h.discount_label || ''),
                 isArrear,
                 isSurcharge: isSurchargeTotal,
@@ -557,7 +594,9 @@ export class VouchersService {
             };
         });
 
+        const totalPaid = feeHeads.reduce((sum, h) => sum + h.amountDeposited, 0);
         const totalAmount = Number(voucher.total_payable_before_due || 0);
+        const outstandingBalance = Math.max(totalAmount - totalPaid, 0);
         const lateFeeAmount = voucher.late_fee_charge ? 1000 : 0;
 
         // Resolve Month Label
@@ -565,7 +604,8 @@ export class VouchersService {
 
         // Prepare Key & QR URL
         const ts = Date.now();
-        const key = `vouchers/${voucher.student_id}/voucher-${voucher.id}-${ts}.pdf`;
+        const filePrefix = paidStamp ? 'paid-voucher' : 'voucher';
+        const key = `vouchers/${voucher.student_id}/${filePrefix}-${voucher.id}-${ts}.pdf`;
         const qrUrl = this.storage.getPublicUrl(key);
 
         return {
@@ -603,6 +643,8 @@ export class VouchersService {
                 },
                 feeHeads,
                 totalAmount,
+                totalPaid,
+                outstandingBalance,
                 lateFeeAmount,
                 qrUrl,
                 paidStamp,
@@ -641,6 +683,17 @@ export class VouchersService {
         const vouchers = await this.prisma.vouchers.findMany({
             where: {
                 student_id: cc,
+                OR: [
+                    { status: { not: 'VOID' } },
+                    {
+                        status: 'VOID',
+                        voucher_heads: {
+                            some: {
+                                amount_deposited: { gt: 0 }
+                            }
+                        }
+                    }
+                ],
                 ...(familyId ? { students: { family_id: familyId } } : {})
             },
             include: VOUCHER_INCLUDE,
@@ -862,13 +915,13 @@ export class VouchersService {
                     }
                 }
 
-                const affectedStudentFeeIds: number[] = [
-                    ...new Set(
+                const affectedStudentFeeIds: number[] = Array.from(
+                    new Set(
                         txHeads
                             .map((head) => head.student_fee_id)
                             .filter(Boolean) as number[],
-                    ),
-                ];
+                    )
+                );
 
                 const studentFees = affectedStudentFeeIds.length
                     ? await tx.student_fees.findMany({
@@ -1119,7 +1172,11 @@ export class VouchersService {
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, paidStamp);
+        // Enforce paid stamp if the voucher is fully paid
+        const isActuallyPaid = voucher.status === 'PAID';
+        const finalPaidStamp = paidStamp || isActuallyPaid;
+
+        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
         voucherData.showDiscount = showDiscount;
 
         const pdfBuffer = await this.pdfService.generateVoucherPdf(voucherData);
@@ -1336,13 +1393,13 @@ export class VouchersService {
                 prefixBalance: string;
             }>();
 
-            const partialFeeIds = [
-                ...new Set(
+            const partialFeeIds = Array.from(
+                new Set(
                     sortedHeads
                         .filter((h) => h.student_fees?.status === 'PARTIALLY_PAID')
                         .map((h) => h.student_fee_id),
-                ),
-            ];
+                )
+            );
 
             for (const oldFeeId of partialFeeIds) {
                 const head = sortedHeads.find((h) => h.student_fee_id === oldFeeId)!;
@@ -1592,7 +1649,47 @@ export class VouchersService {
         // PAID is also definitional — hardcoded by deposit flow or split transaction.
         // Re-deriving it from student_fees breaks split vouchers where a head only
         // covers a *portion* of the underlying student_fee amount.
-        if (voucher.status === 'VOID' || voucher.status === 'PAID') return voucher;
+        if (voucher.status === 'VOID' || voucher.status === 'PAID') {
+            const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
+            const mappedHeads = (voucher.voucher_heads || []).map((h: any) => {
+                const fee = h.student_fees;
+                if (!fee) return { ...h, isArrear: false, isSurcharge: false };
+                
+                const feeMonth = fee.month ?? fee.target_month;
+                const feeYear = fee.academic_year || '';
+                const voucherMonth = voucher.month;
+                const voucherYear = voucher.academic_year || '';
+                const isSurchargeTotal = fee.is_arrear_surcharge === true;
+                let isArrear = false;
+
+                // fee_date is the canonical source of truth for "which period does this fee belong to?"
+                // If fee_date matches the voucher's fee_date, this head is NOT an arrear even if
+                // the calendar month on the voucher differs (happens when a voucher is re-issued).
+                const feeDateStr = fee.fee_date ? new Date(fee.fee_date).toISOString().slice(0, 10) : null;
+                const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
+                const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
+
+                if (!sameFeeDate) {
+                    if (isSurchargeTotal) {
+                        isArrear = true;
+                    } else if (feeYear && voucherYear && feeMonth != null && voucherMonth != null) {
+                        if (feeYear < voucherYear) {
+                            isArrear = true;
+                        } else if (feeYear === voucherYear) {
+                            if (getAcademicMonthIndex(feeMonth) < getAcademicMonthIndex(voucherMonth)) {
+                                isArrear = true;
+                            }
+                        }
+                    }
+                    
+                    if (!isArrear && fee.fee_date && voucher.fee_date) {
+                        isArrear = new Date(fee.fee_date) < new Date(voucher.fee_date);
+                    }
+                }
+                return { ...h, isArrear, is_arrear: isArrear, isSurcharge: isSurchargeTotal, is_surcharge: isSurchargeTotal };
+            });
+            return { ...voucher, voucher_heads: mappedHeads };
+        }
 
         const originalHeads: any[] = voucher.voucher_heads || [];
         const updatedHeads: any[] = [];
@@ -1624,10 +1721,48 @@ export class VouchersService {
             if (new Prisma.Decimal(h.amount_deposited ?? 0).gt(0)) anyHeadPaidSomewhere = true;
             totalRemHeads = totalRemHeads.add(headRem);
 
-            // Overwrite stored balance with the canonical derived value
+            const feeMonth = fee.month ?? fee.target_month;
+            const feeYear = fee.academic_year || '';
+            const voucherMonth = voucher.month;
+            const voucherYear = voucher.academic_year || '';
+            const isSurchargeTotal = fee.is_arrear_surcharge === true;
+            let isArrear = false;
+            
+            const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
+
+            // fee_date is the canonical source of truth for "which period does this fee belong to?"
+            // If fee_date matches the voucher's fee_date, this head is NOT an arrear.
+            const feeDateStr = fee.fee_date ? new Date(fee.fee_date).toISOString().slice(0, 10) : null;
+            const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
+            const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
+
+            if (!sameFeeDate) {
+                if (isSurchargeTotal) {
+                    isArrear = true;
+                } else if (feeYear && voucherYear && feeMonth != null && voucherMonth != null) {
+                    if (feeYear < voucherYear) {
+                        isArrear = true;
+                    } else if (feeYear === voucherYear) {
+                        const feeMonthIdx = getAcademicMonthIndex(feeMonth);
+                        const voucherMonthIdx = getAcademicMonthIndex(voucherMonth);
+                        if (feeMonthIdx < voucherMonthIdx) {
+                            isArrear = true;
+                        }
+                    }
+                }
+                if (!isArrear && fee.fee_date && voucher.fee_date) {
+                    isArrear = new Date(fee.fee_date) < new Date(voucher.fee_date);
+                }
+            }
+
+            // Overwrite stored balance with the canonical derived value and attach UI flags
             updatedHeads.push({
                 ...h,
-                balance: headRem.toString() // Stringify for reliable JSON serialization
+                balance: headRem.toString(), // Stringify for reliable JSON serialization
+                isArrear,
+                is_arrear: isArrear,
+                isSurcharge: isSurchargeTotal,
+                is_surcharge: isSurchargeTotal
             });
         }
 
@@ -1929,7 +2064,7 @@ export class VouchersService {
             if (!waiveSurcharge) {
                 const surchargeFeeType = await this.getOrCreateSurchargeFeeType(tx);
 
-                for (const group of distinctGroups.values()) {
+                for (const group of Array.from(distinctGroups.values())) {
                     let surchargeRecord: any = null;
 
                     if (persist) {

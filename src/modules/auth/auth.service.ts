@@ -170,6 +170,20 @@ export class AuthService {
       },
     });
 
+    const familyGuardians = await this.prisma.student_guardians.findMany({
+      where: {
+        students: { family_id: family.id },
+      },
+      include: { guardians: true },
+    });
+
+    // Unique by guardian ID
+    const uniqueGuardians = Array.from(
+      new Map(familyGuardians.map((g) => [g.guardian_id, g])).values(),
+    );
+
+    const primaryGuardian = uniqueGuardians.find((g) => g.is_primary_contact);
+
     return {
       accessToken,
       refreshToken,
@@ -177,6 +191,32 @@ export class AuthService {
         id: family.id,
         email: family.email ?? '',
         householdName: family.household_name,
+        photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
+        guardians: uniqueGuardians.map((g) => {
+          const guardian = g.guardians;
+          const phoneCode = guardian.primary_phone_country_code ?? '';
+          const phoneNum = guardian.primary_phone ?? '';
+          const fullPhone = phoneNum.startsWith(phoneCode) 
+            ? phoneNum 
+            : `${phoneCode}${phoneNum}`;
+
+          return {
+            id: guardian.id,
+            name: guardian.full_name,
+            relationship: g.relationship,
+            phone: fullPhone || null,
+            photographUrl: guardian.photo_url,
+            email: guardian.email_address || null,
+            occupation: guardian.occupation || null,
+            organization: guardian.organization || null,
+            education: guardian.education_level || null,
+            cnic: guardian.cnic || null,
+            whatsapp: guardian.whatsapp_number || null,
+            address: guardian.mailing_address || null,
+            jobPosition: guardian.job_position || null,
+            isEmergencyContact: g.is_emergency_contact ?? false,
+          };
+        }),
       },
       students: students.map((student) => ({
         cc: student.cc,

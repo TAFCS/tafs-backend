@@ -109,32 +109,95 @@ export class StudentFeesService {
             return a.targetMonth - b.targetMonth;
         });
 
+        // Fetch ALL vouchers (including VOID) with heads to match with months for historical context
+        const vouchers = await this.prisma.vouchers.findMany({
+            where: {
+                student_id: studentCc,
+                OR: [
+                    { status: { not: 'VOID' } },
+                    {
+                        status: 'VOID',
+                        voucher_heads: {
+                            some: {
+                                amount_deposited: { gt: 0 }
+                            }
+                        }
+                    }
+                ]
+            },
+            include: {
+                voucher_heads: {
+                    include: {
+                        student_fees: true
+                    }
+                }
+            },
+            orderBy: { issue_date: 'desc' },
+        });
+
+
         let runningOutstanding = 0;
 
-        return buckets.map((bucket) => {
-            runningOutstanding += bucket.outstanding;
+        return buckets
+            .map((bucket) => {
+                runningOutstanding += bucket.outstanding;
 
-            const monthStatus =
-                bucket.outstanding <= 0
-                    ? 'PAID'
-                    : bucket.totalPaid > 0
-                        ? 'PARTIALLY_PAID'
-                        : bucket.notIssuedCount === bucket.rowCount
-                            ? 'NOT_ISSUED'
-                            : 'ISSUED';
+                // Find latest ACTIVE voucher that either belongs to this month 
+                // OR contains heads for this month (like a later bill with arrears)
+                const activeVoucher = vouchers.find((v) => {
+                    if (v.status === 'VOID') return false;
 
-            return {
-                academic_year: bucket.academicYear,
-                target_month: bucket.targetMonth,
-                month_label: bucket.monthLabel,
-                month_total_amount: Number(bucket.totalAmount.toFixed(2)),
-                month_total_paid: Number(bucket.totalPaid.toFixed(2)),
-                month_total_outstanding: Number(bucket.outstanding.toFixed(2)),
-                running_outstanding_total: Number(runningOutstanding.toFixed(2)),
-                month_status: monthStatus,
-                fee_date: bucket.feeDate,
-            };
-        });
+                    const directMatch = v.academic_year === bucket.academicYear && v.month === bucket.targetMonth;
+                    if (directMatch) return true;
+
+                    return v.voucher_heads.some((h) => 
+                        h.student_fees.academic_year === bucket.academicYear && 
+                        (h.student_fees.target_month ?? h.student_fees.month) === bucket.targetMonth
+                    );
+                });
+
+                const monthStatus =
+                    bucket.outstanding <= 0
+                        ? 'PAID'
+                        : bucket.totalPaid > 0
+                            ? 'PARTIALLY_PAID'
+                            : bucket.notIssuedCount === bucket.rowCount
+                                ? 'NOT_ISSUED'
+                                : 'ISSUED';
+
+                // For the primary month of the bill, show the FULL amount including all arrears.
+                // For historical months where this voucher just contains arrears, we return null
+                // so the frontend falls back to the monthly fee total (gross).
+                let voucherMonthTotal: number | null = null;
+                if (activeVoucher) {
+                    const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
+                    const voucherMonthIdx = activeVoucher.month;
+                    const bucketMonthIdx = getAcademicMonthIndex(bucket.targetMonth);
+                    
+                    const isPrimaryMonth = activeVoucher.academic_year === bucket.academicYear && voucherMonthIdx === bucketMonthIdx;
+                    
+                    if (isPrimaryMonth) {
+                        voucherMonthTotal = activeVoucher.voucher_heads.reduce(
+                            (sum, h) => sum + Number(h.net_amount || 0), 0
+                        );
+                    }
+                }
+
+                return {
+                    academic_year: bucket.academicYear,
+                    target_month: bucket.targetMonth,
+                    month_label: bucket.monthLabel,
+                    month_total_amount: Number(bucket.totalAmount.toFixed(2)),
+                    month_total_paid: Number(bucket.totalPaid.toFixed(2)),
+                    month_total_outstanding: Number(bucket.outstanding.toFixed(2)),
+                    running_outstanding_total: Number(runningOutstanding.toFixed(2)),
+                    month_status: monthStatus,
+                    fee_date: bucket.feeDate,
+                    voucher_total: voucherMonthTotal,
+                    voucher_id: activeVoucher?.id || null,
+                };
+            })
+            .filter((m) => m.month_status !== 'NOT_ISSUED');
     }
 
     private getAcademicYearSortKey(academicYear: string) {
@@ -504,7 +567,7 @@ export class StudentFeesService {
                 });
                 existingBundles.forEach(b => affectedBundleIds.add(b.id));
 
-                for (const bId of affectedBundleIds) {
+                for (const bId of Array.from(affectedBundleIds)) {
                     const members = refreshedFees.filter(f => f.bundle_id === bId);
                     if (members.length === 0) {
                         await tx.student_fee_bundles.delete({ where: { id: bId } });
