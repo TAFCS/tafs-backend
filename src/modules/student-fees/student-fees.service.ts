@@ -282,6 +282,9 @@ export class StudentFeesService {
             include: {
                 fee_types: true,
                 student_fee_bundles: true,
+                student_fee_installments: {
+                    include: { fee_types: true }
+                },
                 voucher_heads: {
                     select: { id: true },
                     take: 1,

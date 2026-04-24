@@ -54,7 +54,10 @@ const VOUCHER_INCLUDE = {
             student_fees: {
                 include: {
                     fee_types: true,
-                    student_fee_bundles: true
+                    student_fee_bundles: true,
+                    student_fee_installments: {
+                        include: { fee_types: true }
+                    }
                 }
             }
         }
@@ -186,7 +189,7 @@ export class VouchersService {
                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
                 // Calculate Arrear Totals
-                const isSurcharge = fee.is_arrear_surcharge === true;
+                const isSurcharge = (fee as any).is_arrear_surcharge === true;
                 const isArrear = !isSurcharge && feeDate && fee.fee_date && new Date(fee.fee_date) < feeDate;
 
                 if (isSurcharge) {
@@ -227,7 +230,7 @@ export class VouchersService {
                             issue_date: issueDate,
                             due_date: dueDate,
                             validity_date: validityDate,
-                            precedence_override: fee.fee_types?.priority_order ?? 0,
+                            precedence_override: (fee as any).fee_types?.priority_order ?? 0,
                             status: 'ISSUED' as any,
                         },
                     }),
@@ -533,11 +536,19 @@ export class VouchersService {
             const prefixToUse = headPrefixRaw || voucherLevelPrefix || '';
             const finalPrefix = prefixToUse ? `${prefixToUse} — ` : '';
 
-            const description = `${finalPrefix}${feeDescription}${monthSuffix}`;
+            let description = `${finalPrefix}${feeDescription}${monthSuffix}`;
+            const instAmount = (h.student_fees as any)?.installment_amount ? Number((h.student_fees as any).installment_amount) : 0;
+            const instFeeType = (h.student_fees as any)?.student_fee_installments?.fee_types?.description;
+            
+            if (instAmount > 0 && instFeeType && instFeeType !== feeDescription) {
+                // If it's an embedded one, add a small notice
+                description += ` (Inc. ${instFeeType} Split — PKR ${instAmount.toLocaleString()})`;
+            }
+
             const isSplitHead = !!headPrefixRaw;
 
             // Arrear Logic for Sidebar (History)
-            const isSurchargeTotal = h.student_fees?.is_arrear_surcharge === true;
+            const isSurchargeTotal = (h.student_fees as any)?.is_arrear_surcharge === true;
             const isArrear = !isSurchargeTotal && h.student_fees?.fee_date && voucher.fee_date && new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
 
             return {
@@ -1470,7 +1481,7 @@ export class VouchersService {
                     const fee = head?.student_fees;
                     if (!fee) continue;
 
-                    const isSurcharge = fee.is_arrear_surcharge === true;
+                    const isSurcharge = (fee as any).is_arrear_surcharge === true;
                     const isArrear = !isSurcharge
                         && fee.fee_date
                         && original.fee_date
@@ -1906,7 +1917,7 @@ export class VouchersService {
 
             rows.push({
                 student_fee_id: fee.id,
-                fee_type: fee.fee_types?.description ?? 'Unknown',
+                fee_type: (fee as any).fee_types?.description ?? 'Unknown',
                 fee_date: dateStr,
                 amount: amount.toFixed(2),
                 amount_paid: paid.toFixed(2),
