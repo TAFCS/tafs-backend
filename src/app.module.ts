@@ -25,6 +25,7 @@ import { StudentFlagsModule } from './modules/student-flags/student-flags.module
 import { TransferModule } from './modules/transfers/transfer.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AppPortalModule } from './modules/app-portal/app-portal.module';
+import { InstallmentsModule } from './modules/installments/installments.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { AppPortalModule } from './modules/app-portal/app-portal.module';
     TransferModule,
     AnalyticsModule,
     AppPortalModule,
+    InstallmentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

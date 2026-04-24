@@ -15,6 +15,7 @@ import {
     UploadedFiles,
     UseGuards,
     UseInterceptors,
+    Delete,
 } from '@nestjs/common';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
@@ -347,6 +348,22 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher resolution completed',
+            data: result,
+        };
+    }
+
+    @Delete(':id')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Delete, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async remove(@Param('id', ParseIntPipe) id: number) {
+        const result = await this.vouchersService.remove(id);
+        return {
+            success: true,
+            message: 'Voucher deleted and fee heads reset successfully.',
             data: result,
         };
     }

@@ -54,7 +54,10 @@ const VOUCHER_INCLUDE = {
             student_fees: {
                 include: {
                     fee_types: true,
-                    student_fee_bundles: true
+                    student_fee_bundles: true,
+                    student_fee_installments: {
+                        include: { fee_types: true }
+                    }
                 }
             }
         }
@@ -186,7 +189,7 @@ export class VouchersService {
                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
                 // Calculate Arrear Totals
-                const isSurcharge = fee.is_arrear_surcharge === true;
+                const isSurcharge = (fee as any).is_arrear_surcharge === true;
                 const isArrear = !isSurcharge && feeDate && fee.fee_date && new Date(fee.fee_date) < feeDate;
 
                 if (isSurcharge) {
@@ -203,7 +206,7 @@ export class VouchersService {
                     net_amount: netAmount,
                     amount_deposited: 0,
                     balance: netAmount,
-                    description_prefix: fee.description_prefix ?? null,
+                    description_prefix: (fee as any).description_prefix ?? null,
                 });
             }
 
@@ -227,7 +230,7 @@ export class VouchersService {
                             issue_date: issueDate,
                             due_date: dueDate,
                             validity_date: validityDate,
-                            precedence_override: fee.fee_types?.priority_order ?? 0,
+                            precedence_override: (fee as any).fee_types?.priority_order ?? 0,
                             status: 'ISSUED' as any,
                         },
                     }),
@@ -441,8 +444,8 @@ export class VouchersService {
                 ...(campusId ? { campus_id: campusId } : {}),
                 ...(classId ? { class_id: classId } : {}),
                 ...(sectionId ? { section_id: sectionId } : {}),
-                // If a specific status is requested show only that; otherwise exclude VOIDs.
-                ...(status ? { status } : { status: { not: 'VOID' } }),
+                // If a specific status is requested show only that; otherwise show all.
+                ...(status ? { status } : {}),
                 ...(dateFrom || dateTo
                     ? {
                         fee_date: {
@@ -533,7 +536,15 @@ export class VouchersService {
             const prefixToUse = headPrefixRaw || voucherLevelPrefix || '';
             const finalPrefix = prefixToUse ? `${prefixToUse} — ` : '';
 
-            const description = `${finalPrefix}${feeDescription}${monthSuffix}`;
+            let description = `${finalPrefix}${feeDescription}${monthSuffix}`;
+            const instAmount = (h.student_fees as any)?.installment_amount ? Number((h.student_fees as any).installment_amount) : 0;
+            const instFeeType = (h.student_fees as any)?.student_fee_installments?.fee_types?.description;
+            
+            if (instAmount > 0 && instFeeType && instFeeType !== feeDescription) {
+                // If it's an embedded one, add a small notice
+                description += ` (Inc. ${instFeeType} Split — PKR ${instAmount.toLocaleString()})`;
+            }
+
             const isSplitHead = !!headPrefixRaw;
 
             // Arrear Logic: Compare academic month/year with voucher's month/year
@@ -1300,7 +1311,7 @@ export class VouchersService {
                 // ── Read from student_fees (source of truth), NOT from h.description_prefix.
                 // buildSplitPrefixes strips any existing PARTIAL/BALANCE prefix first,
                 // so splitting twice never produces "PARTIAL PAYMENT OF BALANCE PAYMENT OF".
-                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes(sf.description_prefix);
+                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes((sf as any).description_prefix);
 
                 paidHeadRows.push({
                     student_fee_id: sf.id,   // will be replaced by resolveSfId in tx
@@ -1336,7 +1347,7 @@ export class VouchersService {
                     net_amount: linePaid,
                     amount_deposited: linePaid,
                     balance: new Prisma.Decimal(0),
-                    description_prefix: sf.description_prefix ?? null,
+                    description_prefix: (sf as any).description_prefix ?? null,
                 });
 
             } else if (sf.status === 'ISSUED' || sf.status === 'NOT_ISSUED') {
@@ -1356,7 +1367,7 @@ export class VouchersService {
                     net_amount: netOutstanding,
                     amount_deposited: new Prisma.Decimal(0),
                     balance: netOutstanding,
-                    description_prefix: sf.description_prefix ?? null,
+                    description_prefix: (sf as any).description_prefix ?? null,
                 });
 
             } else {
@@ -1416,8 +1427,7 @@ export class VouchersService {
                 const unpaidNet = Prisma.Decimal.max(canonAmt.sub(paidPortion), new Prisma.Decimal(0));
 
                 // ── Compute prefixes from student_fees source of truth, not from head cache.
-                //    stripSplitPrefix ensures 2nd (or 3rd) split never stacks prefixes.
-                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes(oldFee.description_prefix);
+                const { prefixPaid, prefixBalance } = this.buildSplitPrefixes((oldFee as any).description_prefix);
 
                 const paidSf = await tx.student_fees.create({
                     data: {
@@ -1527,7 +1537,7 @@ export class VouchersService {
                     const fee = head?.student_fees;
                     if (!fee) continue;
 
-                    const isSurcharge = fee.is_arrear_surcharge === true;
+                    const isSurcharge = (fee as any).is_arrear_surcharge === true;
                     const isArrear = !isSurcharge
                         && fee.fee_date
                         && original.fee_date
@@ -2041,7 +2051,7 @@ export class VouchersService {
 
             rows.push({
                 student_fee_id: fee.id,
-                fee_type: fee.fee_types?.description ?? 'Unknown',
+                fee_type: (fee as any).fee_types?.description ?? 'Unknown',
                 fee_date: dateStr,
                 amount: amount.toFixed(2),
                 amount_paid: paid.toFixed(2),
@@ -2161,5 +2171,58 @@ export class VouchersService {
             });
         }
         return ft;
+    }
+
+    async remove(id: number) {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id },
+            include: { voucher_heads: true }
+        });
+
+        if (!voucher) {
+            throw new NotFoundException(`Voucher #${id} not found`);
+        }
+
+        // Only UNPAID vouchers can be deleted to safely reset fee heads.
+        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE') {
+            throw new BadRequestException(`Only UNPAID or OVERDUE vouchers can be deleted. This voucher is ${voucher.status}.`);
+        }
+
+        return await this.prisma.$transaction(async (tx) => {
+            // 1. Reset associated student_fees to NOT_ISSUED
+            const feeIds = voucher.voucher_heads.map(h => h.student_fee_id);
+            if (feeIds.length > 0) {
+                await tx.student_fees.updateMany({
+                    where: { id: { in: feeIds } },
+                    data: {
+                        status: 'NOT_ISSUED',
+                        issue_date: null,
+                        due_date: null,
+                        validity_date: null,
+                        amount_paid: 0
+                    }
+                });
+            }
+
+            // 2. Delete deposit_allocations for this voucher
+            await tx.deposit_allocations.deleteMany({
+                where: { voucher_id: id }
+            });
+
+            // 3. Delete voucher_heads for this voucher
+            await tx.voucher_heads.deleteMany({
+                where: { voucher_id: id }
+            });
+
+            // 4. Delete the voucher record itsel
+            const deleted = await tx.vouchers.delete({
+                where: { id }
+            });
+
+            return deleted;
+        }, {
+            maxWait: 5000,
+            timeout: 10000,
+        });
     }
 }

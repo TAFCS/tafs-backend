@@ -1471,4 +1471,251 @@ export class StudentsService {
 
     return [...results, ...others];
   }
+
+  async getPaymentHistory(studentId: number, academicYear: string) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentId },
+      include: {
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+      },
+    });
+
+    if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+
+    // Fetch data for the specified academic year
+    const [fees, vouchers, allDeposits] = await Promise.all([
+      this.prisma.student_fees.findMany({
+        where: { student_id: studentId, academic_year: academicYear },
+        include: {
+          fee_types: true,
+          student_fee_bundles: true,
+          student_fee_installments: true,
+          deposit_allocations: {
+            include: { deposits: true },
+          },
+          voucher_heads: {
+            include: { vouchers: true },
+          },
+        },
+        orderBy: { fee_date: 'asc' },
+      }),
+      this.prisma.vouchers.findMany({
+        where: { student_id: studentId, academic_year: academicYear },
+        include: {
+          voucher_heads: {
+            include: {
+              student_fees: {
+                include: { fee_types: true },
+              },
+            },
+          },
+          deposit_allocations: {
+            include: { deposits: true },
+          },
+          bank_accounts: true,
+        },
+        orderBy: { fee_date: 'desc' },
+      }),
+      this.prisma.deposits.findMany({
+        where: { student_id: studentId },
+        include: {
+          deposit_allocations: {
+            include: {
+              student_fees: {
+                include: { fee_types: true },
+              },
+              vouchers: true,
+            },
+          },
+        },
+        orderBy: { deposit_date: 'desc' },
+      }),
+    ]);
+
+    // Arrears History - Cumulative across all time
+    // Identifiable as heads where student_fees.academic_year != vouchers.academic_year
+    const arrearsResult: any = await this.prisma.$queryRaw`
+      SELECT SUM(vh.net_amount) as total
+      FROM voucher_heads vh
+      JOIN vouchers v ON vh.voucher_id = v.id
+      JOIN student_fees sf ON vh.student_fee_id = sf.id
+      WHERE v.student_id = ${studentId}
+      AND sf.academic_year != v.academic_year
+    `;
+    const totalArrearsEver = Number(arrearsResult[0]?.total || 0);
+
+    // Stats calculation logic
+    let totalDue = new Prisma.Decimal(0);
+    let totalPaid = new Prisma.Decimal(0);
+    let paidOnTime = new Prisma.Decimal(0);
+    let paidLate = new Prisma.Decimal(0);
+    let stillOutstanding = new Prisma.Decimal(0);
+    const paymentDays: number[] = [];
+
+    fees.forEach((f) => {
+      // Rule: total dues should only calculate the fees of challans with status NOT void
+      // This ensures we exclude "NOT_ISSUED" fees and "VOID" vouchers from the collection rate denominator.
+      const hasValidVoucher = f.voucher_heads.some((vh) => vh.vouchers.status !== 'VOID');
+
+      if (hasValidVoucher) {
+        const amount = new Prisma.Decimal(f.amount || 0);
+        const amountPaid = new Prisma.Decimal(f.amount_paid || 0);
+        totalDue = totalDue.add(amount);
+        totalPaid = totalPaid.add(amountPaid);
+
+        // For heads with no deposit at all and fee_date < today: outstanding += student_fees.amount - amount_paid
+        if (amountPaid.lt(amount) && f.fee_date && f.fee_date < new Date()) {
+          stillOutstanding = stillOutstanding.add(amount.sub(amountPaid));
+        }
+      }
+    });
+
+    // On-time vs Late logic from all deposits allocations
+    allDeposits.forEach((d) => {
+      d.deposit_allocations.forEach((a) => {
+        if (a.voucher_id && a.vouchers) {
+          const depDate = new Date(d.deposit_date);
+          const dueDate = new Date(a.vouchers.due_date);
+          if (depDate <= dueDate) {
+            paidOnTime = paidOnTime.add(a.amount);
+          } else {
+            paidLate = paidLate.add(a.amount);
+          }
+        }
+
+        // Velocity Stats: Average days between a fee's fee_date and the date it was actually paid
+        if (a.student_fees?.fee_date) {
+          const diffTime = Math.abs(
+            new Date(d.deposit_date).getTime() -
+              new Date(a.student_fees.fee_date).getTime(),
+          );
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          paymentDays.push(diffDays);
+        }
+      });
+    });
+
+    const totalSurchargesCharged = vouchers.reduce(
+      (sum, v) => sum.add(v.total_arrear_surcharge || 0),
+      new Prisma.Decimal(0),
+    );
+    const totalSurchargesWaived = vouchers.reduce(
+      (sum, v) =>
+        v.surcharge_waived
+          ? sum.add(v.total_arrear_surcharge || 0)
+          : sum,
+      new Prisma.Decimal(0),
+    );
+
+    // Format Vouchers Tab
+    const formattedVouchers = vouchers.map((v) => ({
+      ...v,
+      total_payable_before_due: Number(v.total_payable_before_due),
+      total_payable_after_due: Number(v.total_payable_after_due),
+      total_arrears: Number(v.total_arrears),
+      total_arrear_surcharge: Number(v.total_arrear_surcharge),
+      heads: v.voucher_heads.map((vh) => ({
+        ...vh,
+        net_amount: Number(vh.net_amount),
+        amount_deposited: Number(vh.amount_deposited),
+        balance: Number(vh.balance),
+        description: `${vh.description_prefix || vh.student_fees.description_prefix || ''} ${vh.student_fees.fee_types.description}`.trim(),
+        is_arrear: vh.student_fees.fee_date && v.fee_date ? vh.student_fees.fee_date < v.fee_date : false,
+        is_arrear_surcharge: vh.student_fees.is_arrear_surcharge,
+        source_fee_id: vh.student_fee_id,
+      })),
+      deposit_allocations: v.deposit_allocations.map((a) => ({
+        ...a,
+        amount: Number(a.amount),
+        deposit_date: a.deposits.deposit_date,
+        payment_method: a.deposits.payment_method,
+        reference_number: a.deposits.reference_number,
+        remarks: a.deposits.remarks,
+      })),
+      voucher_totals: {
+        total_payable: Number(v.total_payable_before_due),
+        total_deposited: v.deposit_allocations.reduce((s, a) => s + Number(a.amount), 0),
+        outstanding_balance: Number(v.total_payable_before_due) - v.deposit_allocations.reduce((s, a) => s + Number(a.amount), 0)
+      }
+    }));
+
+    // Format Fee Heads Tab
+    const monthMap = new Map<number, any>();
+    fees.forEach((f) => {
+      if (!monthMap.has(f.target_month)) {
+        monthMap.set(f.target_month, {
+          target_month: f.target_month,
+          academic_year: f.academic_year,
+          heads: [],
+          month_total_due: 0,
+          month_total_paid: 0,
+          month_balance: 0,
+        });
+      }
+      const group = monthMap.get(f.target_month);
+      const amount = Number(f.amount || 0);
+      const amountPaid = Number(f.amount_paid || 0);
+      group.month_total_due += amount;
+      group.month_total_paid += amountPaid;
+      group.month_balance = group.month_total_due - group.month_total_paid;
+
+      group.heads.push({
+        ...f,
+        amount: Number(f.amount),
+        amount_paid: Number(f.amount_paid),
+        amount_before_discount: Number(f.amount_before_discount),
+        fee_type_description: `${f.description_prefix || ''} ${f.fee_types.description}`.trim(),
+        installment_label: f.installment_id && f.student_fee_installments 
+            ? `Installment ${fees.filter(sf => sf.installment_id === f.installment_id && sf.id <= f.id).length} of ${f.student_fee_installments.installment_count}`
+            : null,
+        bundle_name: f.student_fee_bundles?.bundle_name,
+        deposit_trail: f.deposit_allocations.map((a) => ({
+          deposit_date: a.deposits.deposit_date,
+          amount: Number(a.amount),
+          payment_method: a.deposits.payment_method,
+          reference_number: a.deposits.reference_number,
+          voucher_id: a.voucher_id,
+        })),
+      });
+    });
+
+    // Format Deposits Tab
+    const formattedDeposits = allDeposits.map((d) => ({
+      ...d,
+      total_amount: Number(d.total_amount),
+      allocations: d.deposit_allocations.map((a) => ({
+        ...a,
+        amount: Number(a.amount),
+        fee_type_description: a.student_fees?.fee_types.description,
+        voucher_id: a.voucher_id,
+      })),
+    }));
+
+    return {
+      student,
+      stats: {
+        total_due: totalDue.toNumber(),
+        total_paid: totalPaid.toNumber(),
+        collection_rate: totalDue.gt(0) ? totalPaid.div(totalDue).mul(100).toNumber() : 0,
+        paid_on_time: paidOnTime.toNumber(),
+        paid_late: paidLate.toNumber(),
+        still_outstanding: stillOutstanding.toNumber(),
+        total_arrears_ever: totalArrearsEver,
+        total_surcharges_charged: totalSurchargesCharged.toNumber(),
+        total_surcharges_waived: totalSurchargesWaived.toNumber(),
+        avg_days_to_pay: paymentDays.length > 0 ? Math.round(paymentDays.reduce((a, b) => a + b, 0) / paymentDays.length) : 0,
+        fastest_payment_days: paymentDays.length > 0 ? Math.min(...paymentDays) : 0,
+        slowest_payment_days: paymentDays.length > 0 ? Math.max(...paymentDays) : 0,
+      },
+      vouchers: formattedVouchers,
+      fee_heads: Array.from(monthMap.values()).sort((a, b) => a.target_month - b.target_month),
+      deposits: formattedDeposits,
+      total_deposited_all_time: allDeposits.reduce((s, d) => s + Number(d.total_amount), 0),
+      total_deposited_current_year: allDeposits
+        .filter(d => d.deposit_allocations.some(a => a.student_fees?.academic_year === academicYear || a.vouchers?.academic_year === academicYear))
+        .reduce((s, d) => s + Number(d.total_amount), 0)
+    };
+  }
 }
