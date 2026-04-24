@@ -328,8 +328,8 @@ model student_fees {
   amount_paid              Decimal?                  @default(0) @db.Decimal(12, 2)
   description_prefix       String?                   @db.VarChar(50)
   is_arrear_surcharge      Boolean                   @default(false)
-  installment_amount       Decimal?                  @db.Decimal(12, 2)
   installment_id           Int?
+  installment_amount       Decimal?                  @db.Decimal(12, 2)
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
   fee_types                fee_types                 @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

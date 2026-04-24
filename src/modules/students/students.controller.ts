@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
+import { PaymentHistoryQueryDto } from './dto/payment-history-query.dto';
 import { AssignStudentDto } from './dto/assign-student.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
@@ -47,6 +48,23 @@ export class StudentsController {
       student,
       HttpStatus.OK,
       STUDENTS_MESSAGES.RETRIEVE_SUCCESS,
+    );
+  }
+
+  @Get(':id/payment-history')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async getPaymentHistory(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: PaymentHistoryQueryDto,
+  ) {
+    const history = await this.studentsService.getPaymentHistory(
+      id,
+      query.academic_year,
+    );
+    return createApiResponse(
+      history,
+      HttpStatus.OK,
+      'Payment history retrieved successfully',
     );
   }
 
