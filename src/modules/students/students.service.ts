@@ -1495,6 +1495,9 @@ export class StudentsService {
           deposit_allocations: {
             include: { deposits: true },
           },
+          voucher_heads: {
+            include: { vouchers: true },
+          },
         },
         orderBy: { fee_date: 'asc' },
       }),
@@ -1552,14 +1555,20 @@ export class StudentsService {
     const paymentDays: number[] = [];
 
     fees.forEach((f) => {
-      const amount = new Prisma.Decimal(f.amount || 0);
-      const amountPaid = new Prisma.Decimal(f.amount_paid || 0);
-      totalDue = totalDue.add(amount);
-      totalPaid = totalPaid.add(amountPaid);
+      // Rule: total dues should only calculate the fees of challans with status NOT void
+      // This ensures we exclude "NOT_ISSUED" fees and "VOID" vouchers from the collection rate denominator.
+      const hasValidVoucher = f.voucher_heads.some((vh) => vh.vouchers.status !== 'VOID');
 
-      // For heads with no deposit at all and fee_date < today: outstanding += student_fees.amount - amount_paid
-      if (amountPaid.lt(amount) && f.fee_date && f.fee_date < new Date()) {
-        stillOutstanding = stillOutstanding.add(amount.sub(amountPaid));
+      if (hasValidVoucher) {
+        const amount = new Prisma.Decimal(f.amount || 0);
+        const amountPaid = new Prisma.Decimal(f.amount_paid || 0);
+        totalDue = totalDue.add(amount);
+        totalPaid = totalPaid.add(amountPaid);
+
+        // For heads with no deposit at all and fee_date < today: outstanding += student_fees.amount - amount_paid
+        if (amountPaid.lt(amount) && f.fee_date && f.fee_date < new Date()) {
+          stillOutstanding = stillOutstanding.add(amount.sub(amountPaid));
+        }
       }
     });
 
