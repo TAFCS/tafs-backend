@@ -457,6 +457,7 @@ interface FeeChallanPDFProps {
         status?: string;
     }[];
     arrearsHistory?: any[];
+    installmentsHistory?: any[];
     /** PDF URL (DigitalOcean Spaces) to encode in the QR code in the history column */
     qrUrl?: string;
 }
@@ -745,7 +746,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, qrUrl }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
             {/* Left 85% for the 3 Challan Copies */}
@@ -808,6 +809,33 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <Text style={styles.historyTableCell}>-</Text>
                                 <Text style={styles.historyTableCell}>-</Text>
+                            </View>
+                        )}
+                    </View>
+                </View>
+                
+                {/* INSTALLMENTS HISTORY */}
+                <View style={styles.historySection}>
+                    <Text style={styles.historyTitle}>INSTALLMENTS HISTORY</Text>
+                    <View style={styles.historyTable}>
+                        <View style={styles.historyTableHeader}>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1 }]}>MONTH</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
+                        </View>
+                        {installmentsHistory && installmentsHistory.length > 0 ? (
+                            installmentsHistory.map((inst: any, idx: number) => (
+                                <View key={idx} style={styles.historyTableRow}>
+                                    <Text style={[styles.historyTableCell, { flex: 1 }]}>{inst.month}</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>{inst.amount}</Text>
+                                </View>
+                            ))
+                        ) : (
+                            <View style={styles.historyTableRow}>
+                                <Text style={[styles.historyTableCell, { flex: 1 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
                             </View>
                         )}
                     </View>

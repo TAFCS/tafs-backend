@@ -543,18 +543,26 @@ export class VouchersService {
         }
 
         // 2. Fetch all installment fees for this student to calculate sequence numbers once
-        const studentInstallmentFees = await this.prisma.student_fees.findMany({
+        let studentInstallmentFees = await this.prisma.student_fees.findMany({
             where: {
                 student_id: voucher.student_id,
-                installment_id: { not: null },
+                academic_year: voucher.academic_year,
+                installment_id: { not: null } as any
             },
-            include: { student_fee_installments: true } as any,
-            orderBy: { target_month: 'asc' },
+            include: { student_fee_installments: { include: { fee_types: true } } } as any,
+        });
+
+        // Sort chronologically by academic year (starting from August)
+        const getAcademicSortIndex = (m: number) => (m >= 8 ? m - 8 : m + 4);
+        studentInstallmentFees.sort((a: any, b: any) => {
+            const aIdx = getAcademicSortIndex(a.target_month ?? a.month ?? 8);
+            const bIdx = getAcademicSortIndex(b.target_month ?? b.month ?? 8);
+            return aIdx - bIdx;
         });
 
         // Group by installment_id for sequence lookup
         const installmentGroups = new Map<number, any[]>();
-        studentInstallmentFees.forEach(f => {
+        (studentInstallmentFees as any[]).forEach(f => {
             if (f.installment_id) {
                 if (!installmentGroups.has(f.installment_id)) installmentGroups.set(f.installment_id, []);
                 installmentGroups.get(f.installment_id)!.push(f);
@@ -570,12 +578,18 @@ export class VouchersService {
             let description = feeTypeDesc + monthSuffix;
 
             // Handle Installment Sequence (e.g. 1/6)
-            if (h.student_fees?.installment_id) {
-                const group = installmentGroups.get(h.student_fees.installment_id) || [];
-                const total = h.student_fees.student_fee_installments?.installment_count || group.length;
-                const idx = group.findIndex(f => f.id === h.student_fees.id);
+            // STANDALONE vs MERGED Check:
+            // Standalone = student_fees.fee_type_id corresponds to the original installment's fee_type_id.
+            // Merged = standalone installment was added/attached to a different head (like tuition).
+            const sf = h.student_fees;
+            const isStandaloneInstallment = sf?.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
+
+            if (isStandaloneInstallment) {
+                const group = installmentGroups.get(sf.installment_id) || [];
+                const total = sf.student_fee_installments?.installment_count || group.length;
+                const idx = group.findIndex(f => f.id === sf.id);
                 if (idx !== -1) {
-                    description = `${feeTypeDesc} (${idx + 1}/${total})${monthSuffix}`;
+                    description = `${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
                 }
             }
 
@@ -706,18 +720,21 @@ export class VouchersService {
                         academic_year: fh.academic_year,
                     })),
                 installmentsHistory: studentInstallmentFees
-                    .filter(f => f.status !== 'PAID' && !voucher.voucher_heads.some(vh => vh.student_fee_id === f.id))
+                    .filter(f => {
+                        const isStandalone = (f as any).installment_id && f.fee_type_id === (f as any).student_fee_installments?.fee_type_id;
+                        return isStandalone && f.status !== 'PAID' && !voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id);
+                    })
                     .map((f: any) => {
-                        const group = installmentGroups.get(f.installment_id!) || [];
+                        const group = installmentGroups.get((f as any).installment_id!) || [];
                         const total = f.student_fee_installments?.installment_count || group.length;
                         const idx = group.findIndex(sf => sf.id === f.id);
-                        const feeType = f.fee_type_id === 1 ? 'Tuition Fee' : 'Fee'; // Fallback
+                        const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
                         return {
-                            head: `${feeType} (${idx + 1}/${total})`,
+                            head: `${feeType} INSTALLMENTS (${idx + 1}/${total})`,
                             month: f.target_month ? monthNames[f.target_month - 1].slice(0, 3).toUpperCase() : 'N/A',
-                            amount: Number(f.amount).toLocaleString(),
+                            amount: Number(f.amount || 0).toLocaleString(),
                         };
-                    })
+                    }),
             },
             key
         };
@@ -1377,7 +1394,7 @@ export class VouchersService {
                     amount_deposited: new Prisma.Decimal(0),
                     balance: balanceFromHead,
                     description_prefix: prefixBalance,
-                });
+                } as any);
 
             } else if (sf.status === 'PAID') {
                 const linePaid = dep.gt(0) ? dep : new Prisma.Decimal(h.net_amount ?? 0);
@@ -1494,7 +1511,7 @@ export class VouchersService {
                         fee_date: oldFee.fee_date,
                         amount_paid: paidPortion,
                         description_prefix: prefixPaid,   // ← from source of truth
-                    },
+                    } as any,
                 });
 
                 const unpaidSf = await tx.student_fees.create({
@@ -1611,7 +1628,7 @@ export class VouchersService {
                     total_payable_after_due: paidTotal,
                     total_arrears: paidTots.arrears,
                     total_arrear_surcharge: paidTots.surcharges,
-                },
+                } as any,
             });
 
             const unpaid = await tx.vouchers.create({
@@ -1625,7 +1642,7 @@ export class VouchersService {
                     total_payable_after_due: unpaidTotal.add(lateFeeVal),
                     total_arrears: unpaidTots.arrears,
                     total_arrear_surcharge: unpaidTots.surcharges,
-                },
+                } as any,
             });
 
             // ── Step 7: Create voucher_heads.
@@ -1641,7 +1658,7 @@ export class VouchersService {
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
                     description_prefix: resolvePrefix(row, 'paid'),   // ← always from SF
-                })),
+                } as any)),
             });
 
             await tx.voucher_heads.createMany({
@@ -1654,7 +1671,7 @@ export class VouchersService {
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
                     description_prefix: resolvePrefix(row, 'unpaid'),  // ← always from SF
-                })),
+                } as any)),
             });
 
             // ── Step 8: Void the original voucher.

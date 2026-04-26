@@ -281,6 +281,9 @@ export class StudentFeesService {
             include: {
                 fee_types: true,
                 student_fee_bundles: true,
+                student_fee_installments: {
+                    include: { fee_types: true }
+                },
                 voucher_heads: {
                     orderBy: { id: 'desc' },
                     take: 1,
@@ -290,18 +293,48 @@ export class StudentFeesService {
                         },
                     },
                 },
-            },
+            } as any,
             orderBy: [
                 { fee_date: 'asc' },
                 { fee_types: { priority_order: 'asc' } },
             ],
         });
 
-        // Group fees by fee_date
-        const groupMap = new Map<string, typeof fees>();
-        const ungrouped: typeof fees = [];
+        // ─── Calculate Installment Sequences (to help frontend labeling) ───
+        const instIds = Array.from(new Set(fees.filter((f: any) => f.installment_id).map((f: any) => f.installment_id as number)));
+        let allStudentInstFees = instIds.length > 0
+            ? await this.prisma.student_fees.findMany({
+                where: { student_id: student.cc, installment_id: { in: instIds } } as any,
+            })
+            : [];
 
-        for (const fee of fees) {
+        // Sort chronologically by academic year (starting from August)
+        const getAcademicSortIndex = (m: number) => (m >= 8 ? m - 8 : m + 4);
+        allStudentInstFees.sort((a: any, b: any) => {
+            const aIdx = getAcademicSortIndex(a.target_month ?? a.month ?? 8);
+            const bIdx = getAcademicSortIndex(b.target_month ?? b.month ?? 8);
+            return aIdx - bIdx;
+        });
+
+        const seqMap = new Map<number, number>(); // fee_id -> seq (1-indexed)
+        const countMap = new Map<number, number>(); // inst_id -> total
+        instIds.forEach(id => {
+            const group = allStudentInstFees.filter((f: any) => f.installment_id === id);
+            countMap.set(id, group.length);
+            group.forEach((f, idx) => seqMap.set(f.id, idx + 1));
+        });
+
+        const enhancedFees = fees.map(f => ({
+            ...f,
+            installment_sequence: seqMap.get(f.id) || null,
+            installment_total: (f as any).installment_id ? countMap.get((f as any).installment_id) : null,
+        }));
+
+        // Group fees by fee_date
+        const groupMap = new Map<string, any[]>();
+        const ungrouped: any[] = [];
+
+        for (const fee of enhancedFees) {
             if (fee.fee_date) {
                 const key = fee.fee_date.toISOString().split('T')[0];
                 if (!groupMap.has(key)) groupMap.set(key, []);
@@ -319,7 +352,7 @@ export class StudentFeesService {
         return {
             groups,
             ungrouped,
-            fees, // Keep backward compat — flat list
+            fees: enhancedFees, // Keep backward compat — flat list
             family: student.families,
         };
     }
@@ -352,7 +385,7 @@ export class StudentFeesService {
                     select: { id: true },
                     take: 1,
                 },
-            },
+            } as any,
             orderBy: {
                 fee_types: {
                     priority_order: 'asc',
