@@ -463,7 +463,7 @@ export class VouchersService {
                     : {}),
             };
 
-            const [total, vouchers] = await Promise.all([
+            const [total, vouchers, stats] = await Promise.all([
                 this.prisma.vouchers.count({ where }),
                 this.prisma.vouchers.findMany({
                     where,
@@ -472,12 +472,45 @@ export class VouchersService {
                     skip,
                     take,
                 }),
+                this.prisma.vouchers.groupBy({
+                    by: ['status'],
+                    where: {
+                        ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
+                        ...(id ? { id } : {}),
+                        ...(campusId ? { campus_id: campusId } : {}),
+                        ...(classId ? { class_id: classId } : {}),
+                        ...(sectionId ? { section_id: sectionId } : {}),
+                        ...(dateFrom || dateTo ? {
+                            fee_date: {
+                                ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+                                ...(dateTo ? { lte: new Date(dateTo) } : {}),
+                            },
+                        } : {}),
+                    },
+                    _count: { _all: true }
+                })
             ]);
+
+            const statusStats = {
+                paid: 0,
+                unpaid: 0,
+                overdue: 0,
+                void: 0
+            };
+
+            stats.forEach(s => {
+                const count = s._count._all;
+                if (s.status === 'PAID') statusStats.paid += count;
+                else if (s.status === 'VOID') statusStats.void += count;
+                else if (s.status === 'OVERDUE') statusStats.overdue += count;
+                else statusStats.unpaid += count;
+            });
 
             return {
                 items: vouchers.map((v) => this.normalizeVoucher(v)),
                 meta: {
                     total,
+                    ...statusStats,
                     page,
                     limit,
                     totalPages: Math.ceil(total / limit),
@@ -494,7 +527,12 @@ export class VouchersService {
 
 
     /** Helper to prepare data for VoucherPdfService */
-    private async prepareVoucherPdfData(voucher: any, paidStamp?: boolean, descriptionPrefix?: string) {
+    private async prepareVoucherPdfData(voucher: any, paidStamp = false) {
+        const monthNames = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+
         // 1. Fetch siblings if family_id exists
         let siblings: any[] = [];
         if (voucher.students?.family_id) {
@@ -504,116 +542,111 @@ export class VouchersService {
             });
         }
 
-        const voucherLevelPrefix = descriptionPrefix;
+        // 2. Fetch all installment fees for this student to calculate sequence numbers once
+        const studentInstallmentFees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: voucher.student_id,
+                installment_id: { not: null },
+            },
+            include: { student_fee_installments: true } as any,
+            orderBy: { target_month: 'asc' },
+        });
 
-        // 2. Map heads correctly
-        const monthNames = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-        const feeHeads = voucher.voucher_heads.map((h: any) => {
-            const feeDescription = h.student_fees?.fee_types?.description || 'Fee';
+        // Group by installment_id for sequence lookup
+        const installmentGroups = new Map<number, any[]>();
+        studentInstallmentFees.forEach(f => {
+            if (f.installment_id) {
+                if (!installmentGroups.has(f.installment_id)) installmentGroups.set(f.installment_id, []);
+                installmentGroups.get(f.installment_id)!.push(f);
+            }
+        });
 
-            // Append month label for tuition fees, e.g. "Monthly Tuition Fee (APR 25)"
-            const isTuition = feeDescription.toLowerCase().includes('tuition');
-            const isSurcharge = feeDescription.toLowerCase().includes('surcharge');
-            const targetMonth: number | null = h.student_fees?.target_month ?? null;
-            let monthSuffix = '';
+        // 3. Initial Mapping of Heads
+        let heads = voucher.voucher_heads.map((h: any) => {
+            const isSplitHead = (h.split_sequence != null && h.split_total != null);
+            const feeTypeDesc = h.student_fees?.fee_types?.description || 'Fee';
+            const monthSuffix = h.student_fees?.target_month != null ? ` ${monthNames[h.student_fees.target_month - 1].slice(0, 3).toUpperCase()} ${h.student_fees.academic_year.slice(-2)}` : '';
+            
+            let description = feeTypeDesc + monthSuffix;
 
-            if (targetMonth) {
-                const monthName = monthNames[targetMonth] || '';
-                const acYear: string = h.student_fees?.academic_year || voucher.academic_year || '';
-                const parts = acYear.split('-');
-                const year = targetMonth >= 8 ? parts[0] : (parts[1] || parts[0]);
-
-                if (isSurcharge) {
-                    // Surcharge keeps the short format (APR '25)
-                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}'${year ? ' ' + year.slice(-2) : ''})`;
-                } else {
-                    // Tuition keeps the short format (APR '25)
-                    monthSuffix = ` (${monthName.slice(0, 3).toUpperCase()}'${year ? ' ' + year.slice(-2) : ''})`;
+            // Handle Installment Sequence (e.g. 1/6)
+            if (h.student_fees?.installment_id) {
+                const group = installmentGroups.get(h.student_fees.installment_id) || [];
+                const total = h.student_fees.student_fee_installments?.installment_count || group.length;
+                const idx = group.findIndex(f => f.id === h.student_fees.id);
+                if (idx !== -1) {
+                    description = `${feeTypeDesc} (${idx + 1}/${total})${monthSuffix}`;
                 }
             }
 
-            const headPrefixRaw = h.description_prefix && String(h.description_prefix).trim();
-            const prefixToUse = headPrefixRaw || voucherLevelPrefix || '';
-            const finalPrefix = prefixToUse ? `${prefixToUse} — ` : '';
-
-            let description = `${finalPrefix}${feeDescription}${monthSuffix}`;
-            const instAmount = (h.student_fees as any)?.installment_amount ? Number((h.student_fees as any).installment_amount) : 0;
-            const instFeeType = (h.student_fees as any)?.student_fee_installments?.fee_types?.description;
-            
-            if (instAmount > 0 && instFeeType && instFeeType !== feeDescription) {
-                // If it's an embedded one, add a small notice
-                description += ` (Inc. ${instFeeType} Split — PKR ${instAmount.toLocaleString()})`;
-            }
-
-            const isSplitHead = !!headPrefixRaw;
-
-            // Arrear Logic: Compare academic month/year with voucher's month/year
-            const feeMonth = h.student_fees?.month ?? h.student_fees?.target_month;
-            const feeYear = h.student_fees?.academic_year || '';
-            const voucherMonth = voucher.month;
-            const voucherYear = voucher.academic_year || '';
-
-            const isSurchargeTotal = h.student_fees?.is_arrear_surcharge === true;
+            const isSurcharge = h.student_fees?.is_arrear_surcharge === true;
             let isArrear = false;
             
-            // Helper to convert calendar month to academic sort index (Aug=0...Jul=11)
-            const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
-
-            // fee_date is the canonical source of truth for "which period does this fee belong to?"
-            // If fee_date matches the voucher's fee_date, this head is NOT an arrear.
+            const getAcademicSortIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
             const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
             const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
             const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
 
-            if (!sameFeeDate && !isSurchargeTotal) {
-                if (feeYear && voucherYear && feeMonth != null && voucherMonth != null) {
-                    if (feeYear < voucherYear) {
-                        isArrear = true;
-                    } else if (feeYear === voucherYear) {
-                        const feeMonthIdx = getAcademicMonthIndex(feeMonth);
-                        const voucherMonthIdx = getAcademicMonthIndex(voucherMonth);
-                        if (feeMonthIdx < voucherMonthIdx) {
-                            isArrear = true;
-                        }
-                    }
+            if (!sameFeeDate && !isSurcharge) {
+                const fMonth = h.student_fees?.target_month;
+                const fYear = h.student_fees?.academic_year;
+                const vMonth = voucher.month;
+                const vYear = voucher.academic_year;
+
+                if (fYear && vYear && fMonth != null && vMonth != null) {
+                    if (fYear < vYear) isArrear = true;
+                    else if (fYear === vYear && getAcademicSortIndex(fMonth) < getAcademicSortIndex(vMonth)) isArrear = true;
                 }
                 if (!isArrear && h.student_fees?.fee_date && voucher.fee_date) {
                     isArrear = new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
                 }
             }
 
-            const amountPaid = Number(h.amount_deposited || 0);
-            const feePaid = Number(h.student_fees?.amount_paid || 0);
-            const finalPaid = Math.max(amountPaid, feePaid);
+            const finalPaid = Math.max(Number(h.amount_deposited || 0), Number(h.student_fees?.amount_paid || 0));
             const netAmount = Number(h.net_amount);
-            const balance = Math.max(netAmount - finalPaid, 0);
 
             return {
                 description,
-                originalDescription: feeDescription + monthSuffix,
+                originalDescription: feeTypeDesc + monthSuffix,
                 amount: isSplitHead ? Number(h.net_amount) : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
                 discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
                 netAmount,
                 amountDeposited: finalPaid,
-                balance,
-                discountLabel: isSplitHead ? '' : (h.discount_label || ''),
+                balance: Math.max(netAmount - finalPaid, 0),
                 isArrear,
-                isSurcharge: isSurchargeTotal,
+                isSurcharge,
                 feeDate: h.student_fees?.fee_date?.toISOString().split('T')[0],
                 target_month: h.student_fees?.target_month,
                 academic_year: h.student_fees?.academic_year,
             };
         });
 
-        const totalPaid = feeHeads.reduce((sum, h) => sum + h.amountDeposited, 0);
+        // 4. Consolidate Surcharges into one row for the main table
+        const surcharges = heads.filter(h => h.isSurcharge);
+        const nonSurcharges = heads.filter(h => !h.isSurcharge);
+        const consolidatedSurchargeAmt = surcharges.reduce((sum, s) => sum + s.netAmount, 0);
+
+        const feeHeads = [...nonSurcharges];
+        if (consolidatedSurchargeAmt > 0) {
+            feeHeads.push({
+                description: 'Late Payment Surcharge for Arrears',
+                originalDescription: 'Late Payment Surcharge for Arrears',
+                amount: consolidatedSurchargeAmt,
+                discount: 0,
+                netAmount: consolidatedSurchargeAmt,
+                amountDeposited: surcharges.reduce((sum, s) => sum + s.amountDeposited, 0),
+                balance: Math.max(consolidatedSurchargeAmt - surcharges.reduce((sum, s) => sum + s.amountDeposited, 0), 0),
+                isArrear: true,
+                isSurcharge: true,
+                feeDate: '',
+                target_month: 0,
+                academic_year: '',
+            } as any);
+        }
+
         const totalAmount = Number(voucher.total_payable_before_due || 0);
-        const outstandingBalance = Math.max(totalAmount - totalPaid, 0);
-        const lateFeeAmount = voucher.late_fee_charge ? 1000 : 0;
+        const monthLabel = voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
 
-        // Resolve Month Label
-        const monthLabel = voucher.month ? monthNames[voucher.month] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
-
-        // Prepare Key & QR URL
         const ts = Date.now();
         const filePrefix = paidStamp ? 'paid-voucher' : 'voucher';
         const key = `vouchers/${voucher.student_id}/${filePrefix}-${voucher.id}-${ts}.pdf`;
@@ -624,13 +657,13 @@ export class VouchersService {
                 voucherNumber: voucher.id.toString(),
                 student: {
                     cc: voucher.students.cc,
-                    classId: voucher.class_id,
                     fullName: voucher.students.full_name,
                     fatherName: voucher.students?.student_guardians?.[0]?.guardians?.full_name || 'N/A',
                     gender: voucher.students?.gender || 'N/A',
                     grNumber: voucher.students.gr_number || 'N/A',
                     className: voucher.classes?.description || 'N/A',
                     sectionName: voucher.sections?.description || 'N/A',
+                    classId: voucher.class_id,
                 },
                 siblings: siblings.filter(s => s.cc !== voucher.student_id).map(s => ({
                     cc: s.cc,
@@ -654,24 +687,37 @@ export class VouchersService {
                 },
                 feeHeads,
                 totalAmount,
-                totalPaid,
-                outstandingBalance,
-                lateFeeAmount,
+                totalPaid: heads.reduce((sum, h) => sum + h.amountDeposited, 0),
+                outstandingBalance: Math.max(totalAmount - heads.reduce((sum, h) => sum + h.amountDeposited, 0), 0),
+                lateFeeAmount: voucher.late_fee_charge ? 1000 : 0,
                 qrUrl,
                 paidStamp,
                 showDiscount: true,
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: Number(voucher.total_arrear_surcharge || 0),
-                arrearsHistory: feeHeads
+                arrearsHistory: nonSurcharges
                     .filter(fh => fh.isArrear)
                     .map(fh => ({
                         date: fh.feeDate || 'N/A',
-                        head: fh.originalDescription, // USE ORIGINAL NAME WITHOUT PREFIX
+                        head: fh.originalDescription,
                         amount: fh.netAmount.toLocaleString(),
-                        totalAmount: fh.netAmount.toLocaleString(), // FeeChallanPDF calculates running total
+                        totalAmount: fh.netAmount.toLocaleString(),
                         target_month: fh.target_month,
                         academic_year: fh.academic_year,
                     })),
+                installmentsHistory: studentInstallmentFees
+                    .filter(f => f.status !== 'PAID' && !voucher.voucher_heads.some(vh => vh.student_fee_id === f.id))
+                    .map((f: any) => {
+                        const group = installmentGroups.get(f.installment_id!) || [];
+                        const total = f.student_fee_installments?.installment_count || group.length;
+                        const idx = group.findIndex(sf => sf.id === f.id);
+                        const feeType = f.fee_type_id === 1 ? 'Tuition Fee' : 'Fee'; // Fallback
+                        return {
+                            head: `${feeType} (${idx + 1}/${total})`,
+                            month: f.target_month ? monthNames[f.target_month - 1].slice(0, 3).toUpperCase() : 'N/A',
+                            amount: Number(f.amount).toLocaleString(),
+                        };
+                    })
             },
             key
         };
@@ -941,10 +987,11 @@ export class VouchersService {
                             id: true,
                             amount: true,
                             amount_paid: true,
-                        },
+                            description_prefix: true,
+                        } as any,
                     })
                     : [];
-                const studentFeeMap = new Map(studentFees.map((fee) => [fee.id, fee]));
+                const studentFeeMap = new Map<number, any>((studentFees as any[]).map((fee) => [fee.id, fee]));
 
                 for (const { headId, amount } of parsedDistributions) {
                     const head = txHeadMap.get(headId)!;
@@ -2004,21 +2051,20 @@ export class VouchersService {
 
     /**
      * Compute all unpaid / partially-paid student_fees rows whose fee_date is
-     * strictly before targetFeeDate, and which are NOT already linked as a head
-     * on another active (non-PAID) voucher (to prevent double-counting).
+     * strictly before targetFeeDate. Adds a 1000 PKR surcharge for every distinct month.
      */
     async computeArrears(studentId: number, targetFeeDate: Date, waiveSurcharge = false, persist = true, tx?: Prisma.TransactionClient) {
         const client = tx || this.prisma;
         console.log(`[Arrears] Computing for Student: ${studentId}, Before: ${targetFeeDate.toISOString()}, Waive: ${waiveSurcharge}, Persist: ${persist}`);
 
-        // 1. Fetch Candidates (Normal Arrears)
+        // 1. Fetch Candidates (Normal Arrears - Excluding surcharges)
         const candidates = await client.student_fees.findMany({
             where: {
                 student_id: studentId,
                 fee_date: { lt: targetFeeDate },
                 status: { notIn: ['PAID'] as any[] },
                 is_arrear_surcharge: false,
-            },
+            } as any,
             include: {
                 fee_types: true,
             },
@@ -2041,6 +2087,7 @@ export class VouchersService {
             arrearFeeIds.push(fee.id);
 
             const dateStr = fee.fee_date ? fee.fee_date.toISOString().split('T')[0] : 'undated';
+            // Each distinct month before targetFeeDate gets exactly one 1000 PKR surcharge
             if (fee.fee_date && !distinctGroups.has(dateStr)) {
                 distinctGroups.set(dateStr, {
                     date: fee.fee_date,
@@ -2062,15 +2109,13 @@ export class VouchersService {
             });
         }
 
-        // 2. Handle Surcharges
+        // 2. Handle Surcharges (1000 PKR per distinct arrear month)
         const surchargeFeeIds: number[] = [];
-        let totalSurcharge = new Prisma.Decimal(0);
+        let totalSurchargeValue = new Prisma.Decimal(0);
 
-        // Potential surcharge is ALWAYS calculated based on distinct months, regardless of waiver
         if (distinctGroups.size > 0) {
-            totalSurcharge = new Prisma.Decimal(distinctGroups.size * 1000);
+            totalSurchargeValue = new Prisma.Decimal(distinctGroups.size * 1000);
 
-            // If we are NOT waiving, we proceed to ensure records exist
             if (!waiveSurcharge) {
                 const surchargeFeeType = await this.getOrCreateSurchargeFeeType(tx);
 
@@ -2078,13 +2123,12 @@ export class VouchersService {
                     let surchargeRecord: any = null;
 
                     if (persist) {
-                        // Deduplicate: check for existing surcharge record for this student + date
                         surchargeRecord = await client.student_fees.findFirst({
                             where: {
                                 student_id: studentId,
                                 fee_date: group.date,
                                 is_arrear_surcharge: true,
-                            }
+                            } as any
                         });
 
                         if (!surchargeRecord) {
@@ -2100,12 +2144,11 @@ export class VouchersService {
                                     status: 'NOT_ISSUED',
                                     is_arrear_surcharge: true,
                                     month: group.target_month,
-                                }
+                                } as any
                             });
                         }
                     }
 
-                    // If we persisted (or found existing), add to the list
                     if (surchargeRecord) {
                         if (surchargeRecord.status !== 'PAID') {
                             const sAmt = new Prisma.Decimal(surchargeRecord.amount ?? 1000);
@@ -2128,9 +2171,9 @@ export class VouchersService {
                             }
                         }
                     } else {
-                        // If not persisting (preview mode), just add a virtual row
+                        // Virtual row for preview mode
                         rows.push({
-                            student_fee_id: -1, // Virtual ID
+                            student_fee_id: -1, 
                             fee_type: "Late Payment Surcharge",
                             fee_date: group.date.toISOString().split('T')[0],
                             amount: "1000.00",
@@ -2147,7 +2190,7 @@ export class VouchersService {
 
         return {
             total_arrears: Number(totalArrearsCount.toFixed(2)),
-            total_surcharge: Number(totalSurcharge.toFixed(2)),
+            total_surcharge: Number(totalSurchargeValue.toFixed(2)),
             arrear_fee_ids: arrearFeeIds,
             surcharge_fee_ids: surchargeFeeIds,
             rows,
