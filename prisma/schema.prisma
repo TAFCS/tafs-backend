@@ -574,7 +574,6 @@ model bundle_fee_type_names {
   created_at  DateTime @default(now()) @db.Timestamp(6)
 }
 
-
 enum BulkJobStatus {
   PENDING
   PROCESSING
