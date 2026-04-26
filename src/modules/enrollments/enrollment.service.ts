@@ -26,7 +26,7 @@ export class EnrollmentService {
     });
   }
 
-  async getSuggestions(cc: number) {
+  async getSuggestions(cc: number, sectionId?: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: {
@@ -68,7 +68,7 @@ export class EnrollmentService {
 
     const [suggested_gr, suggested_house, suggested_section] = await Promise.all([
       this.computeNextGr(student.campus_id),
-      this.computeBalancedHouse(resolvedClassId),
+      this.computeBalancedHouse(resolvedClassId, sectionId),
       this.computeBalancedSection(student.campus_id, resolvedClassId),
     ]);
 
@@ -338,36 +338,54 @@ export class EnrollmentService {
       take: 500, // Look at the last 500 admissions to find the max GR
     });
 
-    if (students.length === 0) return `${defaultPrefix}1`;
-
     let maxNum = 0;
     let mainPrefix = defaultPrefix;
 
-    for (const s of students) {
-      if (!s.gr_number) continue;
+    if (students.length > 0) {
+      for (const s of students) {
+        if (!s.gr_number) continue;
 
-      // Match pattern like "ABC-123" or just "123"
-      const match = s.gr_number.match(/^(.*?)([0-9]+)$/);
-      if (match) {
-        const prefix = match[1];
-        const num = parseInt(match[2], 10);
-        if (num > maxNum) {
-          maxNum = num;
-          mainPrefix = prefix || defaultPrefix;
-        }
-      } else {
-        // Handle non-standard formats if any
-        const num = parseInt(s.gr_number, 10);
-        if (!isNaN(num) && num > maxNum) {
-          maxNum = num;
+        // Match pattern like "ABC-123" or just "123"
+        const match = s.gr_number.match(/^(.*?)([0-9]+)$/);
+        if (match) {
+          const prefix = match[1];
+          const num = parseInt(match[2], 10);
+          if (num > maxNum) {
+            maxNum = num;
+            mainPrefix = prefix || defaultPrefix;
+          }
+        } else {
+          // Handle non-standard formats if any
+          const num = parseInt(s.gr_number, 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
         }
       }
     }
 
-    return `${mainPrefix}${maxNum + 1}`;
+    let nextNum = maxNum + 1;
+    let finalGr = `${mainPrefix}${nextNum}`;
+
+    // Robust uniqueness check: Ensure this GR is truly not present in this campus
+    let isTaken = true;
+    while (isTaken) {
+      const existing = await this.prisma.students.findFirst({
+        where: { campus_id: campusId, gr_number: finalGr },
+        select: { cc: true }
+      });
+      if (!existing) {
+        isTaken = false;
+      } else {
+        nextNum++;
+        finalGr = `${mainPrefix}${nextNum}`;
+      }
+    }
+
+    return finalGr;
   }
 
-  private async computeBalancedHouse(classId: number | null): Promise<number | null> {
+  private async computeBalancedHouse(classId: number | null, sectionId?: number): Promise<number | null> {
     if (!classId) return null;
 
     const allHouses = await this.prisma.houses.findMany({
@@ -377,7 +395,12 @@ export class EnrollmentService {
 
     const houseCounts = await this.prisma.students.groupBy({
       by: ['house_id'],
-      where: { class_id: classId, house_id: { not: null }, status: 'ENROLLED' },
+      where: { 
+        class_id: classId, 
+        section_id: sectionId ? Number(sectionId) : undefined,
+        house_id: { not: null }, 
+        status: 'ENROLLED' 
+      },
       _count: { _all: true },
     });
 

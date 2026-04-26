@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, ParseIntPipe, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
 import { EnrollmentService } from './enrollment.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
@@ -22,8 +22,11 @@ export class EnrollmentController {
 
   @Get(':cc/suggestions')
   @ApiOperation({ summary: 'Get suggested GR number and balanced House for a student' })
-  async getSuggestions(@Param('cc', ParseIntPipe) cc: number) {
-    const suggestions = await this.enrollmentService.getSuggestions(cc);
+  async getSuggestions(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Query('section_id') sectionId?: number,
+  ) {
+    const suggestions = await this.enrollmentService.getSuggestions(cc, sectionId);
     return createApiResponse(
       suggestions,
       HttpStatus.OK,
