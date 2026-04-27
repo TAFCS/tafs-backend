@@ -39,12 +39,21 @@ function getMonthlyFeeDates(from: string, to: string): string[] {
     return dates;
 }
 
-function deriveAcademicYear(dateStr: string): string {
+function deriveAcademicYear(dateStr: string, classId?: number): string {
     const d = new Date(dateStr);
     const m = d.getUTCMonth() + 1; // 1-12
     const y = d.getUTCFullYear();
     
-    // August (8) to July (7) logic
+    // Check for special classes (15-19) which start in April
+    const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
+    
+    if (isSpecialClass) {
+        // April (4) to March (3) logic
+        const startYear = m >= 4 ? y : y - 1;
+        return `${startYear}-${startYear + 1}`;
+    }
+    
+    // Standard: August (8) to July (7) logic
     const startYear = m >= 8 ? y : y - 1;
     return `${startYear}-${startYear + 1}`;
 }
@@ -56,19 +65,27 @@ function deriveAcademicYear(dateStr: string): string {
 const PDF_MONTHS = ['August','September','October','November','December','January','February','March','April','May','June','July'];
 const PDF_MONTH_TO_NUM: Record<string, number> = { August:8,September:9,October:10,November:11,December:12,January:1,February:2,March:3,April:4,May:5,June:6,July:7 };
 
-function getMonthYearLabel(m: number, academicYear: string): string {
+function getMonthYearLabel(m: number, academicYear: string, classId?: number): string {
     const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
     const parts = academicYear.split('-').map(y => y.trim());
-    const year = m >= 8 ? parts[0] : (parts[1] || parts[0]);
+    
+    const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
+    const cutoff = isSpecialClass ? 4 : 8;
+    
+    const year = m >= cutoff ? parts[0] : (parts[1] || parts[0]);
     return `${monthName.slice(0, 3)} ${year.slice(-2)}`;
 }
 
-function getConsolidatedMonthsLabel(items: { month: number; academicYear: string }[]): string {
+function getConsolidatedMonthsLabel(items: { month: number; academicYear: string }[], classId?: number): string {
     if (!items || items.length === 0) return "";
 
     const getSeq = (m: number, ay: string) => {
         const startYear = parseInt(ay.split('-')[0]) || 0;
-        return startYear * 12 + (m >= 8 ? m - 8 : m + 4);
+        const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
+        const relativeMonth = isSpecialClass 
+            ? (m >= 4 ? m - 4 : m + 8)
+            : (m >= 8 ? m - 8 : m + 4);
+        return startYear * 12 + relativeMonth;
     };
 
     // Extract unique month/year pairs and sort by sequence
@@ -171,7 +188,8 @@ export class BulkVoucherJobsService {
                     gte: feeDateFrom,
                     lte: feeDateTo,
                 },
-                academic_year: academicYear,
+                // Relax Academic Year filter to allow consolidation from previous sessions
+                // academic_year: academicYear,
                 status: { in: ['ISSUED', 'PAID', 'PARTIALLY_PAID'] },
             },
             select: { student_id: true },
@@ -347,12 +365,14 @@ export class BulkVoucherJobsService {
                 where: {
                     student_id: { in: dto.student_ccs },
                     fee_date: { lte: feeDateTo },
-                    academic_year: academicYear,
+                    // Relax Academic Year filter to allow consolidation from previous sessions
+                    // academic_year: academicYear,
                     status: 'NOT_ISSUED',
                 },
                 select: {
                     id: true,
                     student_id: true,
+                    academic_year: true,
                     fee_date: true,
                     target_month: true,
                     month: true,
@@ -448,7 +468,8 @@ export class BulkVoucherJobsService {
                 if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
                     skipCountTotal++;
                 } else {
-                    workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student, academicYear });
+                    const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id);
+                    workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student, academicYear: itemAcademicYear });
                 }
             }
         }
@@ -635,7 +656,7 @@ export class BulkVoucherJobsService {
                 const disc = Math.max(0, gross - net);
                 let desc = baseDesc;
                 const m = f.target_month || f.month;
-                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear).toUpperCase()})`;
+                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear, student.class_id).toUpperCase()})`;
 
                 otherHeads.push({ 
                     description: desc, 
@@ -654,7 +675,11 @@ export class BulkVoucherJobsService {
             // Helper for sequencing (Aug=0... Jul=11)
             const getSeq = (m: number) => {
                 const startYear = parseInt(item.academicYear.split('-')[0]) || 0;
-                return startYear * 12 + (m >= 8 ? m - 8 : m + 4);
+                const isSpecialClass = student.class_id && [15, 16, 17, 18, 19].includes(Number(student.class_id));
+                const relativeMonth = isSpecialClass 
+                    ? (m >= 4 ? m - 4 : m + 8)
+                    : (m >= 8 ? m - 8 : m + 4);
+                return startYear * 12 + relativeMonth;
             };
 
             group.sort((a, b) => getSeq(a.target_month || a.month || 0) - getSeq(b.target_month || b.month || 0));
@@ -686,9 +711,9 @@ export class BulkVoucherJobsService {
                 const net = range.reduce((s, f) => s + Number(f.amount || 0), 0);
                 const disc = Math.max(0, gross - net);
 
-                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear).toUpperCase()})`;
+                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id).toUpperCase()})`;
                 if (range.length > 1) {
-                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear).toUpperCase()})`;
+                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear, student.class_id).toUpperCase()})`;
                 }
 
                 mergedTuitionHeads.push({
@@ -726,7 +751,7 @@ export class BulkVoucherJobsService {
         })).filter(x => x.month);
 
         const monthLabel = monthLabelItems.length > 0
-            ? getConsolidatedMonthsLabel(monthLabelItems)
+            ? getConsolidatedMonthsLabel(monthLabelItems, student.class_id)
             : new Date(dateStr).toLocaleString('default', { month: 'long', year: 'numeric' });
 
         const pdfBuffer = await this.voucherPdfService.generateVoucherPdf({
