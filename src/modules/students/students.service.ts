@@ -403,7 +403,7 @@ export class StudentsService {
       const latestAdmission = s.student_admissions?.[0] || null;
       const previousSchool = s.student_previous_schools?.[0] || null;
 
-      const mappedData: any = { cc: s.cc };
+      const mappedData: any = { id: s.cc, cc: s.cc };
 
       if (requestedFields.has('core')) {
         mappedData.core = {
@@ -446,6 +446,7 @@ export class StudentsService {
           siblings: s.families?.students
             ?.filter((sib: any) => sib.cc !== s.cc)
             ?.map((sib: any) => ({
+              id: sib.cc,
               cc: sib.cc,
               full_name: sib.full_name,
               cc_number: sib.cc,
@@ -644,6 +645,7 @@ export class StudentsService {
     }
 
     return {
+      id: s.cc,
       cc: s.cc,
       student_full_name: s.full_name,
       gr_number: s.gr_number,
@@ -693,6 +695,7 @@ export class StudentsService {
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)
         ?.map((sib: any) => ({
+          id: sib.cc,
           cc: sib.cc,
           full_name: sib.full_name,
           cc_number: sib.cc,
