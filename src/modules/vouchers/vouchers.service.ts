@@ -54,7 +54,13 @@ const VOUCHER_INCLUDE = {
             student_fees: {
                 include: {
                     fee_types: true,
-                    student_fee_bundles: true,
+                    student_fee_bundles: {
+                        include: {
+                            student_fees: {
+                                select: { installment_id: true }
+                            }
+                        }
+                    },
                     student_fee_installments: {
                         include: { fee_types: true }
                     }
@@ -1760,7 +1766,20 @@ export class VouchersService {
                         isArrear = new Date(fee.fee_date) < new Date(voucher.fee_date);
                     }
                 }
-                return { ...h, isArrear, is_arrear: isArrear, isSurcharge: isSurchargeTotal, is_surcharge: isSurchargeTotal };
+
+                const isInstallment = !!fee.installment_id;
+                const hasInstallmentMerged = !!fee.bundle_id &&
+                    (fee.student_fee_bundles?.student_fees?.some((sf: any) => !!sf.installment_id) ?? false);
+
+                return {
+                    ...h,
+                    isArrear,
+                    is_arrear: isArrear,
+                    isSurcharge: isSurchargeTotal,
+                    is_surcharge: isSurchargeTotal,
+                    is_installment: isInstallment,
+                    has_installment_merged: hasInstallmentMerged
+                };
             });
             return { ...voucher, voucher_heads: mappedHeads };
         }
@@ -1829,6 +1848,10 @@ export class VouchersService {
                 }
             }
 
+            const isInstallment = !!fee.installment_id;
+            const hasInstallmentMerged = !!fee.bundle_id &&
+                (fee.student_fee_bundles?.student_fees?.some((sf: any) => !!sf.installment_id) ?? false);
+
             // Overwrite stored balance with the canonical derived value and attach UI flags
             updatedHeads.push({
                 ...h,
@@ -1836,7 +1859,9 @@ export class VouchersService {
                 isArrear,
                 is_arrear: isArrear,
                 isSurcharge: isSurchargeTotal,
-                is_surcharge: isSurchargeTotal
+                is_surcharge: isSurchargeTotal,
+                is_installment: isInstallment,
+                has_installment_merged: hasInstallmentMerged
             });
         }
 

@@ -280,7 +280,13 @@ export class StudentFeesService {
             },
             include: {
                 fee_types: true,
-                student_fee_bundles: true,
+                student_fee_bundles: {
+                    include: {
+                        student_fees: {
+                            select: { installment_id: true }
+                        }
+                    }
+                },
                 student_fee_installments: {
                     include: { fee_types: true }
                 },
@@ -324,11 +330,19 @@ export class StudentFeesService {
             group.forEach((f, idx) => seqMap.set(f.id, idx + 1));
         });
 
-        const enhancedFees = fees.map(f => ({
-            ...f,
-            installment_sequence: seqMap.get(f.id) || null,
-            installment_total: (f as any).installment_id ? countMap.get((f as any).installment_id) : null,
-        }));
+        const enhancedFees = fees.map(f => {
+            const isInstallment = !!(f as any).installment_id || !!(f as any).student_fee_installments;
+            const hasInstallmentMerged = !!(f as any).bundle_id && 
+                ((f as any).student_fee_bundles?.student_fees?.some((sf: any) => !!sf.installment_id) ?? false);
+
+            return {
+                ...f,
+                installment_sequence: seqMap.get(f.id) || null,
+                installment_total: (f as any).installment_id ? countMap.get((f as any).installment_id) : null,
+                is_installment: isInstallment,
+                has_installment_merged: hasInstallmentMerged
+            };
+        });
 
         // Group fees by fee_date
         const groupMap = new Map<string, any[]>();
@@ -377,7 +391,13 @@ export class StudentFeesService {
             },
             include: {
                 fee_types: true,
-                student_fee_bundles: true,
+                student_fee_bundles: {
+                    include: {
+                        student_fees: {
+                            select: { installment_id: true }
+                        }
+                    }
+                },
                 student_fee_installments: {
                     include: { fee_types: true }
                 },
