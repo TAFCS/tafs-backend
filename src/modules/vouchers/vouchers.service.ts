@@ -2236,30 +2236,40 @@ export class VouchersService {
     async remove(id: number) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
-            include: { voucher_heads: true }
+            include: {
+                voucher_heads: {
+                    include: { student_fees: true }
+                }
+            }
         });
 
         if (!voucher) {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
 
-        // Only UNPAID vouchers can be deleted to safely reset fee heads.
-        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE') {
-            throw new BadRequestException(`Only UNPAID or OVERDUE vouchers can be deleted. This voucher is ${voucher.status}.`);
+        // Allow deleting UNPAID, OVERDUE, or VOID vouchers.
+        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'VOID') {
+            throw new BadRequestException(`Only UNPAID, OVERDUE, or VOID vouchers can be deleted. This voucher is ${voucher.status}.`);
         }
 
         return await this.prisma.$transaction(async (tx) => {
-            // 1. Reset associated student_fees to NOT_ISSUED
-            const feeIds = voucher.voucher_heads.map(h => h.student_fee_id);
-            if (feeIds.length > 0) {
+            const heads = voucher.voucher_heads || [];
+            const surchargeFeeIds = heads
+                .filter(h => h.student_fees?.is_arrear_surcharge)
+                .map(h => h.student_fee_id);
+            const regularFeeIds = heads
+                .filter(h => !h.student_fees?.is_arrear_surcharge)
+                .map(h => h.student_fee_id);
+
+            // 1. Reset regular student_fees to NOT_ISSUED
+            if (regularFeeIds.length > 0) {
                 await tx.student_fees.updateMany({
-                    where: { id: { in: feeIds } },
+                    where: { id: { in: regularFeeIds } },
                     data: {
                         status: 'NOT_ISSUED',
                         issue_date: null,
                         due_date: null,
                         validity_date: null,
-                        amount_paid: 0
                     }
                 });
             }
@@ -2269,12 +2279,32 @@ export class VouchersService {
                 where: { voucher_id: id }
             });
 
-            // 3. Delete voucher_heads for this voucher
+            // 3. Delete voucher_heads (MUST DO BEFORE deleting student_fees due to FK)
             await tx.voucher_heads.deleteMany({
                 where: { voucher_id: id }
             });
 
-            // 4. Delete the voucher record itsel
+            // 4. Delete surcharge student_fees if they are only linked to this voucher
+            if (surchargeFeeIds.length > 0) {
+                // Find if these surcharges are used in ANY OTHER voucher
+                const otherHeads = await tx.voucher_heads.findMany({
+                    where: {
+                        student_fee_id: { in: surchargeFeeIds },
+                        voucher_id: { not: id }
+                    },
+                    select: { student_fee_id: true }
+                });
+                const feeIdsInOtherVouchers = new Set(otherHeads.map(oh => oh.student_fee_id));
+                const feeIdsToDelete = surchargeFeeIds.filter(fid => !feeIdsInOtherVouchers.has(fid));
+
+                if (feeIdsToDelete.length > 0) {
+                    await tx.student_fees.deleteMany({
+                        where: { id: { in: feeIdsToDelete } }
+                    });
+                }
+            }
+
+            // 5. Delete the voucher record itself
             const deleted = await tx.vouchers.delete({
                 where: { id }
             });
@@ -2282,7 +2312,7 @@ export class VouchersService {
             return deleted;
         }, {
             maxWait: 5000,
-            timeout: 10000,
+            timeout: 15000,
         });
     }
 }
