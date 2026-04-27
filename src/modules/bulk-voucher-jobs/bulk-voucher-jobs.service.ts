@@ -468,7 +468,7 @@ export class BulkVoucherJobsService {
                 if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
                     skipCountTotal++;
                 } else {
-                    const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id);
+                    const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id ?? undefined);
                     workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student, academicYear: itemAcademicYear });
                 }
             }
@@ -656,7 +656,7 @@ export class BulkVoucherJobsService {
                 const disc = Math.max(0, gross - net);
                 let desc = baseDesc;
                 const m = f.target_month || f.month;
-                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear, student.class_id).toUpperCase()})`;
+                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
 
                 otherHeads.push({ 
                     description: desc, 
@@ -711,9 +711,9 @@ export class BulkVoucherJobsService {
                 const net = range.reduce((s, f) => s + Number(f.amount || 0), 0);
                 const disc = Math.max(0, gross - net);
 
-                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id).toUpperCase()})`;
+                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
                 if (range.length > 1) {
-                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear, student.class_id).toUpperCase()})`;
+                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id ?? undefined).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
                 }
 
                 mergedTuitionHeads.push({
@@ -751,7 +751,7 @@ export class BulkVoucherJobsService {
         })).filter(x => x.month);
 
         const monthLabel = monthLabelItems.length > 0
-            ? getConsolidatedMonthsLabel(monthLabelItems, student.class_id)
+            ? getConsolidatedMonthsLabel(monthLabelItems, student.class_id ?? undefined)
             : new Date(dateStr).toLocaleString('default', { month: 'long', year: 'numeric' });
 
         const pdfBuffer = await this.voucherPdfService.generateVoucherPdf({
