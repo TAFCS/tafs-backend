@@ -331,247 +331,296 @@ export class BulkVoucherJobsService {
             return;
         }
 
-        const feeDateFrom = new Date(dto.fee_date_from);
-        const feeDateTo = new Date(dto.fee_date_to);
-        const PDF_BATCH_SIZE = 10;
-
-        // ── PHASE 1: BULK PRE-FETCH (4 parallel DB queries) ─────────────────
-        const [bankAccount, studentRecords, matchingFees, existingVouchers] = await Promise.all([
-            this.prisma.bank_accounts.findUnique({ where: { id: dto.bank_account_id } }),
-            this.prisma.students.findMany({
-                where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
-                select: {
-                    cc: true,
-                    full_name: true,
-                    gender: true,
-                    gr_number: true,
-                    family_id: true,
-                    class_id: true,
-                    campus_id: true,
-                    section_id: true,
-                    classes: { select: { description: true } },
-                    sections: { select: { description: true } },
-                    campuses: { select: { campus_name: true } },
-                    student_guardians: {
-                        select: {
-                            relationship: true,
-                            is_primary_contact: true,
-                            guardians: { select: { full_name: true } },
-                        },
-                    },
-                },
-            }),
-            this.prisma.student_fees.findMany({
-                where: {
-                    student_id: { in: dto.student_ccs },
-                    fee_date: { lte: feeDateTo },
-                    // Relax Academic Year filter to allow consolidation from previous sessions
-                    // academic_year: academicYear,
-                    status: 'NOT_ISSUED',
-                },
-                select: {
-                    id: true,
-                    student_id: true,
-                    academic_year: true,
-                    fee_date: true,
-                    target_month: true,
-                    month: true,
-                    amount: true,
-                    amount_before_discount: true,
-                    fee_type_id: true,
-                    fee_types: { select: { description: true, priority_order: true } },
-                },
-            }),
-            this.prisma.vouchers.findMany({
-                where: {
-                    student_id: { in: dto.student_ccs },
-                    fee_date: { gte: feeDateFrom, lte: feeDateTo },
-                    status: { not: 'VOID' },
-                },
-                select: { student_id: true, fee_date: true },
-            }),
-        ]);
-
-        // Set of "cc|dateStr" keys that already have a non-VOID voucher
-        const existingVoucherKeys = new Set(
-            existingVouchers
-                .filter(v => v.fee_date)
-                .map(v => `${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`),
-        );
-
-        // Siblings bulk fetch (needs familyIds from studentRecords)
-        const familyIds = studentRecords.map((s) => s.family_id).filter(Boolean);
-        const allSiblings = await this.prisma.students.findMany({
-            where: { family_id: { in: familyIds as number[] }, deleted_at: null, status: 'ENROLLED' },
-            include: {
-                classes: { select: { description: true } },
-                sections: { select: { description: true } },
-            },
-        });
-        const siblingsMap = new Map<number, typeof allSiblings>();
-        for (const s of allSiblings) {
-            if (!s.family_id) continue;
-            const list = siblingsMap.get(s.family_id) ?? [];
-            list.push(s);
-            siblingsMap.set(s.family_id, list);
-        }
-
-        // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
-        type WorkItem = { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string };
-        const workItems: WorkItem[] = [];
-        let skipCountTotal = 0;
-
-        for (const cc of dto.student_ccs) {
-            const studentFees = matchingFees.filter((f) => f.student_id === cc);
-            const student = studentRecords.find((s) => s.cc === cc);
-            if (!student) continue;
-
-            // Map fees to their month (1st of month string)
-            const dateMap = new Map<string, any[]>();
-            const priorFees: any[] = [];
-            const startDate = new Date(dto.fee_date_from);
-
-            for (const f of studentFees) {
-                if (!f.fee_date) continue;
-                const fDate = new Date(f.fee_date);
-                if (fDate < startDate) {
-                    priorFees.push(f);
-                } else {
-                    const monthKey = new Date(Date.UTC(fDate.getUTCFullYear(), fDate.getUTCMonth(), 1))
-                        .toISOString()
-                        .split('T')[0];
-                    if (!dateMap.has(monthKey)) dateMap.set(monthKey, []);
-                    dateMap.get(monthKey)!.push(f);
-                }
-            }
-
-            const datesFound = Array.from(dateMap.keys()).sort();
-            
-            const firstDateInRange = expectedFeeDates[0];
-            
-            // Re-calculate datesFound to ensure accumulation target exists
-            if (priorFees.length > 0 && !dateMap.has(firstDateInRange)) {
-                dateMap.set(firstDateInRange, []);
-                if (!datesFound.includes(firstDateInRange)) {
-                    datesFound.push(firstDateInRange);
-                    datesFound.sort();
-                }
-            }
-            
-            // Final pass: inject prior fees into the EARLIEST available month in the range
-            if (priorFees.length > 0) {
-                const targetDate = datesFound[0];
-                dateMap.set(targetDate, [...priorFees, ...(dateMap.get(targetDate) || [])]);
-            }
-
-            for (const dateStr of datesFound) {
-                if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
-                    skipCountTotal++;
-                } else {
-                    const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id ?? undefined);
-                    workItems.push({ cc, dateStr, fees: dateMap!.get(dateStr)!, student, academicYear: itemAcademicYear });
-                }
-            }
-        }
-
-        if (skipCountTotal > 0) {
-            await this.prisma.bulk_voucher_jobs.update({
-                where: { id: jobId },
-                data: { skip_count: { increment: skipCountTotal } },
-            });
-        }
-
-        this.logger.log(
-            `[Job #${jobId}] ${workItems.length} items to process, ${skipCountTotal} skipped upfront.`,
-        );
-
-        // ── PHASE 3: PARALLEL PDF BATCHES ────────────────────────────────────
         let successCount = 0;
         let failCountTotal = 0;
-        const pdfBuffers: Buffer[] = [];
+        let skipCountTotal = 0;
 
-        for (let i = 0; i < workItems.length; i += PDF_BATCH_SIZE) {
-            const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
+        try {
+            const feeDateFrom = new Date(dto.fee_date_from);
+            const feeDateTo = new Date(dto.fee_date_to);
+            const PDF_BATCH_SIZE = 10;
 
-            const results = await Promise.allSettled(
-                chunk.map((item) => this.processWorkItem(item, dto, bankAccount, siblingsMap, createdBy)),
+            // ── PHASE 1: BULK PRE-FETCH (4 parallel DB queries) ─────────────────
+            const [bankAccount, studentRecords, matchingFees, existingVouchers] = await Promise.all([
+                this.prisma.bank_accounts.findUnique({ where: { id: dto.bank_account_id } }),
+                this.prisma.students.findMany({
+                    where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
+                    select: {
+                        cc: true,
+                        full_name: true,
+                        gender: true,
+                        gr_number: true,
+                        family_id: true,
+                        class_id: true,
+                        campus_id: true,
+                        section_id: true,
+                        classes: { select: { description: true } },
+                        sections: { select: { description: true } },
+                        campuses: { select: { campus_name: true } },
+                        student_guardians: {
+                            select: {
+                                relationship: true,
+                                is_primary_contact: true,
+                                guardians: { select: { full_name: true } },
+                            },
+                        },
+                    },
+                }),
+                this.prisma.student_fees.findMany({
+                    where: {
+                        student_id: { in: dto.student_ccs },
+                        fee_date: { lte: feeDateTo },
+                        status: 'NOT_ISSUED',
+                    },
+                    select: {
+                        id: true,
+                        student_id: true,
+                        academic_year: true,
+                        fee_date: true,
+                        target_month: true,
+                        month: true,
+                        amount: true,
+                        amount_before_discount: true,
+                        fee_type_id: true,
+                        fee_types: { select: { description: true, priority_order: true } },
+                    },
+                }),
+                this.prisma.vouchers.findMany({
+                    where: {
+                        student_id: { in: dto.student_ccs },
+                        fee_date: { gte: feeDateFrom, lte: feeDateTo },
+                        status: { not: 'VOID' },
+                    },
+                    select: { student_id: true, fee_date: true },
+                }),
+            ]);
+
+            // Set of "cc|dateStr" keys that already have a non-VOID voucher
+            const existingVoucherKeys = new Set(
+                existingVouchers
+                    .filter(v => v.fee_date)
+                    .map(v => `${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`),
             );
 
-            let chunkSuccess = 0;
-            let chunkFail = 0;
-            for (let j = 0; j < results.length; j++) {
-                const result = results[j];
-                const workItem = chunk[j];
-                if (result.status === 'fulfilled') {
-                    pdfBuffers.push(result.value.buffer);
-                    chunkSuccess++;
-                    successCount++;
-                    
-                    // Add to report
-                    jobReport.push({
-                        cc: workItem.cc,
-                        student_name: workItem.student.full_name,
-                        pdf_url: result.value.url,
-                        status: 'SUCCESS'
-                    });
-                } else {
-                    this.logger.error(`[Job #${jobId}] Work item failed: ${result.reason}`);
-                    chunkFail++;
-                    failCountTotal++;
+            // Siblings bulk fetch
+            const familyIds = studentRecords.map((s) => s.family_id).filter(Boolean);
+            const allSiblings = await this.prisma.students.findMany({
+                where: { family_id: { in: familyIds as number[] }, deleted_at: null, status: 'ENROLLED' },
+                include: {
+                    classes: { select: { description: true } },
+                    sections: { select: { description: true } },
+                },
+            });
+            const siblingsMap = new Map<number, typeof allSiblings>();
+            for (const s of allSiblings) {
+                if (!s.family_id) continue;
+                const list = siblingsMap.get(s.family_id) ?? [];
+                list.push(s);
+                siblingsMap.set(s.family_id, list);
+            }
 
-                    jobReport.push({
-                        cc: workItem.cc,
-                        student_name: workItem.student.full_name,
-                        status: 'FAILED',
-                        error: result.reason
-                    });
+            // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
+            type WorkItem = { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string };
+            const workItems: WorkItem[] = [];
+
+            for (const cc of dto.student_ccs) {
+                const studentFees = matchingFees.filter((f) => f.student_id === cc);
+                const student = studentRecords.find((s) => s.cc === cc);
+                if (!student) continue;
+
+                // Map fees to their month (1st of month string)
+                const dateMap = new Map<string, any[]>();
+                const priorFees: any[] = [];
+                const startDate = new Date(dto.fee_date_from);
+
+                for (const f of studentFees) {
+                    if (!f.fee_date) continue;
+                    const fDate = new Date(f.fee_date);
+                    if (fDate < startDate) {
+                        priorFees.push(f);
+                    } else {
+                        const monthKey = new Date(Date.UTC(fDate.getUTCFullYear(), fDate.getUTCMonth(), 1))
+                            .toISOString()
+                            .split('T')[0];
+                        if (!dateMap.has(monthKey)) dateMap.set(monthKey, []);
+                        dateMap.get(monthKey)!.push(f);
+                    }
+                }
+
+                const datesFound = Array.from(dateMap.keys()).sort();
+                const firstDateInRange = expectedFeeDates[0];
+                
+                if (priorFees.length > 0 && !dateMap.has(firstDateInRange)) {
+                    dateMap.set(firstDateInRange, []);
+                    if (!datesFound.includes(firstDateInRange)) {
+                        datesFound.push(firstDateInRange);
+                        datesFound.sort();
+                    }
+                }
+                
+                if (priorFees.length > 0) {
+                    const targetDate = datesFound[0];
+                    dateMap.set(targetDate, [...priorFees, ...(dateMap.get(targetDate) || [])]);
+                }
+
+                for (const dateStr of expectedFeeDates) {
+                    if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
+                        skipCountTotal++;
+                        jobReport.push({
+                            cc,
+                            student_name: student.full_name,
+                            status: 'SKIPPED',
+                            reason: `Voucher already issued for period starting ${dateStr}`,
+                        });
+                    } else {
+                        const feesInThisMonth = dateMap.get(dateStr) || [];
+                        if (feesInThisMonth.length === 0) {
+                            skipCountTotal++;
+                            jobReport.push({
+                                cc,
+                                student_name: student.full_name,
+                                status: 'SKIPPED',
+                                reason: `No unpaid fee heads found for period starting ${dateStr}`,
+                            });
+                        } else {
+                            const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id ?? undefined);
+                            workItems.push({ cc, dateStr, fees: feesInThisMonth, student, academicYear: itemAcademicYear });
+                        }
+                    }
                 }
             }
 
+            if (skipCountTotal > 0) {
+                await this.prisma.bulk_voucher_jobs.update({
+                    where: { id: jobId },
+                    data: { skip_count: skipCountTotal },
+                });
+            }
+
+            this.logger.log(
+                `[Job #${jobId}] ${workItems.length} items to process, ${skipCountTotal} skipped upfront.`,
+            );
+
+            // ── PHASE 3: PARALLEL PDF BATCHES ────────────────────────────────────
+            const pdfBuffers: Buffer[] = [];
+
+            for (let i = 0; i < workItems.length; i += PDF_BATCH_SIZE) {
+                const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
+
+                const results = await Promise.allSettled(
+                    chunk.map((item) => this.processWorkItem(item, dto, bankAccount, siblingsMap, createdBy)),
+                );
+
+                let chunkSuccess = 0;
+                let chunkFail = 0;
+                let chunkSkip = 0;
+
+                for (let j = 0; j < results.length; j++) {
+                    const result = results[j];
+                    const workItem = chunk[j];
+                    if (result.status === 'fulfilled') {
+                        pdfBuffers.push(result.value.buffer);
+                        chunkSuccess++;
+                        successCount++;
+                        
+                        jobReport.push({
+                            cc: workItem.cc,
+                            student_name: workItem.student.full_name,
+                            pdf_url: result.value.url,
+                            status: 'SUCCESS',
+                        });
+                    } else {
+                        const errorMsg = String(result.reason);
+                        if (errorMsg.includes('already fully paid') || errorMsg.includes('No voucher needed')) {
+                            chunkSkip++;
+                            skipCountTotal++;
+                            jobReport.push({
+                                cc: workItem.cc,
+                                student_name: workItem.student.full_name,
+                                status: 'SKIPPED',
+                                reason: 'All fee heads for this period are already fully paid',
+                            });
+                        } else {
+                            this.logger.error(`[Job #${jobId}] Work item failed: ${errorMsg}`);
+                            chunkFail++;
+                            failCountTotal++;
+
+                            jobReport.push({
+                                cc: workItem.cc,
+                                student_name: workItem.student.full_name,
+                                status: 'FAILED',
+                                error: errorMsg,
+                            });
+                        }
+                    }
+                }
+
+                await this.prisma.bulk_voucher_jobs.update({
+                    where: { id: jobId },
+                    data: {
+                        ...(chunkSuccess > 0 ? { success_count: { increment: chunkSuccess } } : {}),
+                        ...(chunkFail > 0 ? { fail_count: { increment: chunkFail } } : {}),
+                        ...(chunkSkip > 0 ? { skip_count: { increment: chunkSkip } } : {}),
+                    },
+                });
+
+                this.logger.log(
+                    `[Job #${jobId}] Batch ${Math.floor(i / PDF_BATCH_SIZE) + 1}/${Math.ceil(workItems.length / PDF_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped`,
+                );
+            }
+
+            // ── PHASE 4: MERGE & FINALIZE ─────────────────────────────────────────
+            let mergedPdfUrl: string | null = null;
+            if (pdfBuffers.length > 0) {
+                try {
+                    this.logger.log(`[Job #${jobId}] Merging ${pdfBuffers.length} PDFs...`);
+                    const mergedBuffer = await this.voucherPdfService.mergePdfs(pdfBuffers);
+                    const mergedKey = `bulk-vouchers/job-${jobId}-${Date.now()}.pdf`;
+                    mergedPdfUrl = await this.storage.upload(mergedKey, mergedBuffer);
+                } catch (mergeErr) {
+                    this.logger.error(`[Job #${jobId}] PDF Merging failed: ${(mergeErr as Error).message}`);
+                }
+            }
+
+            const jobWasSuccessful = successCount > 0;
+            const hasFailures = failCountTotal > 0;
+            let finalStatus: BulkJobStatus = 'DONE';
+            if (!jobWasSuccessful && hasFailures) finalStatus = 'FAILED';
+            else if (hasFailures) finalStatus = 'PARTIAL_FAILURE';
+
             await this.prisma.bulk_voucher_jobs.update({
                 where: { id: jobId },
-                data: {
-                    ...(chunkSuccess > 0 ? { success_count: { increment: chunkSuccess } } : {}),
-                    ...(chunkFail > 0 ? { fail_count: { increment: chunkFail } } : {}),
+                data: { 
+                    status: finalStatus, 
+                    merged_pdf_url: mergedPdfUrl,
+                    report: jobReport as any,
                 },
             });
 
             this.logger.log(
-                `[Job #${jobId}] Batch ${Math.floor(i / PDF_BATCH_SIZE) + 1}/${Math.ceil(workItems.length / PDF_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed`,
+                `[Job #${jobId}] Complete → status=${finalStatus} success=${successCount} skip=${skipCountTotal} fail=${failCountTotal}`,
             );
+        } catch (fatalError) {
+            this.logger.error(`[Job #${jobId}] Fatal error in job processing: ${(fatalError as Error).message}`, (fatalError as Error).stack);
+            
+            const jobWasSuccessful = successCount > 0;
+            let finalStatus: BulkJobStatus = 'FAILED';
+            if (jobWasSuccessful) finalStatus = 'PARTIAL_FAILURE';
+
+            await this.prisma.bulk_voucher_jobs.update({
+                where: { id: jobId },
+                data: { 
+                    status: finalStatus,
+                    report: [
+                        ...jobReport,
+                        {
+                            status: 'FAILED',
+                            error: `Fatal system error: ${(fatalError as Error).message}`,
+                        },
+                    ] as any,
+                },
+            });
         }
-
-        // ── PHASE 4: MERGE & FINALIZE ─────────────────────────────────────────
-        let mergedPdfUrl: string | null = null;
-        if (pdfBuffers.length > 0) {
-            try {
-                this.logger.log(`[Job #${jobId}] Merging ${pdfBuffers.length} PDFs...`);
-                const mergedBuffer = await this.voucherPdfService.mergePdfs(pdfBuffers);
-                const mergedKey = `bulk-vouchers/job-${jobId}-${Date.now()}.pdf`;
-                mergedPdfUrl = await this.storage.upload(mergedKey, mergedBuffer);
-            } catch (mergeErr) {
-                this.logger.error(`[Job #${jobId}] PDF Merging failed: ${(mergeErr as Error).message}`);
-            }
-        }
-
-        const jobWasSuccessful = successCount > 0;
-        const hasFailures = failCountTotal > 0;
-        let finalStatus: BulkJobStatus = 'DONE';
-        if (!jobWasSuccessful && hasFailures) finalStatus = 'FAILED';
-        else if (hasFailures) finalStatus = 'PARTIAL_FAILURE';
-
-        await this.prisma.bulk_voucher_jobs.update({
-            where: { id: jobId },
-            data: { 
-                status: finalStatus, 
-                merged_pdf_url: mergedPdfUrl,
-                report: jobReport as any 
-            },
-        });
-
-        this.logger.log(
-            `[Job #${jobId}] Complete → status=${finalStatus} success=${successCount} skip=${skipCountTotal} fail=${failCountTotal}`,
-        );
     }
 
     // ── Per-item worker ─────────────────────────────────────────────────────
