@@ -1518,6 +1518,7 @@ export class StudentsService {
             include: { deposits: true },
           },
           bank_accounts: true,
+          voucher_arrear_surcharges: true,
         },
         orderBy: { fee_date: 'desc' },
       }),
@@ -1536,6 +1537,12 @@ export class StudentsService {
         orderBy: { deposit_date: 'desc' },
       }),
     ]);
+
+    (vouchers as any[]).forEach((v) => {
+      const surchargeRows = v.voucher_arrear_surcharges || [];
+      const totalAmt = surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0);
+      v.total_arrear_surcharge = new Prisma.Decimal(totalAmt);
+    });
 
     // Arrears History - Cumulative across all time
     // Identifiable as heads where student_fees.academic_year != vouchers.academic_year
@@ -1600,11 +1607,11 @@ export class StudentsService {
       });
     });
 
-    const totalSurchargesCharged = vouchers.reduce(
+    const totalSurchargesCharged = (vouchers as any[]).reduce(
       (sum, v) => sum.add(v.total_arrear_surcharge || 0),
       new Prisma.Decimal(0),
     );
-    const totalSurchargesWaived = vouchers.reduce(
+    const totalSurchargesWaived = (vouchers as any[]).reduce(
       (sum, v) =>
         v.surcharge_waived
           ? sum.add(v.total_arrear_surcharge || 0)
@@ -1613,7 +1620,7 @@ export class StudentsService {
     );
 
     // Format Vouchers Tab
-    const formattedVouchers = vouchers.map((v) => ({
+    const formattedVouchers = (vouchers as any[]).map((v) => ({
       ...v,
       total_payable_before_due: Number(v.total_payable_before_due),
       total_payable_after_due: Number(v.total_payable_after_due),

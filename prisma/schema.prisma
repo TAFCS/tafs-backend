@@ -534,6 +534,20 @@ model voucher_heads {
   @@index([voucher_id], map: "idx_voucher_heads_voucher")
 }
 
+model voucher_arrear_surcharges {
+  id              Int      @id @default(autoincrement())
+  voucher_id      Int
+  arrear_fee_date DateTime @db.Date
+  arrear_month    Int
+  arrear_year     String   @db.VarChar(10)
+  amount          Decimal  @db.Decimal(12, 2)
+  waived          Boolean  @default(false)
+  waived_by       String?  @db.VarChar(255)
+  vouchers        vouchers @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
+
+  @@index([voucher_id])
+}
+
 model vouchers {
   id                       Int                   @id @default(autoincrement())
   student_id               Int
@@ -555,9 +569,9 @@ model vouchers {
   fee_date                 DateTime?             @db.Date
   surcharge_waived         Boolean               @default(false)
   surcharge_waived_by      String?               @db.VarChar(100)
-  total_arrear_surcharge   Decimal?              @default(0) @db.Decimal(12, 2)
   total_arrears            Decimal?              @default(0) @db.Decimal(12, 2)
   deposit_allocations      deposit_allocations[]
+  voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads            voucher_heads[]
   bank_accounts            bank_accounts         @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   campuses                 campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

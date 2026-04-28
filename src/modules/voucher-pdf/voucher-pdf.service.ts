@@ -43,6 +43,7 @@ export interface VoucherPdfData {
         netAmount: number;
         discountLabel?: string;
         isArrear?: boolean;
+        feeDate?: string;
     }>;
     totalAmount: number;
     lateFeeAmount: number;
@@ -121,6 +122,7 @@ export class VoucherPdfService {
                 discount: f.discount,
                 discountLabel: f.discountLabel,
                 isArrear: f.isArrear,
+                feeDate: f.feeDate,
             })),
             totalAmount: data.totalAmount,
             showDiscount: data.showDiscount ?? true,

@@ -594,12 +594,14 @@ export class BulkVoucherJobsService {
         const arrearFeeIds = arrearsResult.arrear_fee_ids ?? [];
         const arrearRows = arrearsResult.rows ?? [];
 
-        // Arrear lines use outstanding balance as net (no discount)
-        const arrearFeeLines = arrearRows.map((r) => ({
-            student_fee_id: r.student_fee_id,
-            discount_amount: 0,
-            discount_label: '',
-        }));
+        // Arrear lines use outstanding balance as net (no discount); surcharge rows (student_fee_id: -1) excluded
+        const arrearFeeLines = arrearRows
+            .filter((r) => !r.isSurcharge)
+            .map((r) => ({
+                student_fee_id: r.student_fee_id,
+                discount_amount: 0,
+                discount_label: '',
+            }));
 
         const currentFeeLines = feesForThisVoucher.map((f: any) => {
             const gross = Number(f.amount_before_discount || f.amount || 0);
@@ -728,22 +730,31 @@ export class BulkVoucherJobsService {
 
         const feeHeadsForPdf = [...otherHeads, ...mergedTuitionHeads];
 
-        // ── Prepend arrear heads to PDF (same style as single-voucher flow) ──
-        const arrearHeadsForPdf = arrearRows.map((r) => ({
-            description: `${r.fee_type} (ARREAR – ${r.fee_date})`,
-            amount: Number(r.outstanding),
-            discount: 0,
-            netAmount: Number(r.outstanding),
-            discountLabel: '',
-            isArrear: !r.isSurcharge,
-            isSurcharge: !!r.isSurcharge,
-            feeDate: r.fee_date,
-        }));
+        // ── Surcharge info from the created voucher ──
+        const voucherSurchargeRows: any[] = (voucher as any).voucher_arrear_surcharges ?? [];
+        const totalSurcharge = voucherSurchargeRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
+        const surchargeWaived = !!(voucher as any).surcharge_waived;
+        const activeSurchargeTotal = surchargeWaived ? 0 : totalSurcharge;
+
+        // ── Prepend arrear heads to PDF; exclude surcharge virtual rows ──
+        const arrearHeadsForPdf = arrearRows
+            .filter((r) => !r.isSurcharge)
+            .map((r) => ({
+                description: `${r.fee_type} (ARREAR – ${r.fee_date})`,
+                amount: Number(r.outstanding),
+                discount: 0,
+                netAmount: Number(r.outstanding),
+                discountLabel: '',
+                isArrear: true,
+                feeDate: r.fee_date,
+            }));
 
         const allPdfHeads = [...arrearHeadsForPdf, ...feeHeadsForPdf];
         const currentFeesTotal = feesForThisVoucher.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0);
-        const arrearsTotal = arrearRows.reduce((sum, r) => sum + Number(r.outstanding), 0);
-        const grandTotal = currentFeesTotal + arrearsTotal;
+        const arrearsTotal = arrearRows
+            .filter(r => !r.isSurcharge)
+            .reduce((sum, r) => sum + Number(r.outstanding), 0);
+        const grandTotal = currentFeesTotal + arrearsTotal + activeSurchargeTotal;
 
         const monthLabelItems = feesForThisVoucher.map((f: any) => ({
             month: f.target_month || f.month,
@@ -791,20 +802,24 @@ export class BulkVoucherJobsService {
             feeHeads: allPdfHeads,
             totalAmount: grandTotal,
             lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
+            surchargeWaived,
+            totalSurcharge: totalSurcharge > 0 ? totalSurcharge : undefined,
             qrUrl: undefined, // will be set after upload
-            arrearsHistory: arrearRows.map((r, idx) => {
-                const runningTotal = arrearRows
-                    .slice(0, idx + 1)
-                    .reduce((sum, row) => sum + Number(row.outstanding), 0);
-                return {
-                    date: r.fee_date,
-                    head: r.fee_type,
-                    amount: Number(r.outstanding).toLocaleString(),
-                    totalAmount: runningTotal.toLocaleString(),
-                    target_month: r.target_month,
-                    academic_year: r.academic_year,
-                };
-            }),
+            arrearsHistory: arrearRows
+                .filter(r => !r.isSurcharge)
+                .map((r, idx, arr) => {
+                    const runningTotal = arr
+                        .slice(0, idx + 1)
+                        .reduce((sum, row) => sum + Number(row.outstanding), 0);
+                    return {
+                        date: r.fee_date,
+                        head: r.fee_type,
+                        amount: Number(r.outstanding).toLocaleString(),
+                        totalAmount: runningTotal.toLocaleString(),
+                        target_month: r.target_month,
+                        academic_year: r.academic_year,
+                    };
+                }),
         });
 
         // Upload PDF without QR to get the real DO URL
@@ -850,20 +865,24 @@ export class BulkVoucherJobsService {
             feeHeads: allPdfHeads,
             totalAmount: grandTotal,
             lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
+            surchargeWaived,
+            totalSurcharge: totalSurcharge > 0 ? totalSurcharge : undefined,
             qrUrl: pdfUrl,
-            arrearsHistory: arrearRows.map((r, idx) => {
-                const runningTotal = arrearRows
-                    .slice(0, idx + 1)
-                    .reduce((sum, row) => sum + Number(row.outstanding), 0);
-                return {
-                    date: r.fee_date,
-                    head: r.fee_type,
-                    amount: Number(r.outstanding).toLocaleString(),
-                    totalAmount: runningTotal.toLocaleString(),
-                    target_month: r.target_month,
-                    academic_year: r.academic_year,
-                };
-            }),
+            arrearsHistory: arrearRows
+                .filter(r => !r.isSurcharge)
+                .map((r, idx, arr) => {
+                    const runningTotal = arr
+                        .slice(0, idx + 1)
+                        .reduce((sum, row) => sum + Number(row.outstanding), 0);
+                    return {
+                        date: r.fee_date,
+                        head: r.fee_type,
+                        amount: Number(r.outstanding).toLocaleString(),
+                        totalAmount: runningTotal.toLocaleString(),
+                        target_month: r.target_month,
+                        academic_year: r.academic_year,
+                    };
+                }),
         });
 
         return { buffer: pdfBufferWithQr, url: pdfUrl };

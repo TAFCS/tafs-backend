@@ -116,7 +116,7 @@ export class VouchersController {
         const feeDate = new Date(feeDateStr);
         const waiveSurcharge = waiveSurchargeStr === 'true';
         
-        const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge, false);
+        const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
         return {
             success: true,
             message: 'Arrears computed successfully',
