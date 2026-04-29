@@ -131,4 +131,10 @@ export class CreateVoucherDto {
     @IsString()
     @IsOptional()
     waived_by?: string;
+
+    /** Pre-computed surcharge groups from an outer computeArrears() call. When present,
+     *  create() skips its internal computeArrears() call to avoid a redundant DB round-trip. */
+    @IsOptional()
+    @IsArray()
+    pre_computed_surcharge_groups?: Array<{ date: Date; target_month: number; academic_year: string }>;
 }

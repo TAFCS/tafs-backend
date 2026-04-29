@@ -20,8 +20,6 @@ import {
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
-import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
-import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
@@ -59,43 +57,6 @@ export class VouchersController {
             success: true,
             message: 'Voucher created successfully',
             data: voucher,
-        };
-    }
-
-    @Post('bulk/preview')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.OK)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Create, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    async previewBulk(@Body() dto: PreviewBulkVouchersDto) {
-        const preview = await this.vouchersService.previewBulk(dto);
-        return {
-            success: true,
-            message: 'Bulk voucher preview generated successfully',
-            data: preview,
-        };
-    }
-
-    @Post('bulk/create')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.CREATED)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Create, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    async createBulk(@Body() dto: CreateBulkVouchersDto, @Req() req: any) {
-        if (dto.waive_surcharge && !dto.waived_by) {
-            dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
-        }
-        const result = await this.vouchersService.createBulk(dto);
-        return {
-            success: true,
-            message: 'Bulk vouchers created successfully',
-            data: result,
         };
     }
 
@@ -247,27 +208,6 @@ export class VouchersController {
             message: 'Voucher updated successfully',
             data: voucher,
         };
-    }
-
-    /** Save a stamped PAID PDF back to the voucher record. */
-    @Patch(':id/paid-pdf')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.OK)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Update, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    @UseInterceptors(FileInterceptor('pdf'))
-    async savePaidPdf(
-        @Param('id', ParseIntPipe) id: number,
-        @UploadedFile() pdf: Express.Multer.File,
-    ) {
-        if (!pdf?.buffer) {
-            return { success: false, message: 'No PDF file uploaded.' };
-        }
-        const result = await this.vouchersService.savePaidPdf(id, pdf.buffer);
-        return { success: true, message: 'Paid PDF saved.', data: result };
     }
 
     /**
