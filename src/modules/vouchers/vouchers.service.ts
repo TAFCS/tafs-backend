@@ -787,9 +787,26 @@ export class VouchersService {
         const lateFeeAmount = new Prisma.Decimal(dto.late_fee ?? 0);
         const distributionEntries = Object.entries(dto.distributions ?? {});
 
-        if (distributionEntries.length === 0 && lateFeeAmount.eq(0)) {
+        // ── Parse surcharge allocations ──────────────────────────────────────
+        const parsedSurchargeAllocations = (dto.surcharge_allocations ?? []).map(s => {
+            const surchargeId = Number(s.surcharge_id);
+            const amount = new Prisma.Decimal(s.amount ?? 0);
+            if (!Number.isInteger(surchargeId) || surchargeId <= 0) {
+                throw new BadRequestException(`Invalid surcharge id '${s.surcharge_id}' in surcharge_allocations.`);
+            }
+            if (amount.lt(0)) {
+                throw new BadRequestException(`Surcharge allocation amount cannot be negative for surcharge #${surchargeId}.`);
+            }
+            return { surchargeId, amount };
+        });
+        const surchargesTotal = parsedSurchargeAllocations.reduce(
+            (sum, s) => sum.add(s.amount),
+            new Prisma.Decimal(0),
+        );
+
+        if (distributionEntries.length === 0 && lateFeeAmount.eq(0) && surchargesTotal.eq(0)) {
             throw new BadRequestException(
-                'Provide at least one voucher head distribution or late fee amount.',
+                'Provide at least one voucher head distribution, surcharge allocation, or late fee amount.',
             );
         }
 
@@ -815,11 +832,11 @@ export class VouchersService {
             (sum, item) => sum.add(item.amount),
             new Prisma.Decimal(0),
         );
-        const distributedTotal = headsTotal.add(lateFeeAmount);
+        const distributedTotal = headsTotal.add(lateFeeAmount).add(surchargesTotal);
 
         if (!distributedTotal.eq(depositAmount)) {
             throw new BadRequestException(
-                'Deposit amount must equal the sum of distributions and late fee.',
+                'Deposit amount must equal the sum of distributions, surcharge allocations, and late fee.',
             );
         }
 
@@ -849,6 +866,31 @@ export class VouchersService {
                 throw new BadRequestException(
                     `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
                 );
+            }
+        }
+
+        // ── Pre-validate surcharge allocations ──────────────────────────────
+        if (parsedSurchargeAllocations.length > 0) {
+            const voucherSurcharges = await (this.prisma.voucher_arrear_surcharges as any).findMany({
+                where: { voucher_id: voucherId, id: { in: parsedSurchargeAllocations.map(s => s.surchargeId) } },
+            });
+            const surchargeMap = new Map((voucherSurcharges as any[]).map(s => [s.id, s]));
+            for (const { surchargeId, amount } of parsedSurchargeAllocations) {
+                const surcharge = surchargeMap.get(surchargeId);
+                if (!surcharge) {
+                    throw new BadRequestException(`Surcharge #${surchargeId} does not belong to voucher #${voucherId}.`);
+                }
+                if (surcharge.waived) {
+                    throw new BadRequestException(`Surcharge #${surchargeId} has been waived and cannot receive a payment.`);
+                }
+                const remaining = new Prisma.Decimal(surcharge.amount).sub(
+                    new Prisma.Decimal(surcharge.amount_paid ?? 0),
+                );
+                if (amount.gt(remaining)) {
+                    throw new BadRequestException(
+                        `Surcharge #${surchargeId} allocation (${amount}) exceeds its remaining balance (${remaining}).`,
+                    );
+                }
             }
         }
 
@@ -1014,6 +1056,25 @@ export class VouchersService {
 
                 if (allocationData.length > 0) {
                     await tx.deposit_allocations.createMany({ data: allocationData });
+                }
+
+                // ── Step B2: Write surcharge allocations ─────────────────────
+                for (const { surchargeId, amount } of parsedSurchargeAllocations) {
+                    if (amount.eq(0)) continue;
+                    await tx.deposit_allocations.create({
+                        data: {
+                            deposit_id: depositRecord.id,
+                            voucher_id: voucherId,
+                            surcharge_id: surchargeId,
+                            student_fee_id: null,
+                            amount,
+                            type: 'SURCHARGE',
+                        } as any,
+                    });
+                    await (tx.voucher_arrear_surcharges as any).update({
+                        where: { id: surchargeId },
+                        data: { amount_paid: { increment: amount } },
+                    });
                 }
 
                 // ── Step C: Update student_fees (amount_paid + status) ─────────

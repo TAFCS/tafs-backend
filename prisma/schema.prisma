@@ -134,15 +134,17 @@ model classes {
 }
 
 model deposit_allocations {
-  id             Int           @id @default(autoincrement())
-  deposit_id     Int
-  student_fee_id Int?
-  voucher_id     Int?
-  amount         Decimal       @db.Decimal(12, 2)
-  type           String        @db.VarChar(20)
-  deposits       deposits      @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
-  student_fees   student_fees? @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vouchers       vouchers?     @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                        Int                        @id @default(autoincrement())
+  deposit_id                Int
+  student_fee_id            Int?
+  voucher_id                Int?
+  surcharge_id              Int?
+  amount                    Decimal                    @db.Decimal(12, 2)
+  type                      String                     @db.VarChar(20)
+  deposits                  deposits                   @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
+  student_fees              student_fees?              @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                  vouchers?                  @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  voucher_arrear_surcharges voucher_arrear_surcharges? @relation(fields: [surcharge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model deposits {
@@ -538,15 +540,17 @@ model voucher_heads {
 }
 
 model voucher_arrear_surcharges {
-  id              Int      @id @default(autoincrement())
-  voucher_id      Int
-  arrear_fee_date DateTime @db.Date
-  arrear_month    Int
-  arrear_year     String   @db.VarChar(10)
-  amount          Decimal  @db.Decimal(12, 2)
-  waived          Boolean  @default(false)
-  waived_by       String?  @db.VarChar(255)
-  vouchers        vouchers @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
+  id                  Int                   @id @default(autoincrement())
+  voucher_id          Int
+  arrear_fee_date     DateTime              @db.Date
+  arrear_month        Int
+  arrear_year         String                @db.VarChar(10)
+  amount              Decimal               @db.Decimal(12, 2)
+  amount_paid         Decimal               @default(0) @db.Decimal(12, 2)
+  waived              Boolean               @default(false)
+  waived_by           String?               @db.VarChar(255)
+  deposit_allocations deposit_allocations[]
+  vouchers            vouchers              @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
 
   @@index([voucher_id])
 }
