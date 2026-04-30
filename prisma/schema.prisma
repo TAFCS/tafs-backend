@@ -138,13 +138,13 @@ model deposit_allocations {
   deposit_id                Int
   student_fee_id            Int?
   voucher_id                Int?
-  surcharge_id              Int?
   amount                    Decimal                    @db.Decimal(12, 2)
   type                      String                     @db.VarChar(20)
+  surcharge_id              Int?
   deposits                  deposits                   @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
   student_fees              student_fees?              @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vouchers                  vouchers?                  @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   voucher_arrear_surcharges voucher_arrear_surcharges? @relation(fields: [surcharge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                  vouchers?                  @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model deposits {
@@ -418,7 +418,6 @@ model students {
   primary_phone              String?                    @db.VarChar(20)
   email                      String?                    @db.VarChar(100)
   class_id                   Int?
-  graduated_from_class_id    Int?
   section_id                 Int?
   house_id                   Int?
   doa                        DateTime?                  @db.Date
@@ -431,6 +430,7 @@ model students {
   is_complementary           Boolean                    @default(false)
   is_fee_endowment           Boolean                    @default(false)
   fee_start_term             String?                    @db.VarChar(10)
+  graduated_from_class_id    Int?
   deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
@@ -444,8 +444,8 @@ model students {
   student_previous_schools   student_previous_schools[]
   campuses                   campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                    classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vouchers                   vouchers[]
@@ -546,9 +546,9 @@ model voucher_arrear_surcharges {
   arrear_month        Int
   arrear_year         String                @db.VarChar(10)
   amount              Decimal               @db.Decimal(12, 2)
-  amount_paid         Decimal               @default(0) @db.Decimal(12, 2)
   waived              Boolean               @default(false)
   waived_by           String?               @db.VarChar(255)
+  amount_paid         Decimal               @default(0) @db.Decimal(12, 2)
   deposit_allocations deposit_allocations[]
   vouchers            vouchers              @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
 
@@ -556,35 +556,35 @@ model voucher_arrear_surcharges {
 }
 
 model vouchers {
-  id                       Int                   @id @default(autoincrement())
-  student_id               Int
-  campus_id                Int
-  class_id                 Int
-  bank_account_id          Int
-  issue_date               DateTime              @db.Date
-  due_date                 DateTime              @db.Date
-  status                   String?               @default("UNPAID") @db.VarChar(20)
-  validity_date            DateTime?             @db.Date
-  late_fee_charge          Boolean
-  section_id               Int?
-  academic_year            String?               @db.VarChar(10)
-  month                    Int?
-  pdf_url                  String?
-  total_payable_before_due Decimal?              @default(0) @db.Decimal(12, 2)
-  total_payable_after_due  Decimal?              @default(0) @db.Decimal(12, 2)
-  late_fee_deposited       Decimal?              @default(0) @db.Decimal(12, 2)
-  fee_date                 DateTime?             @db.Date
-  surcharge_waived         Boolean               @default(false)
-  surcharge_waived_by      String?               @db.VarChar(100)
-  total_arrears            Decimal?              @default(0) @db.Decimal(12, 2)
-  deposit_allocations      deposit_allocations[]
+  id                        Int                         @id @default(autoincrement())
+  student_id                Int
+  campus_id                 Int
+  class_id                  Int
+  bank_account_id           Int
+  issue_date                DateTime                    @db.Date
+  due_date                  DateTime                    @db.Date
+  status                    String?                     @default("UNPAID") @db.VarChar(20)
+  validity_date             DateTime?                   @db.Date
+  late_fee_charge           Boolean
+  section_id                Int?
+  academic_year             String?                     @db.VarChar(10)
+  month                     Int?
+  pdf_url                   String?
+  total_payable_before_due  Decimal?                    @default(0) @db.Decimal(12, 2)
+  total_payable_after_due   Decimal?                    @default(0) @db.Decimal(12, 2)
+  late_fee_deposited        Decimal?                    @default(0) @db.Decimal(12, 2)
+  fee_date                  DateTime?                   @db.Date
+  surcharge_waived          Boolean                     @default(false)
+  surcharge_waived_by       String?                     @db.VarChar(100)
+  total_arrears             Decimal?                    @default(0) @db.Decimal(12, 2)
+  deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
-  voucher_heads            voucher_heads[]
-  bank_accounts            bank_accounts         @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  campuses                 campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                  classes               @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                 sections?             @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  students                 students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+  voucher_heads             voucher_heads[]
+  bank_accounts             bank_accounts               @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses                  campuses                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                   classes                     @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                  sections?                   @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students                  students                    @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model bundle_fee_type_names {

@@ -483,11 +483,12 @@ export class VouchersService {
         let heads = voucher.voucher_heads.map((h: any) => {
             const isSplitHead = (h.split_sequence != null && h.split_total != null);
             const feeTypeDesc = h.student_fees?.fee_types?.description || 'Fee';
+            const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
             const monthSuffix = h.student_fees?.target_month != null
                 ? ` ${getMonthYearLabel(h.student_fees.target_month, h.student_fees.academic_year, voucher.class_id).toUpperCase()}`
                 : '';
             
-            let description = feeTypeDesc + monthSuffix;
+            let description = prefixStr + feeTypeDesc + monthSuffix;
 
             // Handle Installment Sequence (e.g. 1/6)
             // STANDALONE vs MERGED Check:
@@ -501,7 +502,7 @@ export class VouchersService {
                 const total = sf.student_fee_installments?.installment_count || group.length;
                 const idx = group.findIndex(f => f.id === sf.id);
                 if (idx !== -1) {
-                    description = `${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
+                    description = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
                 }
             }
 
