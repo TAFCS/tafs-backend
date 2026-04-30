@@ -129,6 +129,7 @@ model classes {
   campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
   students           students[]
+  graduated_students students[]           @relation("GraduatedFromClass")
   vouchers           vouchers[]
 }
 
@@ -415,6 +416,7 @@ model students {
   primary_phone              String?                    @db.VarChar(20)
   email                      String?                    @db.VarChar(100)
   class_id                   Int?
+  graduated_from_class_id    Int?
   section_id                 Int?
   house_id                   Int?
   doa                        DateTime?                  @db.Date
@@ -440,6 +442,7 @@ model students {
   student_previous_schools   student_previous_schools[]
   campuses                   campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                    classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

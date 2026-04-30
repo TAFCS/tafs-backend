@@ -52,6 +52,7 @@ export class StudentsService {
   private readonly assignmentInclude = {
     campuses: { select: { campus_name: true, campus_code: true } },
     classes: { select: { description: true, class_code: true } },
+    graduated_from_class: { select: { id: true, description: true, class_code: true } },
     sections: { select: { description: true } },
     houses: { select: { house_name: true } },
   } as const;
@@ -196,6 +197,7 @@ export class StudentsService {
       selectArgs.photograph_url = true;
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
       selectArgs.classes   = { select: { description: true, class_code: true } };
+      selectArgs.graduated_from_class = { select: { id: true, description: true, class_code: true } };
       selectArgs.sections  = { select: { description: true } };
       selectArgs.houses    = { select: { house_name: true, house_color: true } };
       selectArgs.family_id = true;
@@ -1132,6 +1134,7 @@ export class StudentsService {
             where: { cc: student.cc },
             data: {
               status: StudentStatus.GRADUATED,
+              graduated_from_class_id: student.class_id,
               class_id: null,
               academic_year: nextAcademicYear,
             },
