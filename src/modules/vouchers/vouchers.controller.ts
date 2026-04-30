@@ -86,7 +86,7 @@ export class VouchersController {
         const studentId = parseInt(studentIdStr, 10);
         const feeDate = new Date(feeDateStr);
         const waiveSurcharge = waiveSurchargeStr === 'true';
-        
+
         const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
         return {
             success: true,
@@ -333,10 +333,10 @@ export class VouchersController {
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Voucher') || ability.can(Action.Manage, 'all'))
     async bulkRemove(@Body() dto: BulkDeleteVouchersDto) {
-        const results = await this.vouchersService.bulkRemove(dto.ids);
+        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false);
         return {
             success: true,
-            message: `${results.deleted} vouchers deleted, ${results.skipped} skipped (non-deletable status).`,
+            message: `${results.deleted} deleted, ${results.skipped} skipped.`,
             data: results,
         };
     }

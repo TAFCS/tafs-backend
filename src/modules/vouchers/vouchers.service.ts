@@ -487,7 +487,7 @@ export class VouchersService {
             const monthSuffix = h.student_fees?.target_month != null
                 ? ` ${getMonthYearLabel(h.student_fees.target_month, h.student_fees.academic_year, voucher.class_id).toUpperCase()}`
                 : '';
-            
+
             let description = prefixStr + feeTypeDesc + monthSuffix;
 
             // Handle Installment Sequence (e.g. 1/6)
@@ -1747,7 +1747,7 @@ export class VouchersService {
                             }
                         }
                     }
-                    
+
                     if (!isArrear && fee.fee_date && voucher.fee_date) {
                         isArrear = new Date(fee.fee_date) < new Date(voucher.fee_date);
                     }
@@ -1995,13 +1995,13 @@ export class VouchersService {
             rows,
         };
     }
-    async bulkRemove(ids: number[]) {
+    async bulkRemove(ids: number[], force = false) {
         let deleted = 0, skipped = 0;
         const errors: { id: number; reason: string }[] = [];
 
         for (const id of ids) {
             try {
-                await this.remove(id);
+                force ? await this.forceRemove(id) : await this.remove(id);
                 deleted++;
             } catch (e: any) {
                 skipped++;
@@ -2009,6 +2009,63 @@ export class VouchersService {
             }
         }
         return { deleted, skipped, errors };
+    }
+
+    /**
+     * Force hard delete a voucher, bypassing status guard.
+     * Deletes ANY status including PAID/PARTIALLY_PAID.
+     * Resets linked student_fees back to NOT_ISSUED.
+     * Deletes deposit_allocations (severs link from underlying deposit).
+     */
+    async forceRemove(id: number) {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id },
+            include: {
+                voucher_heads: {
+                    include: { student_fees: true }
+                }
+            }
+        });
+
+        if (!voucher) {
+            throw new NotFoundException(`Voucher #${id} not found`);
+        }
+
+        // No status guard — allows deleting PAID/PARTIALLY_PAID
+
+        return await this.prisma.$transaction(async (tx) => {
+            const heads = voucher.voucher_heads || [];
+            const regularFeeIds = heads.map(h => h.student_fee_id);
+
+            // 1. Reset regular student_fees to NOT_ISSUED
+            if (regularFeeIds.length > 0) {
+                await tx.student_fees.updateMany({
+                    where: { id: { in: regularFeeIds } },
+                    data: {
+                        status: 'NOT_ISSUED',
+                        issue_date: null,
+                        due_date: null,
+                        validity_date: null,
+                    }
+                });
+            }
+
+            // 2. Delete deposit_allocations for this voucher
+            await tx.deposit_allocations.deleteMany({
+                where: { voucher_id: id }
+            });
+
+            // 3. Delete voucher_heads
+            await tx.voucher_heads.deleteMany({ where: { voucher_id: id } });
+
+            // 4. Delete the voucher — cascades to voucher_arrear_surcharges automatically.
+            const deleted = await tx.vouchers.delete({ where: { id } });
+
+            return deleted;
+        }, {
+            maxWait: 5000,
+            timeout: 15000,
+        });
     }
     async remove(id: number) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -2068,7 +2125,7 @@ export class VouchersService {
 
     async batchPreview(dto: BatchPreviewDto) {
         const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
-        
+
         const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
             campus_id: dto.campus_id,
             class_id: dto.class_id,
