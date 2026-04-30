@@ -12,33 +12,13 @@ import { StartBulkJobDto } from './dto/start-bulk-job.dto';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { deriveAcademicYear } from '../../common/utils/academic-labels';
+import { BulkVoucherLogicService } from '../vouchers/bulk-voucher-logic.service';
+import { getMonthlyFeeDates } from './utils/bulk-date.utils';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Returns an array of ISO date strings (YYYY-MM-DD) for the 1st of every
- * calendar month between `from` and `to` (inclusive).
- *
- * e.g. "2025-01-01" → "2025-03-31" produces ["2025-01-01", "2025-02-01", "2025-03-01"]
- */
-function getMonthlyFeeDates(from: string, to: string): string[] {
-    const dates: string[] = [];
-    const start = new Date(from);
-    const end = new Date(to);
-
-    // Normalise to 1st of each month
-    const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-    const endNormalised = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
-
-    while (cursor <= endNormalised) {
-        dates.push(cursor.toISOString().split('T')[0]);
-        cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-
-    return dates;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -66,6 +46,7 @@ export class BulkVoucherJobsService {
         private readonly vouchersService: VouchersService,
         private readonly voucherPdfService: VoucherPdfService,
         private readonly storage: StorageService,
+        private readonly bulkLogic: BulkVoucherLogicService,
     ) {}
 
     // ── Preview ─────────────────────────────────────────────────────────────
@@ -258,124 +239,35 @@ export class BulkVoucherJobsService {
             const feeDateTo = new Date(dto.fee_date_to);
             const PDF_BATCH_SIZE = 10;
 
-            // ── PHASE 1: BULK PRE-FETCH (3 parallel DB queries) ─────────────────
-            const [studentRecords, matchingFees, existingVouchers] = await Promise.all([
-                this.prisma.students.findMany({
-                    where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
-                    select: {
-                        cc: true,
-                        full_name: true,
-                        class_id: true,
-                        campus_id: true,
-                        section_id: true,
-                    },
-                }),
-                this.prisma.student_fees.findMany({
-                    where: {
-                        student_id: { in: dto.student_ccs },
-                        fee_date: { lte: feeDateTo },
-                        status: 'NOT_ISSUED',
-                    },
-                    select: {
-                        id: true,
-                        student_id: true,
-                        academic_year: true,
-                        fee_date: true,
-                        target_month: true,
-                        month: true,
-                        amount: true,
-                        amount_before_discount: true,
-                        fee_type_id: true,
-                        fee_types: { select: { description: true, priority_order: true } },
-                    },
-                }),
-                this.prisma.vouchers.findMany({
-                    where: {
-                        student_id: { in: dto.student_ccs },
-                        fee_date: { gte: feeDateFrom, lte: feeDateTo },
-                        status: { not: 'VOID' },
-                    },
-                    select: { student_id: true, fee_date: true },
-                }),
-            ]);
 
-            // Set of "cc|dateStr" keys that already have a non-VOID voucher
-            const existingVoucherKeys = new Set(
-                existingVouchers
-                    .filter(v => v.fee_date)
-                    .map(v => `${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`),
-            );
+            const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
+                campus_id: dto.campus_id,
+                class_id: dto.class_id,
+                section_id: dto.section_id,
+                fee_date_from: dto.fee_date_from,
+                fee_date_to: dto.fee_date_to,
+                student_ccs: dto.student_ccs,
+            });
 
             // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
-            type WorkItem = { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string };
-            const workItems: WorkItem[] = [];
+            const { workItems, skips } = this.bulkLogic.resolveWorkItems({
+                studentRecords,
+                matchingFees,
+                existingVouchers,
+                fee_date_from: dto.fee_date_from,
+                fee_date_to: dto.fee_date_to,
+                expectedFeeDates,
+                skipAlreadyIssued: dto.skip_already_issued ?? true,
+                academic_year_override: dto.academic_year,
+            });
 
-            for (const cc of dto.student_ccs) {
-                const studentFees = matchingFees.filter((f) => f.student_id === cc);
-                const student = studentRecords.find((s) => s.cc === cc);
-                if (!student) continue;
-
-                // Map fees to their month (1st of month string)
-                const dateMap = new Map<string, any[]>();
-                const priorFees: any[] = [];
-                const startDate = new Date(dto.fee_date_from);
-
-                for (const f of studentFees) {
-                    if (!f.fee_date) continue;
-                    const fDate = new Date(f.fee_date);
-                    if (fDate < startDate) {
-                        priorFees.push(f);
-                    } else {
-                        const monthKey = new Date(Date.UTC(fDate.getUTCFullYear(), fDate.getUTCMonth(), 1))
-                            .toISOString()
-                            .split('T')[0];
-                        if (!dateMap.has(monthKey)) dateMap.set(monthKey, []);
-                        dateMap.get(monthKey)!.push(f);
-                    }
-                }
-
-                const datesFound = Array.from(dateMap.keys()).sort();
-                const firstDateInRange = expectedFeeDates[0];
-                
-                if (priorFees.length > 0 && !dateMap.has(firstDateInRange)) {
-                    dateMap.set(firstDateInRange, []);
-                    if (!datesFound.includes(firstDateInRange)) {
-                        datesFound.push(firstDateInRange);
-                        datesFound.sort();
-                    }
-                }
-                
-                if (priorFees.length > 0) {
-                    const targetDate = datesFound[0];
-                    dateMap.set(targetDate, [...priorFees, ...(dateMap.get(targetDate) || [])]);
-                }
-
-                for (const dateStr of expectedFeeDates) {
-                    if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
-                        skipCountTotal++;
-                        jobReport.push({
-                            cc,
-                            student_name: student.full_name,
-                            status: 'SKIPPED',
-                            reason: `Voucher already issued for period starting ${dateStr}`,
-                        });
-                    } else {
-                        const feesInThisMonth = dateMap.get(dateStr) || [];
-                        if (feesInThisMonth.length === 0) {
-                            skipCountTotal++;
-                            jobReport.push({
-                                cc,
-                                student_name: student.full_name,
-                                status: 'SKIPPED',
-                                reason: `No unpaid fee heads found for period starting ${dateStr}`,
-                            });
-                        } else {
-                            const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id ?? undefined);
-                            workItems.push({ cc, dateStr, fees: feesInThisMonth, student, academicYear: itemAcademicYear });
-                        }
-                    }
-                }
-            }
+            skipCountTotal = skips.length;
+            jobReport.push(...skips.map(s => ({
+                cc: s.cc,
+                student_name: s.student_name,
+                status: s.status,
+                reason: s.reason,
+            })));
 
             if (skipCountTotal > 0) {
                 await this.prisma.bulk_voucher_jobs.update({

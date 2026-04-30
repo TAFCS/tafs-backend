@@ -15,6 +15,9 @@ import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel } from '../../common/utils/academic-labels';
+import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
+import { BatchPreviewDto } from './dto/batch-preview.dto';
+import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
@@ -80,6 +83,7 @@ export class VouchersService {
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
         private readonly pdfService: VoucherPdfService,
+        private readonly bulkLogic: BulkVoucherLogicService,
     ) { }
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
@@ -1990,7 +1994,21 @@ export class VouchersService {
             rows,
         };
     }
+    async bulkRemove(ids: number[]) {
+        let deleted = 0, skipped = 0;
+        const errors: { id: number; reason: string }[] = [];
 
+        for (const id of ids) {
+            try {
+                await this.remove(id);
+                deleted++;
+            } catch (e: any) {
+                skipped++;
+                errors.push({ id, reason: e.message });
+            }
+        }
+        return { deleted, skipped, errors };
+    }
     async remove(id: number) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
@@ -2045,5 +2063,82 @@ export class VouchersService {
             maxWait: 5000,
             timeout: 15000,
         });
+    }
+
+    async batchPreview(dto: BatchPreviewDto) {
+        const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
+        
+        const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
+            campus_id: dto.campus_id,
+            class_id: dto.class_id,
+            section_id: dto.section_id,
+            fee_date_from: dto.fee_date_from,
+            fee_date_to: dto.fee_date_to,
+            include_statuses: dto.include_statuses,
+        });
+
+        const { workItems, skips } = this.bulkLogic.resolveWorkItems({
+            studentRecords,
+            matchingFees,
+            existingVouchers,
+            fee_date_from: dto.fee_date_from,
+            fee_date_to: dto.fee_date_to,
+            expectedFeeDates: feeDates,
+            skipAlreadyIssued: false, // In preview, we want to see them but marked as already issued
+            academic_year_override: dto.academic_year,
+        });
+
+        // Group by student for response
+        const studentsMap = new Map<number, any>();
+
+        for (const student of studentRecords) {
+            studentsMap.set(student.cc, {
+                cc: student.cc,
+                full_name: student.full_name,
+                class: student.classes?.description || 'N/A',
+                section: student.sections?.description || 'N/A',
+                voucher_groups: [],
+            });
+        }
+
+        // Add work items (successful groups)
+        for (const item of workItems) {
+            const studentEntry = studentsMap.get(item.cc);
+            if (studentEntry) {
+                studentEntry.voucher_groups.push({
+                    fee_date: item.dateStr,
+                    academic_year: item.academicYear,
+                    heads: item.fees.map((f: any) => ({
+                        id: f.id,
+                        fee_type: f.fee_types?.description || 'Fee',
+                        target_month: f.target_month || f.month,
+                        amount: Number(f.amount),
+                        status: f.status,
+                    })),
+                    already_issued: item.alreadyIssued,
+                    skip_reason: item.alreadyIssued ? 'ALREADY_ISSUED' : undefined,
+                });
+            }
+        }
+
+        // Add skips
+        for (const skip of skips) {
+            const studentEntry = studentsMap.get(skip.cc);
+            if (studentEntry) {
+                studentEntry.voucher_groups.push({
+                    fee_date: skip.dateStr,
+                    heads: [],
+                    already_issued: skip.reason.includes('already issued'),
+                    skip_reason: skip.reason,
+                });
+            }
+        }
+
+        // Sort voucher groups by date
+        for (const student of studentsMap.values()) {
+            student.voucher_groups.sort((a: any, b: any) => a.fee_date.localeCompare(b.fee_date));
+        }
+
+        return Array.from(studentsMap.values());
     }
 }

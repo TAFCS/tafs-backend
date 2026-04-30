@@ -16,6 +16,8 @@ import {
     UseGuards,
     UseInterceptors,
     Delete,
+    Inject,
+    forwardRef,
 } from '@nestjs/common';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
@@ -25,6 +27,10 @@ import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
+import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
+import { BatchPreviewDto } from './dto/batch-preview.dto';
+import { StartBulkJobDto } from '../bulk-voucher-jobs/dto/start-bulk-job.dto';
+import { BulkVoucherJobsService } from '../bulk-voucher-jobs/bulk-voucher-jobs.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -33,7 +39,11 @@ import { Action } from '../auth/casl/actions';
 
 @Controller('vouchers')
 export class VouchersController {
-    constructor(private readonly vouchersService: VouchersService) {}
+    constructor(
+        private readonly vouchersService: VouchersService,
+        @Inject(forwardRef(() => BulkVoucherJobsService))
+        private readonly bulkJobsService: BulkVoucherJobsService,
+    ) {}
 
     @Post()
     @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -289,6 +299,45 @@ export class VouchersController {
             success: true,
             message: 'Voucher resolution completed',
             data: result,
+        };
+    }
+
+    @Post('batch-preview')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchPreview(@Body() dto: BatchPreviewDto) {
+        const data = await this.vouchersService.batchPreview(dto);
+        return {
+            success: true,
+            message: 'Batch preview generated successfully',
+            data,
+        };
+    }
+
+    @Post('batch-issue')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.ACCEPTED)
+    @CheckPolicies((ability) => ability.can(Action.Create, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchIssue(@Body() dto: StartBulkJobDto, @Req() req: any) {
+        const createdBy: string = req?.user?.id ?? req?.user?.sub ?? 'system';
+        const result = await this.bulkJobsService.startJob(dto, createdBy);
+        return {
+            success: true,
+            message: 'Batch generation job started',
+            data: result,
+        };
+    }
+
+    @Delete('bulk')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async bulkRemove(@Body() dto: BulkDeleteVouchersDto) {
+        const results = await this.vouchersService.bulkRemove(dto.ids);
+        return {
+            success: true,
+            message: `${results.deleted} vouchers deleted, ${results.skipped} skipped (non-deletable status).`,
+            data: results,
         };
     }
 
