@@ -54,6 +54,11 @@ export class BulkVoucherJobsService {
     async preview(dto: PreviewBulkRequestDto): Promise<BulkStudentPreview[]> {
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
 
+        // 0. Normalize singular IDs into plural arrays for internal logic
+        const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);
+        const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
+        const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
+
         // 1. Fetch matching student records
         const students = await this.prisma.students.findMany({
             where: {
@@ -62,9 +67,9 @@ export class BulkVoucherJobsService {
                 ...(dto.student_ccs?.length
                     ? { cc: { in: dto.student_ccs } }
                     : {
-                        ...(dto.campus_ids?.length ? { campus_id: { in: dto.campus_ids } } : {}),
-                        ...(dto.class_ids?.length ? { class_id: { in: dto.class_ids } } : {}),
-                        ...(dto.section_ids?.length ? { section_id: { in: dto.section_ids } } : {}),
+                        ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
+                        ...(classIds.length ? { class_id: { in: classIds } } : {}),
+                        ...(sectionIds.length ? { section_id: { in: sectionIds } } : {}),
                     } as any),
             },
             select: {
@@ -154,13 +159,17 @@ export class BulkVoucherJobsService {
         // Total work items = students × months
         const totalCount = dto.student_ccs.length * feeDates.length;
 
+        const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);
+        const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
+        const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
+
         // 1. Create the job record
         const job = await this.prisma.bulk_voucher_jobs.create({
             data: {
                 created_by: createdBy,
-                campus_ids: dto.campus_ids || [],
-                class_ids: dto.class_ids || [],
-                section_ids: dto.section_ids || [],
+                campus_ids: campusIds,
+                class_ids: classIds,
+                section_ids: sectionIds,
                 academic_year: academicYear,
                 fee_date_from: new Date(dto.fee_date_from),
                 fee_date_to: new Date(dto.fee_date_to),
@@ -282,10 +291,14 @@ export class BulkVoucherJobsService {
             const PDF_BATCH_SIZE = 10;
 
 
+            const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);
+            const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
+            const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
+
             const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
-                campus_ids: dto.campus_ids,
-                class_ids: dto.class_ids,
-                section_ids: dto.section_ids,
+                campus_ids: campusIds,
+                class_ids: classIds,
+                section_ids: sectionIds,
                 fee_date_from: dto.fee_date_from,
                 fee_date_to: dto.fee_date_to,
                 student_ccs: dto.student_ccs,

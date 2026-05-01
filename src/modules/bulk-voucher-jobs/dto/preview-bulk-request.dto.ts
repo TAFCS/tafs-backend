@@ -15,14 +15,29 @@ export class PreviewBulkRequestDto {
     campus_ids?: number[];
 
     @Type(() => Number)
+    @IsInt()
+    @IsOptional()
+    campus_id?: number;
+
+    @Type(() => Number)
     @IsInt({ each: true })
     @IsOptional()
     class_ids?: number[];
 
     @Type(() => Number)
+    @IsInt()
+    @IsOptional()
+    class_id?: number;
+
+    @Type(() => Number)
     @IsInt({ each: true })
     @IsOptional()
     section_ids?: number[];
+
+    @Type(() => Number)
+    @IsInt()
+    @IsOptional()
+    section_id?: number;
 
     /**
      * Academic year string e.g. "2024-2025".
