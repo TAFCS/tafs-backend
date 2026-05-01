@@ -67,8 +67,31 @@ export class TransferService {
 
     if (!currentClass) return [];
 
-    const normalize = (s: string) => s.replace(/^Class\s+/i, '').trim().toUpperCase();
-    const normalizedCurrent = normalize(currentClass);
+    const normalize = (s: string) => {
+      if (!s) return '';
+      // 1. Clean up: remove "Class " prefix, replace dots/hyphens with space, collapse spaces
+      const clean = s
+        .replace(/^Class\s+/i, '')
+        .replace(/[.\-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+      
+      // 2. Base keys using spaces for consistency (e.g., 'SR I', 'O I')
+      const baseKeys = [
+        'SR III', 'SR II', 'SR I',
+        'O III', 'O II', 'O I',
+        'VIII', 'VII', 'IX', 'VI', 'X'
+      ];
+
+      // 3. Match base key
+      for (const k of baseKeys) {
+        if (clean === k || clean.startsWith(k + ' ')) {
+          return k;
+        }
+      }
+      return clean;
+    };
 
     const mapping: Record<string, string[]> = {
       'SR I': ['VI'],
@@ -77,19 +100,17 @@ export class TransferService {
       'VII': ['SR II'],
       'SR III': ['VIII'],
       'VIII': ['SR III'],
-      'O-I': ['IX'],
-      'IX': ['O-I'],
-      'O-II': ['X'],
-      'O-III': ['X'],
-      'X': ['O-II', 'O-III'],
+      'O I': ['IX'],
+      'IX': ['O I'],
+      'O II': ['X'],
+      'O III': ['X'],
+      'X': ['O II', 'O III'],
     };
 
-    const allowed = mapping[normalizedCurrent];
+    const normalizedCurrent = normalize(currentClass);
+    const allowed = mapping[normalizedCurrent] || [];
 
-    if (!allowed) {
-      return [];
-    }
-
+    // Filter all classes to find ones that match the allowed normalized descriptions
     return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
