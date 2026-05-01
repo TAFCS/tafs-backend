@@ -10,19 +10,19 @@ import {
 
 export class PreviewBulkRequestDto {
     @Type(() => Number)
-    @IsInt()
-    @IsNotEmpty()
-    campus_id: number;
+    @IsInt({ each: true })
+    @IsOptional()
+    campus_ids?: number[];
 
     @Type(() => Number)
-    @IsInt()
+    @IsInt({ each: true })
     @IsOptional()
-    class_id?: number;
+    class_ids?: number[];
 
     @Type(() => Number)
-    @IsInt()
+    @IsInt({ each: true })
     @IsOptional()
-    section_id?: number;
+    section_ids?: number[];
 
     /**
      * Academic year string e.g. "2024-2025".
@@ -52,4 +52,9 @@ export class PreviewBulkRequestDto {
     @IsBoolean()
     @IsOptional()
     skip_already_issued?: boolean = true;
+
+    @Type(() => Number)
+    @IsInt({ each: true })
+    @IsOptional()
+    student_ccs?: number[];
 }

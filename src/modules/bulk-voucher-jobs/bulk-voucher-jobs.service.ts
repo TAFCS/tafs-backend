@@ -59,9 +59,13 @@ export class BulkVoucherJobsService {
             where: {
                 deleted_at: null,
                 status: 'ENROLLED',
-                campus_id: dto.campus_id,
-                ...(dto.class_id ? { class_id: dto.class_id } : {}),
-                ...(dto.section_id ? { section_id: dto.section_id } : {}),
+                ...(dto.student_ccs?.length
+                    ? { cc: { in: dto.student_ccs } }
+                    : {
+                        ...(dto.campus_ids?.length ? { campus_id: { in: dto.campus_ids } } : {}),
+                        ...(dto.class_ids?.length ? { class_id: { in: dto.class_ids } } : {}),
+                        ...(dto.section_ids?.length ? { section_id: { in: dto.section_ids } } : {}),
+                    } as any),
             },
             select: {
                 cc: true,
@@ -79,32 +83,56 @@ export class BulkVoucherJobsService {
         const feeDateFrom = new Date(dto.fee_date_from);
         const feeDateTo = new Date(dto.fee_date_to);
 
-        // 2. Find students that already have any fee records issued/paid in the date range
-        const issuedFees = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: { in: studentIds },
-                fee_date: {
-                    gte: feeDateFrom,
-                    lte: feeDateTo,
+        // 2. Find students that have fee records in the date range
+        const [studentFees, existingVouchers] = await Promise.all([
+            this.prisma.student_fees.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    fee_date: { gte: feeDateFrom, lte: feeDateTo },
                 },
-                // Relax Academic Year filter to allow consolidation from previous sessions
-                // academic_year: academicYear,
-                status: { in: ['ISSUED', 'PAID', 'PARTIALLY_PAID'] },
-            },
-            select: { student_id: true },
-        });
-        
-        const alreadyIssuedSet = new Set(issuedFees.map((f) => f.student_id));
+                select: { student_id: true, status: true },
+            }),
+            this.prisma.vouchers.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    fee_date: { gte: feeDateFrom, lte: feeDateTo },
+                    status: { not: 'VOID' },
+                },
+                select: { student_id: true },
+            }),
+        ]);
+
+        // Track who has what
+        const hasNotIssuedSet = new Set<number>();
+        const hasAnyFeesSet = new Set<number>();
+        const alreadyIssuedSet = new Set(existingVouchers.map(v => v.student_id));
+
+        for (const f of studentFees) {
+            hasAnyFeesSet.add(f.student_id);
+            if (f.status === 'NOT_ISSUED') {
+                hasNotIssuedSet.add(f.student_id);
+            }
+        }
 
         // 3. Build response
-        return students.map((s) => ({
-            cc: s.cc,
-            student_full_name: s.full_name,
-            gr_number: s.gr_number ?? null,
-            class_name: s.classes?.description ?? 'N/A',
-            section_name: s.sections?.description ?? 'N/A',
-            is_already_issued: alreadyIssuedSet.has(s.cc),
-        }));
+        const results = students
+            .filter(s => hasAnyFeesSet.has(s.cc)) // Only show students who actually have fees scheduled
+            .map((s) => ({
+                cc: s.cc,
+                student_full_name: s.full_name,
+                gr_number: s.gr_number ?? null,
+                class_name: s.classes?.description ?? 'N/A',
+                section_name: s.sections?.description ?? 'N/A',
+                is_already_issued: alreadyIssuedSet.has(s.cc),
+                has_not_issued: hasNotIssuedSet.has(s.cc),
+            }));
+
+        if (dto.skip_already_issued) {
+            // Only show students who have something to issue AND don't have an active voucher
+            return results.filter((r) => r.has_not_issued && !r.is_already_issued);
+        }
+
+        return results;
     }
 
     // ── Start Job ───────────────────────────────────────────────────────────
@@ -130,9 +158,9 @@ export class BulkVoucherJobsService {
         const job = await this.prisma.bulk_voucher_jobs.create({
             data: {
                 created_by: createdBy,
-                campus_id: dto.campus_id,
-                class_id: dto.class_id ?? null,
-                section_id: dto.section_id ?? null,
+                campus_ids: dto.campus_ids || [],
+                class_ids: dto.class_ids || [],
+                section_ids: dto.section_ids || [],
                 academic_year: academicYear,
                 fee_date_from: new Date(dto.fee_date_from),
                 fee_date_to: new Date(dto.fee_date_to),
@@ -174,22 +202,32 @@ export class BulkVoucherJobsService {
                 merged_pdf_url: true,
                 created_at: true,
                 updated_at: true,
-                campuses: { select: { id: true, campus_name: true } },
+                campus_ids: true,
+                class_ids: true,
+                section_ids: true,
                 report: true,
             },
         });
 
         if (!job) throw new NotFoundException(`Job #${jobId} not found.`);
 
-        return job;
+        // Fetch campus names for display
+        const campusList = job.campus_ids.length > 0 
+            ? await this.prisma.campuses.findMany({
+                where: { id: { in: job.campus_ids } },
+                select: { id: true, campus_name: true }
+              })
+            : [];
+
+        return { ...job, campuses: campusList };
     }
 
     // ── Job History ─────────────────────────────────────────────────────────
 
     async listJobs(campusId?: number) {
-        return this.prisma.bulk_voucher_jobs.findMany({
+        const jobs = await this.prisma.bulk_voucher_jobs.findMany({
             where: {
-                ...(campusId ? { campus_id: campusId } : {}),
+                ...(campusId ? { campus_ids: { has: campusId } } : {}),
             },
             orderBy: { created_at: 'desc' },
             take: 50,
@@ -205,10 +243,14 @@ export class BulkVoucherJobsService {
                 fee_date_to: true,
                 merged_pdf_url: true,
                 created_at: true,
-                campuses: { select: { campus_name: true } },
+                campus_ids: true,
                 report: true,
             },
         });
+
+        // We'll let the frontend map IDs to names for the list, or we could fetch here.
+        // For efficiency in listing, return as is.
+        return jobs;
     }
 
     // ── Async Pipeline ──────────────────────────────────────────────────────
@@ -241,9 +283,9 @@ export class BulkVoucherJobsService {
 
 
             const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
-                campus_id: dto.campus_id,
-                class_id: dto.class_id,
-                section_id: dto.section_id,
+                campus_ids: dto.campus_ids,
+                class_ids: dto.class_ids,
+                section_ids: dto.section_ids,
                 fee_date_from: dto.fee_date_from,
                 fee_date_to: dto.fee_date_to,
                 student_ccs: dto.student_ccs,
@@ -433,8 +475,8 @@ export class BulkVoucherJobsService {
 
         const voucher = await this.vouchersService.create({
             student_id: cc,
-            campus_id: student.campus_id,
-            class_id: student.class_id,
+            campus_id: student.campus_id!,
+            class_id: student.class_id!,
             section_id: student.section_id ?? undefined,
             bank_account_id: dto.bank_account_id,
             issue_date: dto.issue_date,
