@@ -9,13 +9,15 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
-import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
-import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
+import { getMonthYearLabel, getConsolidatedMonthsLabel } from '../../common/utils/academic-labels';
+import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
+import { BatchPreviewDto } from './dto/batch-preview.dto';
+import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
@@ -81,6 +83,7 @@ export class VouchersService {
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
         private readonly pdfService: VoucherPdfService,
+        private readonly bulkLogic: BulkVoucherLogicService,
     ) { }
 
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
@@ -104,7 +107,9 @@ export class VouchersService {
             let finalOrderedFeeIds = [...(dto.orderedFeeIds ?? [])];
             let surchargeGroups: Array<{ date: Date; target_month: number; academic_year: string }> = [];
 
-            if (feeDate) {
+            if (dto.pre_computed_surcharge_groups) {
+                surchargeGroups = dto.pre_computed_surcharge_groups;
+            } else if (feeDate) {
                 const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx);
                 surchargeGroups = arrearsInfo.surcharge_groups;
             }
@@ -323,114 +328,6 @@ export class VouchersService {
         return voucher;
     }
 
-    async previewBulk(dto: PreviewBulkVouchersDto) {
-        const selection = await this.getBulkVoucherSelection({
-            campus_id: dto.campus_id,
-            class_id: dto.class_id,
-            section_id: dto.section_id,
-            academic_year: dto.academic_year,
-            month: dto.month,
-            fee_date: dto.fee_date,
-            issue_date: dto.issue_date,
-        });
-
-        return {
-            filters: {
-                campus_id: dto.campus_id,
-                class_id: dto.class_id ?? null,
-                section_id: dto.section_id ?? null,
-                academic_year: dto.academic_year,
-                month: dto.month ?? null,
-                fee_date: dto.fee_date ?? null,
-            },
-            total_matched_students: selection.totalMatchedStudents,
-            eligible_students: selection.eligibleStudents.length,
-            skipped_no_fee_schedule: selection.skippedNoFeeSchedule.length,
-            skipped_already_issued: selection.skippedAlreadyIssued.length,
-            skipped_missing_assignment: selection.skippedMissingAssignment.length,
-            eligible_student_ids: selection.eligibleStudents.map((s) => s.student_id),
-        };
-    }
-
-    async createBulk(dto: CreateBulkVouchersDto) {
-        const selection = await this.getBulkVoucherSelection({
-            campus_id: dto.campus_id,
-            class_id: dto.class_id,
-            section_id: dto.section_id,
-            academic_year: dto.academic_year,
-            month: dto.month,
-            fee_date: dto.fee_date,
-            issue_date: dto.issue_date,
-        });
-
-        const generated: number[] = [];
-        const generatedVoucherIds: number[] = [];
-        const failed: { student_id: number; reason: string }[] = [];
-
-        const CHUNK_SIZE = 25;
-        for (let i = 0; i < selection.eligibleStudents.length; i += CHUNK_SIZE) {
-            const chunk = selection.eligibleStudents.slice(i, i + CHUNK_SIZE);
-
-            await Promise.all(chunk.map(async (item) => {
-                try {
-                    const voucherDto: CreateVoucherDto = {
-                        student_id: item.student_id,
-                        campus_id: item.campus_id,
-                        class_id: item.class_id,
-                        section_id: item.section_id ?? undefined,
-                        bank_account_id: dto.bank_account_id,
-                        issue_date: dto.issue_date,
-                        due_date: dto.due_date,
-                        validity_date: dto.validity_date,
-                        late_fee_charge: dto.late_fee_charge ?? true,
-                        late_fee_amount: dto.late_fee_amount,
-                        academic_year: dto.academic_year,
-                        month: dto.month ?? undefined,
-                        fee_date: dto.fee_date,
-                        precedence: 1,
-                        waive_surcharge: dto.waive_surcharge,
-                        waived_by: dto.waived_by,
-                        orderedFeeIds: item.fee_ids,
-                        fee_lines: item.fee_lines,
-                    };
-
-                    const created = await this.create(voucherDto);
-                    generated.push(item.student_id);
-                    if (created?.id) {
-                        generatedVoucherIds.push(created.id);
-                    }
-                } catch (error: any) {
-                    this.logger.error(
-                        `Bulk voucher creation failed for student ${item.student_id}: ${error?.message ?? 'Unknown error'}`,
-                    );
-                    failed.push({
-                        student_id: item.student_id,
-                        reason: error?.message ?? 'Failed to create voucher',
-                    });
-                }
-            }));
-        }
-
-        return {
-            filters: {
-                campus_id: dto.campus_id,
-                class_id: dto.class_id ?? null,
-                section_id: dto.section_id ?? null,
-                academic_year: dto.academic_year,
-                month: dto.month ?? null,
-                fee_date: dto.fee_date ?? null,
-            },
-            total_matched_students: selection.totalMatchedStudents,
-            generated_count: generated.length,
-            skipped_no_fee_schedule: selection.skippedNoFeeSchedule.length,
-            skipped_already_issued: selection.skippedAlreadyIssued.length,
-            skipped_missing_assignment: selection.skippedMissingAssignment.length,
-            failed_count: failed.length,
-            generated_student_ids: generated,
-            generated_voucher_ids: generatedVoucherIds,
-            failed_students: failed,
-        };
-    }
 
     async findAll(
         studentId?: number,
@@ -586,9 +483,12 @@ export class VouchersService {
         let heads = voucher.voucher_heads.map((h: any) => {
             const isSplitHead = (h.split_sequence != null && h.split_total != null);
             const feeTypeDesc = h.student_fees?.fee_types?.description || 'Fee';
-            const monthSuffix = h.student_fees?.target_month != null ? ` ${monthNames[h.student_fees.target_month - 1].slice(0, 3).toUpperCase()} ${h.student_fees.academic_year.slice(-2)}` : '';
-            
-            let description = feeTypeDesc + monthSuffix;
+            const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
+            const monthSuffix = h.student_fees?.target_month != null
+                ? ` ${getMonthYearLabel(h.student_fees.target_month, h.student_fees.academic_year, voucher.class_id).toUpperCase()}`
+                : '';
+
+            let description = prefixStr + feeTypeDesc + monthSuffix;
 
             // Handle Installment Sequence (e.g. 1/6)
             // STANDALONE vs MERGED Check:
@@ -602,7 +502,7 @@ export class VouchersService {
                 const total = sf.student_fee_installments?.installment_count || group.length;
                 const idx = group.findIndex(f => f.id === sf.id);
                 if (idx !== -1) {
-                    description = `${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
+                    description = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
                 }
             }
 
@@ -660,6 +560,15 @@ export class VouchersService {
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
         const feeHeads = [...nonSurcharges];
 
+        // Consolidated month-range label for the arrears row, e.g. "ARREARS (AUG 25 – OCT 25)"
+        const arrearHeadsForLabel = feeHeads.filter(h => h.isArrear && h.target_month != null);
+        const arrearsLabel = arrearHeadsForLabel.length > 0
+            ? `ARREARS (${getConsolidatedMonthsLabel(
+                arrearHeadsForLabel.map(h => ({ month: h.target_month!, academicYear: h.academic_year || '' })),
+                voucher.class_id,
+            )})`
+            : 'TOTAL ARREARS';
+
         const totalAmount = Number(voucher.total_payable_before_due || 0);
         const monthLabel = voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
 
@@ -711,6 +620,7 @@ export class VouchersService {
                 showDiscount: true,
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
+                arrearsLabel,
                 arrearsHistory: nonSurcharges
                     .filter(fh => fh.isArrear)
                     .map(fh => ({
@@ -882,9 +792,26 @@ export class VouchersService {
         const lateFeeAmount = new Prisma.Decimal(dto.late_fee ?? 0);
         const distributionEntries = Object.entries(dto.distributions ?? {});
 
-        if (distributionEntries.length === 0 && lateFeeAmount.eq(0)) {
+        // ── Parse surcharge allocations ──────────────────────────────────────
+        const parsedSurchargeAllocations = (dto.surcharge_allocations ?? []).map(s => {
+            const surchargeId = Number(s.surcharge_id);
+            const amount = new Prisma.Decimal(s.amount ?? 0);
+            if (!Number.isInteger(surchargeId) || surchargeId <= 0) {
+                throw new BadRequestException(`Invalid surcharge id '${s.surcharge_id}' in surcharge_allocations.`);
+            }
+            if (amount.lt(0)) {
+                throw new BadRequestException(`Surcharge allocation amount cannot be negative for surcharge #${surchargeId}.`);
+            }
+            return { surchargeId, amount };
+        });
+        const surchargesTotal = parsedSurchargeAllocations.reduce(
+            (sum, s) => sum.add(s.amount),
+            new Prisma.Decimal(0),
+        );
+
+        if (distributionEntries.length === 0 && lateFeeAmount.eq(0) && surchargesTotal.eq(0)) {
             throw new BadRequestException(
-                'Provide at least one voucher head distribution or late fee amount.',
+                'Provide at least one voucher head distribution, surcharge allocation, or late fee amount.',
             );
         }
 
@@ -910,11 +837,11 @@ export class VouchersService {
             (sum, item) => sum.add(item.amount),
             new Prisma.Decimal(0),
         );
-        const distributedTotal = headsTotal.add(lateFeeAmount);
+        const distributedTotal = headsTotal.add(lateFeeAmount).add(surchargesTotal);
 
         if (!distributedTotal.eq(depositAmount)) {
             throw new BadRequestException(
-                'Deposit amount must equal the sum of distributions and late fee.',
+                'Deposit amount must equal the sum of distributions, surcharge allocations, and late fee.',
             );
         }
 
@@ -944,6 +871,31 @@ export class VouchersService {
                 throw new BadRequestException(
                     `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
                 );
+            }
+        }
+
+        // ── Pre-validate surcharge allocations ──────────────────────────────
+        if (parsedSurchargeAllocations.length > 0) {
+            const voucherSurcharges = await (this.prisma.voucher_arrear_surcharges as any).findMany({
+                where: { voucher_id: voucherId, id: { in: parsedSurchargeAllocations.map(s => s.surchargeId) } },
+            });
+            const surchargeMap = new Map((voucherSurcharges as any[]).map(s => [s.id, s]));
+            for (const { surchargeId, amount } of parsedSurchargeAllocations) {
+                const surcharge = surchargeMap.get(surchargeId);
+                if (!surcharge) {
+                    throw new BadRequestException(`Surcharge #${surchargeId} does not belong to voucher #${voucherId}.`);
+                }
+                if (surcharge.waived) {
+                    throw new BadRequestException(`Surcharge #${surchargeId} has been waived and cannot receive a payment.`);
+                }
+                const remaining = new Prisma.Decimal(surcharge.amount).sub(
+                    new Prisma.Decimal(surcharge.amount_paid ?? 0),
+                );
+                if (amount.gt(remaining)) {
+                    throw new BadRequestException(
+                        `Surcharge #${surchargeId} allocation (${amount}) exceeds its remaining balance (${remaining}).`,
+                    );
+                }
             }
         }
 
@@ -1111,6 +1063,25 @@ export class VouchersService {
                     await tx.deposit_allocations.createMany({ data: allocationData });
                 }
 
+                // ── Step B2: Write surcharge allocations ─────────────────────
+                for (const { surchargeId, amount } of parsedSurchargeAllocations) {
+                    if (amount.eq(0)) continue;
+                    await tx.deposit_allocations.create({
+                        data: {
+                            deposit_id: depositRecord.id,
+                            voucher_id: voucherId,
+                            surcharge_id: surchargeId,
+                            student_fee_id: null,
+                            amount,
+                            type: 'SURCHARGE',
+                        } as any,
+                    });
+                    await (tx.voucher_arrear_surcharges as any).update({
+                        where: { id: surchargeId },
+                        data: { amount_paid: { increment: amount } },
+                    });
+                }
+
                 // ── Step C: Update student_fees (amount_paid + status) ─────────
                 if (affectedStudentFeeIds.length > 0) {
                     const totalDeposits = await tx.voucher_heads.groupBy({
@@ -1227,16 +1198,6 @@ export class VouchersService {
         return this.findOne(voucherId);
     }
 
-    async savePaidPdf(voucherId: number, pdfBuffer: Buffer) {
-        const voucher = await this.prisma.vouchers.findUnique({ where: { id: voucherId } });
-        if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
-
-        const key = `vouchers/${voucher.student_id}/paid-voucher-${voucherId}-${Date.now()}.pdf`;
-        const pdfUrl = await this.storage.upload(key, pdfBuffer);
-        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
-        return { pdf_url: pdfUrl };
-    }
-
     /**
      * Generate a voucher PDF server-side, upload it, persist pdf_url, and return the URL.
      * Used by both the single-voucher challan flow and the PAID-stamp download on the vouchers list.
@@ -1261,6 +1222,27 @@ export class VouchersService {
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
 
         return { pdf_url: pdfUrl };
+    }
+
+    /**
+     * Like generatePdf() but returns the raw buffer alongside the URL.
+     * Used by bulk-voucher jobs to collect individual buffers for merging.
+     */
+    async generatePdfBuffer(voucherId: number, paidStamp = false): Promise<{ buffer: Buffer; url: string }> {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: VOUCHER_INCLUDE,
+        });
+
+        if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
+
+        const finalPaidStamp = paidStamp || voucher.status === 'PAID';
+        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        const buffer = await this.pdfService.generateVoucherPdf(voucherData);
+        const url = await this.storage.upload(key, buffer);
+        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
+
+        return { buffer, url };
     }
 
     private stripSplitPrefix(raw: string | null | undefined): string {
@@ -1765,7 +1747,7 @@ export class VouchersService {
                             }
                         }
                     }
-                    
+
                     if (!isArrear && fee.fee_date && voucher.fee_date) {
                         isArrear = new Date(fee.fee_date) < new Date(voucher.fee_date);
                     }
@@ -1919,175 +1901,6 @@ export class VouchersService {
         };
     }
 
-    private async getBulkVoucherSelection(filters: {
-        campus_id: number;
-        class_id?: number;
-        section_id?: number;
-        academic_year: string;
-        month?: number;
-        fee_date?: string;
-        issue_date?: string;
-    }) {
-        const students = await this.prisma.students.findMany({
-            where: {
-                deleted_at: null,
-                status: 'ENROLLED',
-                campus_id: filters.campus_id,
-                ...(filters.class_id ? { class_id: filters.class_id } : {}),
-                ...(filters.section_id ? { section_id: filters.section_id } : {}),
-            },
-            select: {
-                cc: true,
-                campus_id: true,
-                class_id: true,
-                section_id: true,
-            },
-        });
-
-        const totalMatchedStudents = students.length;
-        if (students.length === 0) {
-            return {
-                totalMatchedStudents: 0,
-                eligibleStudents: [] as Array<{
-                    student_id: number;
-                    campus_id: number;
-                    class_id: number;
-                    section_id: number | null;
-                    fee_ids: number[];
-                    fee_lines: Array<{ student_fee_id: number; discount_amount: number; discount_label?: string }>;
-                }>,
-                skippedNoFeeSchedule: [] as number[],
-                skippedAlreadyIssued: [] as number[],
-                skippedMissingAssignment: [] as number[],
-            };
-        }
-
-        const studentIds = students.map((s) => s.cc);
-        const feeDateObj = filters.fee_date ? new Date(filters.fee_date) : null;
-
-        // Build fee query: fee_date-based (new) or month-based (legacy)
-        const feeWhere: any = {
-            student_id: { in: studentIds },
-            ...(feeDateObj
-                ? { fee_date: feeDateObj }
-                : {
-                    academic_year: filters.academic_year,
-                    OR: [
-                        { month: filters.month },
-                        { target_month: filters.month },
-                        { student_fee_bundles: { is: { target_month: filters.month } } },
-                    ],
-                }),
-        };
-
-        const fees = await this.prisma.student_fees.findMany({
-            where: feeWhere,
-            select: {
-                id: true,
-                student_id: true,
-                amount: true,
-                amount_before_discount: true,
-            },
-        });
-
-        interface FeeLine { student_fee_id: number; discount_amount: number; discount_label?: string; }
-        const feeIdsByStudent = new Map<number, number[]>();
-        const feeLinesByStudent = new Map<number, FeeLine[]>();
-        for (const fee of fees) {
-            const list = feeIdsByStudent.get(fee.student_id) ?? [];
-            list.push(fee.id);
-            feeIdsByStudent.set(fee.student_id, list);
-
-            const lineList = feeLinesByStudent.get(fee.student_id) ?? [];
-            const net = Number(fee.amount ?? 0);
-            // When amount_before_discount is null there is no discount — treat gross = net
-            const gross = Number(fee.amount_before_discount ?? fee.amount ?? 0);
-            lineList.push({
-                student_fee_id: fee.id,
-                discount_amount: Math.max(0, gross - net),
-            });
-            feeLinesByStudent.set(fee.student_id, lineList);
-        }
-
-        // Deduplicate: fee_date-based (new) or month-based (legacy)
-        const existingVouchers = await this.prisma.vouchers.findMany({
-            where: {
-                student_id: { in: studentIds },
-                ...(feeDateObj
-                    ? { fee_date: feeDateObj }
-                    : { academic_year: filters.academic_year, month: filters.month }),
-            },
-            select: { student_id: true },
-        });
-        const existingVoucherStudentIds = new Set(existingVouchers.map((v) => v.student_id));
-
-        const eligibleStudents: Array<{
-            student_id: number;
-            campus_id: number;
-            class_id: number;
-            section_id: number | null;
-            fee_ids: number[];
-            fee_lines: Array<{ student_fee_id: number; discount_amount: number; discount_label?: string }>;
-        }> = [];
-        const skippedNoFeeSchedule: number[] = [];
-        const skippedAlreadyIssued: number[] = [];
-        const skippedMissingAssignment: number[] = [];
-
-        for (const student of students) {
-            if (!student.campus_id || !student.class_id) {
-                skippedMissingAssignment.push(student.cc);
-                continue;
-            }
-
-            if (existingVoucherStudentIds.has(student.cc)) {
-                skippedAlreadyIssued.push(student.cc);
-                continue;
-            }
-
-            const feeIds = feeIdsByStudent.get(student.cc) ?? [];
-            if (feeIds.length === 0) {
-                skippedNoFeeSchedule.push(student.cc);
-                continue;
-            }
-
-            eligibleStudents.push({
-                student_id: student.cc,
-                campus_id: student.campus_id,
-                class_id: student.class_id,
-                section_id: student.section_id ?? null,
-                fee_ids: feeIds,
-                fee_lines: feeLinesByStudent.get(student.cc) ?? feeIds.map(id => ({ student_fee_id: id, discount_amount: 0 })),
-            });
-        }
-
-        // ── Batch arrear lookup & Surcharge discovery ─────────────────────────
-        const arrearCutoff = feeDateObj ?? (filters.issue_date ? new Date(filters.issue_date) : null);
-
-        if (arrearCutoff && studentIds.length > 0) {
-            for (const student of eligibleStudents) {
-                const arrears = await this.computeArrears(student.student_id, arrearCutoff, (filters as any).waive_surcharge);
-
-                // Prepend arrear fee IDs so they appear first in the voucher heads.
-                // Surcharges are no longer in student_fees — they are written to
-                // voucher_arrear_surcharges inside create(), so we skip surcharge_fee_ids.
-                for (const id of arrears.arrear_fee_ids) {
-                    if (!student.fee_ids.includes(id)) {
-                        student.fee_ids.unshift(id);
-                        student.fee_lines.unshift({ student_fee_id: id, discount_amount: 0 });
-                    }
-                }
-            }
-        }
-
-        return {
-            totalMatchedStudents,
-            eligibleStudents,
-            skippedNoFeeSchedule,
-            skippedAlreadyIssued,
-            skippedMissingAssignment,
-        };
-    }
-
     // ─── Arrears ─────────────────────────────────────────────────────────────
 
     /**
@@ -2182,7 +1995,78 @@ export class VouchersService {
             rows,
         };
     }
+    async bulkRemove(ids: number[], force = false) {
+        let deleted = 0, skipped = 0;
+        const errors: { id: number; reason: string }[] = [];
 
+        for (const id of ids) {
+            try {
+                force ? await this.forceRemove(id) : await this.remove(id);
+                deleted++;
+            } catch (e: any) {
+                skipped++;
+                errors.push({ id, reason: e.message });
+            }
+        }
+        return { deleted, skipped, errors };
+    }
+
+    /**
+     * Force hard delete a voucher, bypassing status guard.
+     * Deletes ANY status including PAID/PARTIALLY_PAID.
+     * Resets linked student_fees back to NOT_ISSUED.
+     * Deletes deposit_allocations (severs link from underlying deposit).
+     */
+    async forceRemove(id: number) {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id },
+            include: {
+                voucher_heads: {
+                    include: { student_fees: true }
+                }
+            }
+        });
+
+        if (!voucher) {
+            throw new NotFoundException(`Voucher #${id} not found`);
+        }
+
+        // No status guard — allows deleting PAID/PARTIALLY_PAID
+
+        return await this.prisma.$transaction(async (tx) => {
+            const heads = voucher.voucher_heads || [];
+            const regularFeeIds = heads.map(h => h.student_fee_id);
+
+            // 1. Reset regular student_fees to NOT_ISSUED
+            if (regularFeeIds.length > 0) {
+                await tx.student_fees.updateMany({
+                    where: { id: { in: regularFeeIds } },
+                    data: {
+                        status: 'NOT_ISSUED',
+                        issue_date: null,
+                        due_date: null,
+                        validity_date: null,
+                    }
+                });
+            }
+
+            // 2. Delete deposit_allocations for this voucher
+            await tx.deposit_allocations.deleteMany({
+                where: { voucher_id: id }
+            });
+
+            // 3. Delete voucher_heads
+            await tx.voucher_heads.deleteMany({ where: { voucher_id: id } });
+
+            // 4. Delete the voucher — cascades to voucher_arrear_surcharges automatically.
+            const deleted = await tx.vouchers.delete({ where: { id } });
+
+            return deleted;
+        }, {
+            maxWait: 5000,
+            timeout: 15000,
+        });
+    }
     async remove(id: number) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
@@ -2237,5 +2121,82 @@ export class VouchersService {
             maxWait: 5000,
             timeout: 15000,
         });
+    }
+
+    async batchPreview(dto: BatchPreviewDto) {
+        const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
+
+        const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
+            campus_id: dto.campus_id,
+            class_id: dto.class_id,
+            section_id: dto.section_id,
+            fee_date_from: dto.fee_date_from,
+            fee_date_to: dto.fee_date_to,
+            include_statuses: dto.include_statuses,
+        });
+
+        const { workItems, skips } = this.bulkLogic.resolveWorkItems({
+            studentRecords,
+            matchingFees,
+            existingVouchers,
+            fee_date_from: dto.fee_date_from,
+            fee_date_to: dto.fee_date_to,
+            expectedFeeDates: feeDates,
+            skipAlreadyIssued: false, // In preview, we want to see them but marked as already issued
+            academic_year_override: dto.academic_year,
+        });
+
+        // Group by student for response
+        const studentsMap = new Map<number, any>();
+
+        for (const student of studentRecords) {
+            studentsMap.set(student.cc, {
+                cc: student.cc,
+                full_name: student.full_name,
+                class: student.classes?.description || 'N/A',
+                section: student.sections?.description || 'N/A',
+                voucher_groups: [],
+            });
+        }
+
+        // Add work items (successful groups)
+        for (const item of workItems) {
+            const studentEntry = studentsMap.get(item.cc);
+            if (studentEntry) {
+                studentEntry.voucher_groups.push({
+                    fee_date: item.dateStr,
+                    academic_year: item.academicYear,
+                    heads: item.fees.map((f: any) => ({
+                        id: f.id,
+                        fee_type: f.fee_types?.description || 'Fee',
+                        target_month: f.target_month || f.month,
+                        amount: Number(f.amount),
+                        status: f.status,
+                    })),
+                    already_issued: item.alreadyIssued,
+                    skip_reason: item.alreadyIssued ? 'ALREADY_ISSUED' : undefined,
+                });
+            }
+        }
+
+        // Add skips
+        for (const skip of skips) {
+            const studentEntry = studentsMap.get(skip.cc);
+            if (studentEntry) {
+                studentEntry.voucher_groups.push({
+                    fee_date: skip.dateStr,
+                    heads: [],
+                    already_issued: skip.reason.includes('already issued'),
+                    skip_reason: skip.reason,
+                });
+            }
+        }
+
+        // Sort voucher groups by date
+        for (const student of studentsMap.values()) {
+            student.voucher_groups.sort((a: any, b: any) => a.fee_date.localeCompare(b.fee_date));
+        }
+
+        return Array.from(studentsMap.values());
     }
 }

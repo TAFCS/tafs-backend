@@ -434,6 +434,7 @@ interface FeeChallanPDFProps {
         };
         surchargeWaived?: boolean;
         totalSurcharge?: number;
+        arrearsLabel?: string;
         bank: {
             name: string;
             title: string;
@@ -597,22 +598,34 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
                         {(() => {
                             const arrearFees = fees.filter(f => f.isArrear && !f.isSurcharge);
-                            const surchargeFees = fees.filter(f => f.isSurcharge);
                             const currentFees = fees.filter(f => !f.isArrear && !f.isSurcharge);
-
                             const arrearTotal = arrearFees.reduce((s, f) => s + (f.netAmount || 0), 0);
+                            const hasArrearSurcharge = details.totalSurcharge != null && details.totalSurcharge > 0;
 
                             return (
                                 <>
                                     {arrearFees.length > 0 && (
                                         <View style={styles.tableRow}>
-                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>TOTAL ARREARS</Text>
+                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>
+                                                {details.arrearsLabel || 'TOTAL ARREARS'}
+                                            </Text>
                                             <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
                                                 {Math.round(arrearTotal).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                             </Text>
                                         </View>
                                     )}
-                                    {surchargeFees.map((fee, idx) => renderFeeRow(fee, `s-${idx}`))}
+                                    {hasArrearSurcharge && (
+                                        <View style={styles.tableRow}>
+                                            <Text style={styles.colDesc}>
+                                                {`Late Payment Surcharge${details.surchargeWaived ? ' (WAIVED)' : ''}`}
+                                            </Text>
+                                            <Text style={styles.colAmount}>
+                                                {details.surchargeWaived
+                                                    ? '0'
+                                                    : Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                            </Text>
+                                        </View>
+                                    )}
                                     {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
                                 </>
                             );
@@ -636,26 +649,6 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     </>
                 );
             })()}
-
-            {/* ── Surcharge waiver note — shown when surcharge was waived ───── */}
-            {details.surchargeWaived && details.totalSurcharge && details.totalSurcharge > 0 && (
-                <View style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: '#fefce8',
-                    borderWidth: 0.5,
-                    borderColor: '#fbbf24',
-                    borderRadius: 2,
-                    paddingVertical: 2,
-                    paddingHorizontal: 4,
-                    marginTop: 3,
-                    marginBottom: 1,
-                }}>
-                    <Text style={{ flex: 1, fontSize: 5.5, color: '#92400e', fontWeight: 'bold' }}>
-                        ⚠ Late payment surcharge of PKR {details.totalSurcharge.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} waived.
-                    </Text>
-                </View>
-            )}
 
             {details.applyLateFee && (
                 <View style={[styles.tableRow, { borderBottomWidth: 0, marginTop: 2 }]}>

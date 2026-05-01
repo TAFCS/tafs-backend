@@ -64,6 +64,9 @@ export interface VoucherPdfData {
     }>;
     surchargeWaived?: boolean;
     totalSurcharge?: number;
+    /** Consolidated month-range label, e.g. "ARREARS (AUG 25 – OCT 25)" */
+    arrearsLabel?: string;
+    installmentsHistory?: Array<{ head: string; month: string; amount: string }>;
 }
 
 @Injectable()
@@ -114,6 +117,7 @@ export class VoucherPdfService {
                 },
                 surchargeWaived: data.surchargeWaived,
                 totalSurcharge: data.totalSurcharge,
+                arrearsLabel: data.arrearsLabel,
             },
             fees: data.feeHeads.map(f => ({
                 description: f.description,
@@ -136,6 +140,7 @@ export class VoucherPdfService {
             })),
             qrUrl: data.qrUrl,
             arrearsHistory: data.arrearsHistory,
+            installmentsHistory: data.installmentsHistory,
         };
 
         try {

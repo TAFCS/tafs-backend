@@ -1,5 +1,25 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import {
+    IsArray,
+    IsInt,
+    IsNumber,
+    IsObject,
+    IsOptional,
+    IsString,
+    Min,
+    ValidateNested,
+} from 'class-validator';
+
+class SurchargeAllocationDto {
+    @Type(() => Number)
+    @IsInt()
+    surcharge_id: number;
+
+    @Type(() => Number)
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0.01)
+    amount: number;
+}
 
 export class RecordVoucherDepositDto {
     @Type(() => Number)
@@ -23,4 +43,10 @@ export class RecordVoucherDepositDto {
     @IsString()
     @IsOptional()
     reference_number?: string;
+
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => SurchargeAllocationDto)
+    @IsOptional()
+    surcharge_allocations?: SurchargeAllocationDto[];
 }

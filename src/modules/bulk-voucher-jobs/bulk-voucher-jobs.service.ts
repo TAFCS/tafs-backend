@@ -11,116 +11,14 @@ import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { deriveAcademicYear } from '../../common/utils/academic-labels';
+import { BulkVoucherLogicService } from '../vouchers/bulk-voucher-logic.service';
+import { getMonthlyFeeDates } from './utils/bulk-date.utils';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Returns an array of ISO date strings (YYYY-MM-DD) for the 1st of every
- * calendar month between `from` and `to` (inclusive).
- *
- * e.g. "2025-01-01" → "2025-03-31" produces ["2025-01-01", "2025-02-01", "2025-03-01"]
- */
-function getMonthlyFeeDates(from: string, to: string): string[] {
-    const dates: string[] = [];
-    const start = new Date(from);
-    const end = new Date(to);
-
-    // Normalise to 1st of each month
-    const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-    const endNormalised = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
-
-    while (cursor <= endNormalised) {
-        dates.push(cursor.toISOString().split('T')[0]);
-        cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-
-    return dates;
-}
-
-function deriveAcademicYear(dateStr: string, classId?: number): string {
-    const d = new Date(dateStr);
-    const m = d.getUTCMonth() + 1; // 1-12
-    const y = d.getUTCFullYear();
-    
-    // Check for special classes (15-19) which start in April
-    const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
-    
-    if (isSpecialClass) {
-        // April (4) to March (3) logic
-        const startYear = m >= 4 ? y : y - 1;
-        return `${startYear}-${startYear + 1}`;
-    }
-    
-    // Standard: August (8) to July (7) logic
-    const startYear = m >= 8 ? y : y - 1;
-    return `${startYear}-${startYear + 1}`;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Month / PDF label helpers  (shared by processJob & processWorkItem)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const PDF_MONTHS = ['August','September','October','November','December','January','February','March','April','May','June','July'];
-const PDF_MONTH_TO_NUM: Record<string, number> = { August:8,September:9,October:10,November:11,December:12,January:1,February:2,March:3,April:4,May:5,June:6,July:7 };
-
-function getMonthYearLabel(m: number, academicYear: string, classId?: number): string {
-    const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
-    const parts = academicYear.split('-').map(y => y.trim());
-    
-    const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
-    const cutoff = isSpecialClass ? 4 : 8;
-    
-    const year = m >= cutoff ? parts[0] : (parts[1] || parts[0]);
-    return `${monthName.slice(0, 3)} ${year.slice(-2)}`;
-}
-
-function getConsolidatedMonthsLabel(items: { month: number; academicYear: string }[], classId?: number): string {
-    if (!items || items.length === 0) return "";
-
-    const getSeq = (m: number, ay: string) => {
-        const startYear = parseInt(ay.split('-')[0]) || 0;
-        const isSpecialClass = classId && [15, 16, 17, 18, 19].includes(Number(classId));
-        const relativeMonth = isSpecialClass 
-            ? (m >= 4 ? m - 4 : m + 8)
-            : (m >= 8 ? m - 8 : m + 4);
-        return startYear * 12 + relativeMonth;
-    };
-
-    // Extract unique month/year pairs and sort by sequence
-    const uniqueMonths = Array.from(new Set(items.map(f => JSON.stringify({ m: f.month, ay: f.academicYear }))))
-        .map(s => JSON.parse(s))
-        .sort((a, b) => getSeq(a.m, a.ay) - getSeq(b.m, b.ay));
-
-    const ranges: { m: number; ay: string }[][] = [];
-    let currentRange: { m: number; ay: string }[] = [];
-
-    uniqueMonths.forEach((item, idx) => {
-        if (idx === 0) {
-            currentRange.push(item);
-        } else {
-            const prevSeq = getSeq(uniqueMonths[idx - 1].m, uniqueMonths[idx - 1].ay);
-            const currSeq = getSeq(item.m, item.ay);
-            if (currSeq === prevSeq + 1) {
-                currentRange.push(item);
-            } else {
-                ranges.push(currentRange);
-                currentRange = [item];
-            }
-        }
-    });
-    ranges.push(currentRange);
-
-    return ranges.map(range => {
-        const first = range[0];
-        const last = range[range.length - 1];
-        const firstLabel = getMonthYearLabel(first.m, first.ay).toUpperCase();
-        if (range.length === 1) return firstLabel;
-        const lastLabel = getMonthYearLabel(last.m, last.ay).toUpperCase();
-        return `${firstLabel} - ${lastLabel}`;
-    }).join(", ");
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -148,6 +46,7 @@ export class BulkVoucherJobsService {
         private readonly vouchersService: VouchersService,
         private readonly voucherPdfService: VoucherPdfService,
         private readonly storage: StorageService,
+        private readonly bulkLogic: BulkVoucherLogicService,
     ) {}
 
     // ── Preview ─────────────────────────────────────────────────────────────
@@ -340,155 +239,35 @@ export class BulkVoucherJobsService {
             const feeDateTo = new Date(dto.fee_date_to);
             const PDF_BATCH_SIZE = 10;
 
-            // ── PHASE 1: BULK PRE-FETCH (4 parallel DB queries) ─────────────────
-            const [bankAccount, studentRecords, matchingFees, existingVouchers] = await Promise.all([
-                this.prisma.bank_accounts.findUnique({ where: { id: dto.bank_account_id } }),
-                this.prisma.students.findMany({
-                    where: { cc: { in: dto.student_ccs }, deleted_at: null, status: 'ENROLLED' },
-                    select: {
-                        cc: true,
-                        full_name: true,
-                        gender: true,
-                        gr_number: true,
-                        family_id: true,
-                        class_id: true,
-                        campus_id: true,
-                        section_id: true,
-                        classes: { select: { description: true } },
-                        sections: { select: { description: true } },
-                        campuses: { select: { campus_name: true } },
-                        student_guardians: {
-                            select: {
-                                relationship: true,
-                                is_primary_contact: true,
-                                guardians: { select: { full_name: true } },
-                            },
-                        },
-                    },
-                }),
-                this.prisma.student_fees.findMany({
-                    where: {
-                        student_id: { in: dto.student_ccs },
-                        fee_date: { lte: feeDateTo },
-                        status: 'NOT_ISSUED',
-                    },
-                    select: {
-                        id: true,
-                        student_id: true,
-                        academic_year: true,
-                        fee_date: true,
-                        target_month: true,
-                        month: true,
-                        amount: true,
-                        amount_before_discount: true,
-                        fee_type_id: true,
-                        fee_types: { select: { description: true, priority_order: true } },
-                    },
-                }),
-                this.prisma.vouchers.findMany({
-                    where: {
-                        student_id: { in: dto.student_ccs },
-                        fee_date: { gte: feeDateFrom, lte: feeDateTo },
-                        status: { not: 'VOID' },
-                    },
-                    select: { student_id: true, fee_date: true },
-                }),
-            ]);
 
-            // Set of "cc|dateStr" keys that already have a non-VOID voucher
-            const existingVoucherKeys = new Set(
-                existingVouchers
-                    .filter(v => v.fee_date)
-                    .map(v => `${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`),
-            );
-
-            // Siblings bulk fetch
-            const familyIds = studentRecords.map((s) => s.family_id).filter(Boolean);
-            const allSiblings = await this.prisma.students.findMany({
-                where: { family_id: { in: familyIds as number[] }, deleted_at: null, status: 'ENROLLED' },
-                include: {
-                    classes: { select: { description: true } },
-                    sections: { select: { description: true } },
-                },
+            const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
+                campus_id: dto.campus_id,
+                class_id: dto.class_id,
+                section_id: dto.section_id,
+                fee_date_from: dto.fee_date_from,
+                fee_date_to: dto.fee_date_to,
+                student_ccs: dto.student_ccs,
             });
-            const siblingsMap = new Map<number, typeof allSiblings>();
-            for (const s of allSiblings) {
-                if (!s.family_id) continue;
-                const list = siblingsMap.get(s.family_id) ?? [];
-                list.push(s);
-                siblingsMap.set(s.family_id, list);
-            }
 
             // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
-            type WorkItem = { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string };
-            const workItems: WorkItem[] = [];
+            const { workItems, skips } = this.bulkLogic.resolveWorkItems({
+                studentRecords,
+                matchingFees,
+                existingVouchers,
+                fee_date_from: dto.fee_date_from,
+                fee_date_to: dto.fee_date_to,
+                expectedFeeDates,
+                skipAlreadyIssued: dto.skip_already_issued ?? true,
+                academic_year_override: dto.academic_year,
+            });
 
-            for (const cc of dto.student_ccs) {
-                const studentFees = matchingFees.filter((f) => f.student_id === cc);
-                const student = studentRecords.find((s) => s.cc === cc);
-                if (!student) continue;
-
-                // Map fees to their month (1st of month string)
-                const dateMap = new Map<string, any[]>();
-                const priorFees: any[] = [];
-                const startDate = new Date(dto.fee_date_from);
-
-                for (const f of studentFees) {
-                    if (!f.fee_date) continue;
-                    const fDate = new Date(f.fee_date);
-                    if (fDate < startDate) {
-                        priorFees.push(f);
-                    } else {
-                        const monthKey = new Date(Date.UTC(fDate.getUTCFullYear(), fDate.getUTCMonth(), 1))
-                            .toISOString()
-                            .split('T')[0];
-                        if (!dateMap.has(monthKey)) dateMap.set(monthKey, []);
-                        dateMap.get(monthKey)!.push(f);
-                    }
-                }
-
-                const datesFound = Array.from(dateMap.keys()).sort();
-                const firstDateInRange = expectedFeeDates[0];
-                
-                if (priorFees.length > 0 && !dateMap.has(firstDateInRange)) {
-                    dateMap.set(firstDateInRange, []);
-                    if (!datesFound.includes(firstDateInRange)) {
-                        datesFound.push(firstDateInRange);
-                        datesFound.sort();
-                    }
-                }
-                
-                if (priorFees.length > 0) {
-                    const targetDate = datesFound[0];
-                    dateMap.set(targetDate, [...priorFees, ...(dateMap.get(targetDate) || [])]);
-                }
-
-                for (const dateStr of expectedFeeDates) {
-                    if (existingVoucherKeys.has(`${cc}|${dateStr}`) && (dto.skip_already_issued ?? true)) {
-                        skipCountTotal++;
-                        jobReport.push({
-                            cc,
-                            student_name: student.full_name,
-                            status: 'SKIPPED',
-                            reason: `Voucher already issued for period starting ${dateStr}`,
-                        });
-                    } else {
-                        const feesInThisMonth = dateMap.get(dateStr) || [];
-                        if (feesInThisMonth.length === 0) {
-                            skipCountTotal++;
-                            jobReport.push({
-                                cc,
-                                student_name: student.full_name,
-                                status: 'SKIPPED',
-                                reason: `No unpaid fee heads found for period starting ${dateStr}`,
-                            });
-                        } else {
-                            const itemAcademicYear = dto.academic_year || deriveAcademicYear(dateStr, student.class_id ?? undefined);
-                            workItems.push({ cc, dateStr, fees: feesInThisMonth, student, academicYear: itemAcademicYear });
-                        }
-                    }
-                }
-            }
+            skipCountTotal = skips.length;
+            jobReport.push(...skips.map(s => ({
+                cc: s.cc,
+                student_name: s.student_name,
+                status: s.status,
+                reason: s.reason,
+            })));
 
             if (skipCountTotal > 0) {
                 await this.prisma.bulk_voucher_jobs.update({
@@ -508,7 +287,7 @@ export class BulkVoucherJobsService {
                 const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
 
                 const results = await Promise.allSettled(
-                    chunk.map((item) => this.processWorkItem(item, dto, bankAccount, siblingsMap, createdBy)),
+                    chunk.map((item) => this.processWorkItem(item, dto, createdBy)),
                 );
 
                 let chunkSuccess = 0;
@@ -626,31 +405,21 @@ export class BulkVoucherJobsService {
     // ── Per-item worker ─────────────────────────────────────────────────────
 
     private async processWorkItem(
-        item: { cc: number; dateStr: string; fees: any[]; student: any, academicYear: string },
+        item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string },
         dto: StartBulkJobDto,
-        bankAccount: any,
-        siblingsMap: Map<number, any[]>,
         createdBy: string,
     ): Promise<{ buffer: Buffer; url: string }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
-        // ── Fetch arrears (unpaid fees whose fee_date < this voucher's fee_date) ──
         const arrearsResult = await this.vouchersService.computeArrears(
-            cc, 
+            cc,
             new Date(dateStr),
-            dto.waive_surcharge ?? false
+            dto.waive_surcharge ?? false,
         );
         const arrearFeeIds = arrearsResult.arrear_fee_ids ?? [];
-        const arrearRows = arrearsResult.rows ?? [];
-
-        // Arrear lines use outstanding balance as net (no discount); surcharge rows (student_fee_id: -1) excluded
-        const arrearFeeLines = arrearRows
+        const arrearFeeLines = (arrearsResult.rows ?? [])
             .filter((r) => !r.isSurcharge)
-            .map((r) => ({
-                student_fee_id: r.student_fee_id,
-                discount_amount: 0,
-                discount_label: '',
-            }));
+            .map((r) => ({ student_fee_id: r.student_fee_id, discount_amount: 0, discount_label: '' }));
 
         const currentFeeLines = feesForThisVoucher.map((f: any) => {
             const gross = Number(f.amount_before_discount || f.amount || 0);
@@ -661,10 +430,6 @@ export class BulkVoucherJobsService {
                 discount_label: gross > net ? 'Discount' : '',
             };
         });
-
-        // Arrear IDs go first (same order as single-voucher flow)
-        const allOrderedFeeIds = [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)];
-        const allFeeLines = [...arrearFeeLines, ...currentFeeLines];
 
         const voucher = await this.vouchersService.create({
             student_id: cc,
@@ -682,258 +447,11 @@ export class BulkVoucherJobsService {
             academic_year: item.academicYear,
             fee_date: dateStr,
             precedence: 1,
-            orderedFeeIds: allOrderedFeeIds,
-            fee_lines: allFeeLines,
+            orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
+            fee_lines: [...arrearFeeLines, ...currentFeeLines],
+            pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
         });
 
-        const fatherG =
-            (student.student_guardians || []).find((g: any) => g.relationship === 'FATHER') ||
-            (student.student_guardians || []).find((g: any) => g.is_primary_contact);
-        const fatherName = fatherG?.guardians?.full_name || 'N/A';
-
-        // Group tuition fees to consolidate consecutive months
-        const tuitionGroups: Record<string, any[]> = {};
-        const otherHeads: any[] = [];
-
-        feesForThisVoucher.forEach((f: any) => {
-            const baseDesc = f.fee_types?.description || 'Fee';
-            const isTuition = baseDesc.toLowerCase().includes('tuition');
-            if (isTuition) {
-                if (!tuitionGroups[baseDesc]) tuitionGroups[baseDesc] = [];
-                tuitionGroups[baseDesc].push(f);
-            } else {
-                const gross = Number(f.amount_before_discount || f.amount || 0);
-                const net = Number(f.amount || 0);
-                const disc = Math.max(0, gross - net);
-                let desc = baseDesc;
-                const m = f.target_month || f.month;
-                if (m) desc = `${baseDesc} (${getMonthYearLabel(m, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
-
-                otherHeads.push({ 
-                    description: desc, 
-                    amount: gross, 
-                    discount: disc, 
-                    netAmount: net, 
-                    discountLabel: disc > 0 ? 'Discount' : '' 
-                });
-            }
-        });
-
-        const mergedTuitionHeads: any[] = [];
-        Object.keys(tuitionGroups).forEach(baseDesc => {
-            const group = tuitionGroups[baseDesc];
-            
-            // Helper for sequencing (Aug=0... Jul=11)
-            const getSeq = (m: number) => {
-                const startYear = parseInt(item.academicYear.split('-')[0]) || 0;
-                const isSpecialClass = student.class_id && [15, 16, 17, 18, 19].includes(Number(student.class_id));
-                const relativeMonth = isSpecialClass 
-                    ? (m >= 4 ? m - 4 : m + 8)
-                    : (m >= 8 ? m - 8 : m + 4);
-                return startYear * 12 + relativeMonth;
-            };
-
-            group.sort((a, b) => getSeq(a.target_month || a.month || 0) - getSeq(b.target_month || b.month || 0));
-
-            // Identify consecutive ranges
-            const ranges: any[][] = [];
-            let currentRange: any[] = [];
-            group.forEach((f, idx) => {
-                const m = f.target_month || f.month || 0;
-                if (idx === 0) {
-                    currentRange.push(f);
-                } else {
-                    const prevM = group[idx - 1].target_month || group[idx - 1].month || 0;
-                    if (getSeq(m) === getSeq(prevM) + 1) {
-                        currentRange.push(f);
-                    } else {
-                        ranges.push(currentRange);
-                        currentRange = [f];
-                    }
-                }
-            });
-            ranges.push(currentRange);
-
-            // Consolidate each range
-            ranges.forEach(range => {
-                const firstM = range[0].target_month || range[0].month || 0;
-                const lastM = range[range.length - 1].target_month || range[range.length - 1].month || 0;
-                const gross = range.reduce((s, f) => s + Number(f.amount_before_discount || f.amount || 0), 0);
-                const net = range.reduce((s, f) => s + Number(f.amount || 0), 0);
-                const disc = Math.max(0, gross - net);
-
-                let labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
-                if (range.length > 1) {
-                    labelSuffix = `(${getMonthYearLabel(firstM, item.academicYear, student.class_id ?? undefined).toUpperCase()} - ${getMonthYearLabel(lastM, item.academicYear, student.class_id ?? undefined).toUpperCase()})`;
-                }
-
-                mergedTuitionHeads.push({
-                    description: `${baseDesc} ${labelSuffix}`,
-                    amount: gross,
-                    discount: disc,
-                    netAmount: net,
-                    discountLabel: disc > 0 ? 'Discount' : ''
-                });
-            });
-        });
-
-        const feeHeadsForPdf = [...otherHeads, ...mergedTuitionHeads];
-
-        // ── Surcharge info from the created voucher ──
-        const voucherSurchargeRows: any[] = (voucher as any).voucher_arrear_surcharges ?? [];
-        const totalSurcharge = voucherSurchargeRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
-        const surchargeWaived = !!(voucher as any).surcharge_waived;
-        const activeSurchargeTotal = surchargeWaived ? 0 : totalSurcharge;
-
-        // ── Prepend arrear heads to PDF; exclude surcharge virtual rows ──
-        const arrearHeadsForPdf = arrearRows
-            .filter((r) => !r.isSurcharge)
-            .map((r) => ({
-                description: `${r.fee_type} (ARREAR – ${r.fee_date})`,
-                amount: Number(r.outstanding),
-                discount: 0,
-                netAmount: Number(r.outstanding),
-                discountLabel: '',
-                isArrear: true,
-                feeDate: r.fee_date,
-            }));
-
-        const allPdfHeads = [...arrearHeadsForPdf, ...feeHeadsForPdf];
-        const currentFeesTotal = feesForThisVoucher.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0);
-        const arrearsTotal = arrearRows
-            .filter(r => !r.isSurcharge)
-            .reduce((sum, r) => sum + Number(r.outstanding), 0);
-        const grandTotal = currentFeesTotal + arrearsTotal + activeSurchargeTotal;
-
-        const monthLabelItems = feesForThisVoucher.map((f: any) => ({
-            month: f.target_month || f.month,
-            academicYear: item.academicYear,
-        })).filter(x => x.month);
-
-        const monthLabel = monthLabelItems.length > 0
-            ? getConsolidatedMonthsLabel(monthLabelItems, student.class_id ?? undefined)
-            : new Date(dateStr).toLocaleString('default', { month: 'long', year: 'numeric' });
-
-        const pdfBuffer = await this.voucherPdfService.generateVoucherPdf({
-            voucherNumber: voucher.id.toString(),
-            student: {
-                cc: student.cc,
-                classId: student.class_id,
-                fullName: student.full_name,
-                fatherName,
-                gender: student.gender || 'N/A',
-                grNumber: student.gr_number || 'N/A',
-                className: student.classes?.description || 'N/A',
-                sectionName: student.sections?.description || 'N/A',
-            },
-            siblings: (siblingsMap.get(student.family_id) || [])
-                .filter((s: any) => s.cc !== student.cc)
-                .map((s: any) => ({
-                    cc: s.cc,
-                    fullName: s.full_name,
-                    grNumber: s.gr_number || 'N/A',
-                    className: s.classes?.description || 'N/A',
-                    sectionName: s.sections?.description || 'N/A',
-                })),
-            campusName: student.campuses?.campus_name || 'Main Campus',
-            academicYear: item.academicYear,
-            month: monthLabel,
-            issueDate: dto.issue_date,
-            dueDate: dto.due_date,
-            validityDate: dto.validity_date || 'N/A',
-            bank: {
-                name: bankAccount?.bank_name || 'N/A',
-                title: bankAccount?.account_title || 'N/A',
-                account: bankAccount?.account_number || 'N/A',
-                iban: bankAccount?.iban || 'N/A',
-                address: bankAccount?.bank_address || 'N/A',
-            },
-            feeHeads: allPdfHeads,
-            totalAmount: grandTotal,
-            lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
-            surchargeWaived,
-            totalSurcharge: totalSurcharge > 0 ? totalSurcharge : undefined,
-            qrUrl: undefined, // will be set after upload
-            arrearsHistory: arrearRows
-                .filter(r => !r.isSurcharge)
-                .map((r, idx, arr) => {
-                    const runningTotal = arr
-                        .slice(0, idx + 1)
-                        .reduce((sum, row) => sum + Number(row.outstanding), 0);
-                    return {
-                        date: r.fee_date,
-                        head: r.fee_type,
-                        amount: Number(r.outstanding).toLocaleString(),
-                        totalAmount: runningTotal.toLocaleString(),
-                        target_month: r.target_month,
-                        academic_year: r.academic_year,
-                    };
-                }),
-        });
-
-        // Upload PDF without QR to get the real DO URL
-        const key = `vouchers/${student.cc}/voucher-${voucher.id}-${Date.now()}.pdf`;
-        const pdfUrl = await this.storage.upload(key, pdfBuffer);
-        await this.prisma.vouchers.update({ where: { id: voucher.id }, data: { pdf_url: pdfUrl } });
-
-        // Regenerate PDF with the real QR URL (same pattern as single-voucher flow)
-        const pdfBufferWithQr = await this.voucherPdfService.generateVoucherPdf({
-            voucherNumber: voucher.id.toString(),
-            student: {
-                cc: student.cc,
-                classId: student.class_id,
-                fullName: student.full_name,
-                fatherName,
-                gender: student.gender || 'N/A',
-                grNumber: student.gr_number || 'N/A',
-                className: student.classes?.description || 'N/A',
-                sectionName: student.sections?.description || 'N/A',
-            },
-            siblings: (siblingsMap.get(student.family_id) || [])
-                .filter((s: any) => s.cc !== student.cc)
-                .map((s: any) => ({
-                    cc: s.cc,
-                    fullName: s.full_name,
-                    grNumber: s.gr_number || 'N/A',
-                    className: s.classes?.description || 'N/A',
-                    sectionName: s.sections?.description || 'N/A',
-                })),
-            campusName: student.campuses?.campus_name || 'Main Campus',
-            academicYear: item.academicYear,
-            month: monthLabel,
-            issueDate: dto.issue_date,
-            dueDate: dto.due_date,
-            validityDate: dto.validity_date || 'N/A',
-            bank: {
-                name: bankAccount?.bank_name || 'N/A',
-                title: bankAccount?.account_title || 'N/A',
-                account: bankAccount?.account_number || 'N/A',
-                iban: bankAccount?.iban || 'N/A',
-                address: bankAccount?.bank_address || 'N/A',
-            },
-            feeHeads: allPdfHeads,
-            totalAmount: grandTotal,
-            lateFeeAmount: dto.apply_late_fee ? (dto.late_fee_amount ?? 1000) : 0,
-            surchargeWaived,
-            totalSurcharge: totalSurcharge > 0 ? totalSurcharge : undefined,
-            qrUrl: pdfUrl,
-            arrearsHistory: arrearRows
-                .filter(r => !r.isSurcharge)
-                .map((r, idx, arr) => {
-                    const runningTotal = arr
-                        .slice(0, idx + 1)
-                        .reduce((sum, row) => sum + Number(row.outstanding), 0);
-                    return {
-                        date: r.fee_date,
-                        head: r.fee_type,
-                        amount: Number(r.outstanding).toLocaleString(),
-                        totalAmount: runningTotal.toLocaleString(),
-                        target_month: r.target_month,
-                        academic_year: r.academic_year,
-                    };
-                }),
-        });
-
-        return { buffer: pdfBufferWithQr, url: pdfUrl };
+        return this.vouchersService.generatePdfBuffer(voucher.id);
     }
 }

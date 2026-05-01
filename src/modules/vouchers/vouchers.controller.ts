@@ -16,17 +16,21 @@ import {
     UseGuards,
     UseInterceptors,
     Delete,
+    Inject,
+    forwardRef,
 } from '@nestjs/common';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
-import { CreateBulkVouchersDto } from './dto/create-bulk-vouchers.dto';
-import { PreviewBulkVouchersDto } from './dto/preview-bulk-vouchers.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
+import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
+import { BatchPreviewDto } from './dto/batch-preview.dto';
+import { StartBulkJobDto } from '../bulk-voucher-jobs/dto/start-bulk-job.dto';
+import { BulkVoucherJobsService } from '../bulk-voucher-jobs/bulk-voucher-jobs.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -35,7 +39,11 @@ import { Action } from '../auth/casl/actions';
 
 @Controller('vouchers')
 export class VouchersController {
-    constructor(private readonly vouchersService: VouchersService) {}
+    constructor(
+        private readonly vouchersService: VouchersService,
+        @Inject(forwardRef(() => BulkVoucherJobsService))
+        private readonly bulkJobsService: BulkVoucherJobsService,
+    ) {}
 
     @Post()
     @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -62,43 +70,6 @@ export class VouchersController {
         };
     }
 
-    @Post('bulk/preview')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.OK)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Create, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    async previewBulk(@Body() dto: PreviewBulkVouchersDto) {
-        const preview = await this.vouchersService.previewBulk(dto);
-        return {
-            success: true,
-            message: 'Bulk voucher preview generated successfully',
-            data: preview,
-        };
-    }
-
-    @Post('bulk/create')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.CREATED)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Create, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    async createBulk(@Body() dto: CreateBulkVouchersDto, @Req() req: any) {
-        if (dto.waive_surcharge && !dto.waived_by) {
-            dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
-        }
-        const result = await this.vouchersService.createBulk(dto);
-        return {
-            success: true,
-            message: 'Bulk vouchers created successfully',
-            data: result,
-        };
-    }
-
     /** Compute arrears for a student before a given fee_date. */
     @Get('arrears')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -115,7 +86,7 @@ export class VouchersController {
         const studentId = parseInt(studentIdStr, 10);
         const feeDate = new Date(feeDateStr);
         const waiveSurcharge = waiveSurchargeStr === 'true';
-        
+
         const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
         return {
             success: true,
@@ -249,27 +220,6 @@ export class VouchersController {
         };
     }
 
-    /** Save a stamped PAID PDF back to the voucher record. */
-    @Patch(':id/paid-pdf')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.OK)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Update, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    @UseInterceptors(FileInterceptor('pdf'))
-    async savePaidPdf(
-        @Param('id', ParseIntPipe) id: number,
-        @UploadedFile() pdf: Express.Multer.File,
-    ) {
-        if (!pdf?.buffer) {
-            return { success: false, message: 'No PDF file uploaded.' };
-        }
-        const result = await this.vouchersService.savePaidPdf(id, pdf.buffer);
-        return { success: true, message: 'Paid PDF saved.', data: result };
-    }
-
     /**
      * Split a PARTIALLY_PAID voucher into a new PAID voucher + a new UNPAID balance voucher.
      * Per fee head: PARTIALLY_PAID student_fees rows are split into paid + balance rows; PAID/ISSUED
@@ -349,6 +299,45 @@ export class VouchersController {
             success: true,
             message: 'Voucher resolution completed',
             data: result,
+        };
+    }
+
+    @Post('batch-preview')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchPreview(@Body() dto: BatchPreviewDto) {
+        const data = await this.vouchersService.batchPreview(dto);
+        return {
+            success: true,
+            message: 'Batch preview generated successfully',
+            data,
+        };
+    }
+
+    @Post('batch-issue')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.ACCEPTED)
+    @CheckPolicies((ability) => ability.can(Action.Create, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchIssue(@Body() dto: StartBulkJobDto, @Req() req: any) {
+        const createdBy: string = req?.user?.id ?? req?.user?.sub ?? 'system';
+        const result = await this.bulkJobsService.startJob(dto, createdBy);
+        return {
+            success: true,
+            message: 'Batch generation job started',
+            data: result,
+        };
+    }
+
+    @Delete('bulk')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async bulkRemove(@Body() dto: BulkDeleteVouchersDto) {
+        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false);
+        return {
+            success: true,
+            message: `${results.deleted} deleted, ${results.skipped} skipped.`,
+            data: results,
         };
     }
 
