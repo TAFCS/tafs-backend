@@ -10,9 +10,9 @@ export class BulkVoucherLogicService {
     constructor(private readonly prisma: PrismaService) {}
 
     async fetchBaseData(params: {
-        campus_id: number;
-        class_id?: number;
-        section_id?: number;
+        campus_ids?: number[];
+        class_ids?: number[];
+        section_ids?: number[];
         fee_date_from: string;
         fee_date_to: string;
         student_ccs?: number[];
@@ -27,10 +27,13 @@ export class BulkVoucherLogicService {
             where: {
                 deleted_at: null,
                 status: 'ENROLLED',
-                campus_id: params.campus_id,
-                ...(params.class_id ? { class_id: params.class_id } : {}),
-                ...(params.section_id ? { section_id: params.section_id } : {}),
-                ...(params.student_ccs ? { cc: { in: params.student_ccs } } : {}),
+                ...(params.student_ccs?.length
+                    ? { cc: { in: params.student_ccs } }
+                    : {
+                        ...(params.campus_ids?.length ? { campus_id: { in: params.campus_ids } } : {}),
+                        ...(params.class_ids?.length ? { class_id: { in: params.class_ids } } : {}),
+                        ...(params.section_ids?.length ? { section_id: { in: params.section_ids } } : {}),
+                    }),
             },
             select: {
                 cc: true,

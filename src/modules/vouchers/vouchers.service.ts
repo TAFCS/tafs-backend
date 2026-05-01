@@ -256,7 +256,7 @@ export class VouchersService {
 
             // 5a. Write voucher_arrear_surcharges rows (one per distinct arrear month)
             if (surchargeGroups.length > 0) {
-                await tx.voucher_arrear_surcharges.createMany({
+                await (tx as any).voucher_arrear_surcharges.createMany({
                     data: surchargeGroups.map(g => ({
                         voucher_id: newVoucher.id,
                         arrear_fee_date: g.date,
@@ -876,7 +876,7 @@ export class VouchersService {
 
         // ── Pre-validate surcharge allocations ──────────────────────────────
         if (parsedSurchargeAllocations.length > 0) {
-            const voucherSurcharges = await (this.prisma.voucher_arrear_surcharges as any).findMany({
+            const voucherSurcharges = await (this.prisma as any).voucher_arrear_surcharges.findMany({
                 where: { voucher_id: voucherId, id: { in: parsedSurchargeAllocations.map(s => s.surchargeId) } },
             });
             const surchargeMap = new Map((voucherSurcharges as any[]).map(s => [s.id, s]));
@@ -1076,7 +1076,7 @@ export class VouchersService {
                             type: 'SURCHARGE',
                         } as any,
                     });
-                    await (tx.voucher_arrear_surcharges as any).update({
+                    await (tx as any).voucher_arrear_surcharges.update({
                         where: { id: surchargeId },
                         data: { amount_paid: { increment: amount } },
                     });
@@ -2127,9 +2127,9 @@ export class VouchersService {
         const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
 
         const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
-            campus_id: dto.campus_id,
-            class_id: dto.class_id,
-            section_id: dto.section_id,
+            campus_ids: dto.campus_ids,
+            class_ids: dto.class_ids,
+            section_ids: dto.section_ids,
             fee_date_from: dto.fee_date_from,
             fee_date_to: dto.fee_date_to,
             include_statuses: dto.include_statuses,
@@ -2142,7 +2142,7 @@ export class VouchersService {
             fee_date_from: dto.fee_date_from,
             fee_date_to: dto.fee_date_to,
             expectedFeeDates: feeDates,
-            skipAlreadyIssued: false, // In preview, we want to see them but marked as already issued
+            skipAlreadyIssued: true, // Don't show already issued students
             academic_year_override: dto.academic_year,
         });
 

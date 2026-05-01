@@ -10,14 +10,29 @@ import {
 
 export class PreviewBulkRequestDto {
     @Type(() => Number)
+    @IsInt({ each: true })
+    @IsOptional()
+    campus_ids?: number[];
+
+    @Type(() => Number)
     @IsInt()
-    @IsNotEmpty()
-    campus_id: number;
+    @IsOptional()
+    campus_id?: number;
+
+    @Type(() => Number)
+    @IsInt({ each: true })
+    @IsOptional()
+    class_ids?: number[];
 
     @Type(() => Number)
     @IsInt()
     @IsOptional()
     class_id?: number;
+
+    @Type(() => Number)
+    @IsInt({ each: true })
+    @IsOptional()
+    section_ids?: number[];
 
     @Type(() => Number)
     @IsInt()
@@ -52,4 +67,9 @@ export class PreviewBulkRequestDto {
     @IsBoolean()
     @IsOptional()
     skip_already_issued?: boolean = true;
+
+    @Type(() => Number)
+    @IsInt({ each: true })
+    @IsOptional()
+    student_ccs?: number[];
 }
