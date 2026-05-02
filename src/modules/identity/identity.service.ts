@@ -234,7 +234,7 @@ export class IdentityService {
             data: {
               student_id: student.cc,
               guardian_id: ecGuardian.id,
-              relationship: ec.relationship,
+              relationship: ec.relationship || 'Guardian',
               is_primary_contact: false,
               is_emergency_contact: true,
             },
@@ -620,15 +620,16 @@ export class IdentityService {
    * This ensures siblings share the same guardian records.
    */
   private async upsertGuardian(tx: TxClient, data: GuardianDto) {
-    const guardianFullName = data.full_name?.trim();
-    if (!guardianFullName) throw new BadRequestException('Guardian full_name is required');
+    const guardianFullName = (data.full_name?.trim() === "N/A" || !data.full_name?.trim()) ? null : data.full_name.trim();
 
     const cnic = (data.cnic && data.cnic !== "N/A") ? data.cnic : null;
+    const primaryPhone = (data.primary_phone && data.primary_phone !== "N/A") ? data.primary_phone : null;
+
     const payload = {
       cnic,
       full_name: guardianFullName,
       primary_phone_country_code: data.primary_phone_country_code ?? '+92',
-      primary_phone: data.primary_phone ?? null,
+      primary_phone: primaryPhone,
       whatsapp_country_code: data.whatsapp_country_code ?? '+92',
       whatsapp_number: data.whatsapp_number ?? null,
       work_phone_country_code: data.work_phone_country_code ?? '+92',

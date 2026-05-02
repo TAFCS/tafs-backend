@@ -38,9 +38,6 @@ model student_flags {
 model bulk_voucher_jobs {
   id                  Int           @id @default(autoincrement())
   created_by          String        @db.VarChar(255)
-  campus_ids          Int[]         @default([])
-  class_ids           Int[]         @default([])
-  section_ids         Int[]         @default([])
   academic_year       String        @db.VarChar(10)
   fee_date_from       DateTime      @db.Date
   fee_date_to         DateTime      @db.Date
@@ -61,6 +58,9 @@ model bulk_voucher_jobs {
   updated_at          DateTime      @updatedAt
   report              Json?         @default("[]")
   waive_surcharge     Boolean       @default(false)
+  campus_ids          Int[]         @default([])
+  class_ids           Int[]         @default([])
+  section_ids         Int[]         @default([])
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")

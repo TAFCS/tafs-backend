@@ -199,26 +199,28 @@ export class StudentFlagDto {
 }
 
 export class EmergencyContactDto {
+  @IsOptional()
+  @ValidateIf((o) => o.full_name !== null && o.full_name !== 'N/A')
   @IsString()
-  @ValidateIf((o) => o.full_name !== 'N/A')
-  @IsNotEmpty()
   @MaxLength(100)
-  full_name: string;
+  full_name?: string | null;
 
   @IsString()
   @IsOptional()
   @MaxLength(10)
   primary_phone_country_code?: string;
 
+  @IsOptional()
+  @ValidateIf((o) => o.primary_phone !== null && o.primary_phone !== 'N/A')
   @IsString()
-  @IsNotEmpty()
   @MaxLength(20)
-  primary_phone: string;
+  primary_phone?: string | null;
 
+  @IsOptional()
+  @ValidateIf((o) => o.relationship !== null && o.relationship !== 'N/A')
   @IsString()
-  @IsNotEmpty()
   @MaxLength(50)
-  relationship: string;
+  relationship?: string | null;
 
   @IsString()
   @IsOptional()
