@@ -997,14 +997,58 @@ export class StaffEditingService {
       academic_year: dto.academic_year,
       application_date: dto.application_date ? new Date(dto.application_date) : new Date(),
     };
-    if (dto.id) {
-      return this.prisma.student_admissions.update({ where: { id: dto.id }, data });
-    }
-    return this.prisma.student_admissions.create({ data });
+
+    return await this.prisma.$transaction(async (tx) => {
+      let admission;
+      if (dto.id) {
+        admission = await tx.student_admissions.update({ where: { id: dto.id }, data });
+      } else {
+        admission = await tx.student_admissions.create({ data });
+      }
+
+      await this.syncStudentClass(studentId, tx);
+      return admission;
+    });
   }
 
   async deleteAdmission(id: number) {
-    return this.prisma.student_admissions.delete({ where: { id } }).catch(() => null);
+    // We need the studentId before deleting to sync after
+    const admission = await this.prisma.student_admissions.findUnique({ where: { id } });
+    if (!admission) return null;
+
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.student_admissions.delete({ where: { id } });
+      await this.syncStudentClass(admission.student_id, tx);
+      return { success: true };
+    }).catch(() => null);
+  }
+
+  private async syncStudentClass(studentId: number, tx: any) {
+    const latest = await tx.student_admissions.findFirst({
+      where: { student_id: studentId },
+      orderBy: [
+        { application_date: 'desc' },
+        { id: 'desc' }
+      ],
+    });
+
+    if (latest && latest.requested_grade) {
+      const cls = await tx.classes.findFirst({
+        where: {
+          OR: [
+            { class_code: { equals: latest.requested_grade, mode: 'insensitive' } },
+            { description: { equals: latest.requested_grade, mode: 'insensitive' } },
+          ]
+        }
+      });
+
+      if (cls) {
+        await tx.students.update({
+          where: { cc: studentId },
+          data: { class_id: cls.id }
+        });
+      }
+    }
   }
 
   async upsertActivity(studentId: number, dto: any) {
