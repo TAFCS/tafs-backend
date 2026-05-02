@@ -48,14 +48,31 @@ export class StudentFeesController {
     async getStudentSchedule(
         @Query('studentId', ParseIntPipe) studentId: number,
         @Query('academicYear') academicYear: string,
-        @Query('classId', ParseIntPipe) classId: number,
+        @Query('classId') classId?: string,
         @Query('campusId') campusId?: string,
     ) {
         const data = await this.studentFeesService.getStudentSchedule(
             studentId,
             academicYear,
-            classId,
+            classId ? Number(classId) : undefined,
             campusId ? Number(campusId) : undefined,
+        );
+        return {
+            success: true,
+            message: 'Student schedule retrieved successfully',
+            data,
+        };
+    }
+
+    @Get('student/:studentId/schedule')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee'))
+    async getStudentScheduleAlt(
+        @Param('studentId', ParseIntPipe) studentId: number,
+        @Query('academic_year') academicYear: string,
+    ) {
+        const data = await this.studentFeesService.getStudentSchedule(
+            studentId,
+            academicYear,
         );
         return {
             success: true,

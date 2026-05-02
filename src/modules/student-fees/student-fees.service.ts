@@ -380,7 +380,7 @@ export class StudentFeesService {
     async getStudentSchedule(
         studentId: number,
         academicYear: string,
-        classId: number,
+        classId?: number,
         campusId?: number,
     ) {
         // 1. Check for saved fees
@@ -420,7 +420,14 @@ export class StudentFeesService {
             };
         }
 
-        // 2. No fees saved -> pull the template
+        // 2. No fees saved -> pull the template (requires classId)
+        if (!classId) {
+            return {
+                fees: [],
+                is_template: true,
+            };
+        }
+
         const template = await this.prisma.class_fee_schedule.findMany({
             where: {
                 class_id: classId,
