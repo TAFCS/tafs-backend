@@ -268,6 +268,16 @@ export class IdentityService {
         },
       });
 
+      // ── 7.5 A-Level Details ──────────────────────────────────────────────
+      if (dto.alevel_details) {
+        await tx.student_alevel_details.create({
+          data: {
+            student_id: student.cc,
+            details: dto.alevel_details as any,
+          },
+        });
+      }
+
       // ── 8. Handle Flags (Universal) ─────────────────────────────────────
       if (dto.flags?.length) {
         for (const f of dto.flags) {
@@ -482,6 +492,20 @@ export class IdentityService {
           }
         }
 
+        // 10. Upsert A-Level Details
+        if (dto.alevel_details) {
+          await tx.student_alevel_details.upsert({
+            where: { student_id: student.cc },
+            create: {
+              student_id: student.cc,
+              details: dto.alevel_details as any,
+            },
+            update: {
+              details: dto.alevel_details as any,
+            },
+          });
+        }
+
         // Return updated student
         return tx.students.findUnique({
           where: { cc: student.cc },
@@ -612,6 +636,7 @@ export class IdentityService {
       student_guardians: {
         include: { guardians: true },
       },
+      student_alevel_details: true,
     };
   }
 

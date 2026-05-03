@@ -209,6 +209,16 @@ export class StudentsService {
           }
         }
       };
+      selectArgs.student_admissions = {
+        orderBy: { application_date: 'desc' },
+        take: 1,
+        select: {
+          requested_grade: true,
+          academic_system: true,
+          academic_year: true,
+          application_date: true,
+        },
+      };
     }
 
     if (requestedFields.has('academic')) {
@@ -423,6 +433,8 @@ export class StudentsService {
           enrollment_status: s.status,
           class_id: s.class_id,
           photograph_url: s.photograph_url,
+          academic_system: latestAdmission?.academic_system,
+          requested_grade: latestAdmission?.requested_grade,
           primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
           guardian_relationship: primaryGuardianNode?.relationship,
         };

@@ -12,6 +12,7 @@ import {
   IsEmail,
   MaxLength,
   ValidateIf,
+  IsObject,
   Allow,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -26,9 +27,46 @@ export enum Gender {
 export enum AcademicSystem {
   Cambridge = 'Cambridge',
   Secondary = 'Secondary',
+  ALevel = 'A-Level',
 }
 
 // ─── Sub-DTOs ────────────────────────────────────────────────────────────────
+
+export class OLevelSubjectDetailDto {
+  @IsString()
+  @IsNotEmpty()
+  subject: string;
+
+  @IsString()
+  @IsOptional()
+  subjectCode?: string;
+
+  @IsString()
+  @IsOptional()
+  mockGrade?: string;
+
+  @IsString()
+  @IsOptional()
+  caieGrade?: string;
+}
+
+export class ALevelDetailsDto {
+  @IsArray()
+  @IsString({ each: true })
+  preferred_subjects_group_a: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  preferred_subjects_group_b: string[];
+
+  @IsObject()
+  olevel_result_counts: Record<string, number>;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OLevelSubjectDetailDto)
+  olevel_subjects_details: OLevelSubjectDetailDto[];
+}
 
 export class PreviousSchoolDto {
   @IsString()
@@ -389,4 +427,9 @@ export class CreateAdmissionDto {
   @Type(() => PreviousSchoolDto)
   @IsOptional()
   previous_schools?: PreviousSchoolDto[];
+
+  @ValidateNested()
+  @IsOptional()
+  @Type(() => ALevelDetailsDto)
+  alevel_details?: ALevelDetailsDto;
 }

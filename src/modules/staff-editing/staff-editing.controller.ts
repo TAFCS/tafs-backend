@@ -249,4 +249,8 @@ export class StaffEditingController {
     await this.staffEditingService.deletePreviousSchool(id);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
+  @Post('students/:id/alevel-details')
+  async upsertALevelDetails(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto), HttpStatus.OK, 'Saved');
+  }
 }

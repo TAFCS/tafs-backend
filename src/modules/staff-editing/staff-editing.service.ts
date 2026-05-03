@@ -199,6 +199,7 @@ export class StaffEditingService {
         student_activities: true,
         student_languages: true,
         student_previous_schools: { orderBy: { id: 'desc' } },
+        student_alevel_details: true,
         families: {
           include: {
             students: {
@@ -873,6 +874,7 @@ export class StaffEditingService {
       activities: s.student_activities ?? [],
       languages: s.student_languages ?? [],
       previous_schools: s.student_previous_schools ?? [],
+      alevel_details: s.student_alevel_details?.details ?? null,
       action_logs: actionLogs,
       guardians: s.student_guardians?.map((link: any) => ({
         guardian_id: link.guardian_id,
@@ -1104,6 +1106,31 @@ export class StaffEditingService {
 
   async deletePreviousSchool(id: number) {
     return this.prisma.student_previous_schools.delete({ where: { id } }).catch(() => null);
+  }
+
+  async upsertALevelDetails(studentCc: number, dto: any) {
+    return this.prisma.student_alevel_details.upsert({
+      where: { student_id: studentCc },
+      update: {
+        details: {
+          ...dto,
+          preferred_subjects_group_a: dto.preferred_subjects_group_a,
+          preferred_subjects_group_b: dto.preferred_subjects_group_b,
+          olevel_result_counts: dto.olevel_result_counts,
+          olevel_subjects_details: dto.olevel_subjects_details,
+        },
+      },
+      create: {
+        student_id: studentCc,
+        details: {
+          ...dto,
+          preferred_subjects_group_a: dto.preferred_subjects_group_a,
+          preferred_subjects_group_b: dto.preferred_subjects_group_b,
+          olevel_result_counts: dto.olevel_result_counts,
+          olevel_subjects_details: dto.olevel_subjects_details,
+        },
+      },
+    });
   }
 
   async hardDeleteStudent(cc: number) {

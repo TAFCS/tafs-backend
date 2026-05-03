@@ -58,10 +58,10 @@ model bulk_voucher_jobs {
   updated_at          DateTime      @updatedAt
   report              Json?         @default("[]")
   waive_surcharge     Boolean       @default(false)
-  job_type            String        @default("BULK") @db.VarChar(20)
   campus_ids          Int[]         @default([])
   class_ids           Int[]         @default([])
   section_ids         Int[]         @default([])
+  job_type            String        @default("BULK") @db.VarChar(20)
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
@@ -436,6 +436,7 @@ model students {
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
   student_admissions         student_admissions[]
+  student_alevel_details     student_alevel_details?
   student_fee_bundles        student_fee_bundles[]
   student_fee_installments   student_fee_installments[]
   student_fees               student_fees[]
@@ -458,6 +459,15 @@ model students {
   @@index([full_name], map: "idx_students_full_name")
   @@index([section_id], map: "idx_students_section_id")
   @@index([status], map: "idx_students_status")
+}
+
+model student_alevel_details {
+  id         Int      @id @default(autoincrement())
+  student_id Int      @unique
+  details    Json
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @updatedAt @db.Timestamp(6)
+  students   students @relation(fields: [student_id], references: [cc], onDelete: Cascade)
 }
 
 model user_refresh_tokens {
