@@ -30,8 +30,8 @@ export class ClassFeeScheduleController {
       ability.can(Action.Read, 'ClassFeeSchedule') ||
       ability.can(Action.Manage, 'all'),
   )
-  async findAll() {
-    const schedules = await this.classFeeScheduleService.findAll();
+  async findAll(@Query('academic_year') academicYear?: string) {
+    const schedules = await this.classFeeScheduleService.findAll(academicYear);
     return {
       success: true,
       message: 'Class fee schedules retrieved successfully',
@@ -111,6 +111,22 @@ export class ClassFeeScheduleController {
     return {
       success: true,
       message: 'Class fee schedule deleted successfully',
+    };
+  }
+
+  @Post('copy-history')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies(
+    (ability) =>
+      ability.can(Action.Create, 'ClassFeeSchedule') ||
+      ability.can(Action.Manage, 'all'),
+  )
+  async copyHistory(@Body() body: { from_year: string; to_year: string }) {
+    const result = await this.classFeeScheduleService.copyHistory(body.from_year, body.to_year);
+    return {
+      success: true,
+      message: `Successfully copied ${result.count} records from ${body.from_year} to ${body.to_year}.`,
+      data: result,
     };
   }
 }

@@ -3,7 +3,7 @@ const PDF_MONTH_TO_NUM: Record<string, number> = { August:8,September:9,October:
 
 const SPECIAL_CLASS_IDS = [15, 16, 17, 18, 19];
 
-function isSpecial(classId?: number): boolean {
+export function isSpecial(classId?: number): boolean {
     return !!classId && SPECIAL_CLASS_IDS.includes(Number(classId));
 }
 

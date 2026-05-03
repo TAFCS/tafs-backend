@@ -9,7 +9,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthService } from './auth.service';
+import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
 import { LoginDto, RefreshTokenDto } from './dto/login.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
@@ -23,8 +23,8 @@ import type {
 // ─── Cookie helpers ────────────────────────────────────────────────────────────
 
 const IS_PROD = process.env.NODE_ENV === 'production';
-const ACCESS_COOKIE_TTL = 15 * 60 * 1000;            // 15 minutes (ms)
-const REFRESH_COOKIE_TTL = 7 * 24 * 60 * 60 * 1000;   // 7 days (ms)
+const ACCESS_COOKIE_TTL = ACCESS_TOKEN_TTL_MS;
+const REFRESH_COOKIE_TTL = REFRESH_TOKEN_TTL_MS;
 
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
   const base = {
