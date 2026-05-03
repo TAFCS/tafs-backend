@@ -14,10 +14,12 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial } from '../../common/utils/academic-labels';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
+import archiver from 'archiver';
+import { PDFDocument } from 'pdf-lib';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
@@ -510,7 +512,9 @@ export class VouchersService {
             const isSurcharge = false;
             let isArrear = false;
 
-            const getAcademicSortIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
+            const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
+            const getAcademicSortIndex = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
+            
             const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
             const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
             const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
@@ -570,7 +574,15 @@ export class VouchersService {
             : 'TOTAL ARREARS';
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
-        const monthLabel = voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A');
+        
+        // Main Label: Consolidate ALL heads in the voucher
+        const headsForMainLabel = heads.filter(h => h.target_month != null);
+        const monthLabel = headsForMainLabel.length > 0
+            ? getConsolidatedMonthsLabel(
+                headsForMainLabel.map(h => ({ month: h.target_month!, academicYear: h.academic_year || '' })),
+                voucher.class_id,
+            )
+            : (voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A'));
 
         const ts = Date.now();
         const filePrefix = paidStamp ? 'paid-voucher' : 'voucher';
@@ -1246,7 +1258,6 @@ export class VouchersService {
     }
 
     async batchExport(voucherIds: number[]): Promise<Buffer> {
-        const archiver = require('archiver');
         const archive = archiver('zip', { zlib: { level: 9 } });
         const chunks: any[] = [];
 
@@ -1276,6 +1287,33 @@ export class VouchersService {
             }
             archive.finalize();
         });
+    }
+
+    async batchMerge(voucherIds: number[]): Promise<Buffer> {
+        const mergedPdf = await PDFDocument.create();
+
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < voucherIds.length; i += BATCH_SIZE) {
+            const batch = voucherIds.slice(i, i + BATCH_SIZE);
+            const results = await Promise.all(batch.map(async (id) => {
+                try {
+                    const { buffer } = await this.generatePdfBuffer(id);
+                    return buffer;
+                } catch (err) {
+                    this.logger.error(`Failed to generate PDF for voucher ${id}: ${err.message}`);
+                    return null;
+                }
+            }));
+
+            for (const buffer of results) {
+                if (!buffer) continue;
+                const pdf = await PDFDocument.load(buffer);
+                const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+                copiedPages.forEach((page: any) => mergedPdf.addPage(page));
+            }
+        }
+
+        return Buffer.from(await mergedPdf.save());
     }
 
     private stripSplitPrefix(raw: string | null | undefined): string {

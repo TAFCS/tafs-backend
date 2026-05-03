@@ -20,6 +20,9 @@ class UpdateClassFeeScheduleItemDto {
   @IsNumber()
   @IsOptional()
   campus_id?: number;
+
+  @IsOptional()
+  academic_year?: string;
 }
 
 export class BulkUpdateClassFeeScheduleDto {

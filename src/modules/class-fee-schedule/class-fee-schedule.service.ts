@@ -7,8 +7,11 @@ import { BulkUpdateClassFeeScheduleDto } from './dto/bulk-update-class-fee-sched
 export class ClassFeeScheduleService {
   constructor(private readonly prisma: PrismaService) { }
 
-  async findAll() {
+  async findAll(academicYear?: string) {
     return this.prisma.class_fee_schedule.findMany({
+      where: {
+        ...(academicYear && { academic_year: academicYear }),
+      },
       include: {
         classes: true,
         fee_types: true,
@@ -42,6 +45,7 @@ export class ClassFeeScheduleService {
         fee_id: dto.fee_id,
         amount: dto.amount,
         ...(dto.campus_id !== undefined && { campus_id: dto.campus_id }),
+        ...(dto.academic_year && { academic_year: dto.academic_year }),
       },
       include: {
         classes: true,
@@ -65,6 +69,7 @@ export class ClassFeeScheduleService {
             ...(item.fee_id !== undefined && { fee_id: item.fee_id }),
             ...(item.amount !== undefined && { amount: item.amount }),
             ...(item.campus_id !== undefined && { campus_id: item.campus_id }),
+            ...(item.academic_year && { academic_year: item.academic_year }),
           },
           include: {
             classes: true,
@@ -85,6 +90,40 @@ export class ClassFeeScheduleService {
   async remove(id: number) {
     return this.prisma.class_fee_schedule.delete({
       where: { id },
+    });
+  }
+
+  async copyHistory(fromYear: string, toYear: string) {
+    const sourceRecords = await this.prisma.class_fee_schedule.findMany({
+      where: { academic_year: fromYear },
+    });
+
+    if (sourceRecords.length === 0) {
+      return { count: 0 };
+    }
+
+    // Use createMany if database supports it, or a transaction of creates
+    // Note: createMany might not handle unique constraints gracefully depending on DB
+    // We'll use a transaction with upsert-like logic or clear target first.
+    return this.prisma.$transaction(async (tx) => {
+      // Clear target year records first to avoid duplicates
+      await tx.class_fee_schedule.deleteMany({
+        where: { academic_year: toYear },
+      });
+
+      const newRecords = sourceRecords.map((r) => ({
+        class_id: r.class_id,
+        fee_id: r.fee_id,
+        amount: r.amount,
+        campus_id: r.campus_id,
+        academic_year: toYear,
+      }));
+
+      const result = await tx.class_fee_schedule.createMany({
+        data: newRecords,
+      });
+
+      return result;
     });
   }
 }

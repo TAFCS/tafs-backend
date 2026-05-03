@@ -330,6 +330,19 @@ export class VouchersController {
         res.send(buffer);
     }
 
+    @Post('batch-merge')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response) {
+        const buffer = await this.vouchersService.batchMerge(dto.ids);
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename=vouchers_merged.pdf',
+            'Content-Length': buffer.length,
+        });
+        res.send(buffer);
+    }
+
     @Post('batch-issue')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.ACCEPTED)

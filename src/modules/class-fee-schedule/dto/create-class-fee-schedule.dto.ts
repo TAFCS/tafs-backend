@@ -16,5 +16,9 @@ export class CreateClassFeeScheduleDto {
   @IsNumber()
   @IsPositive()
   @IsOptional()
+  @Min(1)
   campus_id?: number;
+
+  @IsOptional()
+  academic_year?: string;
 }
