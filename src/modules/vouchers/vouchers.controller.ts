@@ -18,7 +18,9 @@ import {
     Delete,
     Inject,
     forwardRef,
+    Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
@@ -313,6 +315,19 @@ export class VouchersController {
             message: 'Batch preview generated successfully',
             data,
         };
+    }
+
+    @Post('batch-export')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response) {
+        const buffer = await this.vouchersService.batchExport(dto.ids);
+        res.set({
+            'Content-Type': 'application/zip',
+            'Content-Disposition': 'attachment; filename=vouchers_batch.zip',
+            'Content-Length': buffer.length,
+        });
+        res.send(buffer);
     }
 
     @Post('batch-issue')

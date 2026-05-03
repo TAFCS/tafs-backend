@@ -1245,6 +1245,39 @@ export class VouchersService {
         return { buffer, url };
     }
 
+    async batchExport(voucherIds: number[]): Promise<Buffer> {
+        const archiver = require('archiver');
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const chunks: any[] = [];
+
+        return new Promise(async (resolve, reject) => {
+            archive.on('data', (chunk: any) => chunks.push(chunk));
+            archive.on('end', () => resolve(Buffer.concat(chunks)));
+            archive.on('error', (err: any) => reject(err));
+
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < voucherIds.length; i += BATCH_SIZE) {
+                const batch = voucherIds.slice(i, i + BATCH_SIZE);
+                await Promise.all(batch.map(async (id) => {
+                    try {
+                        const { buffer } = await this.generatePdfBuffer(id);
+                        const voucher = await this.prisma.vouchers.findUnique({
+                            where: { id },
+                            select: { student_id: true, academic_year: true, month: true }
+                        });
+                        const monthNamesShort = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+                        const monthStr = voucher?.month ? monthNamesShort[voucher.month - 1] : 'UNK';
+                        const filename = `Voucher-${id}-CC${voucher?.student_id}-${voucher?.academic_year}-${monthStr}.pdf`;
+                        archive.append(buffer, { name: filename });
+                    } catch (err) {
+                        this.logger.error(`Failed to add voucher ${id} to zip: ${err.message}`);
+                    }
+                }));
+            }
+            archive.finalize();
+        });
+    }
+
     private stripSplitPrefix(raw: string | null | undefined): string {
         if (!raw) return '';
         const s = raw.trim();

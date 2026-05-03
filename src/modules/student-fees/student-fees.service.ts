@@ -420,8 +420,22 @@ export class StudentFeesService {
             };
         }
 
-        // 2. No fees saved -> pull the template (requires classId)
-        if (!classId) {
+        // 2. No fees saved -> pull the template
+        let effectiveClassId = classId;
+        let effectiveCampusId = campusId;
+
+        if (!effectiveClassId) {
+            const student = await this.prisma.students.findUnique({
+                where: { cc: studentId },
+                select: { class_id: true, graduated_from_class_id: true, campus_id: true }
+            });
+            if (student) {
+                effectiveClassId = student.class_id ?? student.graduated_from_class_id ?? undefined;
+                if (effectiveCampusId === undefined) effectiveCampusId = student.campus_id ?? undefined;
+            }
+        }
+
+        if (!effectiveClassId) {
             return {
                 fees: [],
                 is_template: true,
@@ -430,10 +444,10 @@ export class StudentFeesService {
 
         const template = await this.prisma.class_fee_schedule.findMany({
             where: {
-                class_id: classId,
-                ...(campusId !== undefined
+                class_id: effectiveClassId,
+                ...(effectiveCampusId !== undefined
                     ? {
-                        OR: [{ campus_id: campusId }, { campus_id: null }],
+                        OR: [{ campus_id: effectiveCampusId }, { campus_id: null }],
                     }
                     : {}),
             },

@@ -98,6 +98,10 @@ export class StartBulkJobDto {
      * The pipeline operates on exactly these students — not the scope
      * filters — to prevent race conditions.
      */
+    @IsString()
+    @IsOptional()
+    job_type?: string;
+
     @IsArray()
     @IsInt({ each: true })
     @ArrayMinSize(1)

@@ -1,6 +1,11 @@
 import React from 'react';
 import { Page, Text, View, Document, StyleSheet, Image, Font, Svg, Rect } from '@react-pdf/renderer';
 import QRCode from 'qrcode';
+import path from 'path';
+import fs from 'fs';
+
+const LOGO_PATH = path.join(process.cwd(), 'src', 'assets', 'logo.png');
+const LOGO_BUFFER = fs.readFileSync(LOGO_PATH);
 
 // Renders a QR code via react-pdf native SVG — fully synchronous, no data URL needed
 const QrCodeView = ({ url, size = 36 }: { url: string; size?: number }) => {
@@ -467,11 +472,11 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     <View style={[styles.section, isLast ? styles.lastSection : {}]}>
         <Text style={styles.copyLabel}>{copyType}</Text>
         {paidStamp && (
-            <Text style={styles.paidStamp}>✔ PAID</Text>
+            <Text style={styles.paidStamp}>PAID</Text>
         )}
 
         <View style={styles.header}>
-            <Image src={require('path').join(process.cwd(), 'src', 'assets', 'logo.png')} style={styles.logo} />
+            <Image src={{ data: LOGO_BUFFER, format: 'png' }} style={styles.logo} />
             <View style={styles.schoolInfo}>
                 <Text style={styles.schoolName}>THE AMERICAN FOUNDATION SCHOOL</Text>
                 <Text style={styles.schoolAddress}>{student.campus || "Main Campus"}</Text>

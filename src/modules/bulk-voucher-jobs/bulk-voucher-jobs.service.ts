@@ -186,6 +186,7 @@ export class BulkVoucherJobsService {
                 skip_count: 0,
                 fail_count: 0,
                 waive_surcharge: dto.waive_surcharge ?? false,
+                job_type: dto.job_type || 'BULK',
                 updated_at: new Date(),
             },
         });
@@ -361,6 +362,7 @@ export class BulkVoucherJobsService {
                             cc: workItem.cc,
                             student_name: workItem.student.full_name,
                             pdf_url: result.value.url,
+                            voucher_id: result.value.voucher_id,
                             status: 'SUCCESS',
                         });
                     } else {
@@ -463,7 +465,7 @@ export class BulkVoucherJobsService {
         item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string },
         dto: StartBulkJobDto,
         createdBy: string,
-    ): Promise<{ buffer: Buffer; url: string }> {
+    ): Promise<{ buffer: Buffer; url: string; voucher_id: number }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
         const arrearsResult = await this.vouchersService.computeArrears(
@@ -507,6 +509,7 @@ export class BulkVoucherJobsService {
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
         });
 
-        return this.vouchersService.generatePdfBuffer(voucher.id);
+        const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id);
+        return { ...pdfResult, voucher_id: voucher.id };
     }
 }
