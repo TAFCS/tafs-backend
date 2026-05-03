@@ -184,7 +184,7 @@ export class AuthService {
       new Map(familyGuardians.map((g) => [g.guardian_id, g])).values(),
     );
 
-    const primaryGuardian = uniqueGuardians.find((g) => g.is_primary_contact);
+    const primaryGuardian = uniqueGuardians.find((g: any) => g.is_primary_contact);
 
     return {
       accessToken,
@@ -194,7 +194,7 @@ export class AuthService {
         email: family.email ?? '',
         householdName: family.household_name,
         photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
-        guardians: uniqueGuardians.map((g) => {
+        guardians: uniqueGuardians.map((g: any) => {
           const guardian = g.guardians;
           const phoneCode = guardian.primary_phone_country_code ?? '';
           const phoneNum = guardian.primary_phone ?? '';

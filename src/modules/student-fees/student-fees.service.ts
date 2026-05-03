@@ -324,10 +324,10 @@ export class StudentFeesService {
 
         const seqMap = new Map<number, number>(); // fee_id -> seq (1-indexed)
         const countMap = new Map<number, number>(); // inst_id -> total
-        instIds.forEach(id => {
+        instIds.forEach((id: number) => {
             const group = allStudentInstFees.filter((f: any) => f.installment_id === id);
             countMap.set(id, group.length);
-            group.forEach((f, idx) => seqMap.set(f.id, idx + 1));
+            group.forEach((f: any, idx: number) => seqMap.set(f.id, idx + 1));
         });
 
         const enhancedFees = fees.map(f => {
