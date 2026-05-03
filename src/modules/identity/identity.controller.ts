@@ -25,7 +25,8 @@ export class IdentityController {
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Student'))
-  async register(@Body() dto: CreateAdmissionDto) {
+  async register(@Body() dto: any) {
+    console.log('[DEBUG] Register Admission DTO:', JSON.stringify(dto, null, 2));
     const student = await this.identityService.registerAdmission(dto);
     return {
       success: true,

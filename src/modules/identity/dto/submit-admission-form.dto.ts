@@ -6,6 +6,7 @@ import {
     IsBoolean,
     IsArray,
     ValidateNested,
+    Allow,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AcademicSystem, ALevelDetailsDto, GuardianDto, PreviousSchoolDto, AdmissionDetailsDto } from './create-admission.dto';
@@ -115,10 +116,8 @@ export class SubmitAdmissionFormDto {
     @IsOptional()
     interests?: string;
 
-    @IsOptional()
-    @ValidateNested()
-    @Type(() => AdmissionDetailsDto)
-    admission?: AdmissionDetailsDto;
+    @Allow()
+    admission?: any;
 
     @IsArray()
     @ValidateNested({ each: true })
@@ -165,8 +164,6 @@ export class SubmitAdmissionFormDto {
     @IsOptional()
     activities?: StudentActivityDto[];
 
-    @ValidateNested()
-    @Type(() => ALevelDetailsDto)
-    @IsOptional()
-    alevel_details?: ALevelDetailsDto;
+    @Allow()
+    alevel_details?: any;
 }

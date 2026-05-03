@@ -272,8 +272,8 @@ export class EmergencyContactDto {
 }
 
 export class AdmissionDetailsDto {
-  @IsEnum(AcademicSystem)
-  academic_system: AcademicSystem;
+  @Allow()
+  academic_system: any;
 
   @IsString()
   @IsNotEmpty()
@@ -428,8 +428,6 @@ export class CreateAdmissionDto {
   @IsOptional()
   previous_schools?: PreviousSchoolDto[];
 
-  @ValidateNested()
-  @IsOptional()
-  @Type(() => ALevelDetailsDto)
-  alevel_details?: ALevelDetailsDto;
+  @Allow()
+  alevel_details?: any;
 }
