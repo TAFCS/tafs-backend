@@ -11,9 +11,11 @@ import {
 } from './interfaces/jwt-payload.interface';
 import { LoginDto, RefreshTokenDto } from './dto/login.dto';
 
-const ACCESS_TOKEN_TTL = '15m';
-const REFRESH_TOKEN_TTL = '7d';
-const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const ACCESS_TOKEN_TTL_MS = 1 * 60 * 60 * 1000; // 1 hour
+export const REFRESH_TOKEN_TTL_MS = 15 * 24 * 60 * 60 * 1000; // 15 days
+
+const ACCESS_TOKEN_TTL = '1h';
+const REFRESH_TOKEN_TTL = '15d';
 
 @Injectable()
 export class AuthService {
@@ -196,8 +198,8 @@ export class AuthService {
           const guardian = g.guardians;
           const phoneCode = guardian.primary_phone_country_code ?? '';
           const phoneNum = guardian.primary_phone ?? '';
-          const fullPhone = phoneNum.startsWith(phoneCode) 
-            ? phoneNum 
+          const fullPhone = phoneNum.startsWith(phoneCode)
+            ? phoneNum
             : `${phoneCode}${phoneNum}`;
 
           return {
