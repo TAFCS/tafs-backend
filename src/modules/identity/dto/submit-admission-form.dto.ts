@@ -8,7 +8,7 @@ import {
     ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { AcademicSystem, ALevelDetailsDto, GuardianDto, PreviousSchoolDto } from './create-admission.dto';
+import { AcademicSystem, ALevelDetailsDto, GuardianDto, PreviousSchoolDto, AdmissionDetailsDto } from './create-admission.dto';
 
 export class StudentLanguageDto {
     @IsString()
@@ -116,12 +116,9 @@ export class SubmitAdmissionFormDto {
     interests?: string;
 
     @IsOptional()
-    admission?: {
-        academic_system: string;
-        requested_grade: string;
-        academic_year?: string;
-        discipline?: string;
-    };
+    @ValidateNested()
+    @Type(() => AdmissionDetailsDto)
+    admission?: AdmissionDetailsDto;
 
     @IsArray()
     @ValidateNested({ each: true })
