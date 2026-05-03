@@ -90,7 +90,9 @@ export class AnalyticsService {
     const startYear = parseInt(currentYear.split('-')[0]);
     const monthNames = ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
     
-    const trends = await Promise.all(monthNames.map(async (name, i) => {
+    const trends: any[] = [];
+    for (let i = 0; i < monthNames.length; i++) {
+      const name = monthNames[i];
       // August is month 7 (0-indexed) in JS Date
       // Sequence: 7, 8, 9, 10, 11 (2025) then 0, 1, 2, 3, 4, 5, 6 (2026)
       const jsMonth = (i + 7) % 12;
@@ -116,13 +118,13 @@ export class AnalyticsService {
       const exp = Number(stats._sum?.amount || 0);
       const coll = Number(stats._sum?.amount_paid || 0);
 
-      return {
+      trends.push({
         month: name,
         collected: coll,
         expected: exp,
         shortfall: Math.max(0, exp - coll)
-      };
-    }));
+      });
+    }
 
     return {
       financials: {
