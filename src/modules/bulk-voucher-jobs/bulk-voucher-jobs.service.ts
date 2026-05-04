@@ -479,7 +479,7 @@ export class BulkVoucherJobsService {
             .map((r) => ({ student_fee_id: r.student_fee_id, discount_amount: 0, discount_label: '' }));
 
         const currentFeeLines = feesForThisVoucher.map((f: any) => {
-            const gross = Number(f.amount_before_discount || f.amount || 0);
+            const gross = Math.max(Number(f.amount_before_discount || 0), Number(f.amount || 0));
             const net = Number(f.amount || 0);
             return {
                 student_fee_id: f.id,

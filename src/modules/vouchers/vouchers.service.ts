@@ -540,7 +540,7 @@ export class VouchersService {
             return {
                 description,
                 originalDescription: feeTypeDesc + monthSuffix,
-                amount: isSplitHead ? Number(h.net_amount) : Number(h.student_fees?.amount_before_discount || h.net_amount || 0),
+                amount: isSplitHead ? Number(h.net_amount) : Math.max(Number(h.student_fees?.amount_before_discount || 0), Number(h.net_amount)),
                 discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
                 netAmount,
                 amountDeposited: finalPaid,
@@ -873,6 +873,12 @@ export class VouchersService {
             );
         }
 
+        if (voucher.status === 'PAID') {
+            throw new BadRequestException(
+                `Voucher #${voucherId} is already fully paid.`,
+            );
+        }
+
         const voucherHeadMap = new Map(
             voucher.voucher_heads.map((h) => [h.id, h]),
         );
@@ -886,7 +892,7 @@ export class VouchersService {
             }
         }
 
-        // ── Pre-validate surcharge allocations ──────────────────────────────
+        // ── Pre-validate surcharge allocations (Initial check) ──────────────
         if (parsedSurchargeAllocations.length > 0) {
             const voucherSurcharges = await (this.prisma as any).voucher_arrear_surcharges.findMany({
                 where: { voucher_id: voucherId, id: { in: parsedSurchargeAllocations.map(s => s.surchargeId) } },
@@ -1078,6 +1084,24 @@ export class VouchersService {
                 // ── Step B2: Write surcharge allocations ─────────────────────
                 for (const { surchargeId, amount } of parsedSurchargeAllocations) {
                     if (amount.eq(0)) continue;
+
+                    // Re-validate inside transaction with lock
+                    const surcharge = await (tx as any).voucher_arrear_surcharges.findUnique({
+                        where: { id: surchargeId },
+                    });
+
+                    if (!surcharge) throw new BadRequestException(`Surcharge #${surchargeId} not found.`);
+
+                    const remaining = new Prisma.Decimal(surcharge.amount).sub(
+                        new Prisma.Decimal(surcharge.amount_paid ?? 0),
+                    );
+
+                    if (amount.gt(remaining)) {
+                        throw new BadRequestException(
+                            `Surcharge #${surchargeId} allocation (${amount}) exceeds its remaining balance (${remaining}). (Tx Error)`,
+                        );
+                    }
+
                     await tx.deposit_allocations.create({
                         data: {
                             deposit_id: depositRecord.id,
@@ -1183,10 +1207,21 @@ export class VouchersService {
                 const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
                     new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
                 );
-                const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0);
+
+                const surcharges = await (tx as any).voucher_arrear_surcharges.findMany({
+                    where: { voucher_id: voucherId }
+                });
+                const surchargeRem = surcharges.reduce(
+                    (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0))),
+                    new Prisma.Decimal(0)
+                );
+                const anySurchargeDep = surcharges.some((s: any) => new Prisma.Decimal(s.amount_paid ?? 0).gt(0));
+
+                const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0) || anySurchargeDep;
+                const allSurchargesPaid = surchargeRem.lte(0);
 
                 let nextVoucherStatus = refreshed.status ?? 'UNPAID';
-                if (allMainHeadsPaid) {
+                if (allMainHeadsPaid && allSurchargesPaid) {
                     nextVoucherStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextVoucherStatus = 'PARTIALLY_PAID';
@@ -1733,6 +1768,7 @@ export class VouchersService {
                         arrear_month: s.arrear_month,
                         arrear_year: s.arrear_year,
                         amount: s.amount,
+                        amount_paid: s.amount_paid || 0,
                         waived: s.waived,
                         waived_by: s.waived_by ?? null,
                     })),
@@ -1942,15 +1978,32 @@ export class VouchersService {
 
         this.logger.debug(`  Voucher #${voucher.id} Final Calculation: headRemTotal=${totalRemHeads}, remLS=${remLS}, isOverdue=${isOverdue} => remOverall=${remOverall}`);
 
+        const surchargeItems = voucher.voucher_arrear_surcharges || [];
+        const surchargeNetTotal = surchargeItems.reduce(
+            (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount || 0)),
+            new Prisma.Decimal(0),
+        );
+        const surchargeDepTotal = surchargeItems.reduce(
+            (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount_paid || 0)),
+            new Prisma.Decimal(0),
+        );
+        const surchargeRemTotal = Prisma.Decimal.max(surchargeNetTotal.sub(surchargeDepTotal), new Prisma.Decimal(0));
+
         // ── Compute status entirely from derived state ──────────────────────────
         let computedStatus: string;
 
-        // Rule: If all main fee heads are fully paid (remTotal <= 0), it's PAID regardless of late fees.
+        // Rule: A voucher is PAID if and only if:
+        // 1. All main fee heads are fully paid (totalRemHeads <= 0)
+        // 2. All arrear surcharges are fully paid (surchargeRemTotal <= 0)
+        // 3. Late fee (if applicable) is fully paid (remLS <= 0)
         const allHeadsPaid = totalRemHeads.lte(0);
+        const allSurchargesPaid = surchargeRemTotal.lte(0);
+        const lateFeePaid = remLS.lte(0);
 
-        const anyDep = anyHeadPaidSomewhere || depLS.gt(0);
+        const fullyPaid = allHeadsPaid && allSurchargesPaid && (isOverdue ? lateFeePaid : true);
+        const anyDep = anyHeadPaidSomewhere || depLS.gt(0) || surchargeDepTotal.gt(0);
 
-        if (allHeadsPaid) {
+        if (fullyPaid) {
             computedStatus = 'PAID';
         } else if (anyDep) {
             computedStatus = 'PARTIALLY_PAID';
@@ -1965,10 +2018,13 @@ export class VouchersService {
         return {
             ...voucher,
             voucher_heads: updatedHeads,
-            sf_net_total: sfNetTotal.toFixed(2),
-            sf_gross_total: sfGrossTotal.toFixed(2),
+            sf_net_total: sfNetTotal.add(surchargeNetTotal).toFixed(2),
+            sf_gross_total: sfGrossTotal.add(surchargeNetTotal).toFixed(2),
             sf_discount_total: sfDiscountTotal.toFixed(2),
             status: computedStatus,
+            // Add explicitly for frontend convenience
+            surcharge_balance: surchargeRemTotal.toFixed(2),
+            head_balance: totalRemHeads.toFixed(2),
         };
     }
 
@@ -2016,9 +2072,10 @@ export class VouchersService {
             arrearFeeIds.push(fee.id);
 
             const dateStr = fee.fee_date ? fee.fee_date.toISOString().split('T')[0] : 'undated';
-            if (fee.fee_date && !distinctGroups.has(dateStr)) {
-                distinctGroups.set(dateStr, {
-                    date: fee.fee_date,
+            const groupKey = `${fee.academic_year}_${fee.target_month}`;
+            if (fee.academic_year && fee.target_month != null && !distinctGroups.has(groupKey)) {
+                distinctGroups.set(groupKey, {
+                    date: fee.fee_date!,
                     target_month: fee.target_month,
                     academic_year: fee.academic_year,
                 });
