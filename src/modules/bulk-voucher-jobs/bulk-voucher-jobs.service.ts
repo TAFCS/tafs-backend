@@ -76,6 +76,7 @@ export class BulkVoucherJobsService {
                 cc: true,
                 full_name: true,
                 gr_number: true,
+                status: true,
                 classes: { select: { description: true } },
                 sections: { select: { description: true } },
             },
@@ -120,23 +121,30 @@ export class BulkVoucherJobsService {
         }
 
         // 3. Build response
-        const results = students
-            .filter(s => hasAnyFeesSet.has(s.cc)) // Only show students who actually have fees scheduled
-            .map((s) => ({
+        const results = students.map((s) => {
+            const isAlreadyIssued = alreadyIssuedSet.has(s.cc);
+            const hasAnyFees = hasAnyFeesSet.has(s.cc);
+            const hasNotIssuedFees = hasNotIssuedSet.has(s.cc);
+            
+            // A student is "Ready" if they have fees and NO voucher exists yet
+            // or if they have explicitly "NOT_ISSUED" fees.
+            const isReady = hasAnyFees && !isAlreadyIssued;
+
+            return {
                 cc: s.cc,
                 student_full_name: s.full_name,
                 gr_number: s.gr_number ?? null,
                 class_name: s.classes?.description ?? 'N/A',
                 section_name: s.sections?.description ?? 'N/A',
-                is_already_issued: alreadyIssuedSet.has(s.cc),
-                has_not_issued: hasNotIssuedSet.has(s.cc),
-            }));
+                is_already_issued: isAlreadyIssued,
+                has_not_issued: hasNotIssuedFees,
+                has_any_fees: hasAnyFees,
+                is_ready: isReady,
+                status: s.status,
+            };
+        });
 
-        if (dto.skip_already_issued) {
-            // Only show students who have something to issue AND don't have an active voucher
-            return results.filter((r) => r.has_not_issued && !r.is_already_issued);
-        }
-
+        // We return everything to the preview, the frontend can handle the display/selection logic
         return results;
     }
 
