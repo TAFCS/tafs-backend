@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, UnauthorizedException, Inject, forwardRef, ConflictException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -9,7 +9,7 @@ import {
   IJwtStaffPayload,
   IJwtParentPayload,
 } from './interfaces/jwt-payload.interface';
-import { LoginDto, RefreshTokenDto } from './dto/login.dto';
+import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 
 export const ACCESS_TOKEN_TTL_MS = 1 * 60 * 60 * 1000; // 1 hour
 export const REFRESH_TOKEN_TTL_MS = 15 * 24 * 60 * 60 * 1000; // 15 days
@@ -276,6 +276,156 @@ export class AuthService {
       where: { family_id: familyId, revoked_at: null },
       data: { revoked_at: new Date() },
     });
+  }
+
+  // ─── Signup/Registration ───────────────────────────────────────────────────
+
+  /**
+   * Verify if a guardian with the given CNIC exists in the system
+   */
+  async verifyCnic(dto: VerifyCnicDto) {
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { cnic: dto.cnic },
+      select: { id: true, full_name: true },
+    });
+
+    if (!guardian) {
+      return {
+        exists: false,
+        message: 'CNIC not found in system',
+      };
+    }
+
+    return {
+      exists: true,
+      message: 'CNIC verified successfully',
+      guardianId: guardian.id,
+      guardianName: guardian.full_name,
+    };
+  }
+
+  /**
+   * Register a new parent account using a verified CNIC
+   * Creates a family record and sets email/password for login
+   */
+  async registerParent(dto: RegisterParentDto) {
+    // Verify CNIC exists
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { cnic: dto.cnic },
+      select: { id: true, full_name: true },
+    });
+
+    if (!guardian) {
+      throw new BadRequestException('CNIC not found in system');
+    }
+
+    // Check if email already in use
+    const existingFamily = await this.prisma.families.findFirst({
+      where: { email: dto.email },
+    });
+
+    if (existingFamily) {
+      throw new ConflictException('Email already in use');
+    }
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    // Create family account with email and password
+    const family = await this.prisma.families.create({
+      data: {
+        email: dto.email,
+        password_hash: passwordHash,
+        household_name: guardian.full_name || 'New Household',
+      },
+    });
+
+    // Generate tokens
+    const payload: IJwtParentPayload = {
+      sub: family.id,
+      familyId: family.id,
+      userType: 'PARENT',
+    };
+
+    const { accessToken, refreshToken } =
+      await this.generateTokenPair(payload);
+    await this.storeParentRefreshToken(family.id, refreshToken);
+
+    // Fetch family data (same as loginParent)
+    const students = await this.prisma.students.findMany({
+      where: { family_id: family.id },
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+        photograph_url: true,
+        academic_year: true,
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+      },
+    });
+
+    const familyGuardians = await this.prisma.student_guardians.findMany({
+      where: {
+        students: { family_id: family.id },
+      },
+      include: { guardians: true },
+    });
+
+    const uniqueGuardians = Array.from(
+      new Map(familyGuardians.map((g) => [g.guardian_id, g])).values(),
+    );
+
+    const primaryGuardian = uniqueGuardians.find((g: any) => g.is_primary_contact);
+
+    return {
+      accessToken,
+      refreshToken,
+      family: {
+        id: family.id,
+        email: family.email ?? '',
+        householdName: family.household_name,
+        photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
+        guardians: uniqueGuardians.map((g: any) => {
+          const grd = g.guardians;
+          const phoneCode = grd.primary_phone_country_code ?? '';
+          const phoneNum = grd.primary_phone ?? '';
+          const fullPhone = phoneNum.startsWith(phoneCode)
+            ? phoneNum
+            : `${phoneCode}${phoneNum}`;
+
+          return {
+            id: grd.id,
+            name: grd.full_name,
+            relationship: g.relationship,
+            phone: fullPhone || null,
+            photographUrl: grd.photo_url,
+            email: grd.email_address || null,
+            occupation: grd.occupation || null,
+            organization: grd.organization || null,
+            education: grd.education_level || null,
+            cnic: grd.cnic || null,
+            whatsapp: grd.whatsapp_number || null,
+            address: grd.mailing_address || null,
+            jobPosition: grd.job_position || null,
+            isEmergencyContact: g.is_emergency_contact ?? false,
+          };
+        }),
+      },
+      students: students.map((student) => ({
+        cc: student.cc,
+        fullName: student.full_name,
+        grNumber: student.gr_number,
+        photographUrl: student.photograph_url,
+        campus: student.campuses?.campus_name ?? null,
+        campusCode: student.campuses?.campus_code ?? null,
+        className: student.classes?.description ?? null,
+        classCode: student.classes?.class_code ?? null,
+        section: student.sections?.description ?? null,
+        academicYear: student.academic_year,
+      })),
+    };
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
