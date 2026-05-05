@@ -116,6 +116,18 @@ export class SubmitAdmissionFormDto {
     @IsOptional()
     interests?: string;
 
+    @IsBoolean()
+    @IsOptional()
+    is_complementary?: boolean;
+
+    @IsBoolean()
+    @IsOptional()
+    is_fee_endowment?: boolean;
+
+    @IsString()
+    @IsOptional()
+    fee_start_term?: string;
+
     @Allow()
     admission?: any;
 

@@ -145,6 +145,24 @@ export class UpdateStudentDto {
   @IsDateString()
   doa?: string;
 
+  @IsOptional()
+  @IsBoolean()
+  is_complementary?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  is_fee_endowment?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  fee_start_term?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  graduated_from_class_id?: number;
+
   // Virtual fields for Parent Info (handled in service)
   @IsOptional()
   @IsString()

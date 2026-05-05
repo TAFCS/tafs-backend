@@ -325,6 +325,9 @@ export class IdentityService {
             physical_impairment: dto.physical_impairment || undefined,
             medical_info: dto.medical_info || undefined,
             interests: dto.interests || undefined,
+            is_complementary: dto.is_complementary ?? undefined,
+            is_fee_endowment: dto.is_fee_endowment ?? undefined,
+            fee_start_term: dto.fee_start_term || undefined,
             academic_year: dto.admission?.academic_year || undefined,
             status: 'ENROLLED',
           },
@@ -637,6 +640,7 @@ export class IdentityService {
         include: { guardians: true },
       },
       student_alevel_details: true,
+      graduated_from_class: true,
     };
   }
 

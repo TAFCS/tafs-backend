@@ -195,6 +195,9 @@ export class StudentsService {
       selectArgs.house_id  = true;
       selectArgs.status = true;
       selectArgs.photograph_url = true;
+      selectArgs.is_complementary = true;
+      selectArgs.is_fee_endowment = true;
+      selectArgs.fee_start_term = true;
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
       selectArgs.classes   = { select: { description: true, class_code: true } };
       selectArgs.graduated_from_class = { select: { id: true, description: true, class_code: true } };
@@ -572,6 +575,7 @@ export class StudentsService {
          student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
         student_activities: true,
         student_flags: { where: { work_done: false } },
+        graduated_from_class: true,
       }
     });
 
@@ -671,6 +675,10 @@ export class StudentsService {
       section_id: s.section_id,
       grade_and_section: s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
+      is_complementary: s.is_complementary,
+      is_fee_endowment: s.is_fee_endowment,
+      fee_start_term: s.fee_start_term,
+      graduated_from_class: s.graduated_from_class,
       financial_status_badge: financial.badge,
       total_outstanding_balance: financial.outstanding,
       advance_credit_balance: financial.advance,

@@ -141,6 +141,10 @@ export class StaffEditingService {
         house_id: true,
         family_id: true,
         home_phone: true,
+        is_complementary: true,
+        is_fee_endowment: true,
+        fee_start_term: true,
+        graduated_from_class_id: true,
         families: {
           select: { 
             id: true,
@@ -163,6 +167,7 @@ export class StaffEditingService {
         photograph_url: true,
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
+        graduated_from_class: { select: { id: true, description: true, class_code: true } },
         sections: { select: { description: true } },
         houses: { select: { house_name: true } },
         student_guardians: {
@@ -191,6 +196,7 @@ export class StaffEditingService {
       include: {
         campuses: true,
         classes: true,
+        graduated_from_class: true,
         sections: true,
         houses: true,
         student_admissions: { orderBy: { application_date: 'desc' }, take: 5 },
@@ -374,6 +380,10 @@ export class StaffEditingService {
         class_id: true,
         section_id: true,
         house_id: true,
+        is_complementary: true,
+        is_fee_endowment: true,
+        fee_start_term: true,
+        graduated_from_class_id: true,
         admission_age_years: true,
         academic_year: true,
         place_of_birth: true,
@@ -388,6 +398,7 @@ export class StaffEditingService {
         photograph_url: true,
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
+        graduated_from_class: { select: { id: true, description: true, class_code: true } },
         sections: { select: { description: true } },
         houses: { select: { house_name: true } },
         student_guardians: {
@@ -823,6 +834,15 @@ export class StaffEditingService {
       father_cnic: fatherLink?.guardians?.cnic ?? null,
       mother_name: motherLink?.guardians?.full_name ?? null,
       mother_cnic: motherLink?.guardians?.cnic ?? null,
+      is_complementary: s.is_complementary,
+      is_fee_endowment: s.is_fee_endowment,
+      fee_start_term: s.fee_start_term,
+      graduated_from_class_id: s.graduated_from_class_id,
+      graduated_from_class: s.graduated_from_class ? {
+        id: s.graduated_from_class.id,
+        description: s.graduated_from_class.description,
+        class_code: s.graduated_from_class.class_code
+      } : null,
     };
   }
 
@@ -896,6 +916,11 @@ export class StaffEditingService {
         students: s.families.students || []
       } : null,
       siblings: (s.families?.students || []).filter((sib: any) => sib.cc !== s.cc),
+      is_complementary: s.is_complementary,
+      is_fee_endowment: s.is_fee_endowment,
+      fee_start_term: s.fee_start_term,
+      graduated_from_class_id: s.graduated_from_class_id,
+      graduated_from_class: s.graduated_from_class,
     };
   }
 
