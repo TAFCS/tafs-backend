@@ -621,6 +621,38 @@ export class StudentsService {
       }
     }
 
+    // ── Backfill graduated_from_class_id for legacy graduated students ───────
+    if (s.status === 'GRADUATED' && !s.graduated_from_class_id) {
+      const admission = s.student_admissions?.[0];
+      let resolvedGradClass: { id: number; description: string; class_code: string } | null = null;
+
+      if (admission?.requested_grade) {
+        const grade = admission.requested_grade;
+        const normalized = grade.replace(/[-\s]/g, '').toUpperCase();
+        resolvedGradClass = await this.prisma.classes.findFirst({
+          where: {
+            OR: [
+              { class_code: { equals: grade, mode: 'insensitive' } },
+              { class_code: { equals: normalized, mode: 'insensitive' } },
+              { description: { equals: grade, mode: 'insensitive' } },
+              { description: { contains: grade, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true, description: true, class_code: true },
+        }) as any;
+      }
+
+      if (resolvedGradClass) {
+        // Persist it so subsequent loads are instant
+        await this.prisma.students.update({
+          where: { cc: s.cc },
+          data: { graduated_from_class_id: resolvedGradClass.id },
+        }).catch(() => { /* non-critical, ignore */ });
+        (s as any).graduated_from_class_id = resolvedGradClass.id;
+        (s as any).graduated_from_class = resolvedGradClass;
+      }
+    }
+
     // ── Potential Family Detection (for unlinked students) ───────────────────
     let potentialFamilyMatch: any = null;
     if (!s.family_id) {
@@ -678,6 +710,7 @@ export class StudentsService {
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
       fee_start_term: s.fee_start_term,
+      graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,
       financial_status_badge: financial.badge,
       total_outstanding_balance: financial.outstanding,

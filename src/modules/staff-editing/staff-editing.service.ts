@@ -238,6 +238,37 @@ export class StaffEditingService {
        });
     }
 
+    // ── Backfill graduated_from_class_id for legacy graduated students ───────
+    if (s.status === 'GRADUATED' && !s.graduated_from_class) {
+      const admission = s.student_admissions?.[0];
+      let resolvedGradClass: { id: number; description: string; class_code: string } | null = null;
+
+      if (admission?.requested_grade) {
+        const grade = admission.requested_grade;
+        const normalized = grade.replace(/[-\s]/g, '').toUpperCase();
+        resolvedGradClass = await this.prisma.classes.findFirst({
+          where: {
+            OR: [
+              { class_code: { equals: grade, mode: 'insensitive' } },
+              { class_code: { equals: normalized, mode: 'insensitive' } },
+              { description: { equals: grade, mode: 'insensitive' } },
+              { description: { contains: grade, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true, description: true, class_code: true },
+        }) as any;
+      }
+
+      if (resolvedGradClass) {
+        await this.prisma.students.update({
+          where: { cc: s.cc },
+          data: { graduated_from_class_id: resolvedGradClass.id },
+        }).catch(() => { /* non-critical */ });
+        s.graduated_from_class_id = resolvedGradClass.id;
+        s.graduated_from_class = resolvedGradClass;
+      }
+    }
+
     return this.flattenStudentFull(s);
   }
 
