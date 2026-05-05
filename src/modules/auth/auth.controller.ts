@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
-import { LoginDto, RefreshTokenDto } from './dto/login.dto';
+import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -119,5 +119,21 @@ export class AuthController {
   @UseGuards(JwtParentGuard)
   logoutParent(@CurrentUser() user: IJwtParentPayload) {
     return this.authService.logoutParent(user.familyId);
+  }
+
+  // ─── Parent Signup (Flutter mobile app) ───────────────────────────────────
+
+  @Post('parent/verify-cnic')
+  @HttpCode(HttpStatus.OK)
+  async verifyCnic(@Body() dto: VerifyCnicDto) {
+    const result = await this.authService.verifyCnic(dto);
+    return createApiResponse(result, HttpStatus.OK, 'CNIC verification result');
+  }
+
+  @Post('parent/register')
+  @HttpCode(HttpStatus.CREATED)
+  async registerParent(@Body() dto: RegisterParentDto) {
+    const result = await this.authService.registerParent(dto);
+    return createApiResponse(result, HttpStatus.CREATED, 'Registration successful');
   }
 }
