@@ -38,6 +38,9 @@ export class EnrollmentService {
           take: 1,
           select: { requested_grade: true, academic_system: true, discipline: true },
         },
+        student_alevel_details: {
+          select: { details: true }
+        }
       },
     });
 
@@ -77,18 +80,59 @@ export class EnrollmentService {
     ]);
 
     let suggested_section = balanced_section;
+    let alevel_subjects: Array<{ name: string, code: string }> = [];
+    let scienceCount = 0;
+    let commerceCount = 0;
 
-    // A-Level Specialized Logic: Science -> A, Commerce -> C
-    if (isALevel && admission.discipline) {
-      const discipline = admission.discipline.toLowerCase();
-      const targetSectionDesc = discipline === 'science' ? 'A' : discipline === 'commerce' ? 'C' : null;
+    // A-Level Specialized Logic
+    if (isALevel) {
+      const alevelDetails = (student.student_alevel_details?.details || {}) as any;
+      const groupA = alevelDetails.preferred_subjects_group_a || [];
+      const groupB = alevelDetails.preferred_subjects_group_b || [];
+      const allCodes = Array.from(new Set([...groupA, ...groupB])) as string[];
+
+      // Subject mapping (based on registration-form.tsx)
+      const subjectMap: Record<string, string> = {
+        "9700": "BIOLOGY",
+        "9701": "CHEMISTRY",
+        "9702": "PHYSICS",
+        "9709": "MATHEMATICS",
+        "9686": "URDU",
+        "9618": "COMPUTER SCIENCE",
+        "9699": "SOCIOLOGY",
+        "9706": "ACCOUNTING",
+        "9707": "BUSINESS",
+        "9708": "ECONOMICS",
+      };
+
+      alevel_subjects = allCodes.map(code => ({
+        code,
+        name: subjectMap[code] || "UNKNOWN"
+      }));
+
+      // Categorization
+      const scienceCodes = ['9700', '9701', '9702', '9618'];
+      const commerceCodes = ['9706', '9707', '9708'];
+
+      allCodes.forEach(code => {
+        if (scienceCodes.includes(code)) scienceCount++;
+        else if (commerceCodes.includes(code)) commerceCount++;
+      });
+
+      // Majority rule for section
+      let targetSectionDesc: string | null = null;
+      if (scienceCount > commerceCount) targetSectionDesc = 'A';
+      else if (commerceCount > scienceCount) targetSectionDesc = 'C';
+      // Fallback to explicit discipline field if no clear majority from subjects
+      else if (admission?.discipline) {
+        const disc = admission.discipline.toLowerCase();
+        targetSectionDesc = disc === 'science' ? 'A' : disc === 'commerce' ? 'C' : null;
+      }
 
       if (targetSectionDesc) {
-        // Find if this section exists in the system
         const matchedSection = await this.prisma.sections.findFirst({
           where: { description: targetSectionDesc }
         });
-
         if (matchedSection) {
           suggested_section = matchedSection.id;
         }
@@ -124,6 +168,11 @@ export class EnrollmentService {
       min_gr,
       all_houses,
       available_sections,
+      alevel_analysis: isALevel ? {
+        subjects: alevel_subjects,
+        scienceCount: scienceCount,
+        commerceCount: commerceCount,
+      } : null
     };
   }
 
