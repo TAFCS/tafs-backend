@@ -36,7 +36,7 @@ export class EnrollmentService {
         student_admissions: {
           orderBy: { application_date: 'desc' },
           take: 1,
-          select: { requested_grade: true },
+          select: { requested_grade: true, academic_system: true, discipline: true },
         },
       },
     });
@@ -66,12 +66,34 @@ export class EnrollmentService {
       }
     }
 
-    const [suggested_gr, suggested_house, suggested_section, min_gr] = await Promise.all([
-      this.computeNextGr(student.campus_id),
+    const admission = student.student_admissions?.[0];
+    const isALevel = admission?.academic_system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+
+    const [suggested_gr, suggested_house, balanced_section, min_gr] = await Promise.all([
+      this.computeNextGr(student.campus_id, isALevel),
       this.computeBalancedHouse(resolvedClassId, sectionId),
       this.computeBalancedSection(student.campus_id, resolvedClassId),
       this.computeMinGr(student.campus_id),
     ]);
+
+    let suggested_section = balanced_section;
+
+    // A-Level Specialized Logic: Science -> A, Commerce -> C
+    if (isALevel && admission.discipline) {
+      const discipline = admission.discipline.toLowerCase();
+      const targetSectionDesc = discipline === 'science' ? 'A' : discipline === 'commerce' ? 'C' : null;
+
+      if (targetSectionDesc) {
+        // Find if this section exists in the system
+        const matchedSection = await this.prisma.sections.findFirst({
+          where: { description: targetSectionDesc }
+        });
+
+        if (matchedSection) {
+          suggested_section = matchedSection.id;
+        }
+      }
+    }
 
     const all_houses = await this.prisma.houses.findMany();
 
@@ -377,7 +399,7 @@ export class EnrollmentService {
     });
   }
 
-  private async computeNextGr(campusId: number | null): Promise<string> {
+  private async computeNextGr(campusId: number | null, isALevel = false): Promise<string> {
     if (!campusId) return '1';
 
     // Get campus name for prefix logic
@@ -393,7 +415,7 @@ export class EnrollmentService {
       return '';
     };
 
-    const defaultPrefix = campus ? getPrefixByCampusName(campus.campus_name) : '';
+    const defaultPrefix = isALevel ? 'A-' : (campus ? getPrefixByCampusName(campus.campus_name) : '');
 
     // Optimize: Instead of fetching ALL students, fetch the most recent ones 
     // to determine the current GR sequence and prefix.
@@ -416,12 +438,17 @@ export class EnrollmentService {
         if (match) {
           const prefix = match[1];
           const num = parseInt(match[2], 10);
+
+          // Logic: Separate sequences for A-Level vs everything else
+          const isThisGrALevel = prefix === 'A-';
+          if (isThisGrALevel !== isALevel) continue;
+
           if (num > maxNum) {
             maxNum = num;
             mainPrefix = prefix || defaultPrefix;
           }
-        } else {
-          // Handle non-standard formats if any
+        } else if (!isALevel) {
+          // For non-A-Level, also check purely numeric GRs if no prefix match found yet
           const num = parseInt(s.gr_number, 10);
           if (!isNaN(num) && num > maxNum) {
             maxNum = num;
