@@ -26,6 +26,7 @@ import { TransferModule } from './modules/transfers/transfer.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
+import { MeezanModule } from './modules/meezan/meezan.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { InstallmentsModule } from './modules/installments/installments.module';
     AnalyticsModule,
     AppPortalModule,
     InstallmentsModule,
+    MeezanModule,
   ],
   controllers: [AppController],
   providers: [AppService],
