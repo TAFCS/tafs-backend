@@ -1658,18 +1658,28 @@ export class VouchersService {
                 const head = sortedHeads.find((h) => h.student_fee_id === oldFeeId)!;
                 const oldFee = head.student_fees!;
 
-                const paidPortion = new Prisma.Decimal(head.amount_deposited as any ?? 0);
+                // ── Use the TOTAL paid on the fee row (from all vouchers) as the paid portion,
+                //    ensuring the balance row is strictly (Original - Total Paid).
+                const totalPaidOnFee = new Prisma.Decimal(oldFee.amount_paid as any ?? 0);
                 const canonAmt = new Prisma.Decimal(oldFee.amount ?? oldFee.amount_before_discount ?? 0);
                 const grossOld = new Prisma.Decimal(oldFee.amount_before_discount ?? oldFee.amount ?? 0);
 
                 const paidGross = canonAmt.gt(0)
-                    ? grossOld.mul(paidPortion).div(canonAmt)
-                    : paidPortion;
+                    ? grossOld.mul(totalPaidOnFee).div(canonAmt)
+                    : totalPaidOnFee;
                 const unpaidGross = Prisma.Decimal.max(grossOld.sub(paidGross), new Prisma.Decimal(0));
-                const unpaidNet = Prisma.Decimal.max(canonAmt.sub(paidPortion), new Prisma.Decimal(0));
+                const unpaidNet = Prisma.Decimal.max(canonAmt.sub(totalPaidOnFee), new Prisma.Decimal(0));
 
-                // ── Compute prefixes from student_fees source of truth, not from head cache.
+                // ── Compute prefixes from student_fees source of truth
                 const { prefixPaid, prefixBalance } = this.buildSplitPrefixes((oldFee as any).description_prefix);
+
+                // ── To avoid unique constraint conflicts (student_id, fee_type_id, fee_date)
+                //    while keeping foreign keys intact, we first NULL the fee_date of the old row.
+                //    This "makes room" for the new PAID row without deleting the old one yet.
+                await tx.student_fees.update({
+                    where: { id: oldFeeId },
+                    data: { fee_date: null },
+                });
 
                 const paidSf = await tx.student_fees.create({
                     data: {
@@ -1684,11 +1694,11 @@ export class VouchersService {
                         status: 'PAID',
                         amount_before_discount: paidGross,
                         target_month: oldFee.target_month,
-                        amount: paidPortion,
+                        amount: totalPaidOnFee,
                         bundle_id: oldFee.bundle_id,
-                        fee_date: oldFee.fee_date,
-                        amount_paid: paidPortion,
-                        description_prefix: prefixPaid,   // ← from source of truth
+                        fee_date: oldFee.fee_date, // Keep original date for the PAID portion
+                        amount_paid: totalPaidOnFee,
+                        description_prefix: prefixPaid,
                     } as any,
                 });
 
@@ -1707,22 +1717,25 @@ export class VouchersService {
                         target_month: oldFee.target_month,
                         amount: unpaidNet,
                         bundle_id: oldFee.bundle_id,
-                        fee_date: oldFee.fee_date,
+                        fee_date: null, // NULL date prevents unique constraint conflict with the paid row
                         amount_paid: new Prisma.Decimal(0),
-                        description_prefix: prefixBalance,  // ← from source of truth
+                        description_prefix: prefixBalance,
                     },
                 });
 
+                // ── Re-link ALL deposit allocations (from all vouchers) to the new paid fee row.
                 await tx.deposit_allocations.updateMany({
-                    where: { student_fee_id: oldFeeId, voucher_id: voucherId },
+                    where: { student_fee_id: oldFeeId },
                     data: { student_fee_id: paidSf.id },
                 });
 
-                await tx.voucher_heads.deleteMany({ where: { student_fee_id: oldFeeId } });
-                await tx.student_fees.delete({ where: { id: oldFeeId } });
+                // ── Re-link ALL other voucher heads to the new paid fee row (so they don't orphan).
+                //    Heads on the current voucherId will be deleted in Step 2 anyway.
+                await tx.voucher_heads.updateMany({
+                    where: { student_fee_id: oldFeeId, NOT: { voucher_id: voucherId } },
+                    data: { student_fee_id: paidSf.id },
+                });
 
-                // ── Store both new IDs AND the prefixes so voucher_heads creation below
-                //    can write the correct description_prefix without going back to the DB.
                 splitReplacement.set(oldFeeId, {
                     paidId: paidSf.id,
                     unpaidId: unpaidSf.id,
@@ -1734,6 +1747,14 @@ export class VouchersService {
             // ── Step 2: Delete all heads on the original voucher (they'll be re-created
             //           under the two new vouchers).
             await tx.voucher_heads.deleteMany({ where: { voucher_id: voucherId } });
+
+            // ── Step 3: Now we can safely delete the original student fees since
+            //           all references (allocations, heads) have been migrated or deleted.
+            if (partialFeeIds.length > 0) {
+                await tx.student_fees.deleteMany({
+                    where: { id: { in: partialFeeIds } },
+                });
+            }
 
             // ── Step 3: Helper — resolve student_fee_id for the new split rows.
             const resolveSfId = (oldId: number, side: 'paid' | 'unpaid'): number => {

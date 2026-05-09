@@ -530,37 +530,50 @@ export class StudentFeesService {
                     });
                 }
 
-                // 2. Upsert items (Parallelized within transaction)
+                // 2. Map existing fees by key for manual lookup (since NULL fee_date breaks unique constraint)
+                const feeKeyMap = new Map<string, number>();
+                existingFees.forEach(f => {
+                    const tm = f.target_month ?? f.month ?? 8;
+                    const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
+                    const key = `${f.fee_type_id}|${tm}|${f.academic_year}|${dateStr}`;
+                    feeKeyMap.set(key, f.id);
+                });
+
+                // 3. Upsert items
                 const upsertPromises = items.map((item) => {
                     const tm = item.target_month ?? item.month ?? 8;
-                    const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
+                    const targetMonth = tm > 0 ? tm : 8;
                     const feeDate = item.fee_date ? new Date(item.fee_date) : null;
+                    const dateStr = item.fee_date || 'no-date';
+                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateStr}`;
 
-                    return tx.student_fees.upsert({
-                        where: {
-                            student_fees_unique_head: {
-                                student_id,
-                                fee_type_id: item.fee_type_id,
+                    const existingId = feeKeyMap.get(key);
+
+                    if (existingId) {
+                        return tx.student_fees.update({
+                            where: { id: existingId },
+                            data: {
+                                month: item.month,
+                                amount: item.amount,
+                                amount_before_discount: item.amount_before_discount,
+                                academic_year: item.academic_year,
+                                target_month: targetMonth,
                                 fee_date: feeDate,
-                            } as any,
-                        },
-                        update: {
-                            month: item.month,
-                            amount: item.amount,
-                            amount_before_discount: item.amount_before_discount,
-                            academic_year: item.academic_year,
-                            target_month: targetMonth,
-                        },
-                        create: {
+                            },
+                        });
+                    }
+
+                    return tx.student_fees.create({
+                        data: {
                             student_id,
                             fee_type_id: item.fee_type_id,
                             month: item.month,
-                            academic_year: item.academic_year,
                             amount: item.amount,
                             amount_before_discount: item.amount_before_discount,
-                            status: 'NOT_ISSUED' as any,
+                            academic_year: item.academic_year,
                             target_month: targetMonth,
                             fee_date: feeDate,
+                            status: 'NOT_ISSUED',
                         },
                     });
                 });
