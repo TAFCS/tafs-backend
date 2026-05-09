@@ -126,6 +126,7 @@ model classes {
   description        String               @db.VarChar(255)
   class_code         String               @db.VarChar(10)
   academic_system    String               @db.VarChar(20)
+  term_start_month   Int                  @default(8)
   campus_classes     campus_classes[]
   campus_sections    campus_sections[]
   class_fee_schedule class_fee_schedule[]
@@ -341,6 +342,7 @@ model student_fees {
   students                 students                  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   voucher_heads            voucher_heads[]
 
+  @@unique([student_id, fee_type_id, fee_date], map: "student_fees_unique_head")
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
 }

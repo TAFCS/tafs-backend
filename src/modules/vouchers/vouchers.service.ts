@@ -514,7 +514,7 @@ export class VouchersService {
 
             const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
             const getAcademicSortIndex = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
-            
+
             const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
             const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
             const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
@@ -574,7 +574,7 @@ export class VouchersService {
             : 'TOTAL ARREARS';
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
-        
+
         // Main Label: Consolidate ALL heads in the voucher
         const headsForMainLabel = heads.filter(h => h.target_month != null);
         const monthLabel = headsForMainLabel.length > 0
@@ -1242,6 +1242,90 @@ export class VouchersService {
         );
 
         // 3. FINAL FULL FETCH
+        return this.findOne(voucherId);
+    }
+
+    /**
+     * Clear a specific deposit against a specific voucher.
+     * Performs a destructive reversal:
+     * 1. Finds all deposit_allocations for this deposit_id AND voucher_id
+     * 2. For each allocation with a student_fee_id, resets that student_fees row
+     * 3. Deletes the deposit_allocations for this voucher
+     * 4. If the parent deposits record has no remaining allocations, deletes it
+     * 5. Resets voucher status to UNPAID and clears late_fee_deposited
+     * 6. Resets voucher_heads cache (amount_deposited to 0, balance to net_amount)
+     *
+     * Edge case: If a deposit covered multiple vouchers, only allocations for the
+     * specified voucher are deleted. The deposits record only gets deleted if no
+     * allocations remain after this targeted deletion.
+     */
+    async clearDeposit(voucherId: number, depositId: number) {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+        });
+
+        if (!voucher) {
+            throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+        }
+
+        if (voucher.status === 'PAID') {
+            throw new BadRequestException(
+                `Cannot clear deposit for a PAID voucher. The voucher status must be manually reset first.`,
+            );
+        }
+
+        await this.prisma.$transaction(async (tx) => {
+            // 1. Find all deposit_allocations for this deposit_id AND this voucher_id
+            const allocations = await tx.deposit_allocations.findMany({
+                where: { deposit_id: depositId, voucher_id: voucherId },
+            });
+
+            // 2. For each allocation that has a student_fee_id, reset that student_fees row
+            for (const alloc of allocations.filter(a => a.student_fee_id)) {
+                await tx.student_fees.update({
+                    where: { id: alloc.student_fee_id! },
+                    data: {
+                        amount_paid: 0,
+                        status: 'ISSUED',
+                        issue_date: null,
+                        due_date: null,
+                        validity_date: null,
+                    } as any,
+                });
+            }
+
+            // 3. Delete the deposit_allocations for this voucher
+            await tx.deposit_allocations.deleteMany({
+                where: { deposit_id: depositId, voucher_id: voucherId },
+            });
+
+            // 4. Check if the parent deposits record now has any remaining allocations
+            const remainingAllocations = await tx.deposit_allocations.count({
+                where: { deposit_id: depositId },
+            });
+
+            // 5. If orphaned, delete the deposits record too
+            if (remainingAllocations === 0) {
+                await tx.deposits.delete({ where: { id: depositId } });
+            }
+
+            // 6. Reset voucher status to UNPAID and clear late_fee_deposited
+            await tx.vouchers.update({
+                where: { id: voucherId },
+                data: {
+                    status: 'UNPAID',
+                    late_fee_deposited: 0,
+                } as any,
+            });
+
+            // 7. Also reset voucher_heads cache (use raw query for column reference)
+            await (tx as any).$executeRawUnsafe(
+                `UPDATE voucher_heads SET amount_deposited = 0, balance = net_amount WHERE voucher_id = $1`,
+                voucherId
+            );
+        }, { timeout: 15000 });
+
+        // Final full fetch
         return this.findOne(voucherId);
     }
 

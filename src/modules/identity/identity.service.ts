@@ -66,7 +66,7 @@ export class IdentityService {
 
           if (existingGuardian && existingGuardian.student_guardians.length > 0) {
             const familyId = existingGuardian.student_guardians[0].students?.family_id;
-            
+
             // Check Spouse (Mother) match to allow auto-linking
             const existingMother = existingGuardian.student_guardians[0].students?.student_guardians?.find(
               (sg) => sg.relationship === 'MOTHER'
@@ -75,7 +75,7 @@ export class IdentityService {
             const dtoMotherCnic = dto.mother.cnic?.replace(/-/g, '');
             const existingMotherCnic = existingMother?.cnic?.replace(/-/g, '');
 
-            const isMotherMatch = 
+            const isMotherMatch =
               (dtoMotherCnic && existingMotherCnic && dtoMotherCnic === existingMotherCnic) ||
               (dto.mother.full_name?.toUpperCase() === existingMother?.full_name?.toUpperCase() && dto.mother.full_name);
 
@@ -222,11 +222,14 @@ export class IdentityService {
             data: { is_emergency_contact: true },
           });
         } else {
+          // Apply N/A -> null coalesce for emergency contact
+          const ecFullName = (ec.full_name?.trim() === "N/A" || !ec.full_name?.trim()) ? null : ec.full_name?.trim();
+          const ecPrimaryPhone = (ec.primary_phone && ec.primary_phone !== "N/A") ? ec.primary_phone : null;
           const ecGuardian = await tx.guardians.create({
             data: {
-              full_name: ec.full_name,
+              full_name: ecFullName,
               primary_phone_country_code: ec.primary_phone_country_code ?? '+92',
-              primary_phone: ec.primary_phone,
+              primary_phone: ecPrimaryPhone,
               additional_phones: (ec.additional_phones as any) ?? undefined,
             } as any,
           });
@@ -582,7 +585,7 @@ export class IdentityService {
 
     // Extract family context
     const family = guardian.student_guardians?.[0]?.students?.families;
-    
+
     // Find other guardians in the family to populate the form (e.g. if searching Father, find Mother)
     const otherGuardiansMap: Record<string, any> = {};
     if (family?.students) {
@@ -653,6 +656,7 @@ export class IdentityService {
 
     const cnic = (data.cnic && data.cnic !== "N/A") ? data.cnic : null;
     const primaryPhone = (data.primary_phone && data.primary_phone !== "N/A") ? data.primary_phone : null;
+    const email = (data.email_address && data.email_address !== "N/A") ? data.email_address : null;
 
     const payload = {
       cnic,
@@ -663,7 +667,7 @@ export class IdentityService {
       whatsapp_number: data.whatsapp_number ?? null,
       work_phone_country_code: data.work_phone_country_code ?? '+92',
       work_phone: data.work_phone ?? null,
-      email_address: data.email_address ?? null,
+      email_address: email,
       dob: data.dob ? new Date(data.dob) : null,
       education_level: data.education_level ?? null,
       occupation: data.occupation ?? null,

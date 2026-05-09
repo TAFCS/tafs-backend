@@ -27,6 +27,7 @@ import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
+import { ClearDepositDto } from './dto/clear-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
 import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
@@ -199,6 +200,26 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher deposit recorded successfully',
+            data: voucher,
+        };
+    }
+
+    @Post(':id/clear-deposit')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async clearDeposit(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ClearDepositDto,
+    ) {
+        const voucher = await this.vouchersService.clearDeposit(id, dto.depositId);
+        return {
+            success: true,
+            message: 'Deposit cleared successfully and allocations reversed',
             data: voucher,
         };
     }
