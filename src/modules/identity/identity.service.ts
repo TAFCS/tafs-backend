@@ -332,7 +332,6 @@ export class IdentityService {
             is_fee_endowment: dto.is_fee_endowment ?? undefined,
             fee_start_term: dto.fee_start_term || undefined,
             academic_year: dto.admission?.academic_year || undefined,
-            status: 'ENROLLED',
           },
         });
 
