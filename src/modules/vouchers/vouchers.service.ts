@@ -1213,7 +1213,7 @@ export class VouchersService {
                 );
 
                 const surcharges = await (tx as any).voucher_arrear_surcharges.findMany({
-                    where: { voucher_id: voucherId }
+                    where: { voucher_id: voucherId, waived: false }
                 });
                 const surchargeRem = surcharges.reduce(
                     (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0))),
@@ -2071,11 +2071,12 @@ export class VouchersService {
         this.logger.debug(`  Voucher #${voucher.id} Final Calculation: headRemTotal=${totalRemHeads}, remLS=${remLS}, isOverdue=${isOverdue} => remOverall=${remOverall}`);
 
         const surchargeItems = voucher.voucher_arrear_surcharges || [];
-        const surchargeNetTotal = surchargeItems.reduce(
+        const activeSurchargeItems = surchargeItems.filter((s: any) => !s.waived);
+        const surchargeNetTotal = activeSurchargeItems.reduce(
             (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount || 0)),
             new Prisma.Decimal(0),
         );
-        const surchargeDepTotal = surchargeItems.reduce(
+        const surchargeDepTotal = activeSurchargeItems.reduce(
             (sum: Prisma.Decimal, s: any) => sum.add(new Prisma.Decimal(s.amount_paid || 0)),
             new Prisma.Decimal(0),
         );
@@ -2117,6 +2118,8 @@ export class VouchersService {
             // Add explicitly for frontend convenience
             surcharge_balance: surchargeRemTotal.toFixed(2),
             head_balance: totalRemHeads.toFixed(2),
+            total_balance: (remOverall.add(surchargeRemTotal)).toFixed(2),
+            total_deposited: (updatedHeads.reduce((s, h) => s.add(new Prisma.Decimal(h.amount_deposited ?? 0)), new Prisma.Decimal(0)).add(depLS).add(surchargeDepTotal)).toFixed(2),
         };
     }
 
