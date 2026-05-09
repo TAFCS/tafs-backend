@@ -504,13 +504,7 @@ export class StudentFeesService {
                     },
                 });
 
-                const existingMap = new Map(
-                    existingFees.map((f) => {
-                        const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
-                        const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
-                        return [key, f];
-                    }),
-                );
+
 
                 const incomingKeys = new Set(
                     items.map((i) => {
@@ -540,35 +534,35 @@ export class StudentFeesService {
                 const upsertPromises = items.map((item) => {
                     const tm = item.target_month ?? item.month ?? 8;
                     const targetMonth = tm > 0 ? tm : 8; // Ensure valid month
-                    const dateStr = item.fee_date || 'no-date';
-                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateStr}`;
-                    const existing = existingMap.get(key);
+                    const feeDate = item.fee_date ? new Date(item.fee_date) : null;
 
-                    if (existing) {
-                        return tx.student_fees.update({
-                            where: { id: existing.id },
-                            data: {
-                                month: item.month,
-                                amount: item.amount,
-                                amount_before_discount: item.amount_before_discount,
-                                fee_date: item.fee_date ? new Date(item.fee_date) : null,
-                            },
-                        });
-                    } else {
-                        return tx.student_fees.create({
-                            data: {
+                    return tx.student_fees.upsert({
+                        where: {
+                            student_fees_unique_head: {
                                 student_id,
                                 fee_type_id: item.fee_type_id,
-                                month: item.month,
-                                academic_year: item.academic_year,
-                                amount: item.amount,
-                                amount_before_discount: item.amount_before_discount,
-                                status: 'NOT_ISSUED' as any,
-                                target_month: targetMonth,
-                                fee_date: item.fee_date ? new Date(item.fee_date) : null,
-                            },
-                        });
-                    }
+                                fee_date: feeDate,
+                            } as any,
+                        },
+                        update: {
+                            month: item.month,
+                            amount: item.amount,
+                            amount_before_discount: item.amount_before_discount,
+                            academic_year: item.academic_year,
+                            target_month: targetMonth,
+                        },
+                        create: {
+                            student_id,
+                            fee_type_id: item.fee_type_id,
+                            month: item.month,
+                            academic_year: item.academic_year,
+                            amount: item.amount,
+                            amount_before_discount: item.amount_before_discount,
+                            status: 'NOT_ISSUED' as any,
+                            target_month: targetMonth,
+                            fee_date: feeDate,
+                        },
+                    });
                 });
                 await Promise.all(upsertPromises);
 
