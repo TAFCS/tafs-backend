@@ -89,6 +89,7 @@ export class StudentsService {
     let anyOverdue = false;
     let anyPartial = false;
     const now = new Date();
+    now.setHours(0, 0, 0, 0);
 
     for (const fee of fees) {
       const balance = new Prisma.Decimal(fee.amount || 0).sub(fee.amount_paid || 0);
@@ -357,6 +358,7 @@ export class StudentsService {
 
     if (studentIds.length > 0) {
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
       const allFees = await this.prisma.student_fees.findMany({
         where: { student_id: { in: studentIds } },
         select: { student_id: true, amount: true, amount_paid: true, due_date: true }

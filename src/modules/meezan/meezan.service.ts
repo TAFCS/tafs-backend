@@ -58,7 +58,11 @@ export class MeezanService {
       }
 
       const amountWIDDate = Number(voucher.total_payable_before_due || 0);
-      const amountADDate = today > dueDate ? amountWIDDate + 1000 : amountWIDDate;
+      const tNormalized = new Date(today);
+      tNormalized.setHours(0, 0, 0, 0);
+      const dNormalized = new Date(dueDate);
+      dNormalized.setHours(0, 0, 0, 0);
+      const amountADDate = tNormalized > dNormalized ? amountWIDDate + 1000 : amountWIDDate;
 
       // BillingMonth: yymm from academic_year + month
       let yymm = '0000';
@@ -132,7 +136,11 @@ export class MeezanService {
         return { StatusCode: '00', StatusDesc: 'Lodged/Returned — not posted' };
       }
 
-      const isOverdue = today > voucher.due_date;
+      const tNormalized = new Date(today);
+      tNormalized.setHours(0, 0, 0, 0);
+      const dNormalized = new Date(voucher.due_date);
+      dNormalized.setHours(0, 0, 0, 0);
+      const isOverdue = tNormalized > dNormalized;
       const remarks = dto.ChequeNo ? `CHQ: ${dto.ChequeNo}` : 'Meezan Bank payment';
 
       await this.prisma.$transaction(async (tx) => {

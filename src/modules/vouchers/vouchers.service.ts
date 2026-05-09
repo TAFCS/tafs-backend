@@ -1199,7 +1199,11 @@ export class VouchersService {
                 const depositedLS = new Prisma.Decimal((refreshed as any).late_fee_deposited ?? 0);
                 const remainingLS = Prisma.Decimal.max(totalLateSurcharge.sub(depositedLS), 0);
 
-                const isOverdue = new Date() > new Date(refreshed.due_date);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const dueDate = new Date(refreshed.due_date);
+                dueDate.setHours(0, 0, 0, 0);
+                const isOverdue = today > dueDate;
 
                 // Rule: If all main heads are paid, the voucher is marked as PAID.
                 const allMainHeadsPaid = remainingHeads.lte(0);
@@ -2057,7 +2061,11 @@ export class VouchersService {
         const totalLS = Prisma.Decimal.max(tAfter.sub(tBefore), new Prisma.Decimal(0));
         const remLS = Prisma.Decimal.max(totalLS.sub(depLS), new Prisma.Decimal(0));
 
-        const isOverdue = new Date() > new Date(voucher.due_date);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueDate = new Date(voucher.due_date);
+        dueDate.setHours(0, 0, 0, 0);
+        const isOverdue = today > dueDate;
         const remOverall = isOverdue ? totalRemHeads.add(remLS) : totalRemHeads;
 
         this.logger.debug(`  Voucher #${voucher.id} Final Calculation: headRemTotal=${totalRemHeads}, remLS=${remLS}, isOverdue=${isOverdue} => remOverall=${remOverall}`);
