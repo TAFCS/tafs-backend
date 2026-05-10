@@ -464,6 +464,7 @@ interface FeeChallanPDFProps {
     }[];
     arrearsHistory?: any[];
     installmentsHistory?: any[];
+    paymentHistory?: any[];
     /** PDF URL (DigitalOcean Spaces) to encode in the QR code in the history column */
     qrUrl?: string;
 }
@@ -744,7 +745,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, qrUrl }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, paymentHistory, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
             {/* Left 85% for the 3 Challan Copies */}
@@ -812,6 +813,39 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 </View>
                 
+                {/* PAYMENT HISTORY */}
+                <View style={styles.historySection}>
+                    <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
+                    <View style={styles.historyTable}>
+                        <View style={styles.historyTableHeader}>
+                            <Text style={styles.historyTableHeaderCell}>DATE</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1.5 }]}>METHOD</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>REF</Text>
+                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
+                        </View>
+                        {paymentHistory && paymentHistory.length > 0 ? (
+                            paymentHistory.map((p: any, idx: number) => (
+                                <View key={idx} style={styles.historyTableRow}>
+                                    <Text style={styles.historyTableCell}>{(() => {
+                                        const [y, m, d] = String(p.date || '').split('-');
+                                        return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
+                                    })()}</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 1.5 }]}>{p.method || 'N/A'}</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{p.reference || '-'}</Text>
+                                    <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
+                                </View>
+                            ))
+                        ) : (
+                            <View style={styles.historyTableRow}>
+                                <Text style={styles.historyTableCell}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 1.5 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
+                            </View>
+                        )}
+                    </View>
+                </View>
+
                 {/* INSTALLMENTS HISTORY */}
                 <View style={styles.historySection}>
                     <Text style={styles.historyTitle}>INSTALLMENTS HISTORY</Text>

@@ -74,6 +74,19 @@ const VOUCHER_INCLUDE = {
         }
     },
     voucher_arrear_surcharges: true,
+    deposit_allocations: {
+        include: {
+            deposits: {
+                select: {
+                    id: true,
+                    deposit_date: true,
+                    payment_method: true,
+                    reference_number: true,
+                },
+            },
+        },
+        orderBy: [{ id: 'asc' as const }],
+    },
 };
 
 @Injectable()
@@ -760,6 +773,43 @@ export class VouchersService {
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
 
+        const depositMap = new Map<number, {
+            id: number;
+            date: Date;
+            method: string;
+            reference: string;
+            amount: number;
+        }>();
+
+        for (const alloc of ((voucher as any).deposit_allocations ?? [])) {
+            const dep = alloc?.deposits;
+            if (!dep?.id) continue;
+
+            const existing = depositMap.get(dep.id);
+            const allocAmount = Number(alloc.amount ?? 0);
+
+            if (!existing) {
+                depositMap.set(dep.id, {
+                    id: dep.id,
+                    date: new Date(dep.deposit_date),
+                    method: dep.payment_method || 'N/A',
+                    reference: dep.reference_number || '-',
+                    amount: allocAmount,
+                });
+            } else {
+                existing.amount += allocAmount;
+            }
+        }
+
+        const paymentHistory = Array.from(depositMap.values())
+            .sort((a, b) => a.date.getTime() - b.date.getTime())
+            .map((p) => ({
+                date: p.date.toISOString().split('T')[0],
+                method: p.method,
+                reference: p.reference,
+                amount: p.amount.toLocaleString(),
+            }));
+
         // Main Label: Consolidate ALL heads in the voucher
         const headsForMainLabel = heads.filter(h => h.target_month != null);
         const monthLabel = headsForMainLabel.length > 0
@@ -844,6 +894,7 @@ export class VouchersService {
                             amount: Number(f.amount || 0).toLocaleString(),
                         };
                     }),
+                paymentHistory,
             },
             key
         };
@@ -1455,12 +1506,6 @@ export class VouchersService {
 
         if (!voucher) {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
-        }
-
-        if (voucher.status === 'PAID') {
-            throw new BadRequestException(
-                `Cannot clear deposit for a PAID voucher. The voucher status must be manually reset first.`,
-            );
         }
 
         await this.prisma.$transaction(async (tx) => {
