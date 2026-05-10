@@ -819,27 +819,34 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
                             <Text style={styles.historyTableHeaderCell}>DATE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1.5 }]}>METHOD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>REF</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
+                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>TOTAL</Text>
                         </View>
                         {paymentHistory && paymentHistory.length > 0 ? (
-                            paymentHistory.map((p: any, idx: number) => (
-                                <View key={idx} style={styles.historyTableRow}>
-                                    <Text style={styles.historyTableCell}>{(() => {
-                                        const [y, m, d] = String(p.date || '').split('-');
-                                        return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
-                                    })()}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 1.5 }]}>{p.method || 'N/A'}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{p.reference || '-'}</Text>
-                                    <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
+                            <>
+                                {paymentHistory.map((p: any, idx: number) => (
+                                    <View key={idx} style={styles.historyTableRow}>
+                                        <Text style={styles.historyTableCell}>{(() => {
+                                            const [y, m, d] = String(p.date || '').split('-');
+                                            return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
+                                        })()}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
+                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
+                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.totalAmount || '0'}</Text>
+                                    </View>
+                                ))}
+                                <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL PAID</Text>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
-                            ))
+                            </>
                         ) : (
                             <View style={styles.historyTableRow}>
                                 <Text style={styles.historyTableCell}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 1.5 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                             </View>
                         )}

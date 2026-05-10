@@ -67,7 +67,7 @@ export interface VoucherPdfData {
     /** Consolidated month-range label, e.g. "ARREARS (AUG 25 – OCT 25)" */
     arrearsLabel?: string;
     installmentsHistory?: Array<{ head: string; month: string; amount: string }>;
-    paymentHistory?: Array<{ date: string; method: string; reference: string; amount: string }>;
+    paymentHistory?: Array<{ date: string; head: string; amount: string; totalAmount: string }>;
 }
 
 @Injectable()

@@ -773,42 +773,62 @@ export class VouchersService {
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
 
-        const depositMap = new Map<number, {
-            id: number;
-            date: Date;
-            method: string;
-            reference: string;
-            amount: number;
-        }>();
+        const paidStudentFees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: voucher.student_id,
+                is_discount: false,
+                amount_paid: { gt: 0 },
+                ...(voucher.fee_date ? { fee_date: { lte: voucher.fee_date } } : {}),
+            },
+            include: {
+                fee_types: true,
+                student_fee_installments: { include: { fee_types: true } },
+            } as any,
+            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
+        });
 
-        for (const alloc of ((voucher as any).deposit_allocations ?? [])) {
-            const dep = alloc?.deposits;
-            if (!dep?.id) continue;
+        const paymentHistoryRows = paidStudentFees
+            .filter((sf: any) => {
+                const isStandaloneInstallment = sf.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
+                return !isStandaloneInstallment;
+            })
+            .map((sf: any) => {
+                const paidAmount = Number(sf.amount_paid ?? 0);
+                if (paidAmount <= 0) return null;
 
-            const existing = depositMap.get(dep.id);
-            const allocAmount = Number(alloc.amount ?? 0);
+                const feeTypeDesc = sf?.fee_types?.description || 'Fee';
+                const prefixStr = sf.description_prefix ? `${sf.description_prefix} ` : '';
+                const monthSuffix = sf?.target_month != null
+                    ? ` ${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()}`
+                    : '';
 
-            if (!existing) {
-                depositMap.set(dep.id, {
-                    id: dep.id,
-                    date: new Date(dep.deposit_date),
-                    method: dep.payment_method || 'N/A',
-                    reference: dep.reference_number || '-',
-                    amount: allocAmount,
-                });
-            } else {
-                existing.amount += allocAmount;
-            }
-        }
+                const head = `${prefixStr}${feeTypeDesc}${monthSuffix}`;
+                const dateObj = sf.fee_date ? new Date(sf.fee_date) : (sf.issue_date ? new Date(sf.issue_date) : null);
 
-        const paymentHistory = Array.from(depositMap.values())
-            .sort((a, b) => a.date.getTime() - b.date.getTime())
-            .map((p) => ({
-                date: p.date.toISOString().split('T')[0],
-                method: p.method,
-                reference: p.reference,
-                amount: p.amount.toLocaleString(),
-            }));
+                return {
+                    dateObj,
+                    date: dateObj ? dateObj.toISOString().split('T')[0] : 'N/A',
+                    head,
+                    amount: paidAmount,
+                };
+            })
+            .filter((row: any) => !!row)
+            .sort((a: any, b: any) => {
+                const aTime = a.dateObj ? a.dateObj.getTime() : 0;
+                const bTime = b.dateObj ? b.dateObj.getTime() : 0;
+                return aTime - bTime;
+            });
+
+        let paymentRunningTotal = 0;
+        const paymentHistory = paymentHistoryRows.map((row: any) => {
+            paymentRunningTotal += row.amount;
+            return {
+                date: row.date,
+                head: row.head,
+                amount: row.amount.toLocaleString(),
+                totalAmount: paymentRunningTotal.toLocaleString(),
+            };
+        });
 
         // Main Label: Consolidate ALL heads in the voucher
         const headsForMainLabel = heads.filter(h => h.target_month != null);
