@@ -43,7 +43,19 @@ export class MeezanBillPaymentDto {
 
   @IsOptional()
   @IsString()
+  BankCode?: string;
+
+  @IsOptional()
+  @IsString()
+  BankName?: string;
+
+  @IsOptional()
+  @IsString()
   ReasonCode?: string;
+
+  @IsOptional()
+  @IsString()
+  DateOfReturn?: string;
 
   @IsOptional()
   @IsString()
