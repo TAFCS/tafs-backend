@@ -339,10 +339,10 @@ model student_fees {
   discount_type_id         Int?
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
+  discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   fee_types                fee_types?                @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student_fee_installments student_fee_installments? @relation(fields: [installment_id], references: [id])
   students                 students                  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
-  discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   voucher_heads            voucher_heads[]
 
   @@index([due_date], map: "idx_student_fees_due_date")
