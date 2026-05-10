@@ -285,6 +285,7 @@ export class StudentFeesService {
             },
             include: {
                 fee_types: true,
+                discount_presets: true,
                 student_fee_bundles: {
                     include: {
                         student_fees: {
@@ -396,6 +397,7 @@ export class StudentFeesService {
             },
             include: {
                 fee_types: true,
+                discount_presets: true,
                 student_fee_bundles: {
                     include: {
                         student_fees: {

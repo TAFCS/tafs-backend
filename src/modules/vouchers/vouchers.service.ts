@@ -525,6 +525,7 @@ export class VouchersService {
                     isArrear: false,
                     isSurcharge: false,
                     isDiscount: true,
+                    baseDescription: presetTitle,
                     feeDate: sf?.fee_date?.toISOString().split('T')[0],
                     target_month: sf?.target_month,
                     academic_year: sf?.academic_year,
@@ -539,6 +540,7 @@ export class VouchersService {
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
+            const baseDescription = prefixStr + feeTypeDesc;
 
             // Handle Installment Sequence (e.g. 1/6)
             // STANDALONE vs MERGED Check:
@@ -587,6 +589,7 @@ export class VouchersService {
             return {
                 description,
                 originalDescription: feeTypeDesc + monthSuffix,
+                baseDescription,
                 amount: isSplitHead ? Number(h.net_amount) : Math.max(Number(h.student_fees?.amount_before_discount || 0), Number(h.net_amount)),
                 discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
                 netAmount,
@@ -608,11 +611,146 @@ export class VouchersService {
             (sum: number, s: any) => sum + Number(s.amount), 0
         );
 
+        const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
+        const getMonthAbsoluteIndex = (targetMonth: number, academicYear: string) => {
+            const startYear = Number((academicYear || '').split('-')[0]);
+            if (!Number.isFinite(startYear)) return null;
+            const calendarYear = targetMonth >= cutoff ? startYear : startYear + 1;
+            return calendarYear * 12 + targetMonth;
+        };
+
+        const buildRangeLabel = (
+            startMonth: number,
+            startYear: string,
+            endMonth: number,
+            endYear: string,
+        ) => {
+            const start = getMonthYearLabel(startMonth, startYear, voucher.class_id).toUpperCase();
+            const end = getMonthYearLabel(endMonth, endYear, voucher.class_id).toUpperCase();
+            return start === end ? start : `${start} - ${end}`;
+        };
+
+        // Consolidate fee-head rows by base description and contiguous months.
+        // Example: AUG, SEP, OCT -> AUG - OCT; JUN, JUL -> JUN - JUL
+        const consolidatable = nonSurcharges.filter(
+            (h) =>
+                !h.isDiscount &&
+                !h.isSurcharge &&
+                h.target_month != null &&
+                !!h.academic_year &&
+                !!h.baseDescription,
+        );
+        const nonConsolidatable = nonSurcharges.filter(
+            (h) =>
+                h.isDiscount ||
+                h.isSurcharge ||
+                h.target_month == null ||
+                !h.academic_year ||
+                !h.baseDescription,
+        );
+
+        const groupedByDescription = new Map<string, any[]>();
+        for (const head of consolidatable) {
+            const key = `${head.baseDescription}|${head.isArrear ? 'AR' : 'NR'}`;
+            if (!groupedByDescription.has(key)) groupedByDescription.set(key, []);
+            groupedByDescription.get(key)!.push(head);
+        }
+
+        const consolidatedByRanges: any[] = [];
+        for (const [, groupHeads] of groupedByDescription) {
+            const sorted = [...groupHeads]
+                .map((h) => ({
+                    ...h,
+                    __absIndex: getMonthAbsoluteIndex(h.target_month, h.academic_year),
+                }))
+                .filter((h) => h.__absIndex != null)
+                .sort((a, b) => a.__absIndex - b.__absIndex);
+
+            if (sorted.length === 0) continue;
+
+            let rangeStart = sorted[0];
+            let rangeEnd = sorted[0];
+            let aggregate = {
+                amount: Number(sorted[0].amount || 0),
+                discount: Number(sorted[0].discount || 0),
+                netAmount: Number(sorted[0].netAmount || 0),
+                amountDeposited: Number(sorted[0].amountDeposited || 0),
+                balance: Number(sorted[0].balance || 0),
+            };
+
+            for (let i = 1; i < sorted.length; i++) {
+                const current = sorted[i];
+                const isContiguous = current.__absIndex === rangeEnd.__absIndex + 1;
+
+                if (isContiguous) {
+                    rangeEnd = current;
+                    aggregate.amount += Number(current.amount || 0);
+                    aggregate.discount += Number(current.discount || 0);
+                    aggregate.netAmount += Number(current.netAmount || 0);
+                    aggregate.amountDeposited += Number(current.amountDeposited || 0);
+                    aggregate.balance += Number(current.balance || 0);
+                    continue;
+                }
+
+                consolidatedByRanges.push({
+                    ...rangeStart,
+                    description: `${rangeStart.baseDescription} ${buildRangeLabel(
+                        rangeStart.target_month,
+                        rangeStart.academic_year,
+                        rangeEnd.target_month,
+                        rangeEnd.academic_year,
+                    )}`,
+                    originalDescription: `${rangeStart.baseDescription} ${buildRangeLabel(
+                        rangeStart.target_month,
+                        rangeStart.academic_year,
+                        rangeEnd.target_month,
+                        rangeEnd.academic_year,
+                    )}`,
+                    amount: aggregate.amount,
+                    discount: aggregate.discount,
+                    netAmount: aggregate.netAmount,
+                    amountDeposited: aggregate.amountDeposited,
+                    balance: Math.max(aggregate.balance, 0),
+                });
+
+                rangeStart = current;
+                rangeEnd = current;
+                aggregate = {
+                    amount: Number(current.amount || 0),
+                    discount: Number(current.discount || 0),
+                    netAmount: Number(current.netAmount || 0),
+                    amountDeposited: Number(current.amountDeposited || 0),
+                    balance: Number(current.balance || 0),
+                };
+            }
+
+            consolidatedByRanges.push({
+                ...rangeStart,
+                description: `${rangeStart.baseDescription} ${buildRangeLabel(
+                    rangeStart.target_month,
+                    rangeStart.academic_year,
+                    rangeEnd.target_month,
+                    rangeEnd.academic_year,
+                )}`,
+                originalDescription: `${rangeStart.baseDescription} ${buildRangeLabel(
+                    rangeStart.target_month,
+                    rangeStart.academic_year,
+                    rangeEnd.target_month,
+                    rangeEnd.academic_year,
+                )}`,
+                amount: aggregate.amount,
+                discount: aggregate.discount,
+                netAmount: aggregate.netAmount,
+                amountDeposited: aggregate.amountDeposited,
+                balance: Math.max(aggregate.balance, 0),
+            });
+        }
+
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
-        const feeHeads = [...nonSurcharges];
+        const feeHeads = [...consolidatedByRanges, ...nonConsolidatable];
 
         // Consolidated month-range label for the arrears row, e.g. "ARREARS (AUG 25 – OCT 25)"
-        const arrearHeadsForLabel = feeHeads.filter(h => h.isArrear && h.target_month != null);
+        const arrearHeadsForLabel = nonSurcharges.filter(h => h.isArrear && h.target_month != null);
         const arrearsLabel = arrearHeadsForLabel.length > 0
             ? `ARREARS (${getConsolidatedMonthsLabel(
                 arrearHeadsForLabel.map(h => ({ month: h.target_month!, academicYear: h.academic_year || '' })),
