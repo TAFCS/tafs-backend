@@ -159,7 +159,7 @@ export class StudentsService {
 
     // Data Audit Filters
     const auditType = query.audit_type || (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true ? 'abnormal' : null);
-    
+
     if (auditType) {
       if (auditType === 'no_family') {
         where.family_id = null;
@@ -394,7 +394,7 @@ export class StudentsService {
         let badge = 'Cleared';
         if (anyOverdue) badge = 'Overdue';
         else if (outstanding.gt(0)) badge = 'Partial';
-        
+
         financialBadges.set(sid, badge);
       }
     }
@@ -662,7 +662,7 @@ export class StudentsService {
         const guardianCnics = s.student_guardians
             .map(sg => sg.guardians.cnic)
             .filter(Boolean);
-            
+
         if (guardianCnics.length > 0) {
             const siblingLink = await this.prisma.student_guardians.findFirst({
                 where: {
@@ -682,7 +682,7 @@ export class StudentsService {
                     }
                 }
             });
-            
+
             if (siblingLink && siblingLink.students && siblingLink.students.families) {
                 const fam = siblingLink.students.families;
                 const mother = siblingLink.students.student_guardians.find(sg => sg.relationship === 'MOTHER')?.guardians;
@@ -934,7 +934,7 @@ export class StudentsService {
     if (isExplicitIds) {
       const byId = new Map(candidates.map((s) => [s.cc, s]));
       const studentIds = distinctStudentIds!;
-      
+
       for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
         const chunk = studentIds.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map(async (studentId) => {
@@ -1689,9 +1689,9 @@ export class StudentsService {
         net_amount: Number(vh.net_amount),
         amount_deposited: Number(vh.amount_deposited),
         balance: Number(vh.balance),
-        description: `${vh.description_prefix || vh.student_fees.description_prefix || ''} ${vh.student_fees.fee_types.description}`.trim(),
-        is_arrear: vh.student_fees.fee_date && v.fee_date ? vh.student_fees.fee_date < v.fee_date : false,
-        is_arrear_surcharge: vh.student_fees.is_arrear_surcharge,
+        description: `${vh.description_prefix || vh.student_fees?.description_prefix || ''} ${vh.student_fees?.fee_types?.description || 'N/A'}`.trim(),
+        is_arrear: vh.student_fees?.fee_date && v.fee_date ? vh.student_fees.fee_date < v.fee_date : false,
+        is_arrear_surcharge: vh.student_fees?.is_arrear_surcharge,
         source_fee_id: vh.student_fee_id,
       })),
       deposit_allocations: v.deposit_allocations.map((a) => ({
@@ -1735,7 +1735,7 @@ export class StudentsService {
         amount_paid: Number(f.amount_paid),
         amount_before_discount: Number(f.amount_before_discount),
         fee_type_description: `${f.description_prefix || ''} ${f.fee_types?.description ?? 'Discount'}`.trim(),
-        installment_label: f.installment_id && f.student_fee_installments 
+        installment_label: f.installment_id && f.student_fee_installments
             ? `Installment ${fees.filter(sf => sf.installment_id === f.installment_id && sf.id <= f.id).length} of ${f.student_fee_installments.installment_count}`
             : null,
         bundle_name: f.student_fee_bundles?.bundle_name,
