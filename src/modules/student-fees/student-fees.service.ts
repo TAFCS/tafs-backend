@@ -503,6 +503,7 @@ export class StudentFeesService {
                     where: {
                         student_id,
                         academic_year: { in: years },
+                        is_discount: false,
                     },
                     include: {
                         voucher_heads: { select: { id: true }, take: 1 },
