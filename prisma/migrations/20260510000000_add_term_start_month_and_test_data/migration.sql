@@ -19,15 +19,15 @@ INSERT INTO "campus_sections" ("campus_id", "class_id", "section_id", "is_active
 VALUES (2, 1, 1, true)
 ON CONFLICT ON CONSTRAINT "campus_sections_unique" DO NOTHING;
 
--- Class fee schedule for class 1 at campus 2, academic year 2025-26
+-- Class fee schedule for class 1 at campus 2, academic year 2025-2026
 -- fee_type 1 (Tuition): 1000 PKR/month
 INSERT INTO "class_fee_schedule" ("class_id", "fee_id", "amount", "campus_id", "academic_year")
-VALUES (1, 1, 1000.00, 2, '2025-26')
+VALUES (1, 1, 1000.00, 2, '2025-2026')
 ON CONFLICT ("class_id", "fee_id", "campus_id", "academic_year") DO UPDATE SET "amount" = 1000.00;
 
 -- fee_type 2: 20000 PKR (appears in April per that fee type's breakup)
 INSERT INTO "class_fee_schedule" ("class_id", "fee_id", "amount", "campus_id", "academic_year")
-VALUES (1, 2, 20000.00, 2, '2025-26')
+VALUES (1, 2, 20000.00, 2, '2025-2026')
 ON CONFLICT ("class_id", "fee_id", "campus_id", "academic_year") DO UPDATE SET "amount" = 20000.00;
 
 -- Move test student cc=44 to campus 2, class 1, section 1
