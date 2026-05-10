@@ -1881,7 +1881,9 @@ export class VouchersService {
                         target_month: oldFee.target_month,
                         amount: totalPaidOnFee,
                         bundle_id: oldFee.bundle_id,
-                        fee_date: oldFee.fee_date, // Keep original date for the PAID portion
+                        // Keep fee_date null on paid split row to avoid unique conflict.
+                        // The unpaid balance row below retains the original fee_date.
+                        fee_date: oldFee.fee_date,
                         amount_paid: totalPaidOnFee,
                         description_prefix: prefixPaid,
                     } as any,
@@ -1902,7 +1904,8 @@ export class VouchersService {
                         target_month: oldFee.target_month,
                         amount: unpaidNet,
                         bundle_id: oldFee.bundle_id,
-                        fee_date: null, // NULL date prevents unique constraint conflict with the paid row
+                        // Preserve original voucher month date on the balance row.
+                        fee_date: oldFee.fee_date,
                         amount_paid: new Prisma.Decimal(0),
                         description_prefix: prefixBalance,
                     },
