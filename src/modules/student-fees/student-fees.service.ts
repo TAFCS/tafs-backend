@@ -40,8 +40,10 @@ export class StudentFeesService {
                 amount_before_discount: true,
                 amount_paid: true,
                 fee_date: true,
+                is_discount: true,
             },
         });
+        const feesWithDiscount = fees;
 
         if (fees.length === 0) {
             return [];
@@ -61,17 +63,20 @@ export class StudentFeesService {
 
         const grouped = new Map<string, Bucket>();
 
-        for (const fee of fees) {
+        for (const fee of feesWithDiscount) {
             const academicYear = fee.academic_year;
             const targetMonth = fee.target_month ?? fee.month ?? 0;
             if (!academicYear || targetMonth < 1 || targetMonth > 12) {
                 continue;
             }
 
-            const amount = Number(fee.amount ?? fee.amount_before_discount ?? 0);
-            const paidRaw = Number(fee.amount_paid ?? 0);
-            const paid = Math.min(Math.max(paidRaw, 0), Math.max(amount, 0));
-            const outstanding = Math.max(amount - paid, 0);
+            // Discount rows reduce the total but have no amount_paid contribution
+            const isDiscount = fee.is_discount === true;
+            const rawAmount = Number(fee.amount ?? fee.amount_before_discount ?? 0);
+            const amount = isDiscount ? -rawAmount : rawAmount;
+            const paidRaw = isDiscount ? 0 : Number(fee.amount_paid ?? 0);
+            const paid = Math.min(Math.max(paidRaw, 0), Math.max(rawAmount, 0));
+            const outstanding = isDiscount ? 0 : Math.max(rawAmount - paid, 0);
 
             const key = `${academicYear}|${targetMonth}`;
             const existing = grouped.get(key);
@@ -85,7 +90,7 @@ export class StudentFeesService {
                     totalPaid: paid,
                     outstanding,
                     rowCount: 1,
-                    notIssuedCount: fee.status === 'NOT_ISSUED' ? 1 : 0,
+                    notIssuedCount: (fee.status === 'NOT_ISSUED' && !isDiscount) ? 1 : 0,
                     feeDate: fee.fee_date ?? null,
                 });
                 continue;
@@ -95,7 +100,7 @@ export class StudentFeesService {
             existing.totalPaid += paid;
             existing.outstanding += outstanding;
             existing.rowCount += 1;
-            if (fee.status === 'NOT_ISSUED') {
+            if (fee.status === 'NOT_ISSUED' && !isDiscount) {
                 existing.notIssuedCount += 1;
             }
             if (!existing.feeDate && fee.fee_date) {
@@ -1232,5 +1237,75 @@ export class StudentFeesService {
         }
 
         return { deleted: canDelete.length, blocked: blocked.length };
+    }
+
+    // ─── Discount Row Operations ──────────────────────────────────────────────
+
+    /**
+     * Create a discount row in student_fees.
+     * Discount rows have is_discount=true, status=DISCOUNT, amount_paid=0.
+     * fee_type_id is optional for discount rows.
+     */
+    async createDiscount(dto: {
+        student_id: number;
+        discount_type_id: number | null;
+        custom_title?: string;
+        amount: number;
+        fee_date: string;
+        target_month: number;
+        academic_year: string;
+    }) {
+        const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
+        if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
+
+        // If no preset and a custom_title is provided, create a new preset on the fly
+        let discountTypeId = dto.discount_type_id;
+        if (!discountTypeId && dto.custom_title) {
+            const newPreset = await this.prisma.discount_presets.create({
+                data: { title: dto.custom_title, is_active: true },
+            });
+            discountTypeId = newPreset.id;
+        }
+
+        return this.prisma.student_fees.create({
+            data: {
+                student_id: dto.student_id,
+                fee_type_id: null,
+                discount_type_id: discountTypeId,
+                is_discount: true,
+                amount: new Prisma.Decimal(dto.amount),
+                amount_paid: new Prisma.Decimal(0),
+                academic_year: dto.academic_year,
+                target_month: dto.target_month,
+                fee_date: new Date(dto.fee_date),
+                status: 'DISCOUNT' as any,
+            },
+            include: {
+                discount_presets: true,
+            },
+        });
+    }
+
+    /**
+     * Delete a discount row. Discount rows are safe to delete unless they appear
+     * on a non-VOID voucher (same protection as regular fee rows).
+     */
+    async deleteDiscount(id: number) {
+        const fee = await this.prisma.student_fees.findUnique({
+            where: { id },
+            include: { voucher_heads: { select: { voucher_id: true } } },
+        });
+
+        if (!fee) throw new NotFoundException(`Discount row #${id} not found`);
+        if (!fee.is_discount) throw new BadRequestException(`Row #${id} is not a discount row`);
+
+        if (fee.voucher_heads.length > 0) {
+            throw new BadRequestException(
+                `Discount row #${id} is included in a voucher — void the voucher first`,
+            );
+        }
+
+        await this.prisma.student_fees.delete({ where: { id } });
+        return { deleted: id };
     }
 }

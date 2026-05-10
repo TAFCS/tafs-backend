@@ -67,7 +67,8 @@ const VOUCHER_INCLUDE = {
                     },
                     student_fee_installments: {
                         include: { fee_types: true }
-                    }
+                    },
+                    discount_presets: true,
                 }
             }
         }
@@ -172,6 +173,25 @@ export class VouchersService {
             for (const fee of feeRecords) {
                 const discountInfo = feeLineMap.get(fee.id);
 
+                // Discount rows: net_amount is stored as negative (the sign flip happens here)
+                if ((fee as any).is_discount) {
+                    const discountAmount = new Prisma.Decimal(fee.amount ?? 0);
+                    const negativeNet = discountAmount.negated();
+                    totalBeforeDueDecimal = totalBeforeDueDecimal.add(negativeNet);
+
+                    voucherHeadsData.push({
+                        voucher_id: newVoucher.id,
+                        student_fee_id: fee.id,
+                        discount_amount: new Prisma.Decimal(0),
+                        discount_label: null,
+                        net_amount: negativeNet,
+                        amount_deposited: 0,
+                        balance: new Prisma.Decimal(0), // discount rows are never deposited against
+                        description_prefix: null,
+                    });
+                    continue;
+                }
+
                 // 1. Calculate net balance after any prior partial payments.
                 // Rule: net_amount = student_fees.amount - student_fees.amount_paid
                 const amount = new Prisma.Decimal(fee.amount ?? 0);
@@ -220,20 +240,22 @@ export class VouchersService {
                 data: voucherHeadsData,
             });
 
-            // 4. Update student_fees records to mark them as ISSUED
+            // 4. Update student_fees records to mark them as ISSUED (skip discount rows — they stay DISCOUNT)
             await Promise.all(
-                feeRecords.map((fee) =>
-                    tx.student_fees.update({
-                        where: { id: fee.id },
-                        data: {
-                            issue_date: issueDate,
-                            due_date: dueDate,
-                            validity_date: validityDate,
-                            precedence_override: (fee as any).fee_types?.priority_order ?? 0,
-                            status: 'ISSUED' as any,
-                        },
-                    }),
-                ),
+                feeRecords
+                    .filter((fee) => !(fee as any).is_discount)
+                    .map((fee) =>
+                        tx.student_fees.update({
+                            where: { id: fee.id },
+                            data: {
+                                issue_date: issueDate,
+                                due_date: dueDate,
+                                validity_date: validityDate,
+                                precedence_override: (fee as any).fee_types?.priority_order ?? 0,
+                                status: 'ISSUED' as any,
+                            },
+                        }),
+                    ),
             );
 
             // 5. Update voucher with final totals derived from heads
@@ -484,10 +506,36 @@ export class VouchersService {
         // 3. Initial Mapping of Heads
         let heads = voucher.voucher_heads.map((h: any) => {
             const isSplitHead = (h.split_sequence != null && h.split_total != null);
-            const feeTypeDesc = h.student_fees?.fee_types?.description || 'Fee';
+            const sf = h.student_fees;
+
+            // ── Discount rows ───────────────────────────────────────────────
+            const isDiscountRow = sf?.is_discount === true;
+            if (isDiscountRow) {
+                const presetTitle = sf?.discount_presets?.title ?? 'Discount';
+                const netAmount = Number(h.net_amount); // already negative
+
+                return {
+                    description: presetTitle,
+                    originalDescription: presetTitle,
+                    amount: 0,
+                    discount: 0,
+                    netAmount,
+                    amountDeposited: 0,
+                    balance: 0,
+                    isArrear: false,
+                    isSurcharge: false,
+                    isDiscount: true,
+                    feeDate: sf?.fee_date?.toISOString().split('T')[0],
+                    target_month: sf?.target_month,
+                    academic_year: sf?.academic_year,
+                };
+            }
+            // ── End discount row ────────────────────────────────────────────
+
+            const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
-            const monthSuffix = h.student_fees?.target_month != null
-                ? ` ${getMonthYearLabel(h.student_fees.target_month, h.student_fees.academic_year, voucher.class_id).toUpperCase()}`
+            const monthSuffix = sf?.target_month != null
+                ? ` ${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()}`
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
@@ -496,7 +544,6 @@ export class VouchersService {
             // STANDALONE vs MERGED Check:
             // Standalone = student_fees.fee_type_id corresponds to the original installment's fee_type_id.
             // Merged = standalone installment was added/attached to a different head (like tuition).
-            const sf = h.student_fees;
             const isStandaloneInstallment = sf?.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
 
             if (isStandaloneInstallment) {
@@ -634,7 +681,7 @@ export class VouchersService {
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
                 arrearsLabel,
                 arrearsHistory: nonSurcharges
-                    .filter(fh => fh.isArrear)
+                    .filter(fh => fh.isArrear && !fh.isDiscount)
                     .map(fh => ({
                         date: fh.feeDate || 'N/A',
                         head: fh.originalDescription,
@@ -2165,8 +2212,9 @@ export class VouchersService {
             where: {
                 student_id: studentId,
                 fee_date: { lt: targetFeeDate },
-                status: { notIn: ['PAID'] as any[] },
+                status: { notIn: ['PAID', 'DISCOUNT'] as any[] },
                 is_arrear_surcharge: false,
+                is_discount: false,
             } as any,
             include: { fee_types: true },
             orderBy: { fee_date: 'asc' },

@@ -1734,7 +1734,7 @@ export class StudentsService {
         amount: Number(f.amount),
         amount_paid: Number(f.amount_paid),
         amount_before_discount: Number(f.amount_before_discount),
-        fee_type_description: `${f.description_prefix || ''} ${f.fee_types.description}`.trim(),
+        fee_type_description: `${f.description_prefix || ''} ${f.fee_types?.description ?? 'Discount'}`.trim(),
         installment_label: f.installment_id && f.student_fee_installments 
             ? `Installment ${fees.filter(sf => sf.installment_id === f.installment_id && sf.id <= f.id).length} of ${f.student_fee_installments.installment_count}`
             : null,
@@ -1756,7 +1756,7 @@ export class StudentsService {
       allocations: d.deposit_allocations.map((a) => ({
         ...a,
         amount: Number(a.amount),
-        fee_type_description: a.student_fees?.fee_types.description,
+        fee_type_description: a.student_fees?.fee_types?.description,
         voucher_id: a.voucher_id,
       })),
     }));

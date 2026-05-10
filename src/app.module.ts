@@ -28,6 +28,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { MeezanModule } from './modules/meezan/meezan.module';
+import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { MeezanModule } from './modules/meezan/meezan.module';
     AppPortalModule,
     InstallmentsModule,
     MeezanModule,
+    DiscountPresetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

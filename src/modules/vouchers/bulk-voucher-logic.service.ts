@@ -59,6 +59,7 @@ export class BulkVoucherLogicService {
                     student_id: { in: studentIds },
                     fee_date: { lte: feeDateTo },
                     status: { in: statuses as any },
+                    is_discount: false, // discount rows are included separately per-voucher
                 },
                 include: {
                     fee_types: { select: { description: true, priority_order: true } },

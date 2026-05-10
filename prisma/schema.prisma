@@ -317,7 +317,7 @@ model student_fee_installments {
 model student_fees {
   id                       Int                       @id @default(autoincrement())
   student_id               Int
-  fee_type_id              Int
+  fee_type_id              Int?
   month                    Int?
   academic_year            String                    @db.VarChar
   precedence_override      Int                       @default(0)
@@ -335,16 +335,28 @@ model student_fees {
   is_arrear_surcharge      Boolean                   @default(false)
   installment_id           Int?
   installment_amount       Decimal?                  @db.Decimal(12, 2)
+  is_discount              Boolean                   @default(false)
+  discount_type_id         Int?
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
-  fee_types                fee_types                 @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fee_types                fee_types?                @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student_fee_installments student_fee_installments? @relation(fields: [installment_id], references: [id])
   students                 students                  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   voucher_heads            voucher_heads[]
 
-  @@unique([student_id, fee_type_id, fee_date], name: "student_fees_unique_head")
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
+  @@index([student_id, is_discount], map: "idx_student_fees_discount")
+}
+
+model discount_presets {
+  id           Int            @id @default(autoincrement())
+  title        String         @db.VarChar(255)
+  description  String?        @db.VarChar(500)
+  is_active    Boolean        @default(true)
+  created_at   DateTime       @default(now()) @db.Timestamp(6)
+  student_fees student_fees[]
 }
 
 model student_guardians {
@@ -636,6 +648,7 @@ enum fee_status_enum {
   ISSUED
   PARTIALLY_PAID
   PAID
+  DISCOUNT
 }
 
 enum student_status {
