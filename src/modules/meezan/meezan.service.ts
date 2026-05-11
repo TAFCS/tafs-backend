@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../prisma/prisma.service';import { MeezanBillInquiryDto } from './dto/bill-inquiry.dto';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { MeezanBillInquiryDto } from './dto/bill-inquiry.dto';
 import { MeezanBillPaymentDto } from './dto/bill-payment.dto';
-import { fromMeezanVoucherNumber } from 'src/utils/meezan.util';
 import { fee_status_enum } from '@prisma/client';
 
 @Injectable()
@@ -28,13 +28,8 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucherId = fromMeezanVoucherNumber(dto.VoucherNumber);
-      if (isNaN(voucherId)) {
-        return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
-      }
-
-      const voucher = await this.prisma.vouchers.findUnique({
-        where: { id: voucherId },
+      const voucher = await this.prisma.vouchers.findFirst({
+        where: { voucher_number: dto.VoucherNumber },
         include: {
           students: true,
           voucher_arrear_surcharges: true,
@@ -94,13 +89,8 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucherId = fromMeezanVoucherNumber(dto.VoucherNumber);
-      if (isNaN(voucherId)) {
-        return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
-      }
-
-      const voucher = await this.prisma.vouchers.findUnique({
-        where: { id: voucherId },
+      const voucher = await this.prisma.vouchers.findFirst({
+        where: { voucher_number: dto.VoucherNumber },
         include: {
           voucher_heads: { include: { student_fees: true } },
           voucher_arrear_surcharges: true,
@@ -132,7 +122,7 @@ export class MeezanService {
           dto.Status === 'R' && dto.ReasonDescription
             ? `Returned — ${dto.ReasonCode}: ${dto.ReasonDescription}`
             : 'Lodged/Returned — not posted';
-        this.logger.log(`Voucher ${voucherId} not posted: ${returnNote}`);
+        this.logger.log(`Voucher ${voucher.id} (${dto.VoucherNumber}) not posted: ${returnNote}`);
         return { StatusCode: '00', StatusDesc: 'Lodged/Returned — not posted' };
       }
 

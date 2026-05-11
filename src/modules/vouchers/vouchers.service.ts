@@ -15,6 +15,7 @@ import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial } from '../../common/utils/academic-labels';
+import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
@@ -288,6 +289,7 @@ export class VouchersService {
                     total_payable_before_due: totalBeforeDueWithSurcharge,
                     total_payable_after_due: totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
+                    voucher_number: toMeezanVoucherNumber(newVoucher.id, issueDate),
                 },
             });
 
@@ -846,7 +848,7 @@ export class VouchersService {
 
         return {
             voucherData: {
-                voucherNumber: voucher.id.toString(),
+                voucherNumber: (voucher as any).voucher_number ?? voucher.id.toString(),
                 student: {
                     cc: voucher.students.cc,
                     fullName: voucher.students.full_name,
@@ -2075,6 +2077,10 @@ export class VouchersService {
                     total_arrears: paidArrears,
                 } as any,
             });
+            await tx.vouchers.update({
+                where: { id: paid.id },
+                data: { voucher_number: toMeezanVoucherNumber(paid.id, new Date(original.issue_date)) } as any,
+            });
 
             const unpaid = await tx.vouchers.create({
                 data: {
@@ -2087,6 +2093,10 @@ export class VouchersService {
                     total_payable_after_due: unpaidTotal.add(lateFeeVal),
                     total_arrears: unpaidArrears,
                 } as any,
+            });
+            await tx.vouchers.update({
+                where: { id: unpaid.id },
+                data: { voucher_number: toMeezanVoucherNumber(unpaid.id, issueDate) } as any,
             });
 
             // ── Step 7: Create voucher_heads.
