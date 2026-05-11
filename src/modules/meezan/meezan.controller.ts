@@ -3,7 +3,7 @@ import { MeezanService } from './meezan.service';
 import { MeezanBillInquiryDto } from './dto/bill-inquiry.dto';
 import { MeezanBillPaymentDto } from './dto/bill-payment.dto';
 
-@Controller('v1/meezan')
+@Controller('meezan')
 export class MeezanController {
   constructor(private readonly meezanService: MeezanService) {}
 
