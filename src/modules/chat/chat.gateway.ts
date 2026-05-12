@@ -16,7 +16,7 @@ import { FcmService } from './fcm.service';
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'],
+    origin: true,
     credentials: true,
   },
   transports: ['websocket', 'polling'],
@@ -60,7 +60,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else if (payload.userType === 'PARENT') {
         const familyId = payload.familyId || payload.sub;
         client.join(`family_app_${familyId}`);
-        console.log(`[ChatGateway] Parent ${familyId} connected to global room: ${client.id}`);
+        client.join('all_parents');
+        
+        // Join Grade and Section rooms for announcements
+        const students = await this.prisma.students.findMany({
+          where: { family_id: familyId, deleted_at: null },
+          include: { classes: true, sections: true }
+        });
+
+        for (const student of students) {
+          if (student.classes?.class_code) {
+            client.join(`grade_${student.classes.class_code}`);
+          }
+          if (student.sections?.description) {
+            client.join(`section_${student.sections.description}`);
+          }
+        }
+        
+        console.log(`[ChatGateway] Parent ${familyId} connected and joined announcement rooms: ${client.id}`);
       } else {
         throw new Error('Unknown user type');
       }
@@ -184,6 +201,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       },
     });
 
+    // Also mark all messages in this conversation as read
+    await this.prisma.chat_messages.updateMany({
+      where: { 
+        conversation_id: conv.id,
+        sender_type: data.role === 'GUARDIAN' ? 'ADMIN' : 'GUARDIAN', // If Guardian marks as read, mark Admin's messages
+        is_read: false 
+      },
+      data: { is_read: true },
+    });
+
     if (data.role === 'ADMIN') {
       this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
@@ -197,6 +224,81 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { familyId: number; token: string; deviceType?: string },
   ) {
     return this.fcmService.registerToken(data.familyId, data.token, data.deviceType);
+  }
+
+  @SubscribeMessage('sendAnnouncement')
+  async handleSendAnnouncement(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { 
+      messageType: ChatMessageType; 
+      content: string; 
+      targetGrade?: string; 
+      targetSection?: string;
+      mediaMetadata?: any 
+    },
+  ) {
+    console.log('[ChatGateway] Received sendAnnouncement:', data);
+
+    const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+
+    // 1. Save to Database
+    const announcement = await this.prisma.chat_messages.create({
+      data: {
+        conversation_id: ANNOUNCEMENT_CONV_ID,
+        sender_type: 'ADMIN',
+        sender_name: 'TAFS Support',
+        message_type: data.messageType,
+        content: data.content,
+        media_metadata: data.mediaMetadata,
+        is_announcement: true,
+        target_grade: data.targetGrade || null,
+        target_section: data.targetSection || null,
+      },
+    });
+
+    const conversation = await this.prisma.chat_conversations.findUnique({
+      where: { id: ANNOUNCEMENT_CONV_ID }
+    });
+
+    // 2. Broadcast via Socket Rooms
+    let targetRoom = 'all_parents';
+    if (data.targetGrade && data.targetSection) {
+      targetRoom = `section_${data.targetSection}`;
+    } else if (data.targetGrade) {
+      targetRoom = `grade_${data.targetGrade}`;
+    }
+
+    this.server.to(targetRoom).emit('receiveMessage', { message: announcement, conversation });
+    
+    // Also update Admin Inbox for reference
+    this.server.to('admin_inbox').emit('receiveMessage', { message: announcement, conversation });
+
+    // 3. Send Push Notifications (Background)
+    const targetFamilies = await this.prisma.families.findMany({
+      where: {
+        students: {
+          some: {
+            deleted_at: null,
+            classes: data.targetGrade ? { class_code: data.targetGrade } : undefined,
+            sections: data.targetSection ? { description: data.targetSection } : undefined,
+          }
+        }
+      },
+      select: { id: true }
+    });
+
+    const familyIds = targetFamilies.map(f => f.id);
+    
+    for (const fId of familyIds) {
+      this.fcmService.sendToFamily(
+        fId,
+        'TAFS Announcement',
+        data.messageType === 'TEXT' ? data.content : `New official ${data.messageType.toLowerCase()} received`,
+        { type: 'ANNOUNCEMENT', messageId: announcement.id }
+      ).catch(e => console.error(`FCM failed for family ${fId}:`, e.message));
+    }
+
+    return announcement;
   }
 
   @SubscribeMessage('deleteMessage')

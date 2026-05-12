@@ -60,10 +60,16 @@ export class FcmService implements OnModuleInit {
     }));
 
     try {
-      await admin.messaging().sendEach(messages);
+      // Use a timeout to prevent hanging the whole chat flow if Firebase is slow
+      const sendPromise = admin.messaging().sendEach(messages);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('FCM Timeout')), 5000)
+      );
+
+      await Promise.race([sendPromise, timeoutPromise]);
       console.log(`Sent ${messages.length} notifications to family ${familyId}`);
     } catch (error) {
-      console.error('Error sending FCM notifications:', error);
+      console.error('Error sending FCM notifications (skipped):', error.message);
     }
   }
 

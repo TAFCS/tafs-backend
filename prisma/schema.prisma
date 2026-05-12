@@ -647,14 +647,14 @@ model bundle_fee_type_names {
 
 model chat_conversations {
   id                   String          @id @default(uuid())
-  family_id            Int             @unique
+  family_id            Int?            @unique
   last_message_at      DateTime        @default(now())
   last_message_snippet String?         @db.VarChar(255)
   unread_by_admin      Int             @default(0)
   unread_by_parent     Int             @default(0)
   created_at           DateTime        @default(now())
   updated_at           DateTime        @updatedAt
-  families             families        @relation(fields: [family_id], references: [id])
+  families             families?       @relation(fields: [family_id], references: [id])
   messages             chat_messages[]
 
   @@index([last_message_at(sort: Desc)])
@@ -665,14 +665,19 @@ model chat_messages {
   conversation_id String
   sender_type     ChatSenderType
   sender_id       String?
+  sender_name     String?            @db.VarChar(100)
   message_type    ChatMessageType
   content         String
   media_metadata  Json?
   is_read         Boolean            @default(false)
+  is_announcement Boolean            @default(false)
+  target_grade    String?            @db.VarChar(50)
+  target_section  String?            @db.VarChar(50)
   created_at      DateTime           @default(now())
   conversation    chat_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
   @@index([conversation_id, created_at(sort: Desc)])
+  @@index([is_announcement, target_grade, target_section])
 }
 
 model fcm_device_tokens {

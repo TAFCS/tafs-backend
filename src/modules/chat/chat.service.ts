@@ -12,6 +12,9 @@ export class ChatService {
 
   async getAdminInbox() {
     return this.prisma.chat_conversations.findMany({
+      where: {
+        id: { not: '00000000-0000-0000-0000-000000000000' }
+      },
       orderBy: { last_message_at: 'desc' },
       include: {
         families: {
@@ -22,6 +25,17 @@ export class ChatService {
   }
 
   async getChatHistory(familyId: number, take: number = 50, skip: number = 0) {
+    if (familyId === 0) {
+      // Fetch Global Announcements
+      const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+      return this.prisma.chat_messages.findMany({
+        where: { conversation_id: ANNOUNCEMENT_CONV_ID },
+        orderBy: { created_at: 'desc' },
+        take,
+        skip,
+      });
+    }
+
     const conversation = await this.prisma.chat_conversations.findUnique({
       where: { family_id: familyId },
     });
@@ -30,8 +44,36 @@ export class ChatService {
       return [];
     }
 
+    // Fetch students of this family to know which announcements to show
+    const students = await this.prisma.students.findMany({
+      where: { family_id: familyId, deleted_at: null },
+      select: { class_id: true, section_id: true, classes: { select: { class_code: true } }, sections: { select: { description: true } } }
+    });
+
+    const gradeCodes = students.map(s => s.classes?.class_code).filter(Boolean);
+    const sectionNames = students.map(s => s.sections?.description).filter(Boolean);
+
     return this.prisma.chat_messages.findMany({
-      where: { conversation_id: conversation.id },
+      where: {
+        OR: [
+          { conversation_id: conversation.id },
+          {
+            is_announcement: true,
+            OR: [
+              { target_grade: null },
+              { target_grade: { in: gradeCodes as string[] } }
+            ],
+            AND: [
+              {
+                OR: [
+                  { target_section: null },
+                  { target_section: { in: sectionNames as string[] } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
       orderBy: { created_at: 'desc' },
       take,
       skip,

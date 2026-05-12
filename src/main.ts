@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+// Triggering reload to pick up .env changes
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
