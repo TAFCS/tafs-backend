@@ -1011,20 +1011,22 @@ export class VouchersService {
     }
 
     async findByStudentCC(cc: number, familyId?: number) {
-        const vouchers = await this.prisma.vouchers.findMany({
-            where: {
-                student_id: cc,
+        const voidFilter = DEV_ALLOW_VOID_DEPOSITS
+            ? {}
+            : {
                 OR: [
                     { status: { not: 'VOID' } },
                     {
                         status: 'VOID',
-                        voucher_heads: {
-                            some: {
-                                amount_deposited: { gt: 0 }
-                            }
-                        }
-                    }
+                        voucher_heads: { some: { amount_deposited: { gt: 0 } } },
+                    },
                 ],
+            };
+
+        const vouchers = await this.prisma.vouchers.findMany({
+            where: {
+                student_id: cc,
+                ...voidFilter,
                 ...(familyId ? { students: { family_id: familyId } } : {})
             },
             include: VOUCHER_INCLUDE,
