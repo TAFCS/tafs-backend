@@ -66,7 +66,7 @@ export interface VoucherPdfData {
     totalSurcharge?: number;
     /** Consolidated month-range label, e.g. "ARREARS (AUG 25 – OCT 25)" */
     arrearsLabel?: string;
-    installmentsHistory?: Array<{ head: string; month: string; amount: string }>;
+    installmentsHistory?: Array<{ head: string; month: string; amount: number; status: string }>;
     paymentHistory?: Array<{ date: string; head: string; amount: string; totalAmount: string }>;
 }
 

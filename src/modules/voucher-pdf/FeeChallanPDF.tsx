@@ -552,9 +552,6 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={[styles.feeTable, { marginTop: 4 }]}>
             {(() => {
-                const hasMTFDisc = showDiscount !== false && fees.some(f => f.discount && f.discount > 0 && f.description.toLowerCase().includes('tuition'));
-                const discWord = (student.class_id === 21 || student.class_id === 22 || student.className === 'AS Level' || student.className === 'A2 Level') ? 'Scholarship' : 'Discount';
-
                 const renderFeeRow = (fee: any, i: string | number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
                     const isMTF = fee.description.toLowerCase().includes('tuition');
@@ -563,21 +560,21 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     if (isMTF && hasDiscount) {
                         return (
                             <React.Fragment key={i}>
-                                {/* Row 1: Before Discount — muted/grey with strikethrough */}
                                 <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                    <Text style={[styles.colDesc, { color: '#9ca3af' }]}>
-                                        {fee.description} — Before Discount
-                                    </Text>
-                                    <Text style={{ flex: 1, textAlign: 'right', fontSize: 6, color: '#9ca3af', textDecoration: 'line-through' }}>
+                                    <Text style={styles.colDesc}>{fee.description}</Text>
+                                    <Text style={styles.colAmount}>
                                         {fee.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                     </Text>
                                 </View>
-                                {/* Row 2: After Discount — flush with left edge */}
+                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`DISCOUNT ON ${fee.description}`}</Text>
+                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>
+                                        -{fee.discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                    </Text>
+                                </View>
                                 <View style={styles.tableRow}>
-                                    <View style={{ flex: 3, flexDirection: 'row', alignItems: 'center' }}>
-                                        <Text style={{ fontSize: 6.5, color: '#1a1a1a' }}>{fee.description} — After Discount</Text>
-                                    </View>
-                                    <Text style={{ flex: 1, textAlign: 'right', fontSize: 7, fontWeight: 'bold', color: '#1a1a1a' }}>
+                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER DISCOUNT`}</Text>
+                                    <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
                                         {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                     </Text>
                                 </View>
@@ -621,30 +618,27 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                         </View>
                                     )}
                                     {hasArrearSurcharge && (
-                                        <View style={styles.tableRow}>
-                                            <Text style={styles.colDesc}>
-                                                {`Late Payment Surcharge${details.surchargeWaived ? ' (WAIVED)' : ''}`}
-                                            </Text>
-                                            <Text style={styles.colAmount}>
-                                                {details.surchargeWaived
-                                                    ? '0'
-                                                    : Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                            </Text>
-                                        </View>
+                                        <>
+                                            <View style={styles.tableRow}>
+                                                <Text style={styles.colDesc}>LATE PAYMENT SURCHARGE</Text>
+                                                <Text style={styles.colAmount}>
+                                                    {Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                </Text>
+                                            </View>
+                                            {details.surchargeWaived && (
+                                                <View style={styles.tableRow}>
+                                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>SURCHARGE WAIVED</Text>
+                                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>
+                                                        -{Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                    </Text>
+                                                </View>
+                                            )}
+                                        </>
                                     )}
                                     {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
                                 </>
                             );
                         })()}
-
-                        {hasMTFDisc && (
-                            <View style={[styles.totalRow, { borderTopWidth: 0.3, borderTopColor: '#d1d5db', paddingVertical: 1, marginTop: 2, borderBottomWidth: 0 }]}>
-                                <Text style={[styles.colDesc, { fontSize: 5, color: '#666666' }]}>TOTAL BEFORE {discWord.toUpperCase()}</Text>
-                                <Text style={[styles.colAmount, { fontSize: 6, color: '#666666' }]}>
-                                    {Math.round(fees.reduce((s, f) => s + f.amount, 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </Text>
-                            </View>
-                        )}
 
                         <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
                             <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
@@ -853,28 +847,46 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 </View>
 
-                {/* INSTALLMENTS HISTORY */}
+                {/* INSTALLMENTS PLAN */}
                 <View style={styles.historySection}>
-                    <Text style={styles.historyTitle}>INSTALLMENTS HISTORY</Text>
+                    <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1 }]}>MONTH</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right' }]}>STATUS</Text>
                         </View>
-                        {installmentsHistory && installmentsHistory.length > 0 ? (
-                            installmentsHistory.map((inst: any, idx: number) => (
-                                <View key={idx} style={styles.historyTableRow}>
-                                    <Text style={[styles.historyTableCell, { flex: 1 }]}>{inst.month}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>{inst.amount}</Text>
-                                </View>
-                            ))
-                        ) : (
+                        {installmentsHistory && installmentsHistory.length > 0 ? (() => {
+                            const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+                            return (
+                                <>
+                                    {installmentsHistory.map((inst: any, idx: number) => (
+                                        <View key={idx} style={styles.historyTableRow}>
+                                            <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{inst.month}</Text>
+                                            <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
+                                            <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
+                                                {Number(inst.amount || 0).toLocaleString()}
+                                            </Text>
+                                            <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
+                                                {inst.status}
+                                            </Text>
+                                        </View>
+                                    ))}
+                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2 }]}>TOTAL</Text>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8 }]}>
+                                            {planTotal.toLocaleString()}
+                                        </Text>
+                                    </View>
+                                </>
+                            );
+                        })() : (
                             <View style={styles.historyTableRow}>
-                                <Text style={[styles.historyTableCell, { flex: 1 }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right' }]}>-</Text>
                             </View>
                         )}
                     </View>
