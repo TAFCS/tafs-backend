@@ -10,14 +10,14 @@ export class MeezanService {
 
   constructor(private prisma: PrismaService) {}
 
-  private validateAuth(serviceUserId: string, userPassword: string, billCompanyCode: string) {
+  private validateAuth(serviceUserId: string, userPassword: string, billCompanyCode?: string) {
     if (
       serviceUserId !== process.env.MEEZAN_SERVICE_USER_ID ||
       userPassword !== process.env.MEEZAN_SERVICE_PASSWORD
     ) {
       return { ResponseCode: '094', ResponseDesc: 'User invalid' };
     }
-    if (billCompanyCode !== process.env.MEEZAN_COMPANY_CODE) {
+    if (billCompanyCode !== undefined && billCompanyCode !== process.env.MEEZAN_COMPANY_CODE) {
       return { ResponseCode: '095', ResponseDesc: 'Company code mismatch' };
     }
     return null;
@@ -28,13 +28,27 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucher = await this.prisma.vouchers.findFirst({
+      let voucher = await this.prisma.vouchers.findFirst({
         where: { voucher_number: dto.VoucherNumber },
         include: {
           students: true,
           voucher_arrear_surcharges: true,
         },
       });
+
+      // Fallback: old vouchers have voucher_number = NULL; extract id from last 7 digits
+      if (!voucher && dto.VoucherNumber.length === 11) {
+        const fallbackId = parseInt(dto.VoucherNumber.slice(4), 10);
+        if (!isNaN(fallbackId)) {
+          voucher = await this.prisma.vouchers.findFirst({
+            where: { id: fallbackId },
+            include: {
+              students: true,
+              voucher_arrear_surcharges: true,
+            },
+          });
+        }
+      }
 
       if (!voucher) {
         return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
@@ -45,7 +59,7 @@ export class MeezanService {
       const validityDate = voucher.validity_date;
 
       if (voucher.status === 'PAID') {
-        return { StatusCode: '097', StatusDesc: 'Already Paid', ResponseDesc: 'Voucher is already paid' };
+        return { ResponseCode: '097', ResponseDesc: 'Voucher is already paid' };
       }
 
       if (validityDate && today > validityDate) {
@@ -53,13 +67,20 @@ export class MeezanService {
       }
 
       const amountWIDDate = Number(voucher.total_payable_before_due || 0);
+      const amountADDate = Number(voucher.total_payable_after_due || 0);
+
       const tNormalized = new Date(today);
       tNormalized.setHours(0, 0, 0, 0);
       const dNormalized = new Date(dueDate);
       dNormalized.setHours(0, 0, 0, 0);
-      const amountADDate = tNormalized > dNormalized ? amountWIDDate + 1000 : amountWIDDate;
+      const isOverdue = tNormalized > dNormalized;
 
-      // BillingMonth: yymm from academic_year + month
+      const remarks = voucher.surcharge_waived
+        ? 'Surcharge waived'
+        : isOverdue
+          ? 'Late payment surcharge applies'
+          : '';
+
       let yymm = '0000';
       if (voucher.month && voucher.academic_year) {
         const yearPart = voucher.academic_year.split('-')[0];
@@ -77,6 +98,7 @@ export class MeezanService {
         Amount_WID_Date: String(amountWIDDate),
         Amount_AD_Date: String(amountADDate),
         BillingMonth: yymm,
+        Remarks: remarks,
       };
     } catch (err) {
       this.logger.error('Bill inquiry error', err);
@@ -89,7 +111,7 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucher = await this.prisma.vouchers.findFirst({
+      let voucher = await this.prisma.vouchers.findFirst({
         where: { voucher_number: dto.VoucherNumber },
         include: {
           voucher_heads: { include: { student_fees: true } },
@@ -97,11 +119,24 @@ export class MeezanService {
         },
       });
 
+      // Fallback: old vouchers have voucher_number = NULL; extract id from last 7 digits
+      if (!voucher && dto.VoucherNumber.length === 11) {
+        const fallbackId = parseInt(dto.VoucherNumber.slice(4), 10);
+        if (!isNaN(fallbackId)) {
+          voucher = await this.prisma.vouchers.findFirst({
+            where: { id: fallbackId },
+            include: {
+              voucher_heads: { include: { student_fees: true } },
+              voucher_arrear_surcharges: true,
+            },
+          });
+        }
+      }
+
       if (!voucher) {
         return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
       }
 
-      // Parse TransDate (yyyymmdd -> Date)
       const transDateStr = dto.TransDate;
       const today = new Date(
         `${transDateStr.slice(0, 4)}-${transDateStr.slice(4, 6)}-${transDateStr.slice(6, 8)}`,
@@ -116,7 +151,6 @@ export class MeezanService {
         return { ResponseCode: '092', ResponseDesc: 'Voucher date is expired' };
       }
 
-      // If Lodged or Returned — do not post, return 00 with note
       if (dto.Status !== 'C') {
         const returnNote =
           dto.Status === 'R' && dto.ReasonDescription
@@ -131,10 +165,16 @@ export class MeezanService {
       const dNormalized = new Date(voucher.due_date);
       dNormalized.setHours(0, 0, 0, 0);
       const isOverdue = tNormalized > dNormalized;
+
       const remarks = dto.ChequeNo ? `CHQ: ${dto.ChequeNo}` : 'Meezan Bank payment';
 
+      const dateOfReturn = dto.DateOfReturn
+        ? new Date(
+            `${dto.DateOfReturn.slice(0, 4)}-${dto.DateOfReturn.slice(4, 6)}-${dto.DateOfReturn.slice(6, 8)}`,
+          )
+        : null;
+
       await this.prisma.$transaction(async (tx) => {
-        // 1. Create deposit
         const deposit = await tx.deposits.create({
           data: {
             student_id: voucher.student_id,
@@ -143,10 +183,12 @@ export class MeezanService {
             payment_method: dto.PaymentMode,
             reference_number: dto.TransAuthenticationCode,
             remarks,
+            bank_code: dto.BankCode,
+            bank_name: dto.BankName,
+            date_of_return: dateOfReturn,
           },
         });
 
-        // 2. Allocate to each voucher head fully
         for (const head of voucher.voucher_heads) {
           const headBalance =
             Number(head.student_fees.amount) - Number(head.student_fees.amount_paid);
@@ -171,7 +213,6 @@ export class MeezanService {
           });
         }
 
-        // 3. If overdue, allocate LPS against voucher_arrear_surcharges
         if (isOverdue) {
           const surcharges = voucher.voucher_arrear_surcharges.filter((s) => !s.waived);
           for (const s of surcharges) {
@@ -195,7 +236,6 @@ export class MeezanService {
           }
         }
 
-        // 4. Mark voucher PAID
         await tx.vouchers.update({
           where: { id: voucher.id },
           data: { status: 'PAID' },

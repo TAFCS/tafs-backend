@@ -9,9 +9,9 @@ export class MeezanBillPaymentDto {
   @IsNotEmpty()
   UserPassword: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  BillCompanyCode: string;
+  BillCompanyCode?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -33,6 +33,14 @@ export class MeezanBillPaymentDto {
   @IsNotEmpty()
   PaymentMode: string; // CASH or CHQ
 
+  @IsString()
+  @IsNotEmpty()
+  BankCode: string;
+
+  @IsString()
+  @IsNotEmpty()
+  BankName: string;
+
   @IsOptional()
   @IsString()
   ChequeNo?: string;
@@ -43,19 +51,11 @@ export class MeezanBillPaymentDto {
 
   @IsOptional()
   @IsString()
-  BankCode?: string;
-
-  @IsOptional()
-  @IsString()
-  BankName?: string;
-
-  @IsOptional()
-  @IsString()
   ReasonCode?: string;
 
   @IsOptional()
   @IsString()
-  DateOfReturn?: string;
+  DateOfReturn?: string; // yyyymmdd
 
   @IsOptional()
   @IsString()
