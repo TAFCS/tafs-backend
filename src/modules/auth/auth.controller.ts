@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   UseGuards,
   HttpCode,
@@ -122,6 +123,14 @@ export class AuthController {
   }
 
   // ─── Parent Signup (Flutter mobile app) ───────────────────────────────────
+
+  @Get('parent/profile')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtParentGuard)
+  async getParentProfile(@CurrentUser() user: IJwtParentPayload) {
+    const result = await this.authService.getParentProfile(user.familyId);
+    return createApiResponse(result, HttpStatus.OK, 'Profile fetched successfully');
+  }
 
   @Post('parent/verify-cnic')
   @HttpCode(HttpStatus.OK)

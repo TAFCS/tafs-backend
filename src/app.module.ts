@@ -29,6 +29,7 @@ import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { MeezanModule } from './modules/meezan/meezan.module';
 import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
+import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { DiscountPresetsModule } from './modules/discount-presets/discount-prese
     InstallmentsModule,
     MeezanModule,
     DiscountPresetsModule,
+    ParentChangeRequestsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -158,8 +158,25 @@ export class AuthService {
       await this.generateTokenPair(payload);
     await this.storeParentRefreshToken(family.id, refreshToken);
 
+    return {
+      accessToken,
+      refreshToken,
+      ...(await this._fetchParentData(family.id)),
+    };
+  }
+
+  async getParentProfile(familyId: number) {
+    return this._fetchParentData(familyId);
+  }
+
+  private async _fetchParentData(familyId: number) {
+    const family = await this.prisma.families.findUnique({
+      where: { id: familyId },
+    });
+    if (!family) throw new UnauthorizedException('Account not found');
+
     const students = await this.prisma.students.findMany({
-      where: { family_id: family.id },
+      where: { family_id: familyId },
       select: {
         cc: true,
         full_name: true,
@@ -174,7 +191,7 @@ export class AuthService {
 
     const familyGuardians = await this.prisma.student_guardians.findMany({
       where: {
-        students: { family_id: family.id },
+        students: { family_id: familyId },
       },
       include: { guardians: true },
     });
@@ -187,8 +204,6 @@ export class AuthService {
     const primaryGuardian = uniqueGuardians.find((g: any) => g.is_primary_contact);
 
     return {
-      accessToken,
-      refreshToken,
       family: {
         id: family.id,
         email: family.email ?? '',
@@ -351,80 +366,10 @@ export class AuthService {
       await this.generateTokenPair(payload);
     await this.storeParentRefreshToken(family.id, refreshToken);
 
-    // Fetch family data (same as loginParent)
-    const students = await this.prisma.students.findMany({
-      where: { family_id: family.id },
-      select: {
-        cc: true,
-        full_name: true,
-        gr_number: true,
-        photograph_url: true,
-        academic_year: true,
-        campuses: { select: { campus_name: true, campus_code: true } },
-        classes: { select: { description: true, class_code: true } },
-        sections: { select: { description: true } },
-      },
-    });
-
-    const familyGuardians = await this.prisma.student_guardians.findMany({
-      where: {
-        students: { family_id: family.id },
-      },
-      include: { guardians: true },
-    });
-
-    const uniqueGuardians = Array.from(
-      new Map(familyGuardians.map((g) => [g.guardian_id, g])).values(),
-    );
-
-    const primaryGuardian = uniqueGuardians.find((g: any) => g.is_primary_contact);
-
     return {
       accessToken,
       refreshToken,
-      family: {
-        id: family.id,
-        email: family.email ?? '',
-        householdName: family.household_name,
-        photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
-        guardians: uniqueGuardians.map((g: any) => {
-          const grd = g.guardians;
-          const phoneCode = grd.primary_phone_country_code ?? '';
-          const phoneNum = grd.primary_phone ?? '';
-          const fullPhone = phoneNum.startsWith(phoneCode)
-            ? phoneNum
-            : `${phoneCode}${phoneNum}`;
-
-          return {
-            id: grd.id,
-            name: grd.full_name,
-            relationship: g.relationship,
-            phone: fullPhone || null,
-            photographUrl: grd.photo_url,
-            email: grd.email_address || null,
-            occupation: grd.occupation || null,
-            organization: grd.organization || null,
-            education: grd.education_level || null,
-            cnic: grd.cnic || null,
-            whatsapp: grd.whatsapp_number || null,
-            address: grd.mailing_address || null,
-            jobPosition: grd.job_position || null,
-            isEmergencyContact: g.is_emergency_contact ?? false,
-          };
-        }),
-      },
-      students: students.map((student) => ({
-        cc: student.cc,
-        fullName: student.full_name,
-        grNumber: student.gr_number,
-        photographUrl: student.photograph_url,
-        campus: student.campuses?.campus_name ?? null,
-        campusCode: student.campuses?.campus_code ?? null,
-        className: student.classes?.description ?? null,
-        classCode: student.classes?.class_code ?? null,
-        section: student.sections?.description ?? null,
-        academicYear: student.academic_year,
-      })),
+      ...(await this._fetchParentData(family.id)),
     };
   }
 
