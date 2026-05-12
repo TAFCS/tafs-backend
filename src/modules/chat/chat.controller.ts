@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Query, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException, Res } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
@@ -43,10 +43,6 @@ export class ChatController {
   }
 
   @Post('media')
-  // Depending on how unified authentication is, we might skip guards here 
-  // and handle auth inside if necessary, but typically we want both staff and parents to upload.
-  // For simplicity, we create a unified upload that doesn't explicitly restrict by role,
-  // or we just trust the endpoint since the file upload doesn't expose sensitive DB data.
   @ApiOperation({ summary: 'Upload an image/voice note and get the CDN URL' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } })) // 10MB
@@ -55,5 +51,17 @@ export class ChatController {
       throw new BadRequestException('No file uploaded');
     }
     return this.chatService.uploadMedia(file);
+  }
+
+  @Get('media/proxy')
+  @ApiOperation({ summary: 'Proxy media to bypass CORS' })
+  async proxyMedia(
+    @Query('key') key: string,
+    @Res() res: any,
+  ) {
+    const { buffer, mime } = await this.chatService.getMediaFile(key);
+    res.set('Content-Type', mime);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(buffer);
   }
 }

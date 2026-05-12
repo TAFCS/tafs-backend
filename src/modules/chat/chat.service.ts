@@ -62,6 +62,10 @@ export class ChatService {
     return { url, metadata };
   }
 
+  async getMediaFile(key: string) {
+    return this.storage.getFile(key);
+  }
+
   async getOrCreateConversation(familyId: number) {
     let conversation = await this.prisma.chat_conversations.findUnique({
       where: { family_id: familyId },
