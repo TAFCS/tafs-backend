@@ -25,12 +25,21 @@ export class ChatService {
             email: true, 
             home_phone: true,
             students: {
-              take: 1,
               where: { deleted_at: null },
               include: {
                 student_guardians: {
-                  where: { is_primary_contact: true },
-                  include: { guardians: { select: { full_name: true, photo_url: true } } }
+                  select: {
+                    is_primary_contact: true,
+                    relationship: true,
+                    guardians: { 
+                      select: { 
+                        full_name: true, 
+                        photo_url: true,
+                        cnic_pic_url: true,
+                        passport_front_url: true
+                      } 
+                    } 
+                  }
                 }
               }
             }
@@ -39,16 +48,62 @@ export class ChatService {
       },
     });
 
-    return conversations.map(c => {
-      const primaryGuardian = c.families?.students[0]?.student_guardians[0]?.guardians;
-      return {
-        ...c,
-        primary_guardian: primaryGuardian ? {
-          name: primaryGuardian.full_name,
-          photo_url: primaryGuardian.photo_url
-        } : null
-      };
-    });
+    return conversations.map(c => this.formatConversation(c));
+  }
+
+  formatConversation(c: any) {
+    // Find primary guardian across all students
+    let primaryGuardian: any = null;
+    if (c.families?.students) {
+      for (const student of c.families.students) {
+        // 1. Try to find primary contact
+        let pg = student.student_guardians.find(sg => sg.is_primary_contact);
+        
+        // 2. Fallback to Father if no primary contact found yet
+        if (!pg) {
+          pg = student.student_guardians.find(sg => 
+            sg.relationship?.toString().toUpperCase() === 'FATHER' || 
+            sg.relationship?.toString().toUpperCase() === 'PAPA'
+          );
+        }
+
+        if (pg) {
+          primaryGuardian = pg.guardians;
+          break;
+        }
+      }
+      
+      // 3. Last resort fallback to first guardian of first student
+      if (!primaryGuardian && c.families.students[0]?.student_guardians[0]) {
+        primaryGuardian = c.families.students[0].student_guardians[0].guardians;
+      }
+    }
+
+    const { families, ...rest } = c;
+    
+    // Aggressive photo discovery
+    let bestPhoto = primaryGuardian?.photo_url;
+    if (!bestPhoto) bestPhoto = primaryGuardian?.cnic_pic_url;
+    
+    // Fallback to student photo if guardian has none
+    if (!bestPhoto && families?.students) {
+      const studentWithPhoto = families.students.find((s: any) => s.photograph_url);
+      if (studentWithPhoto) {
+        bestPhoto = studentWithPhoto.photograph_url;
+      }
+    }
+
+    // Last resort: passport photo
+    if (!bestPhoto) bestPhoto = primaryGuardian?.passport_front_url;
+
+    return {
+      ...rest,
+      families,
+      primary_guardian: {
+        name: primaryGuardian?.full_name || families?.household_name || "Family Chat",
+        photo_url: bestPhoto || null
+      }
+    };
   }
 
   async getFamilyStudents(familyId: number) {

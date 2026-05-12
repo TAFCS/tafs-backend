@@ -143,15 +143,40 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           unread_by_admin: data.senderType === 'GUARDIAN' ? { increment: 1 } : undefined,
           unread_by_parent: data.senderType === 'ADMIN' ? { increment: 1 } : undefined,
         },
-        include: { families: { select: { household_name: true } } }
+        include: {
+          families: {
+            include: {
+              students: {
+                where: { deleted_at: null },
+                include: {
+                  student_guardians: {
+                    select: {
+                      is_primary_contact: true,
+                      relationship: true,
+                      guardians: { 
+                        select: { 
+                          full_name: true, 
+                          photo_url: true,
+                          cnic_pic_url: true,
+                          passport_front_url: true
+                        } 
+                      } 
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }),
     ]);
 
     // 3. Broadcast to Admin Inbox and Family Room
-    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: updatedConv });
+    const formattedConv = this.chatService.formatConversation(updatedConv);
+    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
     
     // Always broadcast to the global "app" room so the app gets the data even if not on chat screen
-    this.server.to(`family_app_${data.familyId}`).emit('receiveMessage', { message: newMessage, conversation: updatedConv });
+    this.server.to(`family_app_${data.familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
 
     // 4. Send Push Notification to Family if sender is ADMIN
     if (data.senderType === 'ADMIN') {
