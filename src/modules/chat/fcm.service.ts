@@ -8,14 +8,23 @@ export class FcmService implements OnModuleInit {
 
   onModuleInit() {
     if (admin.apps.length === 0) {
-      // In production, you would point to a service account JSON file
-      // via GOOGLE_APPLICATION_CREDENTIALS or initialize with cert()
+      const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+      
       try {
-        admin.initializeApp({
-          credential: admin.credential.applicationDefault(),
-        });
+        if (serviceAccountJson) {
+          const serviceAccount = JSON.parse(serviceAccountJson);
+          admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
+          });
+          console.log('Firebase Admin initialized with service account JSON');
+        } else {
+          admin.initializeApp({
+            credential: admin.credential.applicationDefault(),
+          });
+          console.log('Firebase Admin initialized with application default credentials');
+        }
       } catch (e) {
-        console.warn('Firebase Admin not initialized: Missing credentials');
+        console.warn('Firebase Admin not initialized:', e.message);
       }
     }
   }
@@ -34,10 +43,25 @@ export class FcmService implements OnModuleInit {
         ...data,
         click_action: 'FLUTTER_NOTIFICATION_CLICK',
       },
+      apns: {
+        payload: {
+          aps: {
+            badge: 1,
+            sound: 'default',
+          },
+        },
+      },
+      android: {
+        priority: 'high' as const,
+        notification: {
+          channelId: 'high_importance_channel',
+        },
+      },
     }));
 
     try {
       await admin.messaging().sendEach(messages);
+      console.log(`Sent ${messages.length} notifications to family ${familyId}`);
     } catch (error) {
       console.error('Error sending FCM notifications:', error);
     }

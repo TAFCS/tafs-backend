@@ -16,9 +16,10 @@ import { FcmService } from './fcm.service';
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:8080'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'],
     credentials: true,
   },
+  transports: ['websocket', 'polling'],
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -32,41 +33,63 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   async handleConnection(client: Socket) {
+    console.log('[ChatGateway] Connection attempt from:', client.id);
     try {
       // 1. Extract Token from handshake auth or headers
       const token = client.handshake.auth?.token || client.handshake.headers?.authorization?.split(' ')[1];
       
+      let payload: any;
       if (!token) {
         // Allow fallback to cookies for Staff Next.js client
         const cookieToken = this.extractTokenFromCookie(client.handshake.headers.cookie);
-        if (!cookieToken) throw new Error('No token provided');
-        
-        const payload = this.jwtService.verify(cookieToken);
-        if (payload.userType === 'STAFF') {
-          client.join('admin_inbox');
-          return;
+        if (!cookieToken) {
+          console.warn('[ChatGateway] No token found for client:', client.id);
+          throw new Error('No token provided');
         }
-        throw new Error('Invalid cookie token');
+        
+        payload = this.jwtService.verify(cookieToken);
+      } else {
+        payload = this.jwtService.verify(token);
       }
 
-      // 2. Verify token
-      const payload = this.jwtService.verify(token);
+      console.log('[ChatGateway] Token verified for:', payload.userType, payload.sub || payload.id);
 
       if (payload.userType === 'STAFF') {
         client.join('admin_inbox');
+        console.log(`[ChatGateway] Staff connected to admin_inbox: ${client.id}`);
       } else if (payload.userType === 'PARENT') {
         const familyId = payload.familyId || payload.sub;
-        client.join(`family_chat_${familyId}`);
+        client.join(`family_app_${familyId}`);
+        console.log(`[ChatGateway] Parent ${familyId} connected to global room: ${client.id}`);
       } else {
         throw new Error('Unknown user type');
       }
     } catch (error) {
+      console.error('[ChatGateway] Connection rejected:', error.message);
       client.disconnect(true);
     }
   }
 
   handleDisconnect(client: Socket) {
-    // Optional: Update last seen or presence here
+    console.log('[ChatGateway] Client disconnected:', client.id);
+  }
+
+  @SubscribeMessage('enterChat')
+  handleEnterChat(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { familyId: number },
+  ) {
+    client.join(`family_chat_${data.familyId}`);
+    console.log(`[ChatGateway] Socket ${client.id} entered chat for family ${data.familyId}`);
+  }
+
+  @SubscribeMessage('leaveChat')
+  handleLeaveChat(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { familyId: number },
+  ) {
+    client.leave(`family_chat_${data.familyId}`);
+    console.log(`[ChatGateway] Socket ${client.id} left chat for family ${data.familyId}`);
   }
 
   private extractTokenFromCookie(cookieString?: string): string | null {
@@ -109,16 +132,37 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // 3. Broadcast to Admin Inbox and Family Room
     this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: updatedConv });
-    this.server.to(`family_chat_${data.familyId}`).emit('receiveMessage', { message: newMessage, conversation: updatedConv });
+    
+    // Always broadcast to the global "app" room so the app gets the data even if not on chat screen
+    this.server.to(`family_app_${data.familyId}`).emit('receiveMessage', { message: newMessage, conversation: updatedConv });
 
     // 4. Send Push Notification to Family if sender is ADMIN
     if (data.senderType === 'ADMIN') {
-      await this.fcmService.sendToFamily(
-        data.familyId,
-        'New Message from TAFS',
-        data.messageType === 'TEXT' ? data.content : `New ${data.messageType.toLowerCase()} received`,
-        { type: 'CHAT_MESSAGE', conversationId: conv.id.toString() }
-      );
+      const roomName = `family_chat_${data.familyId}`;
+      const room = this.server.sockets.adapter.rooms.get(roomName);
+      const isViewingChat = room && room.size > 0;
+      
+      console.log(`[ChatGateway] Presence Check for Family ${data.familyId}:`, {
+        roomName,
+        activeViewers: room?.size || 0,
+        isViewingChat
+      });
+
+      if (!isViewingChat) {
+        console.log(`[ChatGateway] User not in chat room. Attempting push notification...`);
+        await this.fcmService.sendToFamily(
+          data.familyId,
+          'New Message from TAFS',
+          data.messageType === 'TEXT' ? data.content : `New ${data.messageType.toLowerCase()} received`,
+          { 
+            type: 'CHAT_MESSAGE', 
+            conversationId: conv.id.toString(),
+            messageId: newMessage.id
+          }
+        );
+      } else {
+        console.log(`[ChatGateway] User is actively viewing chat. Skipping push notification.`);
+      }
     }
     
     return newMessage;
@@ -141,7 +185,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     if (data.role === 'ADMIN') {
-      this.server.to(`family_chat_${data.familyId}`).emit('messagesRead', { by: 'ADMIN' });
+      this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
       this.server.to('admin_inbox').emit('messagesRead', { familyId: data.familyId, by: 'GUARDIAN' });
     }
@@ -169,7 +213,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // 2. Broadcast deletion
       this.server.to('admin_inbox').emit('messageDeleted', { messageId: data.messageId, familyId: data.familyId });
-      this.server.to(`family_chat_${data.familyId}`).emit('messageDeleted', { messageId: data.messageId });
+      this.server.to(`family_app_${data.familyId}`).emit('messageDeleted', { messageId: data.messageId });
       
       return { success: true };
     } catch (err) {
