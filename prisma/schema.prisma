@@ -157,6 +157,9 @@ model deposits {
   payment_method      String?               @db.VarChar(50)
   reference_number    String?               @db.VarChar(100)
   remarks             String?
+  bank_code           String?               @db.VarChar(20)
+  bank_name           String?               @db.VarChar(100)
+  date_of_return      DateTime?             @db.Date
   created_at          DateTime              @default(now()) @db.Timestamp(6)
   deposit_allocations deposit_allocations[]
   students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
@@ -172,9 +175,10 @@ model families {
   deleted_at            DateTime?               @db.Timestamp(6)
   email                 String?                 @db.VarChar(100)
   home_phone            String?                 @db.VarChar(20)
-  family_refresh_tokens family_refresh_tokens[]
-  student_siblings      student_siblings[]
-  students              students[]
+  family_refresh_tokens  family_refresh_tokens[]
+  parent_change_requests parent_change_requests[]
+  student_siblings       student_siblings[]
+  students               students[]
 }
 
 model family_refresh_tokens {
@@ -236,6 +240,7 @@ model guardians {
   postal_code                String?             @db.VarChar(20)
   fax_number                 String?             @db.VarChar(20)
   additional_phones          Json?
+  parent_change_requests     parent_change_requests[]
   student_guardians          student_guardians[]
 }
 
@@ -327,7 +332,6 @@ model student_fees {
   status                   fee_status_enum?          @default(NOT_ISSUED)
   amount_before_discount   Decimal?                  @db.Decimal(12, 2)
   target_month             Int
-  amount                   Decimal?                  @db.Decimal(12, 2)
   bundle_id                Int?
   fee_date                 DateTime?                 @db.Date
   amount_paid              Decimal?                  @default(0) @db.Decimal(12, 2)
@@ -337,6 +341,7 @@ model student_fees {
   installment_amount       Decimal?                  @db.Decimal(12, 2)
   is_discount              Boolean                   @default(false)
   discount_type_id         Int?
+  amount                   Decimal?                  @db.Decimal(12, 2)
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
   discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -619,6 +624,21 @@ model bundle_fee_type_names {
   description String?  @db.VarChar(255)
   is_active   Boolean  @default(true)
   created_at  DateTime @default(now()) @db.Timestamp(6)
+}
+
+model parent_change_requests {
+  id             Int       @id @default(autoincrement())
+  guardian_id    Int
+  family_id      Int
+  requested_data Json
+  status         String    @default("PENDING")
+  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  updated_at     DateTime  @db.Timestamp(6)
+  comment        String?
+  processed_by   String?   @db.VarChar(255)
+  processed_at   DateTime? @db.Timestamp(6)
+  families       families  @relation(fields: [family_id], references: [id])
+  guardians      guardians @relation(fields: [guardian_id], references: [id])
 }
 
 enum BulkJobStatus {
