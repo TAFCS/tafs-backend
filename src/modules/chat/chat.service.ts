@@ -149,7 +149,7 @@ export class ChatService {
     const gradeCodes = students.map(s => s.classes?.class_code).filter(Boolean);
     const sectionNames = students.map(s => s.sections?.description).filter(Boolean);
 
-    return this.prisma.chat_messages.findMany({
+    const messages = await this.prisma.chat_messages.findMany({
       where: {
         OR: [
           { conversation_id: conversation.id },
@@ -174,6 +174,13 @@ export class ChatService {
       take,
       skip,
     });
+
+    // Map messages to include accurate is_read status based on last_read_at
+    const lastReadAt = conversation.parent_last_read_at;
+    return messages.map(m => ({
+      ...m,
+      is_read: m.is_read || (lastReadAt && m.created_at <= lastReadAt) || m.sender_type === 'GUARDIAN'
+    }));
   }
 
   async uploadMedia(file: Express.Multer.File): Promise<{ url: string, metadata: any }> {
@@ -227,6 +234,8 @@ export class ChatService {
       data: {
         unread_by_admin: role === 'ADMIN' ? 0 : undefined,
         unread_by_parent: role === 'GUARDIAN' ? 0 : undefined,
+        admin_last_read_at: role === 'ADMIN' ? new Date() : undefined,
+        parent_last_read_at: role === 'GUARDIAN' ? new Date() : undefined,
       },
     });
 

@@ -652,6 +652,8 @@ model chat_conversations {
   last_message_snippet String?         @db.VarChar(255)
   unread_by_admin      Int             @default(0)
   unread_by_parent     Int             @default(0)
+  parent_last_read_at  DateTime?
+  admin_last_read_at   DateTime?
   created_at           DateTime        @default(now())
   updated_at           DateTime        @updatedAt
   families             families?       @relation(fields: [family_id], references: [id])

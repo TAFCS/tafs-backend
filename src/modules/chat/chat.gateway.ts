@@ -223,6 +223,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data: {
         unread_by_admin: data.role === 'ADMIN' ? 0 : undefined,
         unread_by_parent: data.role === 'GUARDIAN' ? 0 : undefined,
+        admin_last_read_at: data.role === 'ADMIN' ? new Date() : undefined,
+        parent_last_read_at: data.role === 'GUARDIAN' ? new Date() : undefined,
       },
     });
 
