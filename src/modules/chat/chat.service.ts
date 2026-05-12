@@ -11,16 +11,57 @@ export class ChatService {
   ) {}
 
   async getAdminInbox() {
-    return this.prisma.chat_conversations.findMany({
+    const conversations = await this.prisma.chat_conversations.findMany({
       where: {
         id: { not: '00000000-0000-0000-0000-000000000000' }
       },
       orderBy: { last_message_at: 'desc' },
       include: {
         families: {
-          select: { id: true, household_name: true, legacy_pid: true, email: true, home_phone: true },
+          select: { 
+            id: true, 
+            household_name: true, 
+            legacy_pid: true, 
+            email: true, 
+            home_phone: true,
+            students: {
+              take: 1,
+              where: { deleted_at: null },
+              include: {
+                student_guardians: {
+                  where: { is_primary_contact: true },
+                  include: { guardians: { select: { full_name: true, photo_url: true } } }
+                }
+              }
+            }
+          },
         },
       },
+    });
+
+    return conversations.map(c => {
+      const primaryGuardian = c.families?.students[0]?.student_guardians[0]?.guardians;
+      return {
+        ...c,
+        primary_guardian: primaryGuardian ? {
+          name: primaryGuardian.full_name,
+          photo_url: primaryGuardian.photo_url
+        } : null
+      };
+    });
+  }
+
+  async getFamilyStudents(familyId: number) {
+    return this.prisma.students.findMany({
+      where: { family_id: familyId, deleted_at: null },
+      select: {
+        cc: true,
+        full_name: true,
+        photograph_url: true,
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } }
+      }
     });
   }
 

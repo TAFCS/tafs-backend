@@ -19,6 +19,13 @@ export class ChatController {
     return this.chatService.getAdminInbox();
   }
 
+  @Get('family/:familyId/students')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Get all students belonging to a family' })
+  getFamilyStudents(@Param('familyId', ParseIntPipe) familyId: number) {
+    return this.chatService.getFamilyStudents(familyId);
+  }
+
   @Get('history/admin/:familyId')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin fetch chat history with a family' })
