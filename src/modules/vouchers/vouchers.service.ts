@@ -25,6 +25,9 @@ import { PDFDocument } from 'pdf-lib';
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
 
+// Set to false before going to production.
+const DEV_ALLOW_VOID_DEPOSITS = true;
+
 
 
 const VOUCHER_INCLUDE = {
@@ -1198,7 +1201,7 @@ export class VouchersService {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
 
-        if (voucher.status === 'VOID') {
+        if (voucher.status === 'VOID' && !DEV_ALLOW_VOID_DEPOSITS) {
             throw new BadRequestException(
                 `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
             );

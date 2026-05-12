@@ -665,15 +665,15 @@ model chat_messages {
   conversation_id String
   sender_type     ChatSenderType
   sender_id       String?
-  sender_name     String?            @db.VarChar(100)
   message_type    ChatMessageType
   content         String
   media_metadata  Json?
   is_read         Boolean            @default(false)
+  created_at      DateTime           @default(now())
   is_announcement Boolean            @default(false)
+  sender_name     String?            @db.VarChar(100)
   target_grade    String?            @db.VarChar(50)
   target_section  String?            @db.VarChar(50)
-  created_at      DateTime           @default(now())
   conversation    chat_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
   @@index([conversation_id, created_at(sort: Desc)])
