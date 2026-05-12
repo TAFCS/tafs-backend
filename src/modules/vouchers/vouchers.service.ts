@@ -1132,7 +1132,8 @@ export class VouchersService {
     async recordDeposit(voucherId: number, dto: RecordVoucherDepositDto) {
         const depositAmount = new Prisma.Decimal(dto.amount);
         const lateFeeAmount = new Prisma.Decimal(dto.late_fee ?? 0);
-        const distributionEntries = Object.entries(dto.distributions ?? {});
+        const distributionEntries = Object.entries(dto.distributions ?? {})
+            .filter(([, v]) => Number(v) > 0);
 
         // ── Parse surcharge allocations ──────────────────────────────────────
         const parsedSurchargeAllocations = (dto.surcharge_allocations ?? []).map(s => {
