@@ -762,7 +762,47 @@ export class VouchersService {
         }
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
-        const feeHeads = [...consolidatedByRanges, ...nonConsolidatable];
+
+        // Standalone installments that are past + unpaid but absent from this voucher's heads
+        // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
+        const installmentSortIdx = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
+        const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
+            if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
+            if (f.status === 'PAID') return false;
+            if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
+            const fYear = f.academic_year, vYear = voucher.academic_year;
+            const fMonth = f.target_month, vMonth = voucher.month;
+            if (!fYear || !vYear || fMonth == null || vMonth == null) return false;
+            return fYear < vYear || (fYear === vYear && installmentSortIdx(fMonth) < installmentSortIdx(vMonth));
+        });
+
+        const missedArrearFeeItems = missedArrearInstallments.map((f: any) => {
+            const group = installmentGroups.get(f.installment_id!) || [];
+            const total = f.student_fee_installments?.installment_count || group.length;
+            const seqIdx = group.findIndex((sf: any) => sf.id === f.id);
+            const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
+            const monthLbl = getMonthYearLabel(f.target_month, f.academic_year, voucher.class_id).toUpperCase();
+            const desc = `${feeType} INSTALLMENTS (${seqIdx + 1}/${total}) ${monthLbl}`;
+            const amount = Number(f.amount || 0);
+            return {
+                description: desc,
+                originalDescription: desc,
+                baseDescription: `${feeType} INSTALLMENTS (${seqIdx + 1}/${total})`,
+                amount,
+                discount: 0,
+                netAmount: amount,
+                amountDeposited: 0,
+                balance: amount,
+                isArrear: true,
+                isSurcharge: false,
+                isDiscount: false,
+                feeDate: f.fee_date?.toISOString().split('T')[0],
+                target_month: f.target_month,
+                academic_year: f.academic_year,
+            };
+        });
+
+        const feeHeads = [...consolidatedByRanges, ...nonConsolidatable, ...missedArrearFeeItems];
 
         // Consolidated month-range label for the arrears row, e.g. "ARREARS (AUG 25 – OCT 25)"
         const arrearHeadsForLabel = nonSurcharges.filter(h => h.isArrear && h.target_month != null);
@@ -785,6 +825,7 @@ export class VouchersService {
             include: {
                 fee_types: true,
                 student_fee_installments: { include: { fee_types: true } },
+                deposit_allocations: { include: { deposits: true }, orderBy: { id: 'desc' }, take: 1 },
             } as any,
             orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
         });
@@ -805,7 +846,10 @@ export class VouchersService {
                     : '';
 
                 const head = `${prefixStr}${feeTypeDesc}${monthSuffix}`;
-                const dateObj = sf.fee_date ? new Date(sf.fee_date) : (sf.issue_date ? new Date(sf.issue_date) : null);
+                const depositDate = (sf as any).deposit_allocations?.[0]?.deposits?.deposit_date;
+                const dateObj = depositDate
+                    ? new Date(depositDate)
+                    : (sf.fee_date ? new Date(sf.fee_date) : null);
 
                 return {
                     dateObj,
@@ -890,30 +934,58 @@ export class VouchersService {
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
                 arrearsLabel,
-                arrearsHistory: nonSurcharges
-                    .filter(fh => fh.isArrear && !fh.isDiscount)
-                    .map(fh => ({
-                        date: fh.feeDate || 'N/A',
-                        head: fh.originalDescription,
-                        amount: fh.netAmount.toLocaleString(),
-                        totalAmount: fh.netAmount.toLocaleString(),
-                        target_month: fh.target_month,
-                        academic_year: fh.academic_year,
-                    })),
-                installmentsHistory: studentInstallmentFees
-                    .filter(f => {
-                        const isStandalone = (f as any).installment_id && f.fee_type_id === (f as any).student_fee_installments?.fee_type_id;
-                        return isStandalone && f.status !== 'PAID' && !voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id);
-                    })
-                    .map((f: any) => {
-                        const group = installmentGroups.get((f as any).installment_id!) || [];
+                arrearsHistory: [
+                    ...nonSurcharges
+                        .filter(fh => fh.isArrear && !fh.isDiscount)
+                        .map(fh => ({
+                            date: fh.feeDate || 'N/A',
+                            head: fh.description,
+                            amount: fh.netAmount.toLocaleString(),
+                            totalAmount: fh.netAmount.toLocaleString(),
+                            target_month: fh.target_month,
+                            academic_year: fh.academic_year,
+                        })),
+                    ...missedArrearInstallments.map((f: any) => {
+                        const group = installmentGroups.get(f.installment_id!) || [];
                         const total = f.student_fee_installments?.installment_count || group.length;
-                        const idx = group.findIndex(sf => sf.id === f.id);
+                        const seqIdx = group.findIndex((sf: any) => sf.id === f.id);
                         const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
                         return {
-                            head: `${feeType} INSTALLMENTS (${idx + 1}/${total})`,
-                            month: f.target_month ? monthNames[f.target_month - 1].slice(0, 3).toUpperCase() : 'N/A',
+                            date: f.fee_date?.toISOString().split('T')[0] || 'N/A',
+                            head: `${feeType} INSTALLMENTS (${seqIdx + 1}/${total})`,
                             amount: Number(f.amount || 0).toLocaleString(),
+                            totalAmount: Number(f.amount || 0).toLocaleString(),
+                            target_month: f.target_month,
+                            academic_year: f.academic_year,
+                        };
+                    }),
+                ],
+                installmentsHistory: (studentInstallmentFees as any[])
+                    .filter(f => {
+                        const isStandalone = f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id;
+                        if (!isStandalone) return false;
+                        // Exclude only the installment(s) that are the current voucher month —
+                        // those are already shown in the main fee columns.
+                        // Past arrear installments and future installments all belong in the plan.
+                        return !(f.target_month === voucher.month && f.academic_year === voucher.academic_year);
+                    })
+                    .map((f: any) => {
+                        const group = installmentGroups.get(f.installment_id!) || [];
+                        const total = f.student_fee_installments?.installment_count || group.length;
+                        const idx = group.findIndex((sf: any) => sf.id === f.id);
+                        const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
+                        const parts = (f.academic_year || '').split('-');
+                        const year = f.target_month != null && f.target_month >= cutoff
+                            ? parts[0]
+                            : (parts[1] || parts[0]);
+                        const month = f.target_month
+                            ? `${monthNames[f.target_month - 1].slice(0, 3)} ${year}`
+                            : 'N/A';
+                        return {
+                            head: `${feeType} INSTALLMENTS (${idx + 1}/${total})`,
+                            month,
+                            amount: Number(f.amount || 0),
+                            status: f.status === 'PAID' ? 'PAID' : 'DUE',
                         };
                     }),
                 paymentHistory,
