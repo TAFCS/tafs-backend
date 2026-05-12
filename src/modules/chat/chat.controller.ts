@@ -55,8 +55,10 @@ export class ChatController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } })) // 10MB
   uploadMedia(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
+      console.error('[ChatController] Upload failed: No file provided');
       throw new BadRequestException('No file uploaded');
     }
+    console.log(`[ChatController] Received file: ${file.originalname} (${file.mimetype}, ${file.size} bytes)`);
     return this.chatService.uploadMedia(file);
   }
 
