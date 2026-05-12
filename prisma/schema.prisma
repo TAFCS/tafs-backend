@@ -179,6 +179,8 @@ model families {
   parent_change_requests parent_change_requests[]
   student_siblings       student_siblings[]
   students               students[]
+  chat_conversations     chat_conversations?
+  fcm_device_tokens      fcm_device_tokens[]
 }
 
 model family_refresh_tokens {
@@ -681,4 +683,64 @@ enum student_status {
   EXPELLED
   GRADUATED
   LEFT
+}
+
+// ---------------------------------------------------------
+// Parent-Admin Chat Feature Models
+// ---------------------------------------------------------
+
+enum ChatMessageType {
+  TEXT
+  IMAGE
+  VOICE
+  DOCUMENT
+}
+
+enum ChatSenderType {
+  GUARDIAN
+  ADMIN
+}
+
+model chat_conversations {
+  id                   String   @id @default(uuid())
+  family_id            Int      @unique
+  last_message_at      DateTime @default(now())
+  last_message_snippet String?  @db.VarChar(255)
+  unread_by_admin      Int      @default(0)
+  unread_by_parent     Int      @default(0)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  families families        @relation(fields: [family_id], references: [id])
+  messages chat_messages[]
+
+  @@index([last_message_at(sort: Desc)])
+}
+
+model chat_messages {
+  id              String          @id @default(uuid())
+  conversation_id String
+  sender_type     ChatSenderType
+  sender_id       String?
+  message_type    ChatMessageType
+  content         String          @db.Text
+  media_metadata  Json?
+  is_read         Boolean         @default(false)
+  created_at      DateTime        @default(now())
+
+  conversation chat_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id, created_at(sort: Desc)])
+}
+
+model fcm_device_tokens {
+  id             Int      @id @default(autoincrement())
+  family_id      Int
+  device_token   String   @unique @db.VarChar(255)
+  device_os      String?  @db.VarChar(20)
+  last_active_at DateTime @default(now())
+
+  families families @relation(fields: [family_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id])
 }
