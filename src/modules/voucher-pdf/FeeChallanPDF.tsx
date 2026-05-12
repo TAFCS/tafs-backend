@@ -759,8 +759,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         <View style={styles.historyTableHeader}>
                             <Text style={styles.historyTableHeaderCell}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
-                            <Text style={styles.historyTableHeaderCell}>AMT</Text>
-                            <Text style={styles.historyTableHeaderCell}>TOTAL</Text>
+                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMT</Text>
                         </View>
                         {arrearsHistory && arrearsHistory.length > 0 ? (() => {
                             const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -783,8 +782,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             <View key={idx} style={styles.historyTableRow}>
                                                 <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
                                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
-                                                <Text style={styles.historyTableCell}>{amt.toLocaleString()}</Text>
-                                                <Text style={styles.historyTableCell}>{runningTotal.toLocaleString()}</Text>
+                                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{amt.toLocaleString()}</Text>
                                             </View>
                                         );
                                     })}
@@ -800,8 +798,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             <View style={styles.historyTableRow}>
                                 <Text style={styles.historyTableCell}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={styles.historyTableCell}>-</Text>
-                                <Text style={styles.historyTableCell}>-</Text>
+                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                             </View>
                         )}
                     </View>
@@ -815,7 +812,6 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             <Text style={styles.historyTableHeaderCell}>DATE</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>TOTAL</Text>
                         </View>
                         {paymentHistory && paymentHistory.length > 0 ? (
                             <>
@@ -827,12 +823,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                         })()}</Text>
                                         <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
                                         <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
-                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.totalAmount || '0'}</Text>
                                     </View>
                                 ))}
                                 <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL PAID</Text>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>-</Text>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
                             </>
@@ -840,7 +834,6 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             <View style={styles.historyTableRow}>
                                 <Text style={styles.historyTableCell}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                             </View>
                         )}
