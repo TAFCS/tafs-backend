@@ -24,6 +24,11 @@ import { FcmService } from './fcm.service';
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
+  
+  // Track online families: Map<familyId, Set<socketId>>
+  private familySockets = new Map<number, Set<string>>();
+  // Reverse lookup: Map<socketId, familyId>
+  private socketToFamily = new Map<string, number>();
 
   constructor(
     private readonly chatService: ChatService,
@@ -77,6 +82,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
         }
         
+        
+        // Track presence
+        if (!this.familySockets.has(familyId)) {
+          this.familySockets.set(familyId, new Set());
+        }
+        this.familySockets.get(familyId)!.add(client.id);
+        this.socketToFamily.set(client.id, familyId);
+        
+        // Notify admins that this family is online
+        this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'ONLINE' });
+        
         console.log(`[ChatGateway] Parent ${familyId} connected and joined announcement rooms: ${client.id}`);
       } else {
         throw new Error('Unknown user type');
@@ -89,6 +105,26 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     console.log('[ChatGateway] Client disconnected:', client.id);
+    
+    const familyId = this.socketToFamily.get(client.id);
+    if (familyId) {
+      this.socketToFamily.delete(client.id);
+      const sockets = this.familySockets.get(familyId);
+      if (sockets) {
+        sockets.delete(client.id);
+        if (sockets.size === 0) {
+          this.familySockets.delete(familyId);
+          // Only notify offline if NO other sockets are connected for this family
+          this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'OFFLINE' });
+        }
+      }
+    }
+  }
+
+  @SubscribeMessage('getOnlineStatus')
+  handleGetOnlineStatus(@ConnectedSocket() client: Socket) {
+    const onlineIds = Array.from(this.familySockets.keys());
+    return { onlineFamilyIds: onlineIds };
   }
 
   @SubscribeMessage('enterChat')
