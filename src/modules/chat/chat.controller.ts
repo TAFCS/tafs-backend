@@ -60,6 +60,20 @@ export class ChatController {
     return this.chatService.uploadMedia(file);
   }
 
+  @Post('mark-read')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Parent marks their messages as read' })
+  markParentRead(@CurrentUser() user: any) {
+    return this.chatService.markAsRead(user.familyId, 'GUARDIAN');
+  }
+
+  @Post('mark-read/admin/:familyId')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Admin marks messages for a family as read' })
+  markAdminRead(@Param('familyId', ParseIntPipe) familyId: number) {
+    return this.chatService.markAsRead(familyId, 'ADMIN');
+  }
+
   @Get('media/proxy')
   @ApiOperation({ summary: 'Proxy media to bypass CORS' })
   async proxyMedia(

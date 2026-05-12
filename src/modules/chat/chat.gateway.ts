@@ -240,6 +240,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
       this.server.to('admin_inbox').emit('messagesRead', { familyId: data.familyId, by: 'GUARDIAN' });
+      // Also notify other devices of the same family
+      this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
   }
 

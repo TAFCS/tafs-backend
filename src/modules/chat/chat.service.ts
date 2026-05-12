@@ -217,4 +217,27 @@ export class ChatService {
 
     return conversation;
   }
+
+  async markAsRead(familyId: number, role: 'ADMIN' | 'GUARDIAN') {
+    const conv = await this.prisma.chat_conversations.findUnique({ where: { family_id: familyId } });
+    if (!conv) return;
+
+    await this.prisma.chat_conversations.update({
+      where: { id: conv.id },
+      data: {
+        unread_by_admin: role === 'ADMIN' ? 0 : undefined,
+        unread_by_parent: role === 'GUARDIAN' ? 0 : undefined,
+      },
+    });
+
+    // Also mark all messages in this conversation as read
+    await this.prisma.chat_messages.updateMany({
+      where: { 
+        conversation_id: conv.id,
+        sender_type: role === 'GUARDIAN' ? 'ADMIN' : 'GUARDIAN', // If Guardian marks as read, mark Admin's messages
+        is_read: false 
+      },
+      data: { is_read: true },
+    });
+  }
 }
