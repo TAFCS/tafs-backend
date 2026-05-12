@@ -28,13 +28,27 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucher = await this.prisma.vouchers.findFirst({
+      let voucher = await this.prisma.vouchers.findFirst({
         where: { voucher_number: dto.VoucherNumber },
         include: {
           students: true,
           voucher_arrear_surcharges: true,
         },
       });
+
+      // Fallback: old vouchers have voucher_number = NULL; extract id from last 7 digits
+      if (!voucher && dto.VoucherNumber.length === 11) {
+        const fallbackId = parseInt(dto.VoucherNumber.slice(4), 10);
+        if (!isNaN(fallbackId)) {
+          voucher = await this.prisma.vouchers.findFirst({
+            where: { id: fallbackId },
+            include: {
+              students: true,
+              voucher_arrear_surcharges: true,
+            },
+          });
+        }
+      }
 
       if (!voucher) {
         return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
@@ -97,13 +111,27 @@ export class MeezanService {
       const authError = this.validateAuth(dto.ServiceUserId, dto.UserPassword, dto.BillCompanyCode);
       if (authError) return authError;
 
-      const voucher = await this.prisma.vouchers.findFirst({
+      let voucher = await this.prisma.vouchers.findFirst({
         where: { voucher_number: dto.VoucherNumber },
         include: {
           voucher_heads: { include: { student_fees: true } },
           voucher_arrear_surcharges: true,
         },
       });
+
+      // Fallback: old vouchers have voucher_number = NULL; extract id from last 7 digits
+      if (!voucher && dto.VoucherNumber.length === 11) {
+        const fallbackId = parseInt(dto.VoucherNumber.slice(4), 10);
+        if (!isNaN(fallbackId)) {
+          voucher = await this.prisma.vouchers.findFirst({
+            where: { id: fallbackId },
+            include: {
+              voucher_heads: { include: { student_fees: true } },
+              voucher_arrear_surcharges: true,
+            },
+          });
+        }
+      }
 
       if (!voucher) {
         return { ResponseCode: '091', ResponseDesc: 'Voucher Id is invalid' };
