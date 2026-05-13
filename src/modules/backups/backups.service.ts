@@ -164,11 +164,15 @@ export class BackupsService implements OnModuleInit {
             // 2. Fetch data from each table
             for (const table of tables) {
                 const tableName = table.table_name;
-                this.logger.debug(`Backing up table: ${tableName}`);
-                
-                // Use raw query to fetch everything from the table
-                const data: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM "${tableName}"`);
-                backupData[tableName] = data;
+                try {
+                    this.logger.debug(`Backing up table: ${tableName}`);
+                    // Explicitly use the public schema
+                    const data: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM "public"."${tableName}"`);
+                    backupData[tableName] = data;
+                } catch (tableError) {
+                    this.logger.warn(`Failed to back up table ${tableName}, skipping. Error: ${tableError.message}`);
+                    backupData[tableName] = []; // Provide an empty array instead of crashing
+                }
             }
 
             // 3. Serialize to JSON with BigInt support
