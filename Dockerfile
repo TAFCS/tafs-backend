@@ -19,16 +19,16 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
+# Copy prisma directory (needed for postinstall 'prisma generate' script)
+COPY prisma ./prisma/
+
 # Install dependencies
 RUN npm install
 
-# Copy source code
+# Copy the rest of the source code
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
-
-# Build the app
+# Build the app (this also runs prisma generate again in your build script)
 RUN npm run build
 
 # Expose the port
