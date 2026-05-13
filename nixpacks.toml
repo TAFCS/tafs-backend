@@ -1,5 +1,6 @@
 [phases.setup]
 nixPkgs = ["nodejs", "postgresql"]
+aptPkgs = ["postgresql-client"]
 
 [phases.build]
 cmds = ["npm run build", "pg_dump --version"]
