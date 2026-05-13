@@ -1,2 +1,5 @@
 [phases.setup]
-nixPkgs = ["...", "postgresql"]
+nixPkgs = ["nodejs", "postgresql"]
+
+[phases.build]
+cmds = ["npm run build", "pg_dump --version"]
