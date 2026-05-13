@@ -13,7 +13,7 @@ export class StudentFlagsService implements OnModuleInit {
   // This keeps the DB logic firing even without a live NestJS listener.
   private async setupTrigger() {
     await this.prisma.$executeRawUnsafe(`
-      CREATE OR REPLACE FUNCTION notify_student_flag()
+      CREATE OR REPLACE FUNCTION public.notify_student_flag()
       RETURNS trigger AS $$
       BEGIN
         IF NEW.work_done = false THEN
@@ -33,13 +33,13 @@ export class StudentFlagsService implements OnModuleInit {
     `);
 
     await this.prisma.$executeRawUnsafe(`
-      DROP TRIGGER IF EXISTS trg_student_flag_notify ON student_flags;
+      DROP TRIGGER IF EXISTS trg_student_flag_notify ON public.student_flags;
     `);
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TRIGGER trg_student_flag_notify
-      AFTER INSERT OR UPDATE ON student_flags
-      FOR EACH ROW EXECUTE FUNCTION notify_student_flag();
+      AFTER INSERT OR UPDATE ON public.student_flags
+      FOR EACH ROW EXECUTE FUNCTION public.notify_student_flag();
     `);
   }
 
