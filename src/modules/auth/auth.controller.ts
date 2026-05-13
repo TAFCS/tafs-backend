@@ -86,6 +86,21 @@ export class AuthController {
     return createApiResponse({ user }, HttpStatus.OK, 'Staff token refreshed');
   }
 
+  @Get('staff/me')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtStaffGuard)
+  async getStaffMe(
+    @CurrentUser() user: IJwtStaffPayload,
+    @Req() req: Request,
+  ) {
+    const accessToken = req.cookies?.tafs_access as string | undefined;
+    return createApiResponse(
+      { ...user, accessToken },
+      HttpStatus.OK,
+      'Staff session fetched',
+    );
+  }
+
   @Post('staff/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtStaffGuard)
