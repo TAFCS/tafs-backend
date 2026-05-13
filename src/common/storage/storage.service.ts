@@ -50,7 +50,6 @@ export class StorageService {
                 region: region!,
                 endpoint: this.uploadEndpoint,
                 credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
-                // If endpoint already includes bucket host, force path-style to avoid duplicate bucket hostnames.
                 forcePathStyle: isBucketQualifiedEndpoint,
             });
 
@@ -143,8 +142,36 @@ export class StorageService {
             const buffer = await streamToBuffer(response.Body);
             return { buffer, mime: response.ContentType || 'application/octet-stream' };
         } catch (err: any) {
-            this.logger.error(`Failed to fetch ${key}`, err?.message);
+            this.logger.error(`Failed to fetch ${key}: ${err?.message}`, err?.stack);
             throw new NotFoundException('File not found in storage');
+        }
+    }
+    /**
+     * Generate a signed URL for temporary access to a private object.
+     */
+    async getSignedUrl(key: string, expiresIn = 900): Promise<string> {
+        if (!this.client) {
+            throw new InternalServerErrorException('Storage not configured');
+        }
+        try {
+            const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+            const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+            
+            const command = new GetObjectCommand({
+                Bucket: this.bucket,
+                Key: key,
+                // Explicitly disable checksum mode which can cause "SignatureDoesNotMatch" on DO Spaces
+                ChecksumMode: undefined,
+            });
+
+            return await getSignedUrl(this.client, command, { 
+                expiresIn,
+                // Ensure we don't include extra headers that DO might reject
+                signableHeaders: new Set(['host'])
+            });
+        } catch (err: any) {
+            this.logger.error(`Failed to generate signed URL for ${key}`, err?.message);
+            throw new InternalServerErrorException('Failed to generate download link');
         }
     }
 }

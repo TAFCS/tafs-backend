@@ -31,6 +31,7 @@ import { MeezanModule } from './modules/meezan/meezan.module';
 import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
 import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { BackupsModule } from './modules/backups/backups.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { ChatModule } from './modules/chat/chat.module';
     DiscountPresetsModule,
     ParentChangeRequestsModule,
     ChatModule,
+    BackupsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
