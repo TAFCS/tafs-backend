@@ -33,8 +33,20 @@ export class BackupsService implements OnModuleInit {
     }
 
     async createBackup() {
-        // Format: TAFS_JSON_YYYY-MM-DD_HH-mm-ss.json.gz
         const now = new Date();
+        const timestamp = this.formatTimestamp(now);
+        
+        this.logger.log(`Starting dual-mode database backup (SQL + JSON) - ${timestamp}`);
+
+        const [sql, json] = await Promise.all([
+            this.createSqlBackup(timestamp),
+            this.createJsonBackup(timestamp)
+        ]);
+
+        return { sql, json };
+    }
+
+    private formatTimestamp(now: Date) {
         const pktTime = new Intl.DateTimeFormat('en-PK', {
             timeZone: 'Asia/Karachi',
             year: 'numeric',
@@ -54,10 +66,86 @@ export class BackupsService implements OnModuleInit {
         const minute = parts[4];
         const second = parts[5];
 
-        const timestamp = `${year}-${month}-${day}_${hour}-${minute}-${second}`;
-        const fileName = `TAFS_JSON_${timestamp}.json.gz`;
+        return `${year}-${month}-${day}_${hour}-${minute}-${second}`;
+    }
+
+    private getBackupInfo(format: 'JSON' | 'SQL', sharedTimestamp?: string) {
+        const timestamp = sharedTimestamp || this.formatTimestamp(new Date());
+        const extension = format === 'JSON' ? 'json' : 'sql';
+        const fileName = `TAFS_${format}_${timestamp}.${extension}.gz`;
         const filePath = join(this.tempDir, fileName);
-        const jsonPath = filePath.replace('.gz', '');
+        const rawPath = filePath.replace('.gz', '');
+
+        return { fileName, filePath, rawPath };
+    }
+
+    private async finalizeBackup(rawPath: string, filePath: string, fileName: string) {
+        const fs = require('fs');
+        try {
+            // 1. Compress
+            await execPromise(`gzip "${rawPath}"`);
+            this.logger.log(`Backup compressed: ${fileName}`);
+
+            // 2. Upload to Storage
+            const fileBuffer = fs.readFileSync(filePath);
+            const storageKey = `backups/${fileName}`;
+            const publicUrl = await this.storage.upload(storageKey, fileBuffer, 'application/gzip');
+
+            this.logger.log(`Backup uploaded successfully: ${publicUrl}`);
+
+            // 3. Cleanup
+            if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+            return {
+                fileName,
+                storageKey,
+                url: publicUrl,
+            };
+        } catch (error) {
+            if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            throw error;
+        }
+    }
+
+    async createSqlBackup(sharedTimestamp?: string) {
+        const { fileName, filePath, rawPath } = this.getBackupInfo('SQL', sharedTimestamp);
+        const dbUrl = this.config.get<string>('DATABASE_URL');
+
+        if (!dbUrl) {
+            throw new InternalServerErrorException('DATABASE_URL not found in environment');
+        }
+
+        // Sanitize DATABASE_URL for pg_dump (it doesn't like prisma-specific params like connection_limit)
+        let sanitizedUrl = dbUrl;
+        try {
+            const url = new URL(dbUrl);
+            url.searchParams.delete('connection_limit');
+            url.searchParams.delete('pool_timeout');
+            sanitizedUrl = url.toString();
+        } catch (e) {
+            this.logger.warn(`Failed to parse DATABASE_URL for sanitization: ${e.message}`);
+        }
+
+        this.logger.log(`Starting SQL database backup: ${fileName} (PKT)`);
+
+        try {
+            // Use pg_dump directly with the connection string
+            // We use --no-owner and --no-privileges to make it more portable
+            await execPromise(`pg_dump "${sanitizedUrl}" --no-owner --no-privileges -f "${rawPath}"`);
+            this.logger.log(`SQL data extracted via pg_dump`);
+
+            return await this.finalizeBackup(rawPath, filePath, fileName);
+        } catch (error) {
+            this.logger.error(`SQL Backup process failed: ${error.message}`);
+            throw new InternalServerErrorException(`Database backup failed: ${error.message}`);
+        }
+    }
+
+    async createJsonBackup(sharedTimestamp?: string) {
+        const { fileName, filePath, rawPath } = this.getBackupInfo('JSON', sharedTimestamp);
+        const jsonPath = rawPath;
 
         this.logger.log(`Starting Pure JS database backup: ${fileName} (PKT)`);
 
@@ -96,32 +184,13 @@ export class BackupsService implements OnModuleInit {
             fs.writeFileSync(jsonPath, jsonString);
             this.logger.log(`JSON data extracted (${Object.keys(backupData).length} tables)`);
 
-            // 5. Compress
-            await execPromise(`gzip "${jsonPath}"`);
-            this.logger.log(`Backup compressed: ${fileName}`);
-
-            // 6. Upload to Storage
-            const fileBuffer = fs.readFileSync(filePath);
-            const storageKey = `backups/${fileName}`;
-            const publicUrl = await this.storage.upload(storageKey, fileBuffer, 'application/gzip');
-
-            this.logger.log(`Backup uploaded successfully: ${publicUrl}`);
-
-            // Cleanup
-            if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
-            fs.unlinkSync(filePath);
-            
+            const result = await this.finalizeBackup(rawPath, filePath, fileName);
             return {
-                fileName,
-                storageKey,
-                url: publicUrl,
+                ...result,
                 tablesCount: Object.keys(backupData).length
             };
         } catch (error) {
             this.logger.error(`JSON Backup process failed: ${error.message}`);
-            const fs = require('fs');
-            if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             throw new InternalServerErrorException(`Database backup failed: ${error.message}`);
         }
     }

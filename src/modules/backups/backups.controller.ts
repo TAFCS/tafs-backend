@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, UseGuards, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, UseGuards, HttpStatus, Res, Query } from '@nestjs/common';
 import { BackupsService } from './backups.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -17,7 +17,7 @@ export class BackupsController {
     @Post('trigger')
     async triggerBackup() {
         const result = await this.backupsService.createBackup();
-        return createApiResponse(result, HttpStatus.CREATED, 'Backup triggered successfully');
+        return createApiResponse(result, HttpStatus.CREATED, 'Dual-mode backup (SQL + JSON) triggered successfully');
     }
 
     @Get('download/*key')

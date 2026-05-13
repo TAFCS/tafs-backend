@@ -19,7 +19,7 @@ export class BackupsSchedulerService {
         this.logger.log('[Backup Scheduler] Starting scheduled database backup (PKT)...');
         try {
             const result = await this.backupsService.createBackup();
-            this.logger.log(`[Backup Scheduler] Scheduled backup completed: ${result.fileName}`);
+            this.logger.log(`[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName} and ${result.json.fileName}`);
         } catch (error) {
             this.logger.error(`[Backup Scheduler] Scheduled backup failed: ${error.message}`);
         }
