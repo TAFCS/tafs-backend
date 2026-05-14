@@ -120,6 +120,10 @@ export class ChatService {
     });
   }
 
+  async getParentStudents(familyId: number) {
+    return this.getFamilyStudents(familyId);
+  }
+
   async getChatHistory(familyId: number, take: number = 50, skip: number = 0) {
     if (familyId === 0) {
       // Fetch Global Announcements

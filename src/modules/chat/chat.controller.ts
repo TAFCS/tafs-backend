@@ -26,6 +26,13 @@ export class ChatController {
     return this.chatService.getFamilyStudents(familyId);
   }
 
+  @Get('students')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Get all students belonging to the current parent' })
+  getParentStudents(@CurrentUser() user: any) {
+    return this.chatService.getParentStudents(user.familyId);
+  }
+
   @Get('history/admin/:familyId')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin fetch chat history with a family' })
