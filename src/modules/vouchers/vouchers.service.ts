@@ -2343,6 +2343,24 @@ export class VouchersService {
                 continue;
             }
 
+            // Discount rows (is_discount=true) have net_amount<0 and balance=0.
+            // They reduce total_payable at voucher creation time and must never be
+            // counted in totalRemHeads — doing so would add the discount amount as
+            // positive debt instead of subtracting it.
+            if (fee.is_discount) {
+                updatedHeads.push({
+                    ...h,
+                    balance: '0',
+                    isArrear: false,
+                    is_arrear: false,
+                    isSurcharge: false,
+                    is_surcharge: false,
+                    is_installment: false,
+                    has_installment_merged: false,
+                });
+                continue;
+            }
+
             // student_fees is the SINGLE SOURCE OF TRUTH for amounts and paid state.
             const canonicalAmount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
             const totalPaidOnFee = new Prisma.Decimal(fee.amount_paid ?? 0);
@@ -2406,12 +2424,20 @@ export class VouchersService {
         }
 
         // ── sf totals (for frontend display) ────────────────────────────────────
+        // For discount heads net_amount is already negative (stored as -discountAmount),
+        // so using it directly gives the correct sign for every row.
         const sfNetTotal = originalHeads.reduce(
-            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)),
+            (sum, head) => sum.add(
+                head.student_fees?.is_discount
+                    ? new Prisma.Decimal(head.net_amount ?? 0)
+                    : new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)
+            ),
             new Prisma.Decimal(0),
         );
         const sfGrossTotal = originalHeads.reduce(
-            (sum, head) => sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.student_fees?.amount ?? head.net_amount ?? 0)),
+            (sum, head) => head.student_fees?.is_discount
+                ? sum  // discount rows are not part of gross fees
+                : sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.student_fees?.amount ?? head.net_amount ?? 0)),
             new Prisma.Decimal(0),
         );
         const sfDiscountTotal = sfGrossTotal.sub(sfNetTotal);
