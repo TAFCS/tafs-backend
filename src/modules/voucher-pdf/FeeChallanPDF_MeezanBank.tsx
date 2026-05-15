@@ -669,16 +669,55 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
         <View style={styles.footerContainer}>
             <View style={styles.bankNoteContainer}>
                 <Text style={styles.bankNoteLabel}>NOTE FOR BANK:</Text>
-                <Text style={styles.bankNoteText}>THESE FUNDS ARE INTENDED FOR THE AMERICAN FOUNDATION SCHOOL'S ACCOUNT {details.bank.iban || details.bank.account} HELD WITH GULISTAN-E-JAUHAR.</Text>
+                <Text style={styles.bankNoteText}>THESE FUNDS ARE INTENDED FOR THE AMERICAN FOUNDATION SCHOOL'S ACCOUNT {details.bank.account} HELD WITH GULISTAN-E-JAUHAR</Text>
             </View>
 
             <View style={styles.footer}>
                 <Text style={{ fontSize: 5, fontWeight: 'bold', marginBottom: 2 }}>IMPORTANT POLICIES:</Text>
                 <Text style={styles.instructions}>1. ALL ADMISSION AND TUITION FEES ARE STRICTLY NON-REFUNDABLE AND NON-ADJUSTABLE ONCE PAID.</Text>
-                <Text style={styles.instructions}>2. A LATE FEE OF PKR {(details.lateFeeAmount || 1000).toLocaleString()}/- APPLIES TO ALL DEPOSITS MADE AFTER THE DUE DATE.</Text>
+                <Text style={styles.instructions}>2. A LATE FEE OF PKR {(details.lateFeeAmount || 1000).toLocaleString()}/- APPLIES TO ALL DEPOSITS MADE AFTER THE DUE DATE; THESE ADDITIONAL PROCEEDS ARE DONATED EXCLUSIVELY FOR CHARITABLE PURPOSES.</Text>
                 <Text style={styles.instructions}>3. A CHARGE OF PKR 100/- WILL BE APPLIED FOR THE ISSUANCE OF ANY DUPLICATE FEE VOUCHER.</Text>
                 <Text style={styles.instructions}>4. PARENTS ARE RESPONSIBLE FOR COLLECTING FEE VOUCHERS FROM THEIR RESPECTIVE CAMPUS IF THEY ARE NOT RECEIVED OR DELIVERED BY THE STUDENT.</Text>
                 <Text style={styles.instructions}>5. STUDENTS WITH FEES REMAINING UNPAID FOR ONE MONTH BEYOND THE DEADLINE WILL BE SUSPENDED FROM ATTENDING CLASSES UNTIL ALL OUTSTANDING DUES ARE CLEARED.</Text>
+
+                <View style={styles.paymentOptionsTable}>
+                    <View style={styles.paymentOptionsHeader}>
+                        <Text>PAYMENT OPTIONS (CASH ACCEPTED)</Text>
+                    </View>
+                    <View style={styles.paymentOptionsRow}>
+                        <View style={styles.paymentOptionsCol1}>
+                            <Text style={{ fontWeight: 'bold' }}>BANK COUNTERS</Text>
+                        </View>
+                        <View style={styles.paymentOptionsCol2}>
+                            <Text>CASH, MBL CHEQUES, AND PAY ORDERS ARE ACCEPTED AT ALL MBL BRANCHES.</Text>
+                        </View>
+                    </View>
+                    <View style={styles.paymentOptionsRow}>
+                        <View style={styles.paymentOptionsCol1}>
+                            <Text style={{ fontWeight: 'bold' }}>CMS ONLINE</Text>
+                        </View>
+                        <View style={styles.paymentOptionsCol2}>
+                            <Text>PAY VIA THE CMS ONLINE DEPOSIT MODULE USING CUSTOMER CODE: TAFCS.</Text>
+                        </View>
+                    </View>
+                    <View style={styles.paymentOptionsRow}>
+                        <View style={styles.paymentOptionsCol1}>
+                            <Text style={{ fontWeight: 'bold' }}>MBL DIGITAL BANKING</Text>
+                        </View>
+                        <View style={styles.paymentOptionsCol2}>
+                            <Text>SELECT "SCHOOL" AS THE BENEFICIARY FROM THE BILLER OPTION VIA MOBILE OR INTERNET BANKING.</Text>
+                        </View>
+                    </View>
+                    <View style={[styles.paymentOptionsRow, { borderBottomWidth: 0 }]}>
+                        <View style={styles.paymentOptionsCol1}>
+                            <Text style={{ fontWeight: 'bold' }}>OTHER BANKS/DIGITAL CHANNELS</Text>
+                        </View>
+                        <View style={styles.paymentOptionsCol2}>
+                            <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 24-DIGIT INVOICE NUMBER.</Text>
+                            <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL ID: 1006259110046</Text>
+                        </View>
+                    </View>
+                </View>
 
                 <View style={styles.stampSignatureRow}>
                     <View style={styles.stampBox}>

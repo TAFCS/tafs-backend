@@ -554,11 +554,11 @@ export class VouchersService {
             const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
             const monthSuffix = sf?.target_month != null
-                ? ` ${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()}`
+                ? ` (${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()})`
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
-            const baseDescription = prefixStr + feeTypeDesc;
+            let baseDescription = prefixStr + feeTypeDesc;
 
             // Handle Installment Sequence (e.g. 1/6)
             // STANDALONE vs MERGED Check:
@@ -571,7 +571,9 @@ export class VouchersService {
                 const total = sf.student_fee_installments?.installment_count || group.length;
                 const idx = group.findIndex(f => f.id === sf.id);
                 if (idx !== -1) {
-                    description = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
+                    const installmentLabel = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})`;
+                    description = `${installmentLabel}${monthSuffix}`;
+                    baseDescription = installmentLabel;
                 }
             }
 
@@ -645,7 +647,7 @@ export class VouchersService {
         ) => {
             const start = getMonthYearLabel(startMonth, startYear, voucher.class_id).toUpperCase();
             const end = getMonthYearLabel(endMonth, endYear, voucher.class_id).toUpperCase();
-            return start === end ? start : `${start} - ${end}`;
+            return start === end ? `(${start})` : `(${start} - ${end})`;
         };
 
         // Consolidate fee-head rows by base description and contiguous months.
@@ -785,7 +787,7 @@ export class VouchersService {
             const seqIdx = group.findIndex((sf: any) => sf.id === f.id);
             const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
             const monthLbl = getMonthYearLabel(f.target_month, f.academic_year, voucher.class_id).toUpperCase();
-            const desc = `${feeType} INSTALLMENTS (${seqIdx + 1}/${total}) ${monthLbl}`;
+            const desc = `${feeType} INSTALLMENTS (${seqIdx + 1}/${total}) (${monthLbl})`;
             const amount = Number(f.amount || 0);
             return {
                 description: desc,
@@ -982,7 +984,7 @@ export class VouchersService {
                             ? parts[0]
                             : (parts[1] || parts[0]);
                         const month = f.target_month
-                            ? `${monthNames[f.target_month - 1].slice(0, 3)} ${year}`
+                            ? `${monthNames[f.target_month - 1].slice(0, 3).toUpperCase()} ${year.slice(-2)}`
                             : 'N/A';
                         return {
                             head: `${feeType} INSTALLMENTS (${idx + 1}/${total})`,
@@ -1693,7 +1695,7 @@ export class VouchersService {
      * Like generatePdf() but returns the raw buffer alongside the URL.
      * Used by bulk-voucher jobs to collect individual buffers for merging.
      */
-    async generatePdfBuffer(voucherId: number, paidStamp = false): Promise<{ buffer: Buffer; url: string }> {
+    async generatePdfBuffer(voucherId: number, paidStamp = false, generatedByName?: string): Promise<{ buffer: Buffer; url: string }> {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,
@@ -1703,6 +1705,7 @@ export class VouchersService {
 
         const finalPaidStamp = paidStamp || voucher.status === 'PAID';
         const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        if (generatedByName) voucherData.generatedByName = generatedByName;
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });

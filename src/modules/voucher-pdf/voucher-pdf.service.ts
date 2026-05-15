@@ -47,6 +47,7 @@ export interface VoucherPdfData {
     }>;
     totalAmount: number;
     lateFeeAmount: number;
+    generatedByName?: string;
     /** When true, overlay a PAID stamp on all three challan copies */
     paidStamp?: boolean;
     /** When false, hide the discount column. Default: true */
@@ -105,7 +106,7 @@ export class VoucherPdfService {
                 lateFeeAmount: data.lateFeeAmount,
                 voucherNumber: data.voucherNumber,
                 generatedBy: {
-                    fullName: 'TAFSync Bulk Engine',
+                    fullName: data.generatedByName || 'TAFSync System',
                     timestampStr: new Date().toLocaleString()
                 },
                 bank: {

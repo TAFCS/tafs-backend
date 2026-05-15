@@ -276,6 +276,8 @@ export class BulkVoucherJobsService {
     private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[], createdBy: string) {
         const jobReport: any[] = [];
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
+        const userRecord = await this.prisma.users.findUnique({ where: { id: createdBy }, select: { full_name: true } });
+        const generatedByName = userRecord?.full_name || createdBy;
         this.logger.log(
             `[Job #${jobId}] Starting: ${dto.student_ccs.length} students × ${expectedFeeDates.length} month(s).`,
         );
@@ -351,7 +353,7 @@ export class BulkVoucherJobsService {
                 const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
 
                 const results = await Promise.allSettled(
-                    chunk.map((item) => this.processWorkItem(item, dto, createdBy)),
+                    chunk.map((item) => this.processWorkItem(item, dto, createdBy, generatedByName)),
                 );
 
                 let chunkSuccess = 0;
@@ -473,6 +475,7 @@ export class BulkVoucherJobsService {
         item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string },
         dto: StartBulkJobDto,
         createdBy: string,
+        generatedByName?: string,
     ): Promise<{ buffer: Buffer; url: string; voucher_id: number }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
@@ -517,7 +520,7 @@ export class BulkVoucherJobsService {
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
         });
 
-        const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id);
+        const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
         return { ...pdfResult, voucher_id: voucher.id };
     }
 }
