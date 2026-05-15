@@ -554,7 +554,7 @@ export class VouchersService {
             const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
             const monthSuffix = sf?.target_month != null
-                ? ` ${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()}`
+                ? ` (${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()})`
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
@@ -571,7 +571,7 @@ export class VouchersService {
                 const total = sf.student_fee_installments?.installment_count || group.length;
                 const idx = group.findIndex(f => f.id === sf.id);
                 if (idx !== -1) {
-                    description = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})${monthSuffix}`;
+                    description = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})`;
                 }
             }
 
