@@ -158,6 +158,23 @@ export class AuthService {
       await this.generateTokenPair(payload);
     await this.storeParentRefreshToken(family.id, refreshToken);
 
+    // If FCM token provided on login, save it immediately
+    if (dto.fcmToken) {
+      await this.prisma.fcm_device_tokens.upsert({
+        where: { device_token: dto.fcmToken },
+        update: {
+          family_id: family.id,
+          device_os: dto.deviceType,
+          last_active_at: new Date(),
+        },
+        create: {
+          family_id: family.id,
+          device_token: dto.fcmToken,
+          device_os: dto.deviceType,
+        },
+      }).catch(e => console.error('Failed to save FCM token on login:', e.message));
+    }
+
     return {
       accessToken,
       refreshToken,
@@ -365,6 +382,23 @@ export class AuthService {
     const { accessToken, refreshToken } =
       await this.generateTokenPair(payload);
     await this.storeParentRefreshToken(family.id, refreshToken);
+
+    // If FCM token provided on registration, save it immediately
+    if (dto.fcmToken) {
+      await this.prisma.fcm_device_tokens.upsert({
+        where: { device_token: dto.fcmToken },
+        update: {
+          family_id: family.id,
+          device_os: dto.deviceType,
+          last_active_at: new Date(),
+        },
+        create: {
+          family_id: family.id,
+          device_token: dto.fcmToken,
+          device_os: dto.deviceType,
+        },
+      }).catch(e => console.error('Failed to save FCM token on registration:', e.message));
+    }
 
     return {
       accessToken,

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MinLength, IsEmail } from 'class-validator';
+import { IsString, IsNotEmpty, MinLength, IsEmail, IsOptional } from 'class-validator';
 
 export class LoginDto {
   @IsString()
@@ -9,6 +9,14 @@ export class LoginDto {
   @IsNotEmpty()
   @MinLength(8)
   password: string;
+
+  @IsOptional()
+  @IsString()
+  fcmToken?: string;
+
+  @IsOptional()
+  @IsString()
+  deviceType?: string;
 }
 
 export class RefreshTokenDto {
@@ -35,4 +43,12 @@ export class RegisterParentDto {
   @IsNotEmpty()
   @MinLength(8)
   password: string;
+
+  @IsOptional()
+  @IsString()
+  fcmToken?: string;
+
+  @IsOptional()
+  @IsString()
+  deviceType?: string;
 }
