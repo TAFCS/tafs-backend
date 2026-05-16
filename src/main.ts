@@ -8,9 +8,19 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  const redisIoAdapter = new RedisIoAdapter(app);
+  try {
+    await redisIoAdapter.connectToRedis();
+    app.useWebSocketAdapter(redisIoAdapter);
+    console.log('✅ Redis Socket.io adapter connected');
+  } catch (err) {
+    console.error('❌ Failed to connect Redis Socket.io adapter, falling back to default adapter:', err.message);
+  }
 
   app.setGlobalPrefix('api/v1');
 
