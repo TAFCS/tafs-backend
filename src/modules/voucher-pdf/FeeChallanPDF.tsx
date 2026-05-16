@@ -83,8 +83,8 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     logo: {
-        width: 25,
-        height: 25,
+        width: 36,
+        height: 36,
         marginBottom: 2,
     },
     schoolInfo: {
@@ -118,13 +118,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     label: {
-        fontSize: 5,
+        fontSize: 6,
         textTransform: 'uppercase',
         color: '#333333',
         fontWeight: 'bold',
     },
     value: {
-        fontSize: 7,
+        fontSize: 8,
         fontWeight: 'bold',
         color: '#1a1a1a',
     },
@@ -172,8 +172,8 @@ const styles = StyleSheet.create({
         borderTopWidth: 0.5,
         borderTopColor: '#333333',
     },
-    colDesc: { flex: 3, fontSize: 6.5 },
-    colAmount: { flex: 1, textAlign: 'right', fontSize: 6.5 },
+    colDesc: { flex: 3, fontSize: 7.5 },
+    colAmount: { flex: 1, textAlign: 'right', fontSize: 7.5 },
     sectionLabelRow: {
         backgroundColor: '#f8fafc',
         paddingVertical: 2,
@@ -490,13 +490,9 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={styles.studentSection}>
             <View style={styles.studentCol}>
-                <View style={{ flex: 2 }}>
+                <View style={{ flex: 3.5 }}>
                     <Text style={styles.label}>Student Name</Text>
                     <Text style={styles.value}>{student.student_full_name}</Text>
-                </View>
-                <View style={{ flex: 1.5 }}>
-                    <Text style={styles.label}>Father's Name</Text>
-                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
                 </View>
                 <View style={{ flex: 0.5, alignItems: 'flex-end' }}>
                     <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
@@ -540,8 +536,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 </View>
             </View>
             <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
-                <Text style={{ fontSize: 6, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                <Text style={{ fontSize: 6, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
+                <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
             </View>
         </View>
 
@@ -643,7 +639,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
                         <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
                             <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
-                            <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
+                            <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 9 }]}>
                                 {Math.round(totalAmount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                             </Text>
                         </View>
@@ -660,7 +656,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
             <View style={[styles.totalRow, { marginTop: 0, paddingTop: 2 }]}>
                 <Text style={[styles.colDesc, { fontWeight: 'bold', color: '#e11d48' }]}>PAYABLE AFTER DUE DATE</Text>
-                <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8, color: '#e11d48' }]}>
+                <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 9, color: '#e11d48' }]}>
                     {Math.round(totalAmount + (details.applyLateFee ? (details.lateFeeAmount || 1000) : 0)).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                 </Text>
             </View>
