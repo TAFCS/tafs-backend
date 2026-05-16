@@ -1705,7 +1705,7 @@ export class VouchersService {
 
         const finalPaidStamp = paidStamp || voucher.status === 'PAID';
         const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
-        if (generatedByName) voucherData.generatedByName = generatedByName;
+        if (generatedByName) (voucherData as any).generatedByName = generatedByName;
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
