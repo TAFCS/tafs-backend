@@ -157,7 +157,9 @@ export class VouchersService {
                     due_date: dueDate,
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
-                    academic_year: dto.academic_year,
+                    academic_year: (isSpecial(dto.class_id) && feeDate)
+                        ? deriveAcademicYear(feeDate.toISOString(), dto.class_id ?? undefined)
+                        : dto.academic_year,
                     month: dto.month ?? null,
                     fee_date: feeDate,
                     total_payable_before_due: 0,
@@ -546,15 +548,21 @@ export class VouchersService {
                     baseDescription: presetTitle,
                     feeDate: sf?.fee_date?.toISOString().split('T')[0],
                     target_month: sf?.target_month,
-                    academic_year: sf?.academic_year,
+                    academic_year: (isSpecial(voucher.class_id) && sf?.fee_date)
+                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                        : sf?.academic_year,
                 };
             }
             // ── End discount row ────────────────────────────────────────────
 
             const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
+            const sfFeeDate = h.student_fees?.fee_date;
+            const effectiveAcadYear = (isSpecial(voucher.class_id) && sfFeeDate)
+                ? deriveAcademicYear(new Date(sfFeeDate).toISOString(), voucher.class_id ?? undefined)
+                : (sf?.academic_year || '');
             const monthSuffix = sf?.target_month != null
-                ? ` (${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()})`
+                ? ` (${getMonthYearLabel(sf.target_month, effectiveAcadYear, voucher.class_id).toUpperCase()})`
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
@@ -619,7 +627,7 @@ export class VouchersService {
                 isSurcharge,
                 feeDate: h.student_fees?.fee_date?.toISOString().split('T')[0],
                 target_month: h.student_fees?.target_month,
-                academic_year: h.student_fees?.academic_year,
+                academic_year: effectiveAcadYear || h.student_fees?.academic_year,
             };
         });
 
@@ -846,8 +854,11 @@ export class VouchersService {
 
                 const feeTypeDesc = sf?.fee_types?.description || 'Fee';
                 const prefixStr = sf.description_prefix ? `${sf.description_prefix} ` : '';
+                const sfEffectiveYear = (isSpecial(voucher.class_id) && sf?.fee_date)
+                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                    : sf?.academic_year;
                 const monthSuffix = sf?.target_month != null
-                    ? ` ${getMonthYearLabel(sf.target_month, sf.academic_year, voucher.class_id).toUpperCase()}`
+                    ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, voucher.class_id).toUpperCase()}`
                     : '';
 
                 const head = `${prefixStr}${feeTypeDesc}${monthSuffix}`;
@@ -916,7 +927,9 @@ export class VouchersService {
                     sectionName: s.sections?.description || 'N/A',
                 })),
                 campusName: voucher.campuses?.campus_name || 'Main Campus',
-                academicYear: voucher.academic_year || 'N/A',
+                academicYear: (isSpecial(voucher.class_id) && voucher.fee_date)
+                    ? deriveAcademicYear(new Date(voucher.fee_date).toISOString(), voucher.class_id ?? undefined)
+                    : (voucher.academic_year || 'N/A'),
                 month: monthLabel,
                 issueDate: voucher.issue_date.toISOString().split('T')[0],
                 dueDate: voucher.due_date.toISOString().split('T')[0],
