@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
