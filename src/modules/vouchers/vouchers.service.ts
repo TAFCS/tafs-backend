@@ -292,7 +292,7 @@ export class VouchersService {
                     total_payable_before_due: totalBeforeDueWithSurcharge,
                     total_payable_after_due: totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
-                    voucher_number: toMeezanVoucherNumber(newVoucher.id, issueDate),
+                    voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
                 },
             });
 
@@ -1730,11 +1730,11 @@ export class VouchersService {
                         const { buffer } = await this.generatePdfBuffer(id);
                         const voucher = await this.prisma.vouchers.findUnique({
                             where: { id },
-                            select: { student_id: true, academic_year: true, month: true }
+                            select: { student_id: true, academic_year: true, month: true, fee_date: true, students: { select: { gr_number: true } } }
                         });
-                        const monthNamesShort = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-                        const monthStr = voucher?.month ? monthNamesShort[voucher.month - 1] : 'UNK';
-                        const filename = `Voucher-${id}-CC${voucher?.student_id}-${voucher?.academic_year}-${monthStr}.pdf`;
+                        const feeDateStr = voucher?.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : 'UNKNOWN';
+                        const grNumber = voucher?.students?.gr_number || `CC${voucher?.student_id}`;
+                        const filename = `${feeDateStr}-${grNumber}.pdf`;
                         archive.append(buffer, { name: filename });
                     } catch (err) {
                         this.logger.error(`Failed to add voucher ${id} to zip: ${err.message}`);
@@ -2160,7 +2160,7 @@ export class VouchersService {
             });
             await tx.vouchers.update({
                 where: { id: paid.id },
-                data: { voucher_number: toMeezanVoucherNumber(paid.id, new Date(original.issue_date)) } as any,
+                data: { voucher_number: toMeezanVoucherNumber(paid.id, targetFeeDate ? new Date(targetFeeDate) : new Date(original.issue_date)) } as any,
             });
 
             const unpaid = await tx.vouchers.create({
@@ -2177,7 +2177,7 @@ export class VouchersService {
             });
             await tx.vouchers.update({
                 where: { id: unpaid.id },
-                data: { voucher_number: toMeezanVoucherNumber(unpaid.id, issueDate) } as any,
+                data: { voucher_number: toMeezanVoucherNumber(unpaid.id, targetFeeDate ? new Date(targetFeeDate) : issueDate) } as any,
             });
 
             // ── Step 7: Create voucher_heads.

@@ -494,7 +494,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     <Text style={styles.label}>Student Name</Text>
                     <Text style={styles.value}>{student.student_full_name}</Text>
                 </View>
-                <View style={{ flex: 0.5, alignItems: 'flex-end' }}>
+                <View style={{ minWidth: 42, flexShrink: 0, alignItems: 'flex-end' }}>
                     <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
                     <Text style={[styles.value, { textAlign: 'right' }]}>{student.gender || 'N/A'}</Text>
                 </View>
@@ -617,7 +617,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                     {hasArrearSurcharge && (
                                         <>
                                             <View style={styles.tableRow}>
-                                                <Text style={styles.colDesc}>LATE PAYMENT SURCHARGE</Text>
+                                                <Text style={styles.colDesc}>PREVIOUS MONTHS' LATE PAYMENT SURCHARGE</Text>
                                                 <Text style={styles.colAmount}>
                                                     {Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                                 </Text>
