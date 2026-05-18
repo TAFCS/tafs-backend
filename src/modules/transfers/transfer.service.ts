@@ -76,7 +76,7 @@ export class TransferService {
         .replace(/\s+/g, ' ')
         .trim()
         .toUpperCase();
-      
+
       // 2. Base keys using spaces for consistency (e.g., 'SR I', 'O I')
       const baseKeys = [
         'SR III', 'SR II', 'SR I',
@@ -94,14 +94,14 @@ export class TransferService {
     };
 
     const mapping: Record<string, string[]> = {
-      'SR I': ['VI'],
-      'VI': ['SR I'],
-      'SR II': ['VII'],
-      'VII': ['SR II'],
-      'SR III': ['VIII'],
-      'VIII': ['SR III'],
-      'O I': ['IX'],
-      'IX': ['O I'],
+      'SR I': ['VI', 'VII'],
+      'VI': ['SR I', 'SR II'],
+      'SR II': ['VII', 'VIII'],
+      'VII': ['SR II', 'SR III'],
+      'SR III': ['VIII', 'IX'],
+      'VIII': ['SR III', 'O I'],
+      'O I': ['IX', 'X'],
+      'IX': ['O I', 'O II'],
       'O II': ['X'],
       'O III': ['X'],
       'X': ['O II', 'O III'],
