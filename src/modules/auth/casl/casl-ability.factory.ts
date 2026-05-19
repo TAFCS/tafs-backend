@@ -38,27 +38,30 @@ export class CaslAbilityFactory {
       const caslAction = (action === 'view') ? Action.Read : Action.Manage;
 
       // Map permission resource keys to CASL Subjects
-      let subject: AppSubjects | null = null;
+      let subjects: AppSubjects[] = [];
       switch (resource) {
-        case 'campuses': subject = 'Campus'; break;
-        case 'classes': subject = 'Class'; break;
-        case 'sections': subject = 'Section'; break;
+        case 'campuses': subjects = ['Campus']; break;
+        case 'classes': subjects = ['Class']; break;
+        case 'sections': subjects = ['Section']; break;
         case 'registration':
         case 'enrollment':
-        case 'directory': subject = 'Student'; break;
-        case 'families': subject = 'Family'; break;
-        case 'fee_types': subject = 'Fee'; break;
-        case 'classwise_schedule': subject = 'ClassFeeSchedule'; break;
-        case 'studentwise_schedule': subject = 'StudentFee'; break;
-        case 'vouchers': subject = 'Voucher'; break;
-        case 'deposits': subject = 'Challan'; break; // 'deposits' UI uses Challan subject in guards
-        case 'banks': subject = 'Fee'; break; // Banks are part of fee admin
-        case 'users': subject = 'User'; break;
-        case 'permissions': subject = 'Permission'; break;
-        case 'analytics': subject = 'all'; break;
+        case 'directory': subjects = ['Student']; break;
+        case 'families': subjects = ['Family']; break;
+        case 'fee_types': subjects = ['Fee']; break;
+        case 'classwise_schedule': subjects = ['ClassFeeSchedule']; break;
+        case 'studentwise_schedule': subjects = ['StudentFee']; break;
+        case 'vouchers': subjects = ['Voucher']; break;
+        case 'deposits': subjects = ['Challan']; break; // 'deposits' UI uses Challan subject in guards
+        case 'banks': subjects = ['Fee']; break; // Banks are part of fee admin
+        case 'users': subjects = ['User']; break;
+        case 'permissions': subjects = ['Permission']; break;
+        case 'analytics': subjects = ['all']; break;
+        case 'employees': subjects = ['Employee']; break;
+        case 'policies': subjects = ['Policy', 'Calendar', 'ClassAttendanceMode']; break;
+        case 'calendar': subjects = ['Calendar']; break;
       }
 
-      if (subject) {
+      subjects.forEach((subject) => {
         // Apply campus scoping for non-Super Admins
         const isAdminOrPrincipal = ([StaffRole.CAMPUS_ADMIN, StaffRole.PRINCIPAL] as StaffRole[]).includes(user.role);
         
@@ -68,7 +71,7 @@ export class CaslAbilityFactory {
         } else {
            can(caslAction, subject);
         }
-      }
+      });
     });
 
     return build();

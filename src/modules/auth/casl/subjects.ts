@@ -15,4 +15,8 @@ export type AppSubjects =
   | 'Section'
   | 'StudentFee'
   | 'Voucher'
+  | 'Employee'
+  | 'Policy'
+  | 'Calendar'
+  | 'ClassAttendanceMode'
   | 'all';

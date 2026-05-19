@@ -32,6 +32,7 @@ import { DiscountPresetsModule } from './modules/discount-presets/discount-prese
 import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { BackupsModule } from './modules/backups/backups.module';
+import { HrModule } from './modules/hr/hr.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { BackupsModule } from './modules/backups/backups.module';
     ParentChangeRequestsModule,
     ChatModule,
     BackupsModule,
+    HrModule,
   ],
   controllers: [AppController],
   providers: [AppService],

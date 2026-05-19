@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-// Triggering reload to pick up .env changes
+// Triggering reload to connect to Redis service
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
@@ -18,8 +18,9 @@ async function bootstrap() {
     await redisIoAdapter.connectToRedis();
     app.useWebSocketAdapter(redisIoAdapter);
     console.log('✅ Redis Socket.io adapter connected');
-  } catch (err) {
-    console.error('❌ Failed to connect Redis Socket.io adapter, falling back to default adapter:', err.message);
+  } catch (err: any) {
+    const errMsg = err?.message || (err?.errors ? err.errors.map((e: any) => e.message).join(', ') : String(err));
+    console.error('❌ Failed to connect Redis Socket.io adapter, falling back to default adapter:', errMsg);
   }
 
   app.setGlobalPrefix('api/v1');

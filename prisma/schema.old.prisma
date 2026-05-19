@@ -96,18 +96,16 @@ model campus_sections {
 }
 
 model campuses {
-  id                     Int                      @id @default(autoincrement())
-  campus_code            String                   @unique @db.VarChar(10)
-  campus_name            String                   @db.VarChar(100)
-  address                String?
-  academic_calendar_days academic_calendar_days[]
-  campus_classes         campus_classes[]
-  campus_sections        campus_sections[]
-  class_fee_schedule     class_fee_schedule[]
-  hr_policy_sets         hr_policy_sets[]
-  students               students[]
-  users                  users[]
-  vouchers               vouchers[]
+  id                 Int                  @id @default(autoincrement())
+  campus_code        String               @unique @db.VarChar(10)
+  campus_name        String               @db.VarChar(100)
+  address            String?
+  campus_classes     campus_classes[]
+  campus_sections    campus_sections[]
+  class_fee_schedule class_fee_schedule[]
+  students           students[]
+  users              users[]
+  vouchers           vouchers[]
 }
 
 model class_fee_schedule {
@@ -125,18 +123,17 @@ model class_fee_schedule {
 }
 
 model classes {
-  id                     Int                     @id @default(autoincrement())
-  description            String                  @db.VarChar(255)
-  class_code             String                  @db.VarChar(10)
-  academic_system        String                  @db.VarChar(20)
-  term_start_month       Int                     @default(8)
-  campus_classes         campus_classes[]
-  campus_sections        campus_sections[]
-  class_attendance_modes class_attendance_modes?
-  class_fee_schedule     class_fee_schedule[]
-  students               students[]
-  graduated_students     students[]              @relation("GraduatedFromClass")
-  vouchers               vouchers[]
+  id                 Int                  @id @default(autoincrement())
+  description        String               @db.VarChar(255)
+  class_code         String               @db.VarChar(10)
+  academic_system    String               @db.VarChar(20)
+  term_start_month   Int                  @default(8)
+  campus_classes     campus_classes[]
+  campus_sections    campus_sections[]
+  class_fee_schedule class_fee_schedule[]
+  students           students[]
+  graduated_students students[]           @relation("GraduatedFromClass")
+  vouchers           vouchers[]
 }
 
 model deposit_allocations {
@@ -568,7 +565,6 @@ model users {
   created_at                DateTime                 @default(now()) @db.Timestamp(6)
   updated_at                DateTime                 @updatedAt
   deleted_at                DateTime?                @db.Timestamp(6)
-  employee_profile          employee_profiles?
   processed_change_requests parent_change_requests[]
   granted_overrides         user_permissions[]       @relation("granted_by_rel")
   user_permissions          user_permissions[]       @relation("user_permissions_link")
@@ -707,86 +703,6 @@ model complaints {
   file_url    String?
   status      String   @default("open") @db.VarChar(50)
   created_at  DateTime @default(now()) @db.Timestamp(6)
-}
-
-model departments {
-  id                Int                 @id @default(autoincrement())
-  name              String              @db.VarChar(100)
-  description       String?             @db.VarChar(255)
-  designations      designations[]
-  employee_profiles employee_profiles[]
-}
-
-model designations {
-  id                Int                 @id @default(autoincrement())
-  department_id     Int
-  title             String              @db.VarChar(100)
-  description       String?             @db.VarChar(255)
-  departments       departments         @relation(fields: [department_id], references: [id], onDelete: Cascade)
-  employee_profiles employee_profiles[]
-}
-
-model employee_profiles {
-  id                   Int                 @id @default(autoincrement())
-  user_id              String?             @unique
-  cnic                 String?             @unique @db.VarChar(20)
-  join_date            DateTime?           @db.Date
-  employment_type      String?             @db.VarChar(50)
-  department_id        Int?
-  designation_id       Int?
-  reporting_manager_id Int?
-  departments          departments?        @relation(fields: [department_id], references: [id])
-  designations         designations?       @relation(fields: [designation_id], references: [id])
-  reporting_manager    employee_profiles?  @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
-  subordinates         employee_profiles[] @relation("ReportingManager")
-  users                users?              @relation(fields: [user_id], references: [id])
-}
-
-model academic_calendar_days {
-  id          Int      @id @default(autoincrement())
-  campus_id   Int
-  date        DateTime @db.Date
-  day_type    String   @db.VarChar(20)
-  description String?  @db.VarChar(255)
-  campuses    campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-
-  @@unique([campus_id, date])
-}
-
-model class_attendance_modes {
-  id       Int     @id @default(autoincrement())
-  class_id Int     @unique
-  mode     String  @default("BIOMETRIC_DAILY") @db.VarChar(50)
-  classes  classes @relation(fields: [class_id], references: [id], onDelete: Cascade)
-}
-
-model hr_policy_sets {
-  id              Int               @id @default(autoincrement())
-  campus_id       Int
-  academic_year   String            @db.VarChar(10)
-  effective_from  DateTime          @db.Date
-  description     String?           @db.VarChar(255)
-  hr_policy_rules hr_policy_rules[]
-  campuses        campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-}
-
-model hr_policy_rules {
-  id             Int            @id @default(autoincrement())
-  policy_set_id  Int
-  rule_type      String         @db.VarChar(100)
-  value_json     Json           @default("{}")
-  applies_to     String?        @db.VarChar(50)
-  description    String?        @db.VarChar(255)
-  hr_policy_sets hr_policy_sets @relation(fields: [policy_set_id], references: [id], onDelete: Cascade)
-
-  @@unique([policy_set_id, rule_type])
-}
-
-model leave_types {
-  id          Int     @id @default(autoincrement())
-  name        String  @db.VarChar(100)
-  description String? @db.VarChar(255)
-  is_paid     Boolean @default(true)
 }
 
 enum BulkJobStatus {

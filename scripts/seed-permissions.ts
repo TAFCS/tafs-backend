@@ -51,6 +51,20 @@ const permissionsList = [
     { key: 'system.permissions.manage', module: 'System Administration', description: 'Manage user permissions' },
     { key: 'system.analytics.view', module: 'System Administration', description: 'View dashboard analytics' },
     { key: 'system.analytics.view_amounts', module: 'System Administration', description: 'View financial amounts in analytics' },
+
+    // HR & Attendance
+    { key: 'hr.employees.view', module: 'HR & Attendance', description: 'View employee directory' },
+    { key: 'hr.employees.edit', module: 'HR & Attendance', description: 'Manage employee profiles' },
+    { key: 'hr.policies.manage', module: 'HR & Attendance', description: 'Manage HR policies and calendar' },
+    { key: 'hr.leave.apply', module: 'HR & Attendance', description: 'Apply for leave' },
+    { key: 'hr.leave.approve', module: 'HR & Attendance', description: 'Approve leave requests' },
+    { key: 'attendance.staff.mark', module: 'HR & Attendance', description: 'Mark staff daily attendance' },
+    { key: 'attendance.reports.view', module: 'HR & Attendance', description: 'View attendance reports' },
+    { key: 'attendance.events.import', module: 'HR & Attendance', description: 'Import attendance events' },
+    { key: 'attendance.student.biometric.view', module: 'HR & Attendance', description: 'View student biometric logs' },
+    { key: 'attendance.student.rollcall.mark', module: 'HR & Attendance', description: 'Mark student roll call attendance' },
+    { key: 'attendance.student.rollcall.view', module: 'HR & Attendance', description: 'View student roll call attendance' },
+    { key: 'attendance.student.edit_locked', module: 'HR & Attendance', description: 'Edit locked student attendance records' },
 ];
 
 async function main() {
@@ -80,23 +94,27 @@ async function main() {
             'students.directory.edit', 'students.families.edit', // Principal can usually edit kids
             'fee_admin.fee_types.view', 'fee_admin.classwise_schedule.view', 'fee_admin.studentwise_schedule.view', 'fee_admin.bundles.view',
             'finance.vouchers.view', 'finance.deposits.view', 'finance.banks.view',
-            'system.analytics.view', 'system.analytics.view_amounts'
+            'system.analytics.view', 'system.analytics.view_amounts',
+            'hr.employees.view', 'hr.leave.apply', 'hr.leave.approve', 'attendance.reports.view',
+            'attendance.student.biometric.view', 'attendance.student.rollcall.view', 'attendance.student.edit_locked'
         ],
         FINANCE_CLERK: [
             'students.directory.view', 'students.families.view',
             'finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 
             'finance.vouchers.view', 'finance.vouchers.download', 'finance.vouchers.split_partial',
-            'finance.deposits.record', 'finance.deposits.view', 'finance.banks.view'
+            'finance.deposits.record', 'finance.deposits.view', 'finance.banks.view',
+            'hr.leave.apply'
         ],
         RECEPTIONIST: [
             'students.registration.create', 'students.directory.view', 'students.families.view',
-            'finance.vouchers.view'
+            'finance.vouchers.view', 'hr.leave.apply'
         ],
         TEACHER: [
-            'students.directory.view', 'system.analytics.view'
+            'students.directory.view', 'system.analytics.view', 'hr.leave.apply',
+            'attendance.student.rollcall.mark', 'attendance.student.rollcall.view'
         ],
         STAFF_EDITOR: [
-            'students.directory.view', 'students.directory.edit', 'students.registration.view'
+            'students.directory.view', 'students.directory.edit', 'students.registration.view', 'hr.leave.apply'
         ],
     };
 
