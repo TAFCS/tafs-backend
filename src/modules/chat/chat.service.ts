@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import * as path from 'path';
 
 @Injectable()
@@ -227,6 +228,108 @@ export class ChatService {
     }
 
     return conversation;
+  }
+
+  private conversationInclude = {
+    families: {
+      include: {
+        students: {
+          where: { deleted_at: null },
+          include: {
+            student_guardians: {
+              select: {
+                is_primary_contact: true,
+                relationship: true,
+                guardians: {
+                  select: {
+                    full_name: true,
+                    photo_url: true,
+                    cnic_pic_url: true,
+                    passport_front_url: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  async findMessageByTempId(familyId: number, tempId: string) {
+    const conv = await this.prisma.chat_conversations.findUnique({
+      where: { family_id: familyId },
+    });
+    if (!conv) return null;
+
+    const recent = await this.prisma.chat_messages.findMany({
+      where: {
+        conversation_id: conv.id,
+        sender_type: 'GUARDIAN',
+      },
+      orderBy: { created_at: 'desc' },
+      take: 100,
+    });
+
+    return (
+      recent.find((m) => {
+        const meta = m.media_metadata as Record<string, unknown> | null;
+        return meta?.tempId === tempId;
+      }) ?? null
+    );
+  }
+
+  async createMessage(
+    familyId: number,
+    data: {
+      senderType: ChatSenderType;
+      messageType: ChatMessageType;
+      content: string;
+      mediaMetadata?: Record<string, unknown>;
+    },
+  ) {
+    const tempId = data.mediaMetadata?.tempId as string | undefined;
+    if (tempId) {
+      const existing = await this.findMessageByTempId(familyId, tempId);
+      if (existing) {
+        const conv = await this.prisma.chat_conversations.findUnique({
+          where: { family_id: familyId },
+          include: this.conversationInclude,
+        });
+        return { newMessage: existing, updatedConv: conv!, isDuplicate: true };
+      }
+    }
+
+    const conv = await this.getOrCreateConversation(familyId);
+
+    const [newMessage, updatedConv] = await this.prisma.$transaction([
+      this.prisma.chat_messages.create({
+        data: {
+          conversation_id: conv.id,
+          sender_type: data.senderType,
+          message_type: data.messageType,
+          content: data.content,
+          media_metadata: (data.mediaMetadata ?? undefined) as object | undefined,
+        },
+      }),
+      this.prisma.chat_conversations.update({
+        where: { id: conv.id },
+        data: {
+          last_message_at: new Date(),
+          last_message_snippet:
+            data.messageType === 'TEXT'
+              ? data.content.substring(0, 50)
+              : `[${data.messageType}]`,
+          unread_by_admin:
+            data.senderType === 'GUARDIAN' ? { increment: 1 } : undefined,
+          unread_by_parent:
+            data.senderType === 'ADMIN' ? { increment: 1 } : undefined,
+        },
+        include: this.conversationInclude,
+      }),
+    ]);
+
+    return { newMessage, updatedConv, isDuplicate: false };
   }
 
   async markAsRead(familyId: number, role: 'ADMIN' | 'GUARDIAN') {

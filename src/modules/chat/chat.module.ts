@@ -11,6 +11,6 @@ import { FcmService } from './fcm.service';
   imports: [PrismaModule, StorageModule, AuthModule],
   providers: [ChatService, ChatGateway, FcmService],
   controllers: [ChatController],
-  exports: [ChatService]
+  exports: [ChatService, ChatGateway],
 })
 export class ChatModule {}

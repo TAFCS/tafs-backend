@@ -157,99 +157,62 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return match ? match[1] : null;
   }
 
+  async broadcastNewMessage(
+    familyId: number,
+    newMessage: { id: string; message_type: ChatMessageType; content: string; conversation_id: string },
+    updatedConv: any,
+    senderType: ChatSenderType,
+    messageType: ChatMessageType,
+    content: string,
+  ) {
+    const formattedConv = this.chatService.formatConversation(updatedConv);
+    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
+    this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
+
+    if (senderType === 'ADMIN') {
+      const roomName = `family_chat_${familyId}`;
+      const room = this.server.sockets.adapter.rooms.get(roomName);
+      const isViewingChat = room && room.size > 0;
+
+      if (!isViewingChat) {
+        await this.fcmService.sendToFamily(
+          familyId,
+          'New Message from TAFS',
+          messageType === 'TEXT' ? content : `New ${messageType.toLowerCase()} received`,
+          {
+            type: 'CHAT_MESSAGE',
+            conversationId: updatedConv.id.toString(),
+            messageId: newMessage.id,
+          },
+        );
+      }
+    }
+  }
+
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { familyId: any; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any },
   ) {
-    console.log('[ChatGateway] Received sendMessage:', data);
     const familyId = Number(data.familyId);
-    // 1. Ensure conversation exists
-    const conv = await this.chatService.getOrCreateConversation(familyId);
+    const { newMessage, updatedConv, isDuplicate } = await this.chatService.createMessage(familyId, {
+      senderType: data.senderType,
+      messageType: data.messageType,
+      content: data.content,
+      mediaMetadata: data.mediaMetadata,
+    });
 
-    // 2. Save Message via Prisma Transaction
-    const [newMessage, updatedConv] = await this.prisma.$transaction([
-      this.prisma.chat_messages.create({
-        data: {
-          conversation_id: conv.id,
-          sender_type: data.senderType,
-          message_type: data.messageType,
-          content: data.content,
-          media_metadata: data.mediaMetadata,
-        },
-      }),
-      this.prisma.chat_conversations.update({
-        where: { id: conv.id },
-        data: {
-          last_message_at: new Date(),
-          last_message_snippet: data.messageType === 'TEXT' ? data.content.substring(0, 50) : `[${data.messageType}]`,
-          unread_by_admin: data.senderType === 'GUARDIAN' ? { increment: 1 } : undefined,
-          unread_by_parent: data.senderType === 'ADMIN' ? { increment: 1 } : undefined,
-        },
-        include: {
-          families: {
-            include: {
-              students: {
-                where: { deleted_at: null },
-                include: {
-                  student_guardians: {
-                    select: {
-                      is_primary_contact: true,
-                      relationship: true,
-                      guardians: { 
-                        select: { 
-                          full_name: true, 
-                          photo_url: true,
-                          cnic_pic_url: true,
-                          passport_front_url: true
-                        } 
-                      } 
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }),
-    ]);
-
-    // 3. Broadcast to Admin Inbox and Family Room
-    const formattedConv = this.chatService.formatConversation(updatedConv);
-    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
-    
-    // Always broadcast to the global "app" room so the app gets the data even if not on chat screen
-    this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
-
-    // 4. Send Push Notification to Family if sender is ADMIN
-    if (data.senderType === 'ADMIN') {
-      const roomName = `family_chat_${familyId}`;
-      const room = this.server.sockets.adapter.rooms.get(roomName);
-      const isViewingChat = room && room.size > 0;
-      
-      console.log(`[ChatGateway] Presence Check for Family ${familyId}:`, {
-        roomName,
-        activeViewers: room?.size || 0,
-        isViewingChat
-      });
-
-      if (!isViewingChat) {
-        console.log(`[ChatGateway] User not in chat room. Attempting push notification...`);
-        await this.fcmService.sendToFamily(
-          familyId,
-          'New Message from TAFS',
-          data.messageType === 'TEXT' ? data.content : `New ${data.messageType.toLowerCase()} received`,
-          { 
-            type: 'CHAT_MESSAGE', 
-            conversationId: conv.id.toString(),
-            messageId: newMessage.id
-          }
-        );
-      } else {
-        console.log(`[ChatGateway] User is actively viewing chat. Skipping push notification.`);
-      }
+    if (!isDuplicate) {
+      await this.broadcastNewMessage(
+      familyId,
+      newMessage,
+      updatedConv,
+      data.senderType,
+      data.messageType,
+      data.content,
+      );
     }
-    
+
     return newMessage;
   }
 

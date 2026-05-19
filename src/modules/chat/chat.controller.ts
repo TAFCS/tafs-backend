@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Param, Query, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException, Res } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, Body, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException, Res } from '@nestjs/common';
 import { ChatService } from './chat.service';
+import { ChatGateway } from './chat.gateway';
+import { ChatMessageType } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -10,7 +12,10 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 @ApiBearerAuth()
 @Controller('chat')
 export class ChatController {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly chatGateway: ChatGateway,
+  ) {}
 
   @Get('inbox')
   @UseGuards(JwtStaffGuard)
@@ -67,6 +72,34 @@ export class ChatController {
     }
     console.log(`[ChatController] Received file: ${file.originalname} (${file.mimetype}, ${file.size} bytes)`);
     return this.chatService.uploadMedia(file);
+  }
+
+  @Post('messages')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Parent sends a chat message (REST fallback, idempotent via mediaMetadata.tempId)' })
+  async sendParentMessage(
+    @CurrentUser() user: any,
+    @Body() body: { messageType: ChatMessageType; content: string; mediaMetadata?: Record<string, unknown> },
+  ) {
+    const { newMessage, updatedConv, isDuplicate } = await this.chatService.createMessage(user.familyId, {
+      senderType: 'GUARDIAN',
+      messageType: body.messageType,
+      content: body.content,
+      mediaMetadata: body.mediaMetadata,
+    });
+
+    if (!isDuplicate) {
+      await this.chatGateway.broadcastNewMessage(
+        user.familyId,
+        newMessage,
+        updatedConv,
+        'GUARDIAN',
+        body.messageType,
+        body.content,
+      );
+    }
+
+    return newMessage;
   }
 
   @Post('mark-read')
