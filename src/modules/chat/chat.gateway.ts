@@ -65,7 +65,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.join('admin_inbox');
         console.log(`[ChatGateway] Staff connected to admin_inbox: ${client.id}`);
       } else if (payload.userType === 'PARENT') {
-        const familyId = payload.familyId || payload.sub;
+        const familyId = Number(payload.familyId || payload.sub);
+        if (isNaN(familyId)) {
+          throw new Error('Invalid familyId');
+        }
         client.join(`family_app_${familyId}`);
         client.join('all_parents');
         
@@ -83,7 +86,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             client.join(`section_${student.sections.description}`);
           }
         }
-        
         
         // Track presence
         if (!this.familySockets.has(familyId)) {
@@ -132,19 +134,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('enterChat')
   handleEnterChat(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: number },
+    @MessageBody() data: { familyId: any },
   ) {
-    client.join(`family_chat_${data.familyId}`);
-    console.log(`[ChatGateway] Socket ${client.id} entered chat for family ${data.familyId}`);
+    const familyId = Number(data.familyId);
+    client.join(`family_chat_${familyId}`);
+    console.log(`[ChatGateway] Socket ${client.id} entered chat for family ${familyId}`);
   }
 
   @SubscribeMessage('leaveChat')
   handleLeaveChat(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: number },
+    @MessageBody() data: { familyId: any },
   ) {
-    client.leave(`family_chat_${data.familyId}`);
-    console.log(`[ChatGateway] Socket ${client.id} left chat for family ${data.familyId}`);
+    const familyId = Number(data.familyId);
+    client.leave(`family_chat_${familyId}`);
+    console.log(`[ChatGateway] Socket ${client.id} left chat for family ${familyId}`);
   }
 
   private extractTokenFromCookie(cookieString?: string): string | null {
@@ -156,11 +160,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: number; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any },
+    @MessageBody() data: { familyId: any; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any },
   ) {
     console.log('[ChatGateway] Received sendMessage:', data);
+    const familyId = Number(data.familyId);
     // 1. Ensure conversation exists
-    const conv = await this.chatService.getOrCreateConversation(data.familyId);
+    const conv = await this.chatService.getOrCreateConversation(familyId);
 
     // 2. Save Message via Prisma Transaction
     const [newMessage, updatedConv] = await this.prisma.$transaction([
@@ -214,15 +219,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
     
     // Always broadcast to the global "app" room so the app gets the data even if not on chat screen
-    this.server.to(`family_app_${data.familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
+    this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
 
     // 4. Send Push Notification to Family if sender is ADMIN
     if (data.senderType === 'ADMIN') {
-      const roomName = `family_chat_${data.familyId}`;
+      const roomName = `family_chat_${familyId}`;
       const room = this.server.sockets.adapter.rooms.get(roomName);
       const isViewingChat = room && room.size > 0;
       
-      console.log(`[ChatGateway] Presence Check for Family ${data.familyId}:`, {
+      console.log(`[ChatGateway] Presence Check for Family ${familyId}:`, {
         roomName,
         activeViewers: room?.size || 0,
         isViewingChat
@@ -231,7 +236,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (!isViewingChat) {
         console.log(`[ChatGateway] User not in chat room. Attempting push notification...`);
         await this.fcmService.sendToFamily(
-          data.familyId,
+          familyId,
           'New Message from TAFS',
           data.messageType === 'TEXT' ? data.content : `New ${data.messageType.toLowerCase()} received`,
           { 
@@ -251,9 +256,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('markAsRead')
   async handleMarkAsRead(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: number; role: 'ADMIN' | 'GUARDIAN' },
+    @MessageBody() data: { familyId: any; role: 'ADMIN' | 'GUARDIAN' },
   ) {
-    const conv = await this.prisma.chat_conversations.findUnique({ where: { family_id: data.familyId } });
+    const familyId = Number(data.familyId);
+    const conv = await this.prisma.chat_conversations.findUnique({ where: { family_id: familyId } });
     if (!conv) return;
 
     await this.prisma.chat_conversations.update({
@@ -277,20 +283,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     if (data.role === 'ADMIN') {
-      this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'ADMIN' });
+      this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
-      this.server.to('admin_inbox').emit('messagesRead', { familyId: data.familyId, by: 'GUARDIAN' });
+      this.server.to('admin_inbox').emit('messagesRead', { familyId: familyId, by: 'GUARDIAN' });
       // Also notify other devices of the same family
-      this.server.to(`family_app_${data.familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
+      this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
   }
 
   @SubscribeMessage('registerFcmToken')
   async handleRegisterFcmToken(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: number; token: string; deviceType?: string },
+    @MessageBody() data: { familyId: any; token: string; deviceType?: string },
   ) {
-    return this.fcmService.registerToken(data.familyId, data.token, data.deviceType);
+    const familyId = Number(data.familyId);
+    return this.fcmService.registerToken(familyId, data.token, data.deviceType);
   }
 
   @SubscribeMessage('sendAnnouncement')
@@ -371,18 +378,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('deleteMessage')
   async handleDeleteMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { messageId: string; familyId: number },
+    @MessageBody() data: { messageId: string; familyId: any },
   ) {
     console.log('[ChatGateway] Received deleteMessage:', data);
     try {
+      const familyId = Number(data.familyId);
       // 1. Delete from DB
       await this.prisma.chat_messages.delete({
         where: { id: data.messageId },
       });
 
       // 2. Broadcast deletion
-      this.server.to('admin_inbox').emit('messageDeleted', { messageId: data.messageId, familyId: data.familyId });
-      this.server.to(`family_app_${data.familyId}`).emit('messageDeleted', { messageId: data.messageId });
+      this.server.to('admin_inbox').emit('messageDeleted', { messageId: data.messageId, familyId: familyId });
+      this.server.to(`family_app_${familyId}`).emit('messageDeleted', { messageId: data.messageId });
       
       return { success: true };
     } catch (err) {
