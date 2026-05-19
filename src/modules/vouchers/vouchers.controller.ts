@@ -269,29 +269,6 @@ export class VouchersController {
         };
     }
 
-    @Post(':id/waive-arrear-surcharge')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
-    @HttpCode(HttpStatus.OK)
-    @CheckPolicies(
-        (ability) =>
-            ability.can(Action.Update, 'Voucher') ||
-            ability.can(Action.Manage, 'all'),
-    )
-    async waiveArrearSurcharge(
-        @Param('id', ParseIntPipe) id: number,
-        @Body() body: { surcharge_id: number },
-        @Req() req: any,
-    ) {
-        const waivedBy: string =
-            req.user?.username || req.user?.email || String(req.user?.id ?? 'staff');
-        const result = await this.vouchersService.waiveArrearSurcharge(id, body.surcharge_id, waivedBy);
-        return {
-            success: true,
-            message: 'Arrear surcharge waived successfully.',
-            data: result,
-        };
-    }
-
     // --- Parent Facing ---
 
     @Get('parent/student/:cc')

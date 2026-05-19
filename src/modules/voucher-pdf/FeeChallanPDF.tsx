@@ -35,10 +35,8 @@ const styles = StyleSheet.create({
     page: {
         flexDirection: 'row',
         backgroundColor: '#ffffff',
-        paddingTop: 7,
-        paddingBottom: 7,
-        paddingLeft: 5,
-        paddingRight: 10,
+        paddingHorizontal: 5,
+        paddingVertical: 6,
         fontSize: 8,
         fontFamily: 'Helvetica',
     },
