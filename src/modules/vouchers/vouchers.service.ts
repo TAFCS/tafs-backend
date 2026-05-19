@@ -2623,6 +2623,96 @@ export class VouchersService {
             rows,
         };
     }
+    async waiveArrearSurcharge(voucherId: number, surchargeId: number, waivedBy: string) {
+        const voucher = await this.prisma.vouchers.findUnique({ where: { id: voucherId } });
+        if (!voucher) throw new NotFoundException(`Voucher #${voucherId} not found`);
+
+        const surcharge = await (this.prisma as any).voucher_arrear_surcharges.findUnique({
+            where: { id: surchargeId },
+        });
+        if (!surcharge || surcharge.voucher_id !== voucherId) {
+            throw new BadRequestException(`Surcharge #${surchargeId} does not belong to voucher #${voucherId}.`);
+        }
+        if (surcharge.waived) {
+            throw new BadRequestException(`Surcharge #${surchargeId} is already waived.`);
+        }
+        if (new Prisma.Decimal(surcharge.amount_paid ?? 0).gt(0)) {
+            throw new BadRequestException(
+                `Cannot waive surcharge #${surchargeId}: a payment of ${surcharge.amount_paid} has already been recorded against it.`,
+            );
+        }
+
+        const surchargeAmount = new Prisma.Decimal(surcharge.amount);
+
+        await this.prisma.$transaction(async (tx) => {
+            await (tx as any).voucher_arrear_surcharges.update({
+                where: { id: surchargeId },
+                data: { waived: true, waived_by: waivedBy },
+            });
+
+            const newBeforeDue = Prisma.Decimal.max(
+                new Prisma.Decimal(voucher.total_payable_before_due ?? 0).sub(surchargeAmount),
+                new Prisma.Decimal(0),
+            );
+            const newAfterDue = Prisma.Decimal.max(
+                new Prisma.Decimal(voucher.total_payable_after_due ?? 0).sub(surchargeAmount),
+                new Prisma.Decimal(0),
+            );
+
+            await tx.vouchers.update({
+                where: { id: voucherId },
+                data: { total_payable_before_due: newBeforeDue, total_payable_after_due: newAfterDue },
+            });
+
+            // Re-evaluate voucher status after the waiver
+            const heads = await tx.voucher_heads.findMany({ where: { voucher_id: voucherId } });
+            const remainingHeads = heads.reduce(
+                (sum, h) => sum.add(new Prisma.Decimal(h.balance as any ?? 0)),
+                new Prisma.Decimal(0),
+            );
+            const anyHeadDeposited = heads.some(h => new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0));
+
+            const remainingSurcharges = await (tx as any).voucher_arrear_surcharges.findMany({
+                where: { voucher_id: voucherId, waived: false },
+            });
+            const surchargeRem = remainingSurcharges.reduce(
+                (sum: Prisma.Decimal, s: any) =>
+                    sum.add(new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0))),
+                new Prisma.Decimal(0),
+            );
+            const anySurchargeDep = remainingSurcharges.some(
+                (s: any) => new Prisma.Decimal(s.amount_paid ?? 0).gt(0),
+            );
+
+            const refreshed = await tx.vouchers.findUnique({ where: { id: voucherId } });
+            const depositedLS = new Prisma.Decimal((refreshed as any)?.late_fee_deposited ?? 0);
+            const hasAnyDeposit = anyHeadDeposited || depositedLS.gt(0) || anySurchargeDep;
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const dueDate = new Date(voucher.due_date);
+            dueDate.setHours(0, 0, 0, 0);
+            const isOverdue = today > dueDate;
+
+            let nextStatus: string;
+            if (remainingHeads.lte(0) && surchargeRem.lte(0)) {
+                nextStatus = 'PAID';
+            } else if (hasAnyDeposit) {
+                nextStatus = 'PARTIALLY_PAID';
+            } else if (isOverdue) {
+                nextStatus = 'OVERDUE';
+            } else {
+                nextStatus = 'UNPAID';
+            }
+
+            if (nextStatus !== voucher.status) {
+                await tx.vouchers.update({ where: { id: voucherId }, data: { status: nextStatus } });
+            }
+        });
+
+        return this.findOne(voucherId);
+    }
+
     async bulkRemove(ids: number[], force = false) {
         let deleted = 0, skipped = 0;
         const errors: { id: number; reason: string }[] = [];
