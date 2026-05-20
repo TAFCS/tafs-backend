@@ -306,6 +306,7 @@ export class BulkVoucherJobsService {
             const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
             const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
 
+            const skipAlreadyIssued = dto.skip_already_issued ?? true;
             const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
                 campus_ids: campusIds,
                 class_ids: classIds,
@@ -313,6 +314,7 @@ export class BulkVoucherJobsService {
                 fee_date_from: dto.fee_date_from,
                 fee_date_to: dto.fee_date_to,
                 student_ccs: dto.student_ccs,
+                include_statuses: skipAlreadyIssued ? ['NOT_ISSUED'] : ['NOT_ISSUED', 'ISSUED'],
             });
 
             // ── PHASE 2: BUILD WORK ITEMS + RESOLVE SKIPS (no DB calls) ─────────
@@ -323,7 +325,7 @@ export class BulkVoucherJobsService {
                 fee_date_from: dto.fee_date_from,
                 fee_date_to: dto.fee_date_to,
                 expectedFeeDates,
-                skipAlreadyIssued: dto.skip_already_issued ?? true,
+                skipAlreadyIssued: skipAlreadyIssued,
                 academic_year_override: dto.academic_year,
             });
 
