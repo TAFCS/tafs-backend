@@ -314,26 +314,29 @@ export class StudentFeesService {
 
         // ─── Calculate Installment Sequences (to help frontend labeling) ───
         const instIds = Array.from(new Set(fees.filter((f: any) => f.installment_id).map((f: any) => f.installment_id as number)));
-        let allStudentInstFees = instIds.length > 0
+        let allStudentInstFees: any[] = instIds.length > 0
             ? await this.prisma.student_fees.findMany({
                 where: { student_id: student.cc, installment_id: { in: instIds } } as any,
-            })
+                include: { student_fee_installments: true } as any,
+            }) as any[]
             : [];
 
-        // Sort chronologically by academic year (starting from August)
-        const getAcademicSortIndex = (m: number) => (m >= 8 ? m - 8 : m + 4);
-        allStudentInstFees.sort((a: any, b: any) => {
-            const aIdx = getAcademicSortIndex(a.target_month ?? a.month ?? 8);
-            const bIdx = getAcademicSortIndex(b.target_month ?? b.month ?? 8);
-            return aIdx - bIdx;
-        });
-
         const seqMap = new Map<number, number>(); // fee_id -> seq (1-indexed)
-        const countMap = new Map<number, number>(); // inst_id -> total
+        const countMap = new Map<number, number>(); // inst_id -> standalone count
         instIds.forEach((id: number) => {
             const group = allStudentInstFees.filter((f: any) => f.installment_id === id);
-            countMap.set(id, group.length);
-            group.forEach((f: any, idx: number) => seqMap.set(f.id, idx + 1));
+            const instFeeTypeId = group.find((f: any) => f.student_fee_installments?.fee_type_id)
+                ?.student_fee_installments?.fee_type_id;
+            // Standalone fees only — sorted by fee_date so position reflects the payment schedule
+            const standalones = group
+                .filter((f: any) => !instFeeTypeId || f.fee_type_id === instFeeTypeId)
+                .sort((a: any, b: any) => {
+                    const aDate = a.fee_date ? new Date(a.fee_date).getTime() : 0;
+                    const bDate = b.fee_date ? new Date(b.fee_date).getTime() : 0;
+                    return aDate - bDate;
+                });
+            countMap.set(id, standalones.length);
+            standalones.forEach((f: any, idx: number) => seqMap.set(f.id, idx + 1));
         });
 
         const enhancedFees = fees.map(f => {

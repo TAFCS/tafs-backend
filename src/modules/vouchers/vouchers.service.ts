@@ -506,13 +506,15 @@ export class VouchersService {
             include: { student_fee_installments: { include: { fee_types: true } } } as any,
         });
 
-        // Sort chronologically by academic year (starting from August)
-        const getAcademicSortIndex = (m: number) => (m >= 8 ? m - 8 : m + 4);
-        studentInstallmentFees.sort((a: any, b: any) => {
-            const aIdx = getAcademicSortIndex(a.target_month ?? a.month ?? 8);
-            const bIdx = getAcademicSortIndex(b.target_month ?? b.month ?? 8);
-            return aIdx - bIdx;
-        });
+        // Term cutoff: class IDs 15–19 run Apr–Mar (cutoff=4); all others run Aug–Jul (cutoff=8).
+        // Installment sequence order is derived from target_month relative to the term start,
+        // so APR is slot 0 for Apr-Mar classes and AUG is slot 0 for Aug-Jul classes.
+        const termCutoff = isSpecial(voucher.class_id) ? 4 : 8;
+        const installmentSlot = (m: number) => m >= termCutoff ? m - termCutoff : m + (12 - termCutoff);
+
+        studentInstallmentFees.sort((a: any, b: any) =>
+            installmentSlot(a.target_month ?? 8) - installmentSlot(b.target_month ?? 8)
+        );
 
         // Group by installment_id for sequence lookup
         const installmentGroups = new Map<number, any[]>();
@@ -521,6 +523,22 @@ export class VouchersService {
                 if (!installmentGroups.has(f.installment_id)) installmentGroups.set(f.installment_id, []);
                 installmentGroups.get(f.installment_id)!.push(f);
             }
+        });
+
+        // Precompute standalone sequence numbers: map from student_fees.id → 1-based position.
+        // Only standalone fees (fee_type_id matches the installment plan's fee_type_id) are counted.
+        // Sorted by installmentSlot(target_month) so the position reflects the term's month order.
+        const standaloneSequenceMap = new Map<number, number>();
+        installmentGroups.forEach((group) => {
+            const instFeeTypeId = group.find((f: any) => f.student_fee_installments?.fee_type_id)
+                ?.student_fee_installments?.fee_type_id;
+            if (!instFeeTypeId) return;
+            const standalones = group
+                .filter((f: any) => f.fee_type_id === instFeeTypeId)
+                .sort((a: any, b: any) =>
+                    installmentSlot(a.target_month ?? 8) - installmentSlot(b.target_month ?? 8)
+                );
+            standalones.forEach((f: any, idx: number) => standaloneSequenceMap.set(f.id, idx + 1));
         });
 
         // 3. Initial Mapping of Heads
@@ -577,9 +595,9 @@ export class VouchersService {
             if (isStandaloneInstallment) {
                 const group = installmentGroups.get(sf.installment_id) || [];
                 const total = sf.student_fee_installments?.installment_count || group.length;
-                const idx = group.findIndex(f => f.id === sf.id);
-                if (idx !== -1) {
-                    const installmentLabel = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${idx + 1}/${total})`;
+                const seqNum = standaloneSequenceMap.get(sf.id);
+                if (seqNum != null) {
+                    const installmentLabel = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${seqNum}/${total})`;
                     description = `${installmentLabel}${monthSuffix}`;
                     baseDescription = installmentLabel;
                 }
@@ -792,15 +810,15 @@ export class VouchersService {
         const missedArrearFeeItems = missedArrearInstallments.map((f: any) => {
             const group = installmentGroups.get(f.installment_id!) || [];
             const total = f.student_fee_installments?.installment_count || group.length;
-            const seqIdx = group.findIndex((sf: any) => sf.id === f.id);
+            const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
             const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
             const monthLbl = getMonthYearLabel(f.target_month, f.academic_year, voucher.class_id).toUpperCase();
-            const desc = `${feeType} INSTALLMENTS (${seqIdx + 1}/${total}) (${monthLbl})`;
+            const desc = `${feeType} INSTALLMENTS (${seqNum}/${total}) (${monthLbl})`;
             const amount = Number(f.amount || 0);
             return {
                 description: desc,
                 originalDescription: desc,
-                baseDescription: `${feeType} INSTALLMENTS (${seqIdx + 1}/${total})`,
+                baseDescription: `${feeType} INSTALLMENTS (${seqNum}/${total})`,
                 amount,
                 discount: 0,
                 netAmount: amount,
@@ -990,7 +1008,7 @@ export class VouchersService {
                     .map((f: any) => {
                         const group = installmentGroups.get(f.installment_id!) || [];
                         const total = f.student_fee_installments?.installment_count || group.length;
-                        const idx = group.findIndex((sf: any) => sf.id === f.id);
+                        const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
                         const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
                         const parts = (f.academic_year || '').split('-');
                         const year = f.target_month != null && f.target_month >= cutoff
@@ -1000,7 +1018,7 @@ export class VouchersService {
                             ? `${monthNames[f.target_month - 1].slice(0, 3).toUpperCase()} ${year.slice(-2)}`
                             : 'N/A';
                         return {
-                            head: `${feeType} INSTALLMENTS (${idx + 1}/${total})`,
+                            head: `${feeType} INSTALLMENTS (${seqNum}/${total})`,
                             month,
                             amount: Number(f.amount || 0),
                             status: f.status === 'PAID' ? 'PAID' : 'DUE',
