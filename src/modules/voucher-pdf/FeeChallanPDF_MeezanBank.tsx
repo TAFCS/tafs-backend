@@ -764,10 +764,13 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         </View>
                         {arrearsHistory && arrearsHistory.length > 0 ? (() => {
                             const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            // Apr–Mar classes (IDs 15–19): term starts in April (cutoff=4).
+                            // All others: Aug–Jul term (cutoff=8).
+                            const termCutoff = [15, 16, 17, 18, 19].includes(student?.class_id) ? 4 : 8;
                             const getMonthLabel = (r: any) => {
                                 if (r.target_month && r.academic_year) {
                                     const parts = r.academic_year.split('-');
-                                    const year = r.target_month >= 8 ? parts[0] : parts[1];
+                                    const year = r.target_month >= termCutoff ? parts[0] : parts[1];
                                     return `${MONTHS_SHORT[r.target_month - 1].toUpperCase()} ${year.slice(-2)}`;
                                 }
                                 const [y, m] = r.date.split('-');
