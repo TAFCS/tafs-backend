@@ -1,6 +1,7 @@
-import { Controller, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, Query, ParseIntPipe, UseGuards, Request } from '@nestjs/common';
 import { InstallmentsService } from './installments.service';
 import { CreateInstallmentDto } from './dto/create-installment.dto';
+import { UpdateInstallmentDto } from './dto/update-installment.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -17,5 +18,29 @@ export class InstallmentsController {
   async create(@Body() dto: CreateInstallmentDto, @Request() req) {
     const userId = req.user.username || req.user.id;
     return this.installmentsService.create(dto, userId);
+  }
+
+  @Get('student/:studentId')
+  @CheckPolicies((ability: AppAbility) => ability.can(Action.Read, 'Fee'))
+  async findByStudent(
+    @Param('studentId', ParseIntPipe) studentId: number,
+    @Query('academic_year') academicYear?: string,
+  ) {
+    return this.installmentsService.findByStudent(studentId, academicYear);
+  }
+
+  @Patch(':id')
+  @CheckPolicies((ability: AppAbility) => ability.can(Action.Update, 'Fee'))
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateInstallmentDto,
+  ) {
+    return this.installmentsService.update(id, dto);
+  }
+
+  @Delete(':id')
+  @CheckPolicies((ability: AppAbility) => ability.can(Action.Delete, 'Fee'))
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return this.installmentsService.remove(id);
   }
 }
