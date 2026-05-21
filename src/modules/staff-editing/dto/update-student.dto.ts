@@ -18,6 +18,11 @@ export class UpdateStudentDto {
   full_name?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  cnic?: string;
+
+  @IsOptional()
   @IsDateString()
   dob?: string;
 

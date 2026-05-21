@@ -7,6 +7,7 @@ import {
     IsArray,
     ValidateNested,
     Allow,
+    MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AcademicSystem, ALevelDetailsDto, GuardianDto, PreviousSchoolDto, AdmissionDetailsDto } from './create-admission.dto';
@@ -87,6 +88,11 @@ export class SubmitAdmissionFormDto {
     @IsString()
     @IsOptional()
     gr_number?: string;
+
+    @IsString()
+    @IsOptional()
+    @MaxLength(15)
+    cnic?: string;
 
     @IsString()
     @IsOptional()

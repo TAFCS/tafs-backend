@@ -49,6 +49,86 @@ type ResolvedClass = {
 export class StudentsService {
   constructor(private readonly prisma: PrismaService) { }
 
+  async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
+    if (classId) return classId;
+    
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: {
+        class_id: true,
+        status: true,
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+          select: { requested_grade: true },
+        },
+      },
+    });
+
+    if (!student) return null;
+    if (student.class_id) return student.class_id;
+
+    const requestedGrade = student.student_admissions?.[0]?.requested_grade;
+    if (!requestedGrade) return null;
+
+    const normalized = requestedGrade.replace(/[-\s]/g, '').toUpperCase();
+    const matchedClass = await this.prisma.classes.findFirst({
+      where: {
+        OR: [
+          { class_code: { equals: requestedGrade, mode: 'insensitive' } },
+          { class_code: { equals: normalized, mode: 'insensitive' } },
+          { description: { equals: requestedGrade, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    return matchedClass?.id ?? null;
+  }
+
+  private formatSiblingGrade(sib: {
+    classes?: { description: string } | null;
+    sections?: { description: string } | null;
+    student_admissions?: { requested_grade: string }[];
+  }): string | undefined {
+    if (sib.classes?.description) {
+      const section = sib.sections?.description;
+      return section ? `${sib.classes.description} (${section})` : sib.classes.description;
+    }
+    return sib.student_admissions?.[0]?.requested_grade ?? undefined;
+  }
+
+  private mapSiblingForResponse(sib: any) {
+    return {
+      id: sib.cc,
+      cc: sib.cc,
+      full_name: sib.full_name,
+      cc_number: sib.cc,
+      gr_number: sib.gr_number ?? null,
+      grade: this.formatSiblingGrade(sib),
+      father_name: sib.student_guardians?.[0]?.guardians?.full_name,
+    };
+  }
+
+  private readonly familySiblingSelect = {
+    cc: true,
+    full_name: true,
+    gr_number: true,
+    classes: { select: { description: true } },
+    sections: { select: { description: true } },
+    student_admissions: {
+      orderBy: { application_date: 'desc' as const },
+      take: 1,
+      select: { requested_grade: true },
+    },
+    student_guardians: {
+      take: 1,
+      select: {
+        guardians: { select: { full_name: true } },
+      },
+    },
+  };
+
   private readonly assignmentInclude = {
     campuses: { select: { campus_name: true, campus_code: true } },
     classes: { select: { description: true, class_code: true } },
@@ -191,6 +271,7 @@ export class StudentsService {
     if (requestedFields.has('core')) {
       selectArgs.full_name = true;
       selectArgs.gr_number = true;
+      selectArgs.cnic = true;
       selectArgs.class_id  = true;
       selectArgs.section_id = true;
       selectArgs.house_id  = true;
@@ -248,62 +329,15 @@ export class StudentsService {
           primary_address: true,
           students: {
             where: { deleted_at: null },
-            select: {
-              cc: true,
-              full_name: true,
-              student_guardians: {
-                where: { is_primary_contact: true },
-                take: 1,
-                select: {
-                  guardians: { select: { full_name: true } }
-                }
-              }
-            }
+            select: this.familySiblingSelect,
           },
           _count: { select: { students: true } } // For sibling_count
         },
       };
     }
 
-    if (requestedFields.has('contact')) {
-      selectArgs.primary_phone = true;
-      selectArgs.whatsapp_number = true;
+    if (requestedFields.has('core') || requestedFields.has('contact') || requestedFields.has('medical')) {
       selectArgs.student_guardians = {
-        take: 1,
-        select: {
-          relationship: true,
-          guardians: {
-            select: {
-              full_name: true,
-              cnic: true,
-              whatsapp_number: true,
-              primary_phone: true,
-              occupation: true,
-            },
-          },
-        },
-      };
-    }
-
-    if (requestedFields.has('demographic')) {
-      selectArgs.dob = true;
-      selectArgs.gender = true;
-      selectArgs.nationality = true;
-      selectArgs.religion = true;
-      selectArgs.email = true;
-    }
-
-    if (requestedFields.has('medical')) {
-      selectArgs.medical_info = true;
-      selectArgs.physical_impairment = true;
-      selectArgs.identification_marks = true;
-      // Emergency info joins through guardians
-      if (!selectArgs.student_guardians) {
-        selectArgs.student_guardians = {};
-      }
-      selectArgs.student_guardians = {
-        ...(typeof selectArgs.student_guardians === 'object' ? selectArgs.student_guardians : {}),
-        where: { OR: [{ is_primary_contact: true }, { is_emergency_contact: true }] },
         select: {
           is_primary_contact: true,
           is_emergency_contact: true,
@@ -319,6 +353,25 @@ export class StudentsService {
           },
         },
       };
+    }
+
+    if (requestedFields.has('contact')) {
+      selectArgs.primary_phone = true;
+      selectArgs.whatsapp_number = true;
+    }
+
+    if (requestedFields.has('demographic')) {
+      selectArgs.dob = true;
+      selectArgs.gender = true;
+      selectArgs.nationality = true;
+      selectArgs.religion = true;
+      selectArgs.email = true;
+    }
+
+    if (requestedFields.has('medical')) {
+      selectArgs.medical_info = true;
+      selectArgs.physical_impairment = true;
+      selectArgs.identification_marks = true;
     }
 
     if (requestedFields.has('history')) {
@@ -428,6 +481,7 @@ export class StudentsService {
           full_name: s.full_name,
           cc_number: s.cc,
           gr_number: s.gr_number,
+          cnic: s.cnic,
           campus_name: s.campuses?.campus_name,
           campus_code: s.campuses?.campus_code,
           class_description: s.classes?.description,
@@ -442,6 +496,7 @@ export class StudentsService {
           requested_grade: latestAdmission?.requested_grade,
           primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
           guardian_relationship: primaryGuardianNode?.relationship,
+          primary_guardian_cnic: primaryGuardianNode?.guardians?.cnic,
         };
       }
 
@@ -464,13 +519,7 @@ export class StudentsService {
           sibling_count: s.families?._count?.students,
           siblings: s.families?.students
             ?.filter((sib: any) => sib.cc !== s.cc)
-            ?.map((sib: any) => ({
-              id: sib.cc,
-              cc: sib.cc,
-              full_name: sib.full_name,
-              cc_number: sib.cc,
-              father_name: sib.student_guardians?.[0]?.guardians?.full_name,
-            })),
+            ?.map((sib: any) => this.mapSiblingForResponse(sib)),
         };
       }
 
@@ -520,9 +569,12 @@ export class StudentsService {
         student_full_name: mappedData.core?.full_name,
         gr_number: mappedData.core?.gr_number,
         cc_number: mappedData.core?.cc_number,
+        cnic: mappedData.core?.cnic,
         campus: mappedData.core?.campus_name,
         class_id: s.class_id,
-        grade_and_section: mappedData.academic?.requested_grade,
+        grade_and_section: mappedData.core?.class_description
+          ? `${mappedData.core.class_description}${mappedData.core.section_description ? ` (${mappedData.core.section_description})` : ''}`
+          : mappedData.academic?.requested_grade,
         primary_guardian_name: mappedData.contact?.primary_guardian_name,
         whatsapp_number: mappedData.contact?.whatsapp_number,
         enrollment_status: mappedData.core?.enrollment_status,
@@ -555,6 +607,9 @@ export class StudentsService {
                 cc: true,
                 full_name: true,
                 gr_number: true,
+                status: true,
+                classes: { select: { description: true, class_code: true } },
+                sections: { select: { description: true } },
                 student_admissions: {
                   orderBy: { application_date: "desc" },
                   take: 1,
@@ -570,6 +625,8 @@ export class StudentsService {
             _count: { select: { students: true } }
           }
         },
+        classes: true,
+        sections: true,
         student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
         student_guardians: {
           include: { guardians: true }
@@ -702,12 +759,15 @@ export class StudentsService {
       student_full_name: s.full_name,
       gr_number: s.gr_number,
       cc_number: s.cc,
+      cnic: s.cnic,
       campus: s.campuses?.campus_name,
       campus_code: s.campuses?.campus_code,
       campus_id: s.campus_id,
       class_id: resolvedClassId,
       section_id: s.section_id,
-      grade_and_section: s.student_admissions?.[0]?.requested_grade,
+      grade_and_section: s.classes
+        ? `${s.classes.description}${s.sections ? ` (${s.sections.description})` : ''}`
+        : s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
@@ -751,15 +811,7 @@ export class StudentsService {
       } : null,
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)
-        ?.map((sib: any) => ({
-          id: sib.cc,
-          cc: sib.cc,
-          full_name: sib.full_name,
-          cc_number: sib.cc,
-          gr_number: sib.gr_number,
-          grade: sib.student_admissions?.[0]?.requested_grade,
-          father_name: sib.student_guardians?.[0]?.guardians?.full_name,
-        })),
+        ?.map((sib: any) => this.mapSiblingForResponse(sib)),
     };
 
   }

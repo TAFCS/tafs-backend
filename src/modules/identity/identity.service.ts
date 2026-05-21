@@ -136,6 +136,7 @@ export class IdentityService {
         data: {
           cc: nextCC,
           gr_number: dto.gr_number,
+          cnic: dto.cnic,
           family_id: familyId,
           full_name: dto.full_name,
           dob,
@@ -321,6 +322,7 @@ export class IdentityService {
           where: { cc: student.cc },
           data: {
             gr_number: dto.gr_number || undefined,
+            cnic: dto.cnic ?? undefined,
             gender: dto.gender || undefined,
             religion: dto.religion || undefined,
             nationality: dto.nationality || undefined,
@@ -553,7 +555,6 @@ export class IdentityService {
       where: { cnic: cleanedCnic },
       include: {
         student_guardians: {
-          take: 1, // Get one student link to find the family context
           include: {
             students: {
               include: {
@@ -583,7 +584,15 @@ export class IdentityService {
     }
 
     // Extract family context
-    const family = guardian.student_guardians?.[0]?.students?.families;
+    let family: any = null;
+    if (guardian.student_guardians && guardian.student_guardians.length > 0) {
+      for (const sg of guardian.student_guardians) {
+        if (sg.students?.families) {
+          family = sg.students.families;
+          break;
+        }
+      }
+    }
 
     // Find other guardians in the family to populate the form (e.g. if searching Father, find Mother)
     const otherGuardiansMap: Record<string, any> = {};
@@ -625,6 +634,8 @@ export class IdentityService {
               cc: true,
               full_name: true,
               status: true,
+              classes: true,
+              sections: true,
               student_admissions: {
                 select: { requested_grade: true },
               },

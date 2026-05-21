@@ -124,6 +124,7 @@ export class StaffEditingService {
       select: {
         cc: true,
         gr_number: true,
+        cnic: true,
         full_name: true,
         dob: true,
         gender: true,
@@ -211,7 +212,10 @@ export class StaffEditingService {
             students: {
               where: { deleted_at: null },
               include: {
-                student_guardians: { include: { guardians: true }, take: 1 }
+                student_guardians: { include: { guardians: true } },
+                student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
+                classes: true,
+                sections: true,
               }
             }
           }
@@ -823,6 +827,7 @@ export class StaffEditingService {
     return {
       cc: s.cc,
       gr_number: s.gr_number,
+      cnic: s.cnic,
       full_name: s.full_name,
       dob: s.dob,
       gender: s.gender,
@@ -883,6 +888,7 @@ export class StaffEditingService {
     return {
       cc: s.cc,
       gr_number: s.gr_number,
+      cnic: s.cnic,
       full_name: s.full_name,
       dob: s.dob,
       gender: s.gender,
@@ -946,7 +952,23 @@ export class StaffEditingService {
         home_phone: s.families.home_phone,
         students: s.families.students || []
       } : null,
-      siblings: (s.families?.students || []).filter((sib: any) => sib.cc !== s.cc),
+      siblings: (s.families?.students || [])
+        .filter((sib: any) => sib.cc !== s.cc)
+        .map((sib: any) => ({
+          id: sib.cc,
+          cc: sib.cc,
+          full_name: sib.full_name,
+          cc_number: sib.cc,
+          gr_number: sib.gr_number,
+          grade: sib.classes
+            ? `${sib.classes.description}${sib.sections ? ` (${sib.sections.description})` : ''}`
+            : sib.student_admissions?.[0]?.requested_grade,
+          status: sib.status,
+          father_name: sib.student_guardians?.find((sg: any) => {
+            const r = (sg.relationship || '').trim().toUpperCase();
+            return r === 'FATHER' || (r.includes('FATHER') && !r.includes('GRAND'));
+          })?.guardians?.full_name ?? null,
+        })),
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
       fee_start_term: s.fee_start_term,

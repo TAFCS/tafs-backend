@@ -457,14 +457,14 @@ export class EnrollmentService {
       select: { campus_name: true },
     });
 
-    const getPrefixByCampusName = (name: string) => {
+    const getPrefixByCampusName = (name: string, campusId: number) => {
       const uname = name.toUpperCase();
-      if (uname.includes('KANEEZ FATIMA')) return 'KF-A';
-      if (uname.includes('NORTH NAZIMABAD')) return 'A-N';
+      if (uname.includes('KANEEZ FATIMA') || campusId === 2) return 'KF-A';
+      if (uname.includes('NORTH NAZIMABAD') || campusId === 3) return 'A-N';
       return '';
     };
 
-    const defaultPrefix = isALevel ? 'A-' : (campus ? getPrefixByCampusName(campus.campus_name) : '');
+    const defaultPrefix = isALevel ? 'A-' : (campus ? getPrefixByCampusName(campus.campus_name, campusId) : '');
 
     // Optimize: Instead of fetching ALL students, fetch the most recent ones 
     // to determine the current GR sequence and prefix.
@@ -492,11 +492,14 @@ export class EnrollmentService {
           const isThisGrALevel = prefix === 'A-';
           if (isThisGrALevel !== isALevel) continue;
 
+          // Harden: Ensure the prefix matches the expected defaultPrefix for the campus/level
+          if (prefix !== defaultPrefix) continue;
+
           if (num > maxNum) {
             maxNum = num;
             mainPrefix = prefix || defaultPrefix;
           }
-        } else if (!isALevel) {
+        } else if (!isALevel && defaultPrefix === '') {
           // For non-A-Level, also check purely numeric GRs if no prefix match found yet
           const num = parseInt(s.gr_number, 10);
           if (!isNaN(num) && num > maxNum) {

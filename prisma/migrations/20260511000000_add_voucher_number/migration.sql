@@ -1,0 +1,2 @@
+-- Placeholder migration for database-only migration
+-- This migration has already been applied to the database.

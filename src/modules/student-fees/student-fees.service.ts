@@ -8,10 +8,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
+import { StudentsService } from '../students/students.service';
 
 @Injectable()
 export class StudentFeesService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly studentsService: StudentsService,
+    ) { }
 
     async getMonthlyStatusForParent(studentCc: number, familyId: number) {
         const student = await this.prisma.students.findFirst({
@@ -442,6 +446,13 @@ export class StudentFeesService {
             if (student) {
                 effectiveClassId = student.class_id ?? student.graduated_from_class_id ?? undefined;
                 if (effectiveCampusId === undefined) effectiveCampusId = student.campus_id ?? undefined;
+            }
+        }
+
+        if (!effectiveClassId) {
+            const resolved = await this.studentsService.resolveClassIdForStudent(studentId, classId);
+            if (resolved) {
+                effectiveClassId = resolved;
             }
         }
 

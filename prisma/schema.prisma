@@ -437,6 +437,7 @@ model student_siblings {
 
 model students {
   cc                         Int                        @id @default(autoincrement())
+  cnic                       String?                    @unique @db.VarChar(15)
   family_id                  Int?
   campus_id                  Int?
   gr_number                  String?                    @db.VarChar(50)

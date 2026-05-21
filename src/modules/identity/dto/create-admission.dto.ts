@@ -323,6 +323,11 @@ export class CreateAdmissionDto {
   gr_number?: string;
 
   @IsString()
+  @IsOptional()
+  @MaxLength(15)
+  cnic?: string;
+
+  @IsString()
   @IsNotEmpty()
   @MaxLength(100)
   full_name: string;
