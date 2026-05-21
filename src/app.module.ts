@@ -33,6 +33,7 @@ import { ParentChangeRequestsModule } from './modules/parent-change-requests/par
 import { ChatModule } from './modules/chat/chat.module';
 import { BackupsModule } from './modules/backups/backups.module';
 import { HrModule } from './modules/hr/hr.module';
+import { AttendanceModule } from './modules/attendance/attendance.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { HrModule } from './modules/hr/hr.module';
     ChatModule,
     BackupsModule,
     HrModule,
+    AttendanceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

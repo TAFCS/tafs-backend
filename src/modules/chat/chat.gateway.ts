@@ -263,6 +263,65 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return this.fcmService.registerToken(familyId, data.token, data.deviceType);
   }
 
+  /**
+   * Server-side section/grade broadcast (roll call skipped, system events).
+   * Same delivery as sendAnnouncement WS handler.
+   */
+  async publishAnnouncement(data: {
+    content: string;
+    targetGrade?: string;
+    targetSection?: string;
+    messageType?: ChatMessageType;
+    mediaMetadata?: any;
+  }) {
+    return this.handleSendAnnouncement(null as any, {
+      messageType: data.messageType ?? ChatMessageType.TEXT,
+      content: data.content,
+      targetGrade: data.targetGrade,
+      targetSection: data.targetSection,
+      mediaMetadata: data.mediaMetadata,
+    });
+  }
+
+  /**
+   * Per-family scoped announcement — used for roll call taken (per-student result).
+   * Saves to the sentinel announcement conversation but delivers only to this family's socket room + FCM.
+   */
+  async publishFamilyAnnouncement(
+    familyId: number,
+    content: string,
+    targetGrade?: string,
+    targetSection?: string,
+  ): Promise<void> {
+    const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+
+    const message = await this.prisma.chat_messages.create({
+      data: {
+        conversation_id: ANNOUNCEMENT_CONV_ID,
+        sender_type: 'ADMIN',
+        sender_name: 'TAFS Support',
+        message_type: ChatMessageType.TEXT,
+        content,
+        is_announcement: true,
+        target_grade: targetGrade ?? null,
+        target_section: targetSection ?? null,
+      },
+    });
+
+    const conversation = await this.prisma.chat_conversations.findUnique({
+      where: { id: ANNOUNCEMENT_CONV_ID },
+    });
+
+    // Deliver only to the specific family room
+    this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message, conversation });
+    this.server.to('admin_inbox').emit('receiveMessage', { message, conversation });
+
+    // Background FCM push
+    this.fcmService
+      .sendToFamily(familyId, 'TAFS', content, { type: 'ANNOUNCEMENT', messageId: message.id })
+      .catch((e) => console.error(`FCM failed for family ${familyId}:`, e.message));
+  }
+
   @SubscribeMessage('sendAnnouncement')
   async handleSendAnnouncement(
     @ConnectedSocket() client: Socket,

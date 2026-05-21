@@ -96,6 +96,7 @@ async function main() {
             'finance.vouchers.view', 'finance.deposits.view', 'finance.banks.view',
             'system.analytics.view', 'system.analytics.view_amounts',
             'hr.employees.view', 'hr.leave.apply', 'hr.leave.approve', 'attendance.reports.view',
+            'attendance.staff.mark',
             'attendance.student.biometric.view', 'attendance.student.rollcall.view', 'attendance.student.edit_locked'
         ],
         FINANCE_CLERK: [

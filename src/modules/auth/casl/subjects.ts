@@ -19,4 +19,6 @@ export type AppSubjects =
   | 'Policy'
   | 'Calendar'
   | 'ClassAttendanceMode'
+  | 'RollSession'
+  | 'StaffAttendance'
   | 'all';

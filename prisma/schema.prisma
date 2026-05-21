@@ -96,18 +96,20 @@ model campus_sections {
 }
 
 model campuses {
-  id                     Int                      @id @default(autoincrement())
-  campus_code            String                   @unique @db.VarChar(10)
-  campus_name            String                   @db.VarChar(100)
-  address                String?
-  academic_calendar_days academic_calendar_days[]
-  campus_classes         campus_classes[]
-  campus_sections        campus_sections[]
-  class_fee_schedule     class_fee_schedule[]
-  hr_policy_sets         hr_policy_sets[]
-  students               students[]
-  users                  users[]
-  vouchers               vouchers[]
+  id                       Int                        @id @default(autoincrement())
+  campus_code              String                     @unique @db.VarChar(10)
+  campus_name              String                     @db.VarChar(100)
+  address                  String?
+  academic_calendar_days   academic_calendar_days[]
+  attendance_roll_sessions attendance_roll_sessions[]
+  attendance_staff_daily   attendance_staff_daily[]
+  campus_classes           campus_classes[]
+  campus_sections          campus_sections[]
+  class_fee_schedule       class_fee_schedule[]
+  hr_policy_sets           hr_policy_sets[]
+  students                 students[]
+  users                    users[]
+  vouchers                 vouchers[]
 }
 
 model class_fee_schedule {
@@ -125,18 +127,19 @@ model class_fee_schedule {
 }
 
 model classes {
-  id                     Int                     @id @default(autoincrement())
-  description            String                  @db.VarChar(255)
-  class_code             String                  @db.VarChar(10)
-  academic_system        String                  @db.VarChar(20)
-  term_start_month       Int                     @default(8)
-  campus_classes         campus_classes[]
-  campus_sections        campus_sections[]
-  class_attendance_modes class_attendance_modes?
-  class_fee_schedule     class_fee_schedule[]
-  students               students[]
-  graduated_students     students[]              @relation("GraduatedFromClass")
-  vouchers               vouchers[]
+  id                       Int                        @id @default(autoincrement())
+  description              String                     @db.VarChar(255)
+  class_code               String                     @db.VarChar(10)
+  academic_system          String                     @db.VarChar(20)
+  term_start_month         Int                        @default(8)
+  attendance_roll_sessions attendance_roll_sessions[]
+  campus_classes           campus_classes[]
+  campus_sections          campus_sections[]
+  class_attendance_modes   class_attendance_modes?
+  class_fee_schedule       class_fee_schedule[]
+  students                 students[]
+  graduated_students       students[]                 @relation("GraduatedFromClass")
+  vouchers                 vouchers[]
 }
 
 model deposit_allocations {
@@ -283,11 +286,12 @@ model relatives_attending_tafs {
 }
 
 model sections {
-  id              Int               @id @default(autoincrement())
-  description     String            @db.VarChar(255)
-  campus_sections campus_sections[]
-  students        students[]
-  vouchers        vouchers[]
+  id                       Int                        @id @default(autoincrement())
+  description              String                     @db.VarChar(255)
+  attendance_roll_sessions attendance_roll_sessions[]
+  campus_sections          campus_sections[]
+  students                 students[]
+  vouchers                 vouchers[]
 }
 
 model student_activities {
@@ -473,6 +477,7 @@ model students {
   is_fee_endowment           Boolean                    @default(false)
   fee_start_term             String?                    @db.VarChar(10)
   graduated_from_class_id    Int?
+  attendance_roll_records    attendance_roll_records[]
   deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
@@ -557,23 +562,25 @@ model user_permissions {
 }
 
 model users {
-  id                        String                   @id
-  username                  String                   @unique @db.VarChar(50)
-  password_hash             String                   @db.VarChar(255)
-  email                     String?                  @unique @db.VarChar(100)
-  full_name                 String                   @db.VarChar(100)
-  role                      StaffRole
-  campus_id                 Int?
-  is_active                 Boolean                  @default(true)
-  created_at                DateTime                 @default(now()) @db.Timestamp(6)
-  updated_at                DateTime                 @updatedAt
-  deleted_at                DateTime?                @db.Timestamp(6)
-  employee_profile          employee_profiles?
-  processed_change_requests parent_change_requests[]
-  granted_overrides         user_permissions[]       @relation("granted_by_rel")
-  user_permissions          user_permissions[]       @relation("user_permissions_link")
-  user_refresh_tokens       user_refresh_tokens[]
-  campuses                  campuses?                @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                                                       String                     @id
+  username                                                                 String                     @unique @db.VarChar(50)
+  password_hash                                                            String                     @db.VarChar(255)
+  email                                                                    String?                    @unique @db.VarChar(100)
+  full_name                                                                String                     @db.VarChar(100)
+  role                                                                     StaffRole
+  campus_id                                                                Int?
+  is_active                                                                Boolean                    @default(true)
+  created_at                                                               DateTime                   @default(now()) @db.Timestamp(6)
+  updated_at                                                               DateTime                   @updatedAt
+  deleted_at                                                               DateTime?                  @db.Timestamp(6)
+  attendance_roll_sessions_attendance_roll_sessions_created_by_idTousers   attendance_roll_sessions[] @relation("attendance_roll_sessions_created_by_idTousers")
+  attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[] @relation("attendance_roll_sessions_submitted_by_idTousers")
+  employee_profile                                                         employee_profiles?
+  processed_change_requests                                                parent_change_requests[]
+  granted_overrides                                                        user_permissions[]         @relation("granted_by_rel")
+  user_permissions                                                         user_permissions[]         @relation("user_permissions_link")
+  user_refresh_tokens                                                      user_refresh_tokens[]
+  campuses                                                                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model voucher_heads {
@@ -727,19 +734,20 @@ model designations {
 }
 
 model employee_profiles {
-  id                   Int                 @id @default(autoincrement())
-  user_id              String?             @unique
-  cnic                 String?             @unique @db.VarChar(20)
-  join_date            DateTime?           @db.Date
-  employment_type      String?             @db.VarChar(50)
-  department_id        Int?
-  designation_id       Int?
-  reporting_manager_id Int?
-  departments          departments?        @relation(fields: [department_id], references: [id])
-  designations         designations?       @relation(fields: [designation_id], references: [id])
-  reporting_manager    employee_profiles?  @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
-  subordinates         employee_profiles[] @relation("ReportingManager")
-  users                users?              @relation(fields: [user_id], references: [id])
+  id                     Int                      @id @default(autoincrement())
+  user_id                String?                  @unique
+  cnic                   String?                  @unique @db.VarChar(20)
+  join_date              DateTime?                @db.Date
+  employment_type        String?                  @db.VarChar(50)
+  department_id          Int?
+  designation_id         Int?
+  reporting_manager_id   Int?
+  attendance_staff_daily attendance_staff_daily[]
+  departments            departments?             @relation(fields: [department_id], references: [id])
+  designations           designations?            @relation(fields: [designation_id], references: [id])
+  reporting_manager      employee_profiles?       @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
+  subordinates           employee_profiles[]      @relation("ReportingManager")
+  users                  users?                   @relation(fields: [user_id], references: [id])
 }
 
 model academic_calendar_days {
@@ -787,6 +795,62 @@ model leave_types {
   name        String  @db.VarChar(100)
   description String? @db.VarChar(255)
   is_paid     Boolean @default(true)
+}
+
+model attendance_roll_records {
+  id                       Int                      @id @default(autoincrement())
+  session_id               Int
+  student_cc               Int
+  status                   RollRecordStatus
+  notes                    String?                  @db.VarChar(255)
+  attendance_roll_sessions attendance_roll_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students                 students                 @relation(fields: [student_cc], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([session_id, student_cc])
+  @@index([student_cc])
+}
+
+model attendance_roll_sessions {
+  id                                                    Int                       @id @default(autoincrement())
+  campus_id                                             Int
+  class_id                                              Int
+  section_id                                            Int
+  session_date                                          DateTime                  @db.Date
+  period                                                Int                       @default(1)
+  status                                                RollSessionStatus         @default(DRAFT)
+  skip_reason                                           String?                   @db.VarChar(500)
+  created_by_id                                         String?
+  submitted_by_id                                       String?
+  submitted_at                                          DateTime?                 @db.Timestamp(6)
+  created_at                                            DateTime                  @default(now()) @db.Timestamp(6)
+  updated_at                                            DateTime                  @updatedAt @db.Timestamp(6)
+  attendance_roll_records                               attendance_roll_records[]
+  campuses                                              campuses                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                                              sections                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id, section_id, session_date, period], map: "attendance_roll_sessions_campus_id_class_id_section_id_session_")
+  @@index([session_date, campus_id])
+  @@index([status, session_date])
+}
+
+model attendance_staff_daily {
+  id                Int                   @id @default(autoincrement())
+  employee_id       Int
+  campus_id         Int
+  date              DateTime              @db.Date
+  status            StaffAttendanceStatus
+  notes             String?               @db.VarChar(500)
+  marked_by         String?
+  created_at        DateTime              @default(now()) @db.Timestamp(6)
+  updated_at        DateTime              @updatedAt @db.Timestamp(6)
+  campuses          campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
+  employee_profiles employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, date])
+  @@index([date, campus_id])
 }
 
 enum BulkJobStatus {
@@ -844,4 +908,23 @@ enum MessageStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum RollRecordStatus {
+  PRESENT
+  ABSENT
+}
+
+enum RollSessionStatus {
+  DRAFT
+  SUBMITTED
+  SKIPPED
+}
+
+enum StaffAttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  EXCUSED
 }

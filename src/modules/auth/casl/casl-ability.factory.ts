@@ -32,10 +32,43 @@ export class CaslAbilityFactory {
     const permissions = user.permissions || [];
 
     permissions.forEach((perm) => {
-      const [module, resource, action] = perm.split('.');
+      const parts = perm.split('.');
+
+      // attendance.staff.mark
+      if (parts[0] === 'attendance' && parts[1] === 'staff') {
+        const subject: AppSubjects = 'StaffAttendance';
+        if (user.campusId) {
+          can(Action.Manage, subject, { campusId: user.campusId } as any);
+          can(Action.Read, subject, { campusId: user.campusId } as any);
+        } else {
+          can(Action.Manage, subject);
+          can(Action.Read, subject);
+        }
+        return;
+      }
+
+      // attendance.student.rollcall.mark / .view / .edit_locked
+      if (parts[0] === 'attendance' && parts[1] === 'student') {
+        const subAction = parts.slice(2).join('.');
+        const caslAction =
+          subAction === 'rollcall.view' || subAction === 'biometric.view' || subAction === 'reports.view'
+            ? Action.Read
+            : Action.Manage;
+        const subject: AppSubjects = 'RollSession';
+        if (user.campusId) {
+          can(caslAction, subject, { campusId: user.campusId } as any);
+        } else {
+          can(caslAction, subject);
+        }
+        return;
+      }
+
+      const [module, resource, action] = parts.length >= 3
+        ? [parts[0], parts[1], parts.slice(2).join('.')]
+        : parts;
 
       // Simple mapping logic: edit/create/manage maps to Manage, view maps to Read
-      const caslAction = (action === 'view') ? Action.Read : Action.Manage;
+      const caslAction = (action === 'view' || action.endsWith('.view')) ? Action.Read : Action.Manage;
 
       // Map permission resource keys to CASL Subjects
       let subjects: AppSubjects[] = [];

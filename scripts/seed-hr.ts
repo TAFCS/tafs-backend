@@ -88,7 +88,25 @@ async function main() {
         rule_type: 'ABSENT_FINE_AMOUNT',
         value_json: { amount: 500 },
         description: 'Fine amount for unexcused absence',
-      }
+      },
+      {
+        policy_set_id: policySet.id,
+        rule_type: 'ROLLCALL_SESSION_CUTOFF_TIME',
+        value_json: { time: '16:00' },
+        description: 'Daily cutoff after which draft roll sessions are auto-skipped',
+      },
+      {
+        policy_set_id: policySet.id,
+        rule_type: 'ANNOUNCE_ROLLCALL_TAKEN',
+        value_json: { enabled: true },
+        description: 'Post chat announcement when roll call is submitted',
+      },
+      {
+        policy_set_id: policySet.id,
+        rule_type: 'ANNOUNCE_ROLLCALL_SKIPPED',
+        value_json: { enabled: true },
+        description: 'Post chat announcement when roll call is skipped',
+      },
     ];
 
     for (const rule of defaultRules) {
