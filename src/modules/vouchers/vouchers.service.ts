@@ -352,7 +352,15 @@ export class VouchersService {
         // 6. Upload PDF if provided (Outside transaction to avoid timeout)
         if (pdfBuffer) {
             try {
-                const key = `vouchers/${dto.student_id}/voucher-${voucher.id}-${Date.now()}.pdf`;
+                const feeDateStrCreate = feeDate
+                    ? feeDate.toISOString().slice(0, 10)
+                    : new Date().toISOString().slice(0, 10);
+                const studentRec = await this.prisma.students.findUnique({
+                    where: { cc: dto.student_id },
+                    select: { gr_number: true },
+                });
+                const grOrCcCreate = studentRec?.gr_number || `CC${dto.student_id}`;
+                const key = `vouchers/${dto.student_id}/${feeDateStrCreate}-${grOrCcCreate}-${voucher.id}.pdf`;
                 const pdfUrl = await this.storage.upload(key, pdfBuffer);
 
                 const updatedVoucher = await this.prisma.vouchers.update({
@@ -923,9 +931,12 @@ export class VouchersService {
             )
             : (voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A'));
 
-        const ts = Date.now();
-        const filePrefix = paidStamp ? 'paid-voucher' : 'voucher';
-        const key = `vouchers/${voucher.student_id}/${filePrefix}-${voucher.id}-${ts}.pdf`;
+        const feeDateStr = voucher.fee_date
+            ? new Date(voucher.fee_date).toISOString().slice(0, 10)
+            : new Date().toISOString().slice(0, 10);
+        const grOrCc = voucher.students?.gr_number || `CC${voucher.student_id}`;
+        const paidSuffix = paidStamp ? '-paid' : '';
+        const key = `vouchers/${voucher.student_id}/${feeDateStr}-${grOrCc}-${voucher.id}${paidSuffix}.pdf`;
         const qrUrl = this.storage.getPublicUrl(key);
 
         return {
