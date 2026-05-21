@@ -801,6 +801,10 @@ export class VouchersService {
             if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
             if (f.status === 'PAID') return false;
             if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
+            if (f.fee_date && voucher.fee_date) {
+                return new Date(f.fee_date) < new Date(voucher.fee_date);
+            }
+            // Fallback: month-based comparison when fee_dates are unavailable
             const fYear = f.academic_year, vYear = voucher.academic_year;
             const fMonth = f.target_month, vMonth = voucher.month;
             if (!fYear || !vYear || fMonth == null || vMonth == null) return false;
