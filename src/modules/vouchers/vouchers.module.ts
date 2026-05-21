@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { VouchersService } from './vouchers.service';
 import { VouchersController } from './vouchers.controller';
+import { DepositsController } from './deposits.controller';
 import { VouchersSchedulerService } from './vouchers-scheduler.service';
 import { PrismaModule } from '../../../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
@@ -12,7 +13,7 @@ import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 @Module({
     imports: [PrismaModule, AuthModule, StorageModule, VoucherPdfModule, forwardRef(() => BulkVoucherJobsModule)],
     providers: [VouchersService, BulkVoucherLogicService, VouchersSchedulerService],
-    controllers: [VouchersController],
+    controllers: [VouchersController, DepositsController],
     exports: [VouchersService, BulkVoucherLogicService, VouchersSchedulerService],
 })
 export class VouchersModule {}

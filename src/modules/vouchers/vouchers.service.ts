@@ -1647,6 +1647,69 @@ export class VouchersService {
      * specified voucher are deleted. The deposits record only gets deleted if no
      * allocations remain after this targeted deletion.
      */
+    async reverseDeposit(depositId: number) {
+        const deposit = await this.prisma.deposits.findUnique({
+            where: { id: depositId },
+            include: { deposit_allocations: true },
+        });
+
+        if (!deposit) {
+            throw new NotFoundException(`Deposit ${depositId} not found`);
+        }
+
+        await this.prisma.$transaction(async (tx) => {
+            const allocations = deposit.deposit_allocations;
+
+            // Reset every affected student_fee row
+            const studentFeeIds = [...new Set(
+                allocations.filter(a => a.student_fee_id).map(a => a.student_fee_id!)
+            )];
+            for (const sfId of studentFeeIds) {
+                await tx.student_fees.update({
+                    where: { id: sfId },
+                    data: {
+                        amount_paid: 0,
+                        status: 'ISSUED',
+                        issue_date: null,
+                        due_date: null,
+                        validity_date: null,
+                    } as any,
+                });
+            }
+
+            // Reset arrear surcharge amount_paid if any surcharge allocations exist
+            const surchargeIds = [...new Set(
+                allocations.filter(a => a.surcharge_id).map(a => a.surcharge_id!)
+            )];
+            for (const sId of surchargeIds) {
+                await tx.voucher_arrear_surcharges.update({
+                    where: { id: sId },
+                    data: { amount_paid: 0 },
+                });
+            }
+
+            // Reset every affected voucher and its heads
+            const voucherIds = [...new Set(
+                allocations.filter(a => a.voucher_id).map(a => a.voucher_id!)
+            )];
+            for (const vId of voucherIds) {
+                await tx.vouchers.update({
+                    where: { id: vId },
+                    data: { status: 'UNPAID', late_fee_deposited: 0 } as any,
+                });
+                await (tx as any).$executeRawUnsafe(
+                    `UPDATE voucher_heads SET amount_deposited = 0, balance = net_amount WHERE voucher_id = $1`,
+                    vId,
+                );
+            }
+
+            // Delete deposit — cascades to deposit_allocations
+            await tx.deposits.delete({ where: { id: depositId } });
+        }, { timeout: 15000 });
+
+        return { reversed: true, deposit_id: depositId };
+    }
+
     async clearDeposit(voucherId: number, depositId: number) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
