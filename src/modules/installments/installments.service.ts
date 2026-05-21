@@ -138,6 +138,45 @@ export class InstallmentsService {
     }
   }
 
+  async removeHead(planId: number, headId: number) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const head = await tx.student_fees.findUnique({
+          where: { id: headId },
+          select: { status: true, installment_id: true },
+        });
+
+        if (!head || head.installment_id !== planId) {
+          throw new BadRequestException('Head not found in this plan.');
+        }
+        if (head.status !== 'NOT_ISSUED') {
+          throw new BadRequestException('Only pending (NOT_ISSUED) heads can be deleted.');
+        }
+
+        await tx.student_fees.delete({ where: { id: headId } });
+
+        const remaining = await tx.student_fees.findMany({
+          where: { installment_id: planId },
+          select: { amount: true },
+        });
+
+        if (remaining.length === 0) {
+          return tx.student_fee_installments.delete({ where: { id: planId } });
+        }
+
+        const newTotal = remaining.reduce((sum, f) => sum + Number(f.amount || 0), 0);
+        return tx.student_fee_installments.update({
+          where: { id: planId },
+          data: { total_amount: newTotal, installment_count: remaining.length },
+        });
+      }, { maxWait: 5000, timeout: 30000 });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      console.error('Error deleting installment head:', error);
+      throw new InternalServerErrorException('Failed to delete installment head');
+    }
+  }
+
   async remove(id: number) {
     try {
       return await this.prisma.$transaction(async (tx) => {

@@ -38,6 +38,15 @@ export class InstallmentsController {
     return this.installmentsService.update(id, dto);
   }
 
+  @Delete(':id/heads/:headId')
+  @CheckPolicies((ability: AppAbility) => ability.can(Action.Delete, 'Fee'))
+  async removeHead(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('headId', ParseIntPipe) headId: number,
+  ) {
+    return this.installmentsService.removeHead(id, headId);
+  }
+
   @Delete(':id')
   @CheckPolicies((ability: AppAbility) => ability.can(Action.Delete, 'Fee'))
   async remove(@Param('id', ParseIntPipe) id: number) {
