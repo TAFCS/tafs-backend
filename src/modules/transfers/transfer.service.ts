@@ -114,7 +114,7 @@ export class TransferService {
     return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
-  async executeTransfer(cc: number, dto: { to_class_id: number; discipline?: string; remarks?: string }) {
+  async executeTransfer(cc: number, dto: { to_class_id: number; discipline?: string; remarks?: string; target_academic_year?: string }) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: { classes: { select: { description: true, academic_system: true } } },
@@ -128,12 +128,16 @@ export class TransferService {
     });
     if (!toClass) throw new BadRequestException(`Target class #${dto.to_class_id} not found`);
 
-    // Increment academic year
+    // Increment academic year or use provided
     const currentYear = student.academic_year;
     let nextYear = currentYear || '';
-    const rangeMatch = currentYear?.match(/^(\d{4})-(\d{4})$/);
-    if (rangeMatch) {
-      nextYear = `${Number(rangeMatch[1]) + 1}-${Number(rangeMatch[2]) + 1}`;
+    if (dto.target_academic_year?.trim()) {
+      nextYear = dto.target_academic_year.trim();
+    } else {
+      const rangeMatch = currentYear?.match(/^(\d{4})-(\d{4})$/);
+      if (rangeMatch) {
+        nextYear = `${Number(rangeMatch[1]) + 1}-${Number(rangeMatch[2]) + 1}`;
+      }
     }
 
     await this.prisma.$transaction(async (tx) => {

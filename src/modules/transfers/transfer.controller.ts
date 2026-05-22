@@ -19,7 +19,7 @@ export class TransferController {
   @ApiOperation({ summary: 'Execute a student transfer to a new class/academic system' })
   async executeTransfer(
     @Param('cc', ParseIntPipe) cc: number,
-    @Body() body: { to_class_id: number; discipline?: string; remarks?: string },
+    @Body() body: { to_class_id: number; discipline?: string; remarks?: string; target_academic_year?: string },
   ) {
     const data = await this.transferService.executeTransfer(cc, body);
     return createApiResponse(data, HttpStatus.OK, 'Transfer executed successfully');
