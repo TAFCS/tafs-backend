@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { PostdatedChequesService } from '../postdated-cheques/postdated-cheques.service';
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private postdatedChequesSvc: PostdatedChequesService,
+  ) {}
 
   private getCurrentAcademicYear(): string {
     const now = new Date();
@@ -126,6 +130,8 @@ export class AnalyticsService {
       });
     }
 
+    const postdatedCheques = await this.postdatedChequesSvc.getDashboardSummary();
+
     return {
       financials: {
         currentYear,
@@ -140,7 +146,8 @@ export class AnalyticsService {
         branchwise: branchwiseStrength,
       },
       campuses: campusesList,
-      trends
+      trends,
+      postdated_cheques: postdatedCheques,
     };
   }
 }

@@ -23,6 +23,7 @@ import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-
 import { EnrollmentModule } from './modules/enrollments/enrollment.module';
 import { MediaModule } from './modules/media/media.module';
 import { StudentFlagsModule } from './modules/student-flags/student-flags.module';
+import { PostdatedChequesModule } from './modules/postdated-cheques/postdated-cheques.module';
 import { TransferModule } from './modules/transfers/transfer.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AppPortalModule } from './modules/app-portal/app-portal.module';
@@ -59,6 +60,7 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
     EnrollmentModule,
     MediaModule,
     StudentFlagsModule,
+    PostdatedChequesModule,
     TransferModule,
     AnalyticsModule,
     AppPortalModule,
