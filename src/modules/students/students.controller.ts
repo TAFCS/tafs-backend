@@ -93,6 +93,17 @@ export class StudentsController {
     );
   }
 
+  @Patch(':id/undo-left')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async undoLeftStudent(@Param('id', ParseIntPipe) id: number) {
+    const updated = await this.studentsService.undoLeftStudent(id);
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      'Student restored from left successfully',
+    );
+  }
+
   @Post('promotion/single')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
   async promoteSingle(@Body() dto: PromoteSingleStudentDto) {

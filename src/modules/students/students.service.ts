@@ -51,7 +51,7 @@ export class StudentsService {
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
     if (classId) return classId;
-    
+
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: {
@@ -889,12 +889,65 @@ export class StudentsService {
     });
   }
 
+  async undoLeftStudent(id: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: id },
+      select: {
+        cc: true,
+        status: true,
+        deleted_at: true,
+      },
+    });
+
+    if (!student || student.deleted_at) {
+      throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    if (student.status !== StudentStatus.LEFT) {
+      throw new BadRequestException('Only students requested as left can be restored');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.students.update({
+        where: { cc: id },
+        data: {
+          status: StudentStatus.ENROLLED,
+        },
+        include: this.assignmentInclude,
+      });
+
+      await tx.student_flags.updateMany({
+        where: {
+          student_id: id,
+          flag: 'LEFT',
+          work_done: false,
+        },
+        data: {
+          work_done: true,
+        },
+      });
+
+      await tx.student_flags.create({
+        data: {
+          student_id: id,
+          flag: `UNDO_LEFT_LOG_${Date.now()}`,
+          reminder_date: new Date(),
+          work_done: true,
+          comment: 'Student status restored to ENROLLED from LEFT',
+        },
+      });
+
+      return updated;
+    });
+  }
+
   async promoteSingle(dto: PromoteSingleStudentDto) {
     const result = await this.promoteBulk({
       from: dto.from,
       to: dto.to,
       graduate: dto.graduate,
       expel: dto.expel,
+      left: dto.left,
       target_academic_year: dto.target_academic_year,
       to_section_id: dto.to_section_id,
       student_ids: [dto.student_id],

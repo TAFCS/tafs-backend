@@ -437,7 +437,6 @@ model student_siblings {
 
 model students {
   cc                         Int                        @id @default(autoincrement())
-  cnic                       String?                    @unique @db.VarChar(15)
   family_id                  Int?
   campus_id                  Int?
   gr_number                  String?                    @db.VarChar(50)
@@ -478,6 +477,7 @@ model students {
   is_fee_endowment           Boolean                    @default(false)
   fee_start_term             String?                    @db.VarChar(10)
   graduated_from_class_id    Int?
+  cnic                       String?                    @unique @db.VarChar(15)
   attendance_roll_records    attendance_roll_records[]
   deposits                   deposits[]
   relatives_attending_tafs   relatives_attending_tafs[]
