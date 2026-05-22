@@ -804,6 +804,7 @@ export class StudentsService {
       photograph_url: s.photograph_url,
       photo_blue_bg_url: s.photo_blue_bg_url,
       date_of_admission: s.doa,
+      academic_year: s.academic_year,
       families: s.families ? {
         household_name: s.families.household_name,
         legacy_pid: s.families.legacy_pid,

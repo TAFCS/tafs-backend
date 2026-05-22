@@ -132,6 +132,25 @@ export class IdentityService {
       });
       const nextCC = (latestStudent?.cc || 0) + 1;
 
+      let classId = dto.admission.class_id || undefined;
+      if (!classId && dto.admission.requested_grade) {
+        const grade = dto.admission.requested_grade;
+        const normalized = grade.replace(/[-\s]/g, '').toUpperCase();
+        const matchedClass = await tx.classes.findFirst({
+          where: {
+            OR: [
+              { class_code: { equals: grade, mode: 'insensitive' } },
+              { class_code: { equals: normalized, mode: 'insensitive' } },
+              { description: { equals: grade, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (matchedClass) {
+          classId = matchedClass.id;
+        }
+      }
+
       const student = await tx.students.create({
         data: {
           cc: nextCC,
@@ -158,7 +177,7 @@ export class IdentityService {
           admission_age_years: this.calcAge(dob),
           status: 'SOFT_ADMISSION',
           campus_id: dto.admission.campus_id || undefined,
-          class_id: dto.admission.class_id || undefined,
+          class_id: classId,
           section_id: dto.admission.section_id || undefined,
         },
       });
