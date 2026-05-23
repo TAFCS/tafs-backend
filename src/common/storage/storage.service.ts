@@ -4,6 +4,7 @@ import {
     S3Client,
     PutObjectCommand,
     DeleteObjectCommand,
+    PutBucketCorsCommand,
 } from '@aws-sdk/client-s3';
 
 @Injectable()
@@ -56,8 +57,43 @@ export class StorageService {
             this.logger.log(
                 `Storage initialized with endpoint "${this.uploadEndpoint}" (bucketQualifiedInput=${isBucketQualifiedEndpoint})`,
             );
+
+            // Apply CORS policy to the bucket so browsers can load assets directly.
+            // This is idempotent — safe to run on every startup.
+            this.ensureBucketCors().catch((err) =>
+                this.logger.warn(`Could not set bucket CORS: ${err?.message}`),
+            );
         }
     }
+
+    /**
+     * Sets a permissive CORS policy on the Spaces bucket so that browsers
+     * (Flutter Web, React webapp) can load images and audio files directly
+     * from the CDN without CORS errors.
+     *
+     * Only allows GET and HEAD on all objects (*) from any origin.
+     * PUT/POST still require authentication via the backend.
+     */
+    private async ensureBucketCors(): Promise<void> {
+        await this.client.send(
+            new PutBucketCorsCommand({
+                Bucket: this.bucket,
+                CORSConfiguration: {
+                    CORSRules: [
+                        {
+                            AllowedOrigins: ['*'],
+                            AllowedMethods: ['GET', 'HEAD'],
+                            AllowedHeaders: ['*'],
+                            ExposeHeaders: ['Content-Length', 'Content-Type', 'ETag'],
+                            MaxAgeSeconds: 3600,
+                        },
+                    ],
+                },
+            }),
+        );
+        this.logger.log(`✅ Bucket CORS policy applied to "${this.bucket}"`);
+    }
+
 
     /** Returns the public CDN URL for a given key without uploading anything. */
     getPublicUrl(key: string): string {

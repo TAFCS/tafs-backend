@@ -4,6 +4,7 @@ import {
   SubscribeMessage,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
@@ -23,7 +24,7 @@ import { FcmService } from './fcm.service';
   pingTimeout: 60000,
   pingInterval: 25000,
 })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
   
@@ -39,45 +40,65 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly fcmService: FcmService,
   ) {}
 
-  async handleConnection(client: Socket) {
-    console.log('[ChatGateway] Connection attempt from:', client.id);
-    try {
-      // 1. Extract Token from handshake auth or headers
-      const token = client.handshake.auth?.token || client.handshake.headers?.authorization?.split(' ')[1];
-      
-      let payload: any;
-      if (!token) {
-        // Allow fallback to cookies for Staff Next.js client
-        const cookieToken = this.extractTokenFromCookie(client.handshake.headers.cookie);
-        if (!cookieToken) {
-          console.warn('[ChatGateway] No token found for client:', client.id);
-          throw new Error('No token provided');
+  // ─── Socket.IO Middleware (runs BEFORE connection is established) ──────────
+  // Using middleware instead of handleConnection+disconnect ensures clients
+  // receive a proper connect_error with a typed message, stopping reconnect storms.
+  afterInit(server: Server) {
+    server.use((socket: Socket, next) => {
+      try {
+        const rawToken =
+          socket.handshake.auth?.token ||
+          socket.handshake.headers?.authorization?.split(' ')[1];
+
+        if (!rawToken) {
+          // Staff webapp uses httpOnly cookies — extract from header
+          const cookieToken = this.extractTokenFromCookie(
+            socket.handshake.headers.cookie,
+          );
+          if (!cookieToken) {
+            return next(new Error('unauthorized'));
+          }
+          const payload = this.jwtService.verify(cookieToken);
+          (socket as any).tafsPayload = payload;
+          return next();
         }
-        
-        payload = this.jwtService.verify(cookieToken);
-      } else {
-        payload = this.jwtService.verify(token);
+
+        const payload = this.jwtService.verify(rawToken);
+        (socket as any).tafsPayload = payload;
+        return next();
+      } catch (error: any) {
+        const isExpired =
+          error?.message?.includes('jwt expired') ||
+          error?.name === 'TokenExpiredError';
+        // Pass a typed error — clients check err.message to decide whether to refresh
+        return next(new Error(isExpired ? 'token_expired' : 'unauthorized'));
       }
+    });
+  }
 
-      console.log('[ChatGateway] Token verified for:', payload.userType, payload.sub || payload.id);
-
+  async handleConnection(client: Socket) {
+    // Auth is already verified by the server middleware in afterInit.
+    // This hook only sets up rooms and presence tracking.
+    const payload = (client as any).tafsPayload;
+    console.log('[ChatGateway] Connected:', payload.userType, payload.sub || payload.familyId);
+    try {
       if (payload.userType === 'STAFF') {
         client.join('admin_inbox');
-        console.log(`[ChatGateway] Staff connected to admin_inbox: ${client.id}`);
+        console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
       } else if (payload.userType === 'PARENT') {
         const familyId = Number(payload.familyId || payload.sub);
         if (isNaN(familyId)) {
-          throw new Error('Invalid familyId');
+          client.disconnect(true);
+          return;
         }
         client.join(`family_app_${familyId}`);
         client.join('all_parents');
-        
+
         // Join Grade and Section rooms for announcements
         const students = await this.prisma.students.findMany({
           where: { family_id: familyId, deleted_at: null },
-          include: { classes: true, sections: true }
+          include: { classes: true, sections: true },
         });
-
         for (const student of students) {
           if (student.classes?.class_code) {
             client.join(`grade_${student.classes.class_code}`);
@@ -86,23 +107,22 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             client.join(`section_${student.sections.description}`);
           }
         }
-        
+
         // Track presence
         if (!this.familySockets.has(familyId)) {
           this.familySockets.set(familyId, new Set());
         }
         this.familySockets.get(familyId)!.add(client.id);
         this.socketToFamily.set(client.id, familyId);
-        
+
         // Notify admins that this family is online
-        this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'ONLINE' });
-        
-        console.log(`[ChatGateway] Parent ${familyId} connected and joined announcement rooms: ${client.id}`);
-      } else {
-        throw new Error('Unknown user type');
+        this.server
+          .to('admin_inbox')
+          .emit('userStatusChanged', { familyId, status: 'ONLINE' });
+        console.log(`[ChatGateway] Parent ${familyId} connected: ${client.id}`);
       }
-    } catch (error) {
-      console.error('[ChatGateway] Connection rejected:', error.message);
+    } catch (error: any) {
+      console.warn('[ChatGateway] Room setup error:', error.message);
       client.disconnect(true);
     }
   }
