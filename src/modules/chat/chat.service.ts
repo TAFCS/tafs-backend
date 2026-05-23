@@ -180,12 +180,18 @@ export class ChatService {
       skip,
     });
 
-    // Map messages to include accurate is_read status based on last_read_at
-    const lastReadAt = conversation.parent_last_read_at;
-    return messages.map(m => ({
-      ...m,
-      is_read: m.is_read || (lastReadAt && m.created_at <= lastReadAt) || m.sender_type === 'GUARDIAN'
-    }));
+    // Map messages to include accurate is_read status based on last_read_at of the recipient
+    const parentLastRead = conversation.parent_last_read_at;
+    const adminLastRead = conversation.admin_last_read_at;
+    return messages.map(m => {
+      const isReadByRecipient = m.sender_type === 'ADMIN'
+        ? (m.is_read || (parentLastRead && m.created_at <= parentLastRead))
+        : (m.is_read || (adminLastRead && m.created_at <= adminLastRead));
+      return {
+        ...m,
+        is_read: isReadByRecipient,
+      };
+    });
   }
 
   async uploadMedia(file: Express.Multer.File): Promise<{ url: string, metadata: any }> {
