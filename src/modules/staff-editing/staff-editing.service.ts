@@ -1025,35 +1025,26 @@ export class StaffEditingService {
       const rawFlag = String(flag?.flag || '');
       const upperFlag = rawFlag.toUpperCase();
 
-      if (upperFlag === 'EXPELLED') {
-        logs.push({
-          id: `flag-${flag.id}`,
-          type: 'EXPELLED',
-          title: 'Student expelled',
-          description: flag?.comment || null,
-          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
-        });
-        continue;
-      }
+      // Unified status-change log matching — covers both legacy and new changeStatus patterns
+      const statusFlagConfig: Array<{ test: (f: string) => boolean; type: string; title: string }> = [
+        { test: f => f.startsWith('ENROLLED_LOG_'),       type: 'ENROLLED',       title: 'Student enrolled' },
+        { test: f => f.startsWith('SOFT_ADMISSION_LOG_'), type: 'SOFT_ADMISSION', title: 'Soft admission recorded' },
+        { test: f => f.startsWith('LEFT_LOG_'),           type: 'LEFT',           title: 'Student left' },
+        { test: f => f.startsWith('UNDO_LEFT_LOG_'),      type: 'UNDO_LEFT',      title: 'Student re-enrolled (left undone)' },
+        { test: f => f === 'EXPELLED' || f.startsWith('EXPELLED_LOG_'), type: 'EXPELLED',   title: 'Student expelled' },
+        { test: f => f.startsWith('UNEXPELLED_LOG_'),     type: 'UNEXPELLED',     title: 'Student unexpelled' },
+        { test: f => f.startsWith('GRADUATED_LOG_'),      type: 'GRADUATED',      title: 'Student graduated' },
+        { test: f => f.startsWith('PROMOTION_LOG_'),      type: 'PROMOTION',      title: 'Student promoted' },
+      ];
 
-      if (upperFlag.startsWith('UNEXPELLED_LOG_')) {
+      const matched = statusFlagConfig.find(cfg => cfg.test(upperFlag));
+      if (matched) {
         logs.push({
           id: `flag-${flag.id}`,
-          type: 'UNEXPELLED',
-          title: 'Student unexpelled',
+          type: matched.type,
+          title: matched.title,
           description: flag?.comment || null,
-          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
-        });
-        continue;
-      }
-
-      if (upperFlag.startsWith('GRADUATED_LOG_')) {
-        logs.push({
-          id: `flag-${flag.id}`,
-          type: 'GRADUATED',
-          title: 'Student graduated',
-          description: flag?.comment || null,
-          occurred_at: flag?.reminder_date ?? flag?.created_at ?? null,
+          occurred_at: flag?.created_at ?? flag?.reminder_date ?? null,
         });
       }
     }

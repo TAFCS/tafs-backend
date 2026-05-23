@@ -633,7 +633,7 @@ export class StudentsService {
         },
          student_previous_schools: { orderBy: { id: 'desc' }, take: 1 },
         student_activities: true,
-        student_flags: { where: { work_done: false } },
+        student_flags: { orderBy: { reminder_date: 'desc' } },
         graduated_from_class: true,
       }
     });
@@ -813,6 +813,28 @@ export class StudentsService {
       siblings: s.families?.students
         ?.filter((sib: any) => sib.cc !== s.cc)
         ?.map((sib: any) => this.mapSiblingForResponse(sib)),
+      action_logs: s.student_flags.map((f: any) => {
+        // Derive a clean type from the flag key (e.g. "GRADUATED_LOG_1234" → "GRADUATED")
+        const rawType = f.flag
+          .replace(/_LOG_\d+$/, '')   // strip timestamped suffix
+          .replace(/_LOG$/, '');       // strip plain _LOG suffix
+        const titleMap: Record<string, string> = {
+          ENROLLED:       'Enrolled',
+          SOFT_ADMISSION: 'Soft Admission',
+          LEFT:           'Marked as Left',
+          UNDO_LEFT:      'Left Status Reversed',
+          EXPELLED:       'Expelled',
+          UNEXPELLED:     'Expulsion Reversed',
+          GRADUATED:      'Graduated',
+        };
+        return {
+          id:          String(f.id),
+          type:        rawType,
+          title:       titleMap[rawType] ?? rawType.replace(/_/g, ' '),
+          description: f.comment ?? null,
+          occurred_at: f.reminder_date?.toISOString() ?? f.created_at?.toISOString() ?? null,
+        };
+      }),
     };
 
   }
@@ -917,10 +939,11 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
+      // Mark all LEFT_LOG_ flags as done (new timestamped pattern)
       await tx.student_flags.updateMany({
         where: {
           student_id: id,
-          flag: 'LEFT',
+          flag: { startsWith: 'LEFT_LOG_' },
           work_done: false,
         },
         data: {
@@ -935,6 +958,63 @@ export class StudentsService {
           reminder_date: new Date(),
           work_done: true,
           comment: 'Student status restored to ENROLLED from LEFT',
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  async changeStatus(id: number, newStatus: StudentStatus, reason?: string) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: id },
+      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true },
+    });
+
+    if (!student || student.deleted_at) {
+      throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    if ((student.status as any) === newStatus) {
+      throw new BadRequestException(`Student is already in ${newStatus} status`);
+    }
+
+    // Each status maps to a timestamped flag prefix so every transition is individually logged.
+    const flagPrefixMap: Record<StudentStatus, string> = {
+      [StudentStatus.ENROLLED]:       'ENROLLED_LOG',
+      [StudentStatus.SOFT_ADMISSION]: 'SOFT_ADMISSION_LOG',
+      [StudentStatus.LEFT]:           'LEFT_LOG',
+      [StudentStatus.EXPELLED]:       'EXPELLED_LOG',
+      [StudentStatus.GRADUATED]:      'GRADUATED_LOG',
+    };
+
+    return this.prisma.$transaction(async (tx) => {
+      const updateData: any = { status: newStatus };
+
+      // When graduating, record which class the student graduated from and clear class assignment
+      if (newStatus === StudentStatus.GRADUATED) {
+        if (student.class_id) {
+          updateData.graduated_from_class_id = student.class_id;
+        }
+        updateData.class_id = null;
+        // Auto-increment academic year (e.g. 2023-2024 → 2024-2025)
+        updateData.academic_year = this.incrementAcademicYear(student.academic_year);
+      }
+
+      const updated = await tx.students.update({
+        where: { cc: id },
+        data: updateData,
+        include: this.assignmentInclude,
+      });
+
+      await tx.student_flags.create({
+        data: {
+          student_id: id,
+          flag: `${flagPrefixMap[newStatus]}_${Date.now()}`,
+          work_done: true,
+          comment: reason?.trim() || null,
+          // Always record the exact date/time this action was performed
+          reminder_date: new Date(),
         },
       });
 
@@ -976,10 +1056,17 @@ export class StudentsService {
       throw new BadRequestException('Only one of `to`, `graduate`, `expel`, or `left` may be specified at a time');
     }
 
-    const fromClass = await this.resolveClassSelector(dto.from, 'from');
+    // For expel/left/graduate, `from` is optional — we don't move the student between classes.
+    const fromIsMissing = dto.from?.class_id == null && !dto.from?.class_label;
+    if (!isGraduating && !isExpelling && !isLeaving && fromIsMissing) {
+      throw new BadRequestException('`from` selector (class_id or class_label) is required for promotion');
+    }
+    const fromClass = (isGraduating || isExpelling || isLeaving) && fromIsMissing
+      ? null
+      : await this.resolveClassSelector(dto.from!, 'from');
     const toClass = isGraduating || isExpelling || isLeaving ? null : await this.resolveClassSelector(dto.to!, 'to');
 
-    if (!isGraduating && !isExpelling && !isLeaving && toClass && fromClass.id === toClass.id) {
+    if (!isGraduating && !isExpelling && !isLeaving && toClass && fromClass?.id === toClass.id) {
       throw new BadRequestException('From and to class must be different for promotion');
     }
 
@@ -1015,7 +1102,7 @@ export class StudentsService {
 
     if (isExplicitIds) {
       where.cc = { in: distinctStudentIds };
-    } else {
+    } else if (fromClass) {
       where.class_id = fromClass.id;
     }
 
@@ -1058,7 +1145,7 @@ export class StudentsService {
 
           const outcome = await this.processPromotionForStudent(
             student,
-            fromClass,
+            fromClass!,
             toClass,
             isGraduating,
             isExpelling,
@@ -1133,7 +1220,7 @@ export class StudentsService {
       academic_year: string | null;
       status: string;
     },
-    fromClass: ResolvedClass,
+    fromClass: ResolvedClass | null,
     toClass: ResolvedClass | null,
     isGraduating: boolean,
     isExpelling: boolean,
@@ -1196,10 +1283,11 @@ export class StudentsService {
     }
 
     // ── From-class mismatch ──────────────────────────────────────────────────
+    // For expel/left/graduate, fromClass may be null (no class required) — skip check.
     // For bulk (no explicit IDs): strict failure — the student shouldn't be in this batch.
     // For explicit IDs: softer skip — the caller asked for this specific student
     // but they're not in the expected class. Log it but don't inflate failure count.
-    if (student.class_id !== fromClass.id) {
+    if (fromClass && student.class_id !== fromClass.id) {
       return {
         student_id: student.cc,
         status: isExplicitIds ? 'skipped' : 'failed',
@@ -1323,8 +1411,7 @@ export class StudentsService {
           dry_run: false,
         };
       } else if (isExpelling) {
-        // Expulsion: set status to EXPELLED and store expulsion metadata.
-        const expulsionDate = new Date();
+        // Expulsion: set status to EXPELLED and create a timestamped historical log entry.
         const expulsionReason = reason?.trim() || null;
 
         await this.prisma.$transaction(async (tx) => {
@@ -1333,24 +1420,15 @@ export class StudentsService {
             data: { status: StudentStatus.EXPELLED },
           });
 
-          await tx.student_flags.upsert({
-            where: {
-              student_id_flag: {
-                student_id: student.cc,
-                flag: 'EXPELLED',
-              },
-            },
-            update: {
-              reminder_date: expulsionDate,
-              comment: expulsionReason,
-              work_done: false,
-            },
-            create: {
+          // Use timestamped flag (same pattern as changeStatus) so every expulsion
+          // is individually logged and work_done: true (no persistent unresolved alert).
+          await tx.student_flags.create({
+            data: {
               student_id: student.cc,
-              flag: 'EXPELLED',
-              reminder_date: expulsionDate,
+              flag: `EXPELLED_LOG_${Date.now()}`,
+              reminder_date: new Date(),
               comment: expulsionReason,
-              work_done: false,
+              work_done: true,
             },
           });
         });
@@ -1376,24 +1454,15 @@ export class StudentsService {
             data: { status: StudentStatus.LEFT },
           });
 
-          await tx.student_flags.upsert({
-            where: {
-              student_id_flag: {
-                student_id: student.cc,
-                flag: 'LEFT',
-              },
-            },
-            update: {
-              reminder_date: leftDate,
-              comment: leftReason,
-              work_done: false,
-            },
-            create: {
+          // Use a timestamped flag key so each left action creates a fresh log entry
+          // (same pattern as GRADUATED_LOG_ and UNDO_LEFT_LOG_)
+          await tx.student_flags.create({
+            data: {
               student_id: student.cc,
-              flag: 'LEFT',
+              flag: `LEFT_LOG_${Date.now()}`,
               reminder_date: leftDate,
               comment: leftReason,
-              work_done: false,
+              work_done: true,
             },
           });
         });

@@ -5,6 +5,7 @@ import { PaymentHistoryQueryDto } from './dto/payment-history-query.dto';
 import { AssignStudentDto } from './dto/assign-student.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
+import { ChangeStatusDto } from './dto/change-status.dto';
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -101,6 +102,20 @@ export class StudentsController {
       updated,
       HttpStatus.OK,
       'Student restored from left successfully',
+    );
+  }
+
+  @Patch(':id/status')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async changeStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ChangeStatusDto,
+  ) {
+    const updated = await this.studentsService.changeStatus(id, dto.status, dto.reason);
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      `Student status changed to ${dto.status} successfully`,
     );
   }
 

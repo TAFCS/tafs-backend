@@ -480,6 +480,7 @@ model students {
   cnic                       String?                    @unique @db.VarChar(15)
   attendance_roll_records    attendance_roll_records[]
   deposits                   deposits[]
+  postdated_cheques          postdated_cheques[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
   student_admissions         student_admissions[]
@@ -498,7 +499,6 @@ model students {
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vouchers                   vouchers[]
-  postdated_cheques          postdated_cheques[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -579,12 +579,12 @@ model users {
   attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[] @relation("attendance_roll_sessions_submitted_by_idTousers")
   employee_profile                                                         employee_profiles?
   processed_change_requests                                                parent_change_requests[]
+  postdated_cheques_cashed                                                 postdated_cheques[]        @relation("ChequeCashedBy")
+  postdated_cheques_received                                               postdated_cheques[]        @relation("ChequeReceivedBy")
   granted_overrides                                                        user_permissions[]         @relation("granted_by_rel")
   user_permissions                                                         user_permissions[]         @relation("user_permissions_link")
   user_refresh_tokens                                                      user_refresh_tokens[]
   campuses                                                                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  postdated_cheques_received                                               postdated_cheques[]        @relation("ChequeReceivedBy")
-  postdated_cheques_cashed                                                 postdated_cheques[]        @relation("ChequeCashedBy")
 }
 
 model voucher_heads {
@@ -857,6 +857,29 @@ model attendance_staff_daily {
   @@index([date, campus_id])
 }
 
+model postdated_cheques {
+  id               Int                   @id @default(autoincrement())
+  student_id       Int
+  cheque_number    String                @db.VarChar(50)
+  bank_name        String?               @db.VarChar(100)
+  amount           Decimal               @db.Decimal(12, 2)
+  cheque_date      DateTime              @db.Date
+  received_date    DateTime              @db.Date
+  received_by      String?               @db.VarChar(255)
+  status           PostdatedChequeStatus @default(PENDING)
+  cashed_date      DateTime?             @db.Date
+  cashed_by        String?               @db.VarChar(255)
+  notes            String?
+  created_at       DateTime              @default(now()) @db.Timestamp(6)
+  cashed_by_user   users?                @relation("ChequeCashedBy", fields: [cashed_by], references: [id])
+  received_by_user users?                @relation("ChequeReceivedBy", fields: [received_by], references: [id])
+  students         students              @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+
+  @@index([student_id])
+  @@index([status])
+  @@index([cheque_date])
+}
+
 enum BulkJobStatus {
   PENDING
   PROCESSING
@@ -938,28 +961,4 @@ enum PostdatedChequeStatus {
   CASHED
   BOUNCED
   RETURNED
-}
-
-model postdated_cheques {
-  id               Int                   @id @default(autoincrement())
-  student_id       Int
-  cheque_number    String                @db.VarChar(50)
-  bank_name        String?               @db.VarChar(100)
-  amount           Decimal               @db.Decimal(12, 2)
-  cheque_date      DateTime              @db.Date
-  received_date    DateTime              @db.Date
-  received_by      String?               @db.VarChar(255)
-  status           PostdatedChequeStatus @default(PENDING)
-  cashed_date      DateTime?             @db.Date
-  cashed_by        String?               @db.VarChar(255)
-  notes            String?
-  created_at       DateTime              @default(now()) @db.Timestamp(6)
-  
-  students         students              @relation(fields: [student_id], references: [cc], onDelete: Cascade)
-  received_by_user users?                @relation("ChequeReceivedBy", fields: [received_by], references: [id], onDelete: SetNull)
-  cashed_by_user   users?                @relation("ChequeCashedBy", fields: [cashed_by], references: [id], onDelete: SetNull)
-
-  @@index([student_id])
-  @@index([status])
-  @@index([cheque_date])
 }

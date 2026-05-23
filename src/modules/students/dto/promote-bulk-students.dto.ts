@@ -14,11 +14,12 @@ import { ClassSelectorDto } from './class-selector.dto';
 export class PromoteBulkStudentsDto {
   /**
    * Source class that students must currently be assigned to.
-   * Always required (used as a filter when no student_ids are given).
+   * Required for promotion. Optional when expel/left/graduate is true.
    */
+  @IsOptional()
   @ValidateNested()
   @Type(() => ClassSelectorDto)
-  from!: ClassSelectorDto;
+  from?: ClassSelectorDto;
 
   /**
    * Target class to promote students into.

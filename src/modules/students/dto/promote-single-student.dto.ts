@@ -16,9 +16,10 @@ export class PromoteSingleStudentDto {
   @Min(1)
   student_id!: number;
 
+  @IsOptional()
   @ValidateNested()
   @Type(() => ClassSelectorDto)
-  from!: ClassSelectorDto;
+  from?: ClassSelectorDto;
 
   /** Required when neither `graduate`, `expel`, nor `left` is true. */
   @ValidateIf((o) => !o.graduate && !o.expel && !o.left)
