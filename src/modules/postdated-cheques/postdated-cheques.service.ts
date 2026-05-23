@@ -1,15 +1,39 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PostdatedChequeStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { IsNotEmpty, IsString, IsOptional, IsNumber, IsInt, IsEnum } from 'class-validator';
 
 export class CreatePostdatedChequeDto {
+  @IsNotEmpty()
+  @IsInt()
   student_id: number;
+
+  @IsNotEmpty()
+  @IsString()
   cheque_number: string;
+
+  @IsOptional()
+  @IsString()
   bank_name?: string;
+
+  @IsNotEmpty()
+  @IsNumber()
   amount: number;
+
+  @IsNotEmpty()
+  @IsString()
   cheque_date: string;
+
+  @IsNotEmpty()
+  @IsString()
   received_date: string;
-  received_by: string;
+
+  @IsOptional()
+  @IsString()
+  received_by?: string;
+
+  @IsOptional()
+  @IsString()
   notes?: string;
 }
 
@@ -22,9 +46,20 @@ export class ListPostdatedChequesFilter {
 }
 
 export class UpdateStatusDto {
+  @IsNotEmpty()
+  @IsEnum(PostdatedChequeStatus)
   status: PostdatedChequeStatus;
+
+  @IsOptional()
+  @IsString()
   cashed_by?: string;
+
+  @IsOptional()
+  @IsString()
   cashed_date?: string;
+
+  @IsOptional()
+  @IsString()
   notes?: string;
 }
 
