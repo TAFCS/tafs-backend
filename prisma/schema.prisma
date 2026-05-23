@@ -871,8 +871,8 @@ model postdated_cheques {
   cashed_by        String?               @db.VarChar(255)
   notes            String?
   created_at       DateTime              @default(now()) @db.Timestamp(6)
-  cashed_by_user   users?                @relation("ChequeCashedBy", fields: [cashed_by], references: [id])
-  received_by_user users?                @relation("ChequeReceivedBy", fields: [received_by], references: [id])
+  cashed_by_user   users?                @relation("ChequeCashedBy", fields: [cashed_by], references: [id], onDelete: NoAction)
+  received_by_user users?                @relation("ChequeReceivedBy", fields: [received_by], references: [id], onDelete: NoAction)
   students         students              @relation(fields: [student_id], references: [cc], onDelete: Cascade)
 
   @@index([student_id])
@@ -961,4 +961,5 @@ enum PostdatedChequeStatus {
   CASHED
   BOUNCED
   RETURNED
+  CANCELLED
 }

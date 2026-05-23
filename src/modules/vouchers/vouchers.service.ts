@@ -2299,19 +2299,29 @@ export class VouchersService {
             // ── Step 8: Copy surcharge rows from original to the unpaid voucher.
             //    The original's surcharges cascade-delete when the original is voided later,
             //    so we must copy them before that happens.
+            //    Only copy surcharges with an outstanding balance. Store just the outstanding
+            //    portion (amount - amount_paid) with amount_paid = 0, so normalizeVoucher does
+            //    not see any deposit on the balance voucher and correctly computes status UNPAID.
             const originalSurcharges: any[] = (original as any).voucher_arrear_surcharges ?? [];
-            if (originalSurcharges.length > 0) {
-                await (tx as any).voucher_arrear_surcharges.createMany({
-                    data: originalSurcharges.map((s: any) => ({
+            const outstandingSurcharges = originalSurcharges
+                .filter((s: any) => !s.waived)
+                .map((s: any) => {
+                    const outstanding = new Prisma.Decimal(s.amount || 0).sub(new Prisma.Decimal(s.amount_paid || 0));
+                    return outstanding.gt(0) ? {
                         voucher_id: unpaid.id,
                         arrear_fee_date: s.arrear_fee_date,
                         arrear_month: s.arrear_month,
                         arrear_year: s.arrear_year,
-                        amount: s.amount,
-                        amount_paid: s.amount_paid || 0,
-                        waived: s.waived,
-                        waived_by: s.waived_by ?? null,
-                    })),
+                        amount: outstanding,
+                        amount_paid: 0,
+                        waived: false,
+                        waived_by: null,
+                    } : null;
+                })
+                .filter(Boolean);
+            if (outstandingSurcharges.length > 0) {
+                await (tx as any).voucher_arrear_surcharges.createMany({
+                    data: outstandingSurcharges,
                 });
             }
 
