@@ -407,7 +407,13 @@ export class VouchersService {
                 ...(classId ? { class_id: classId } : {}),
                 ...(sectionId ? { section_id: sectionId } : {}),
                 // If a specific status is requested show only that; otherwise show all.
-                ...(status ? { status } : {}),
+                ...(status
+                    ? {
+                        status: status.includes(',')
+                            ? { in: status.split(',').map((s) => s.trim()) }
+                            : status,
+                      }
+                    : {}),
                 ...(dateFrom || dateTo
                     ? {
                         fee_date: {
