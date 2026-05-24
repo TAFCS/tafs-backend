@@ -5,11 +5,11 @@ import { PrismaModule } from '../../../prisma/prisma.module';
 import { StorageModule } from '../../common/storage/storage.module';
 import { ChatGateway } from './chat.gateway';
 import { AuthModule } from '../auth/auth.module';
-import { FcmService } from './fcm.service';
+import { FcmModule } from '../../common/fcm/fcm.module';
 
 @Module({
-  imports: [PrismaModule, StorageModule, AuthModule],
-  providers: [ChatService, ChatGateway, FcmService],
+  imports: [PrismaModule, StorageModule, AuthModule, FcmModule],
+  providers: [ChatService, ChatGateway],
   controllers: [ChatController],
   exports: [ChatService, ChatGateway],
 })

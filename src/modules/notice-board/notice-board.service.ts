@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { FcmService } from '../../common/fcm/fcm.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
@@ -10,6 +11,7 @@ export class NoticeBoardService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly fcm: FcmService,
   ) {}
 
   // ── Family-facing ────────────────────────────────────────────────────────
@@ -92,7 +94,7 @@ export class NoticeBoardService {
   }
 
   async createPost(postedBy: string, dto: CreatePostDto) {
-    return this.prisma.notice_board_posts.create({
+    const post = await this.prisma.notice_board_posts.create({
       data: {
         posted_by: postedBy,
         title: dto.title,
@@ -110,6 +112,51 @@ export class NoticeBoardService {
         _count: { select: { post_reads: true } },
       },
     });
+
+    // Fire-and-forget push notifications to all scoped families
+    this._sendPostNotifications(post).catch((err) =>
+      console.error('Notice board FCM dispatch failed:', err.message),
+    );
+
+    return post;
+  }
+
+  private async _sendPostNotifications(post: {
+    id: number;
+    title: string | null;
+    body: string;
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+  }) {
+    const campusIds = (post.campus_ids as number[]) ?? [];
+    const classIds  = (post.class_ids as number[])  ?? [];
+    const sectionIds = (post.section_ids as number[]) ?? [];
+
+    const families = await this.prisma.families.findMany({
+      where: {
+        deleted_at: null,
+        students: {
+          some: {
+            deleted_at: null,
+            AND: [
+              campusIds.length  ? { campus_id:  { in: campusIds  } } : {},
+              classIds.length   ? { class_id:   { in: classIds   } } : {},
+              sectionIds.length ? { section_id: { in: sectionIds } } : {},
+            ],
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    const title = post.title ?? 'New School Notice';
+    const body  = post.body.length > 120 ? post.body.slice(0, 117) + '…' : post.body;
+    const data  = { type: 'notice_board', post_id: String(post.id) };
+
+    await Promise.allSettled(
+      families.map((f) => this.fcm.sendToFamily(f.id, title, body, data)),
+    );
   }
 
   async updatePost(id: number, dto: UpdatePostDto) {

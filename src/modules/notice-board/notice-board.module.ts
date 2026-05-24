@@ -4,9 +4,10 @@ import { NoticeBoardController } from './notice-board.controller';
 import { PrismaModule } from '../../../prisma/prisma.module';
 import { StorageModule } from '../../common/storage/storage.module';
 import { AuthModule } from '../auth/auth.module';
+import { FcmModule } from '../../common/fcm/fcm.module';
 
 @Module({
-  imports: [PrismaModule, StorageModule, AuthModule],
+  imports: [PrismaModule, StorageModule, AuthModule, FcmModule],
   providers: [NoticeBoardService],
   controllers: [NoticeBoardController],
 })

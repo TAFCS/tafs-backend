@@ -13,7 +13,7 @@ import { ChatService } from './chat.service';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
-import { FcmService } from './fcm.service';
+import { FcmService } from '../../common/fcm/fcm.service';
 
 @WebSocketGateway({
   cors: {
