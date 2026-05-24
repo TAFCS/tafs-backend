@@ -116,6 +116,23 @@ export class ChatController {
     return this.chatService.markAsRead(familyId, 'ADMIN');
   }
 
+  @Post('messages/:messageId/acknowledge')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Parent acknowledges a message that requires acknowledgment' })
+  async acknowledgeMessage(
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.chatService.acknowledgeMessage(messageId, user.familyId);
+  }
+
+  @Get('admin/messages/:messageId/acknowledgments')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Admin: see which families have acknowledged a message' })
+  getAcknowledgments(@Param('messageId') messageId: string) {
+    return this.chatService.getAcknowledgments(messageId);
+  }
+
   @Get('media/proxy')
   @ApiOperation({ summary: 'Proxy media to bypass CORS' })
   async proxyMedia(

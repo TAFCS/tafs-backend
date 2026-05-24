@@ -222,6 +222,26 @@ export class ChatService {
     return this.storage.getFile(key);
   }
 
+  async acknowledgeMessage(messageId: string, familyId: number) {
+    await this.prisma.message_acknowledgments.upsert({
+      where: { message_id_family_id: { message_id: messageId, family_id: familyId } },
+      create: { message_id: messageId, family_id: familyId },
+      update: {},
+    });
+    return { acknowledged: true };
+  }
+
+  async getAcknowledgments(messageId: string) {
+    const acks = await this.prisma.message_acknowledgments.findMany({
+      where: { message_id: messageId },
+      include: {
+        families: { select: { id: true, household_name: true } },
+      },
+      orderBy: { acknowledged_at: 'asc' },
+    });
+    return acks;
+  }
+
   async getOrCreateConversation(familyId: number) {
     let conversation = await this.prisma.chat_conversations.findUnique({
       where: { family_id: familyId },

@@ -35,6 +35,7 @@ import { ChatModule } from './modules/chat/chat.module';
 import { BackupsModule } from './modules/backups/backups.module';
 import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
+import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
     BackupsModule,
     HrModule,
     AttendanceModule,
+    NoticeBoardModule,
   ],
   controllers: [AppController],
   providers: [AppService],
