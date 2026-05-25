@@ -312,6 +312,7 @@ export class ChatService {
       messageType: ChatMessageType;
       content: string;
       mediaMetadata?: Record<string, unknown>;
+      senderName?: string;
     },
   ) {
     const tempId = data.mediaMetadata?.tempId as string | undefined;
@@ -333,6 +334,7 @@ export class ChatService {
         data: {
           conversation_id: conv.id,
           sender_type: data.senderType,
+          sender_name: data.senderName ?? null,
           message_type: data.messageType,
           content: data.content,
           media_metadata: (data.mediaMetadata ?? undefined) as object | undefined,

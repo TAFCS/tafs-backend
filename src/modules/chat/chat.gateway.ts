@@ -33,6 +33,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   // Reverse lookup: Map<socketId, familyId>
   private socketToFamily = new Map<string, number>();
 
+  // Track which admin sockets are actively viewing which family chat
+  // Map<familyId, Set<socketId>> — for FCM suppression when admin is viewing
+  private adminViewingFamily = new Map<number, Set<string>>();
+  // Reverse: Map<socketId, familyId> — so we can clean up on disconnect
+  private socketAdminViewing = new Map<string, number>();
+
   constructor(
     private readonly chatService: ChatService,
     private readonly jwtService: JwtService,
@@ -130,6 +136,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   handleDisconnect(client: Socket) {
     console.log('[ChatGateway] Client disconnected:', client.id);
     
+    // Clean up parent presence
     const familyId = this.socketToFamily.get(client.id);
     if (familyId) {
       this.socketToFamily.delete(client.id);
@@ -140,6 +147,19 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.familySockets.delete(familyId);
           // Only notify offline if NO other sockets are connected for this family
           this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'OFFLINE' });
+        }
+      }
+    }
+
+    // Clean up admin viewing-family tracking
+    const viewingFamilyId = this.socketAdminViewing.get(client.id);
+    if (viewingFamilyId !== undefined) {
+      this.socketAdminViewing.delete(client.id);
+      const admins = this.adminViewingFamily.get(viewingFamilyId);
+      if (admins) {
+        admins.delete(client.id);
+        if (admins.size === 0) {
+          this.adminViewingFamily.delete(viewingFamilyId);
         }
       }
     }
@@ -157,7 +177,28 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any },
   ) {
     const familyId = Number(data.familyId);
+    // Join the family-specific chat room (used for FCM suppression)
     client.join(`family_chat_${familyId}`);
+
+    // Track admin viewing for FCM suppression
+    const payload = (client as any).tafsPayload;
+    if (payload?.userType === 'STAFF') {
+      // Clean up previous admin view if switching conversations
+      const previousFamilyId = this.socketAdminViewing.get(client.id);
+      if (previousFamilyId !== undefined && previousFamilyId !== familyId) {
+        const prevAdmins = this.adminViewingFamily.get(previousFamilyId);
+        if (prevAdmins) {
+          prevAdmins.delete(client.id);
+          if (prevAdmins.size === 0) this.adminViewingFamily.delete(previousFamilyId);
+        }
+      }
+      if (!this.adminViewingFamily.has(familyId)) {
+        this.adminViewingFamily.set(familyId, new Set());
+      }
+      this.adminViewingFamily.get(familyId)!.add(client.id);
+      this.socketAdminViewing.set(client.id, familyId);
+    }
+
     console.log(`[ChatGateway] Socket ${client.id} entered chat for family ${familyId}`);
   }
 
@@ -168,6 +209,18 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   ) {
     const familyId = Number(data.familyId);
     client.leave(`family_chat_${familyId}`);
+
+    // Clean up admin viewing tracking
+    const payload = (client as any).tafsPayload;
+    if (payload?.userType === 'STAFF') {
+      this.socketAdminViewing.delete(client.id);
+      const admins = this.adminViewingFamily.get(familyId);
+      if (admins) {
+        admins.delete(client.id);
+        if (admins.size === 0) this.adminViewingFamily.delete(familyId);
+      }
+    }
+
     console.log(`[ChatGateway] Socket ${client.id} left chat for family ${familyId}`);
   }
 
@@ -175,6 +228,15 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!cookieString) return null;
     const match = cookieString.match(/(?:^|;)\s*tafs_access=([^;]+)/);
     return match ? match[1] : null;
+  }
+
+  /**
+   * Checks whether any admin is currently actively viewing this family's chat window.
+   * Used to suppress FCM push notifications when the admin is already present.
+   */
+  private isAdminViewingFamily(familyId: number): boolean {
+    const admins = this.adminViewingFamily.get(familyId);
+    return admins !== undefined && admins.size > 0;
   }
 
   async broadcastNewMessage(
@@ -190,11 +252,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
 
     if (senderType === 'ADMIN') {
-      const roomName = `family_chat_${familyId}`;
-      const room = this.server.sockets.adapter.rooms.get(roomName);
-      const isViewingChat = room && room.size > 0;
-
-      if (!isViewingChat) {
+      // Send FCM to parent only if they are NOT actively viewing the chat
+      const parentInChat = this.isParentInChatRoom(familyId);
+      if (!parentInChat) {
         await this.fcmService.sendToFamily(
           familyId,
           'New Message from TAFS',
@@ -209,17 +269,34 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  /**
+   * Checks whether the parent (family) is actively in the chat room
+   * (i.e., has the chat screen open in Flutter via enterChat).
+   */
+  private isParentInChatRoom(familyId: number): boolean {
+    const roomName = `family_chat_${familyId}`;
+    const room = this.server.sockets.adapter.rooms.get(roomName);
+    return room !== undefined && room.size > 0;
+  }
+
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: any; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any },
+    @MessageBody() data: { familyId: any; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any; senderName?: string },
   ) {
     const familyId = Number(data.familyId);
+    const payload = (client as any).tafsPayload;
+
+    // Resolve sender name: use provided name, or derive from JWT payload
+    const senderName = data.senderName ||
+      (payload?.userType === 'STAFF' ? (payload?.name || payload?.username || 'TAFS Admin') : undefined);
+
     const { newMessage, updatedConv, isDuplicate } = await this.chatService.createMessage(familyId, {
       senderType: data.senderType,
       messageType: data.messageType,
       content: data.content,
       mediaMetadata: data.mediaMetadata,
+      senderName,
     });
 
     if (!isDuplicate) {

@@ -102,6 +102,36 @@ export class ChatController {
     return newMessage;
   }
 
+  @Post('messages/admin')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Admin sends a chat message via REST (offline fallback when socket is down)' })
+  async sendAdminMessage(
+    @CurrentUser() user: any,
+    @Body() body: { familyId: number; messageType: ChatMessageType; content: string; mediaMetadata?: Record<string, unknown> },
+  ) {
+    const senderName = user?.name || user?.username || 'TAFS Admin';
+    const { newMessage, updatedConv, isDuplicate } = await this.chatService.createMessage(body.familyId, {
+      senderType: 'ADMIN',
+      messageType: body.messageType,
+      content: body.content,
+      mediaMetadata: body.mediaMetadata,
+      senderName,
+    });
+
+    if (!isDuplicate) {
+      await this.chatGateway.broadcastNewMessage(
+        body.familyId,
+        newMessage,
+        updatedConv,
+        'ADMIN',
+        body.messageType,
+        body.content,
+      );
+    }
+
+    return newMessage;
+  }
+
   @Post('mark-read')
   @UseGuards(JwtParentGuard)
   @ApiOperation({ summary: 'Parent marks their messages as read' })

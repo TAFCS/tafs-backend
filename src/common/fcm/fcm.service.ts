@@ -46,7 +46,32 @@ export class FcmService implements OnModuleInit {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('FCM Timeout')), 5000),
       );
-      await Promise.race([sendPromise, timeoutPromise]);
+      const result = await Promise.race([sendPromise, timeoutPromise]) as admin.messaging.BatchResponse;
+
+      // Purge stale / unregistered tokens to keep the DB clean
+      if (result?.responses) {
+        const staleTokens: string[] = [];
+        result.responses.forEach((resp, idx) => {
+          if (!resp.success) {
+            const errCode = resp.error?.code;
+            // These error codes indicate the token is permanently invalid
+            if (
+              errCode === 'messaging/registration-token-not-registered' ||
+              errCode === 'messaging/invalid-registration-token' ||
+              errCode === 'messaging/invalid-argument'
+            ) {
+              staleTokens.push(tokens[idx].device_token);
+            }
+          }
+        });
+
+        if (staleTokens.length > 0) {
+          console.log(`[FCM] Purging ${staleTokens.length} stale token(s) for family ${familyId}`);
+          await this.prisma.fcm_device_tokens
+            .deleteMany({ where: { device_token: { in: staleTokens } } })
+            .catch((e) => console.error('[FCM] Failed to purge stale tokens:', e.message));
+        }
+      }
     } catch (error) {
       console.error(`FCM send to family ${familyId} failed:`, error.message);
     }
