@@ -296,6 +296,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const familyId = Number(data.familyId);
     const payload = (client as any).tafsPayload;
 
+    // Parents must only send messages for their own family.
+    if (payload?.userType === 'PARENT') {
+      const authorizedFamilyId = Number(payload.familyId ?? payload.sub);
+      if (authorizedFamilyId !== familyId) {
+        return { error: 'forbidden' };
+      }
+    }
+
     // Resolve sender name: use provided name, or derive from JWT payload
     const senderName = data.senderName ||
       (payload?.userType === 'STAFF' ? (payload?.name || payload?.username || 'TAFS Admin') : undefined);
