@@ -446,6 +446,10 @@ export class VouchersService {
                 ...(singleFeeDateIds !== undefined ? { id: { in: singleFeeDateIds } } : {}),
             };
 
+            // Stats groupBy uses the same where but without the status filter,
+            // so the cards always show a full breakdown across all statuses.
+            const { status: _omit, ...statsWhere } = where as any;
+
             const [total, vouchers, stats] = await Promise.all([
                 this.prisma.vouchers.count({ where }),
                 this.prisma.vouchers.findMany({
@@ -457,19 +461,7 @@ export class VouchersService {
                 }),
                 this.prisma.vouchers.groupBy({
                     by: ['status'],
-                    where: {
-                        ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
-                        ...(id ? { id } : {}),
-                        ...(campusId ? { campus_id: campusId } : {}),
-                        ...(classId ? { class_id: classId } : {}),
-                        ...(sectionId ? { section_id: sectionId } : {}),
-                        ...(dateFrom || dateTo ? {
-                            fee_date: {
-                                ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-                                ...(dateTo ? { lte: new Date(dateTo) } : {}),
-                            },
-                        } : {}),
-                    },
+                    where: statsWhere,
                     _count: { _all: true }
                 })
             ]);
