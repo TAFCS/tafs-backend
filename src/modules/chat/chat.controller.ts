@@ -135,15 +135,17 @@ export class ChatController {
   @Post('mark-read')
   @UseGuards(JwtParentGuard)
   @ApiOperation({ summary: 'Parent marks their messages as read' })
-  markParentRead(@CurrentUser() user: any) {
-    return this.chatService.markAsRead(user.familyId, 'GUARDIAN');
+  async markParentRead(@CurrentUser() user: any) {
+    await this.chatService.markAsRead(user.familyId, 'GUARDIAN');
+    this.chatGateway.broadcastMessagesRead(user.familyId, 'GUARDIAN');
   }
 
   @Post('mark-read/admin/:familyId')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin marks messages for a family as read' })
-  markAdminRead(@Param('familyId', ParseIntPipe) familyId: number) {
-    return this.chatService.markAsRead(familyId, 'ADMIN');
+  async markAdminRead(@Param('familyId', ParseIntPipe) familyId: number) {
+    await this.chatService.markAsRead(familyId, 'ADMIN');
+    this.chatGateway.broadcastMessagesRead(familyId, 'ADMIN');
   }
 
   @Post('messages/:messageId/acknowledge')

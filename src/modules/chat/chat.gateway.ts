@@ -279,6 +279,15 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return room !== undefined && room.size > 0;
   }
 
+  broadcastMessagesRead(familyId: number, by: 'ADMIN' | 'GUARDIAN') {
+    if (by === 'ADMIN') {
+      this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
+    } else {
+      this.server.to('admin_inbox').emit('messagesRead', { familyId, by: 'GUARDIAN' });
+      this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
+    }
+  }
+
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
