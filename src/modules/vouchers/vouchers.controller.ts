@@ -119,6 +119,7 @@ export class VouchersController {
             query.date_to,
             query.page,
             query.limit,
+            query.single_fee_date,
         );
         return {
             success: true,

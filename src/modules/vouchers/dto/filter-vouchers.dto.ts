@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class FilterVouchersDto {
     @ApiPropertyOptional({ description: 'Filter by Student CC' })
@@ -70,4 +70,10 @@ export class FilterVouchersDto {
     @Type(() => Number)
     @IsInt()
     limit?: number = 50;
+
+    @ApiPropertyOptional({ description: 'Show only vouchers whose heads all share a single fee_date' })
+    @IsOptional()
+    @Transform(({ value }) => value === 'true' || value === true)
+    @IsBoolean()
+    single_fee_date?: boolean;
 }

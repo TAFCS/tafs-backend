@@ -394,10 +394,24 @@ export class VouchersService {
         dateTo?: string,
         page: number = 1,
         limit: number = 50,
+        singleFeeDate?: boolean,
     ) {
         try {
             const skip = (page - 1) * limit;
             const take = limit;
+
+            let singleFeeDateIds: number[] | undefined;
+            if (singleFeeDate) {
+                const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
+                    SELECT vh.voucher_id
+                    FROM voucher_heads vh
+                    JOIN student_fees sf ON vh.student_fee_id = sf.id
+                    WHERE sf.fee_date IS NOT NULL
+                    GROUP BY vh.voucher_id
+                    HAVING COUNT(DISTINCT sf.fee_date) = 1
+                `;
+                singleFeeDateIds = rows.map(r => Number(r.voucher_id));
+            }
 
             const where: Prisma.vouchersWhereInput = {
                 // student_id or cc both resolve to student_id (cc is the student PK)
@@ -429,6 +443,7 @@ export class VouchersService {
                         },
                     }
                     : {}),
+                ...(singleFeeDateIds !== undefined ? { id: { in: singleFeeDateIds } } : {}),
             };
 
             const [total, vouchers, stats] = await Promise.all([
