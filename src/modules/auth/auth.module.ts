@@ -9,6 +9,7 @@ import { JwtStaffStrategy } from './strategies/jwt-staff.strategy';
 import { JwtParentStrategy } from './strategies/jwt-parent.strategy';
 import { CaslAbilityFactory } from './casl/casl-ability.factory';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { PrismaService } from '../../../prisma/prisma.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
     JwtParentStrategy,
     CaslAbilityFactory,
     PoliciesGuard,
+    PrismaService,
   ],
   exports: [AuthService, CaslAbilityFactory, PoliciesGuard, JwtModule],
 })

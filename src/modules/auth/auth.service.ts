@@ -310,6 +310,52 @@ export class AuthService {
     });
   }
 
+  /**
+   * Permanently deletes the *app account* for a parent.
+   *
+   * Notes:
+   * - We cannot hard-delete `families` because it is linked to school records.
+   * - We "delete" the account by revoking sessions and removing login capability
+   *   (nulling credentials) while keeping required institutional records intact.
+   */
+  async deleteParentAccount(familyId: number) {
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      // Revoke all refresh tokens immediately
+      await tx.family_refresh_tokens.updateMany({
+        where: { family_id: familyId, revoked_at: null },
+        data: { revoked_at: now },
+      });
+
+      // Remove push notification tokens
+      await tx.fcm_device_tokens.deleteMany({
+        where: { family_id: familyId },
+      });
+
+      // Detach chat conversation from the family account (if present)
+      await tx.chat_conversations.updateMany({
+        where: { family_id: familyId },
+        data: {
+          family_id: null,
+          unread_by_parent: 0,
+          last_message_snippet: null,
+        },
+      });
+
+      // Disable further logins + mark deleted. Keep household name (non-sensitive),
+      // but remove email/password so the account cannot be accessed again.
+      await tx.families.update({
+        where: { id: familyId },
+        data: {
+          deleted_at: now,
+          password_hash: null,
+          email: null,
+        },
+      });
+    });
+  }
+
   // ─── Signup/Registration ───────────────────────────────────────────────────
 
   /**
