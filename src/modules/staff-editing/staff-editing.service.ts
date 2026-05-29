@@ -293,6 +293,11 @@ export class StaffEditingService {
       ...(doa !== undefined ? { doa: doa ? new Date(doa) : null } : {}),
     };
 
+    if (studentData.cnic !== undefined) {
+      const c = typeof studentData.cnic === 'string' ? studentData.cnic.trim() : studentData.cnic;
+      studentData.cnic = (!c || c === 'NULL' || c === 'XXXXX-XXXXXXX-X') ? null : c;
+    }
+
     try {
       await this.prisma.$transaction(async (tx) => {
         // 1. Update student fields
@@ -320,11 +325,13 @@ export class StaffEditingService {
         // 2. Update/Create Father Info
         if (father_name !== undefined || father_cnic !== undefined) {
           const fatherLink = allLinks.find(l => isFather(l.relationship));
+          const fCnic = typeof father_cnic === 'string' ? father_cnic.trim() : father_cnic;
+          const fCnicNormalized = (!fCnic || fCnic === 'NULL' || fCnic === 'XXXXX-XXXXXXX-X') ? null : fCnic;
 
           if (fatherLink) {
             const guardianUpdate: any = {};
             if (father_name !== undefined) guardianUpdate.full_name = father_name;
-            if (father_cnic !== undefined) guardianUpdate.cnic = (!father_cnic || father_cnic === "NULL") ? null : father_cnic;
+            if (father_cnic !== undefined) guardianUpdate.cnic = fCnicNormalized;
             await tx.guardians.update({
               where: { id: fatherLink.guardian_id },
               data: guardianUpdate,
@@ -332,7 +339,7 @@ export class StaffEditingService {
           } else if (father_name !== undefined || father_cnic !== undefined) {
             const guardianData: any = {
               full_name: father_name || 'NOT PROVIDED',
-              cnic: (!father_cnic || father_cnic === "NULL") ? null : father_cnic,
+              cnic: fCnicNormalized,
             };
             const guardian = guardianData.cnic
               ? await tx.guardians.upsert({
@@ -353,11 +360,13 @@ export class StaffEditingService {
         // 3. Update/Create Mother Info
         if (mother_name !== undefined || mother_cnic !== undefined) {
           const motherLink = allLinks.find(l => isMother(l.relationship));
+          const mCnic = typeof mother_cnic === 'string' ? mother_cnic.trim() : mother_cnic;
+          const mCnicNormalized = (!mCnic || mCnic === 'NULL' || mCnic === 'XXXXX-XXXXXXX-X') ? null : mCnic;
 
           if (motherLink) {
             const guardianUpdate: any = {};
             if (mother_name !== undefined) guardianUpdate.full_name = mother_name;
-            if (mother_cnic !== undefined) guardianUpdate.cnic = (!mother_cnic || mother_cnic === "NULL") ? null : mother_cnic;
+            if (mother_cnic !== undefined) guardianUpdate.cnic = mCnicNormalized;
             await tx.guardians.update({
               where: { id: motherLink.guardian_id },
               data: guardianUpdate,
@@ -365,7 +374,7 @@ export class StaffEditingService {
           } else if (mother_name !== undefined || mother_cnic !== undefined) {
             const guardianData: any = {
               full_name: mother_name || 'NOT PROVIDED',
-              cnic: (!mother_cnic || mother_cnic === "NULL") ? null : mother_cnic,
+              cnic: mCnicNormalized,
             };
             const guardian = guardianData.cnic
               ? await tx.guardians.upsert({
