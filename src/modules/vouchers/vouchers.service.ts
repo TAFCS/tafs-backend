@@ -260,21 +260,27 @@ export class VouchersService {
             });
 
             // 4. Update student_fees records to mark them as ISSUED (skip discount rows — they stay DISCOUNT)
+            // IMPORTANT: never demote a fee that is already PARTIALLY_PAID or PAID back to ISSUED.
+            // The valid forward-only status chain is: NOT_ISSUED → ISSUED → PARTIALLY_PAID / PAID.
+            // Arrear fees included in a new voucher must keep their payment progress.
             await Promise.all(
                 feeRecords
                     .filter((fee) => !(fee as any).is_discount)
-                    .map((fee) =>
-                        tx.student_fees.update({
+                    .map((fee) => {
+                        const alreadyProgressed =
+                            (fee as any).status === 'PARTIALLY_PAID' ||
+                            (fee as any).status === 'PAID';
+                        return tx.student_fees.update({
                             where: { id: fee.id },
                             data: {
                                 issue_date: issueDate,
                                 due_date: dueDate,
                                 validity_date: validityDate,
                                 precedence_override: (fee as any).fee_types?.priority_order ?? 0,
-                                status: 'ISSUED' as any,
+                                ...(!alreadyProgressed ? { status: 'ISSUED' as any } : {}),
                             },
-                        }),
-                    ),
+                        });
+                    }),
             );
 
             // 5. Update voucher with final totals derived from heads
