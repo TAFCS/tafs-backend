@@ -1928,12 +1928,30 @@ export class StudentsService {
     const formattedDeposits = allDeposits.map((d) => ({
       ...d,
       total_amount: Number(d.total_amount),
-      allocations: d.deposit_allocations.map((a) => ({
-        ...a,
-        amount: Number(a.amount),
-        fee_type_description: a.student_fees?.fee_types?.description,
-        voucher_id: a.voucher_id,
-      })),
+      allocations: d.deposit_allocations.map((a) => {
+        const sf = a.student_fees as any;
+        let feeTypeDescription: string;
+        if (sf) {
+          const prefix = sf.description_prefix ? `${sf.description_prefix} ` : '';
+          feeTypeDescription = `${prefix}${sf.fee_types?.description || 'Fee'}`;
+        } else if ((a as any).type === 'LATE_FEE') {
+          feeTypeDescription = 'Late Fee Surcharge';
+        } else if ((a as any).type === 'SURCHARGE') {
+          feeTypeDescription = 'Arrear Surcharge';
+        } else {
+          feeTypeDescription = 'Fee Allocation';
+        }
+        return {
+          amount: Number(a.amount),
+          type: (a as any).type ?? 'FEE_HEAD',
+          fee_type_description: feeTypeDescription,
+          fee_date: sf?.fee_date ?? null,
+          target_month: sf?.target_month ?? null,
+          academic_year: sf?.academic_year ?? (a as any).vouchers?.academic_year ?? null,
+          voucher_id: a.voucher_id,
+          student_fee_id: a.student_fee_id,
+        };
+      }),
     }));
 
     return {
