@@ -645,9 +645,10 @@ export class VouchersService {
                     baseDescription: presetTitle,
                     feeDate: sf?.fee_date?.toISOString().split('T')[0],
                     target_month: sf?.target_month,
-                    academic_year: (isSpecial(voucher.class_id) && sf?.fee_date)
-                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
-                        : sf?.academic_year,
+                    academic_year: sf?.academic_year ||
+                        ((isSpecial(voucher.class_id) && sf?.fee_date)
+                            ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                            : null),
                 };
             }
             // ── End discount row ────────────────────────────────────────────
@@ -655,9 +656,10 @@ export class VouchersService {
             const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
             const sfFeeDate = h.student_fees?.fee_date;
-            const effectiveAcadYear = (isSpecial(voucher.class_id) && sfFeeDate)
-                ? deriveAcademicYear(new Date(sfFeeDate).toISOString(), voucher.class_id ?? undefined)
-                : (sf?.academic_year || '');
+            const effectiveAcadYear = sf?.academic_year ||
+                ((isSpecial(voucher.class_id) && sfFeeDate)
+                    ? deriveAcademicYear(new Date(sfFeeDate).toISOString(), voucher.class_id ?? undefined)
+                    : '');
             const monthSuffix = sf?.target_month != null
                 ? ` (${getMonthYearLabel(sf.target_month, effectiveAcadYear, voucher.class_id).toUpperCase()})`
                 : '';
@@ -970,9 +972,10 @@ export class VouchersService {
 
                 const feeTypeDesc = sf?.fee_types?.description || 'Fee';
                 const prefixStr = sf.description_prefix ? `${sf.description_prefix} ` : '';
-                const sfEffectiveYear = (isSpecial(voucher.class_id) && sf?.fee_date)
-                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
-                    : sf?.academic_year;
+                const sfEffectiveYear = sf?.academic_year ||
+                    ((isSpecial(voucher.class_id) && sf?.fee_date)
+                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                        : '');
                 const monthSuffix = sf?.target_month != null
                     ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, voucher.class_id).toUpperCase()}`
                     : '';

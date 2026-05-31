@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
 import { StudentsService } from '../students/students.service';
+import { isSpecial } from '../../common/utils/academic-labels';
 
 @Injectable()
 export class StudentFeesService {
@@ -879,9 +880,10 @@ export class StudentFeesService {
         });
     }
 
-    private getCalendarYear(academicYear: string, month: number): number {
+    private getCalendarYear(academicYear: string, month: number, classId?: number): number {
         const startYear = parseInt(academicYear.split('-')[0]);
-        return month >= 8 ? startYear : startYear + 1;
+        const cutoff = isSpecial(classId) ? 4 : 8;
+        return month >= cutoff ? startYear : startYear + 1;
     }
 
     private isValidDayForMonth(year: number, month: number, day: number): boolean {
@@ -986,7 +988,7 @@ export class StudentFeesService {
         const monthMeta: { month: number; calYear: number; feeDateStr: string; feeDate: Date; valid: boolean; reason?: string }[] = [];
         for (let i = startIndex; i <= endIndex; i++) {
             const month = ACADEMIC_ORDER[i];
-            const calYear = this.getCalendarYear(academic_year, month);
+            const calYear = this.getCalendarYear(academic_year, month, class_id);
             if (!this.isValidDayForMonth(calYear, month, day)) {
                 monthMeta.push({ month, calYear, feeDateStr: '', feeDate: new Date(), valid: false, reason: `Day ${day} doesn't exist in this month` });
             } else {
@@ -1173,7 +1175,7 @@ export class StudentFeesService {
         const monthMeta: { month: number; feeDateStr: string; feeDate: Date; valid: boolean }[] = [];
         for (let i = startIndex; i <= endIndex; i++) {
             const month = ACADEMIC_ORDER[i];
-            const calYear = this.getCalendarYear(academic_year, month);
+            const calYear = this.getCalendarYear(academic_year, month, class_id);
             if (!this.isValidDayForMonth(calYear, month, day)) {
                 monthMeta.push({ month, feeDateStr: '', feeDate: new Date(), valid: false });
             } else {
