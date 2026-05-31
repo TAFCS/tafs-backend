@@ -568,6 +568,58 @@ export class VouchersService {
             standalones.forEach((f: any, idx: number) => standaloneSequenceMap.set(f.id, idx + 1));
         });
 
+        // 3a. Build class_fee_schedule lookup for gross-amount and discount calculation.
+        //     Discount = schedule.amount − student_fees.amount  (schedule is single source of truth).
+        //     student_fees.amount_before_discount is intentionally NOT used here.
+        const normalizeAY = (ay: string): string => {
+            const parts = (ay ?? '').split('-');
+            if (parts.length !== 2) return ay ?? '';
+            const start = parts[0].trim();
+            const endRaw = parts[1].trim();
+            const end = endRaw.length === 2 ? `${start.slice(0, 2)}${endRaw}` : endRaw;
+            return `${start}-${end}`;
+        };
+
+        const regularHeads = (voucher.voucher_heads as any[]).filter(
+            (h: any) => !(h.student_fees?.is_discount === true),
+        );
+        const scheduleYears = [
+            ...new Set(
+                regularHeads
+                    .map((h: any) => normalizeAY(h.student_fees?.academic_year ?? ''))
+                    .filter(Boolean),
+            ),
+        ] as string[];
+        const scheduleFeeIds = [
+            ...new Set(
+                regularHeads
+                    .map((h: any) => h.student_fees?.fee_type_id)
+                    .filter((id: any) => id != null),
+            ),
+        ] as number[];
+
+        const rawScheduleRows =
+            scheduleFeeIds.length > 0 && scheduleYears.length > 0
+                ? await this.prisma.class_fee_schedule.findMany({
+                      where: {
+                          class_id: voucher.class_id,
+                          fee_id: { in: scheduleFeeIds },
+                          academic_year: { in: scheduleYears },
+                          OR: [{ campus_id: voucher.campus_id }, { campus_id: null }],
+                      },
+                  })
+                : [];
+
+        // Build map: "fee_type_id|academic_year" → gross amount.
+        // Campus-specific row wins over null-campus row for the same key.
+        const scheduleMap = new Map<string, number>();
+        for (const row of rawScheduleRows) {
+            const key = `${row.fee_id}|${normalizeAY(row.academic_year)}`;
+            if (!scheduleMap.has(key) || row.campus_id != null) {
+                scheduleMap.set(key, Number(row.amount));
+            }
+        }
+
         // 3. Initial Mapping of Heads
         let heads = voucher.voucher_heads.map((h: any) => {
             const isSplitHead = (h.split_sequence != null && h.split_total != null);
@@ -663,8 +715,23 @@ export class VouchersService {
                 description,
                 originalDescription: feeTypeDesc + monthSuffix,
                 baseDescription,
-                amount: isSplitHead ? Number(h.net_amount) : Math.max(Number(h.student_fees?.amount_before_discount || 0), Number(h.net_amount)),
-                discount: isSplitHead ? 0 : Number(h.discount_amount || 0),
+                amount: (() => {
+                    if (isSplitHead) return Number(h.net_amount);
+                    const schedKey = sf?.fee_type_id != null && sf?.academic_year
+                        ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
+                        : null;
+                    const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
+                    return schedGross != null ? schedGross : Number(h.net_amount);
+                })(),
+                discount: (() => {
+                    if (isSplitHead) return 0;
+                    const schedKey = sf?.fee_type_id != null && sf?.academic_year
+                        ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
+                        : null;
+                    const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
+                    if (schedGross == null) return 0;
+                    return Math.max(0, schedGross - Number(sf?.amount ?? h.net_amount));
+                })(),
                 netAmount,
                 amountDeposited: finalPaid,
                 balance: Math.max(netAmount - finalPaid, 0),
@@ -1000,7 +1067,7 @@ export class VouchersService {
                 lateFeeAmount: voucher.late_fee_charge ? 1000 : 0,
                 qrUrl,
                 paidStamp,
-                showDiscount: true,
+                showDiscount: false, // DEV kill switch — flip to true to re-enable
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
                 arrearsLabel,
@@ -1797,7 +1864,7 @@ export class VouchersService {
      * Generate a voucher PDF server-side, upload it, persist pdf_url, and return the URL.
      * Used by both the single-voucher challan flow and the PAID-stamp download on the vouchers list.
      */
-    async generatePdf(voucherId: number, showDiscount = true, paidStamp = false) {
+    async generatePdf(voucherId: number, showDiscount = false, paidStamp = false) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,

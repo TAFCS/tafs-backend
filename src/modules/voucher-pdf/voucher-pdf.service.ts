@@ -131,7 +131,7 @@ export class VoucherPdfService {
                 feeDate: f.feeDate,
             })),
             totalAmount: data.totalAmount,
-            showDiscount: data.showDiscount ?? true,
+            showDiscount: data.showDiscount ?? false, // DEV kill switch — flip default to true to re-enable
             paidStamp: data.paidStamp ?? false,
             siblings: data.siblings?.filter(s => s.cc !== data.student.cc).map(s => ({
                 full_name: s.fullName,
