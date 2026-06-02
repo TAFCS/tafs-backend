@@ -11,11 +11,11 @@ import {
 } from './interfaces/jwt-payload.interface';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 
-export const ACCESS_TOKEN_TTL_MS = 1 * 60 * 60 * 1000; // 1 hour
-export const REFRESH_TOKEN_TTL_MS = 15 * 24 * 60 * 60 * 1000; // 15 days
+export const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-const ACCESS_TOKEN_TTL = '1h';
-const REFRESH_TOKEN_TTL = '15d';
+const ACCESS_TOKEN_TTL = '7d';
+const REFRESH_TOKEN_TTL = '30d';
 
 @Injectable()
 export class AuthService {
