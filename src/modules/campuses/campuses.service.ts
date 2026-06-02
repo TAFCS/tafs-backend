@@ -154,30 +154,38 @@ export class CampusesService {
     async delete(id: number) {
         // Use a transaction to safely unlink related records and delete the campus
         return this.prisma.$transaction(async (tx) => {
-            // 1. Unlink Students
-            await tx.students.updateMany({
-                where: { campus_id: id },
-                data: { campus_id: null },
+            // Check if any active students exist for this campus
+            const studentCount = await tx.students.count({
+                where: { campus_id: id, deleted_at: null },
             });
+            if (studentCount > 0) {
+                throw new BadRequestException(
+                    `Cannot delete campus: ${studentCount} active student record(s) exist in this campus. Please reassign or remove them first.`,
+                );
+            }
 
-            // 2. Unlink Users/Staff
+            // 1. Unlink Users/Staff
             await tx.users.updateMany({
                 where: { campus_id: id },
                 data: { campus_id: null },
             });
 
-            // 3. Unlink Class Fee Schedules
+            // 2. Unlink Class Fee Schedules
             await tx.class_fee_schedule.updateMany({
                 where: { campus_id: id },
                 data: { campus_id: null },
             });
 
-            // 4. Delete Junction Records (Campus Classes assignments)
+            // 3. Delete Junction Records (Campus Sections & Classes assignments)
+            await tx.campus_sections.deleteMany({
+                where: { campus_id: id },
+            });
+
             await tx.campus_classes.deleteMany({
                 where: { campus_id: id },
             });
 
-            // 5. Finally, delete the campus itself
+            // 4. Finally, delete the campus itself
             return tx.campuses.delete({
                 where: { id },
             });
@@ -216,9 +224,15 @@ export class CampusesService {
         }
 
         try {
-            await this.prisma.campus_classes.delete({
-                where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
-            });
+            await this.prisma.$transaction([
+                // delete orphaned section records first
+                this.prisma.campus_sections.deleteMany({
+                    where: { campus_id: campusId, class_id: classId },
+                }),
+                this.prisma.campus_classes.delete({
+                    where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
+                }),
+            ]);
             return this.findOne(campusId);
         } catch (e: any) {
             if (e?.code === 'P2025') {
