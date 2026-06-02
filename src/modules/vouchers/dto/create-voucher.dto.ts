@@ -28,8 +28,8 @@ export class CreateVoucherDto {
 
     @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
-    @IsNotEmpty()
-    bank_account_id: number;
+    @IsOptional()
+    bank_account_id?: number;
 
     @IsISO8601()
     @IsNotEmpty()

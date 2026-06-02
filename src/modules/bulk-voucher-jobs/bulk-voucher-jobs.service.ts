@@ -171,7 +171,24 @@ export class BulkVoucherJobsService {
         const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
         const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
 
-        // 1. Create the job record
+        // 1. Resolve default bank if not provided
+        let bankAccountId = dto.bank_account_id;
+        if (!bankAccountId) {
+            const defaultBank = await this.prisma.bank_accounts.findFirst({
+                where: { is_default: true },
+            });
+            if (defaultBank) {
+                bankAccountId = defaultBank.id;
+            } else {
+                const firstBank = await this.prisma.bank_accounts.findFirst();
+                if (!firstBank) {
+                    throw new BadRequestException('No bank account found in the system to issue bulk vouchers.');
+                }
+                bankAccountId = firstBank.id;
+            }
+        }
+
+        // 2. Create the job record
         const job = await this.prisma.bulk_voucher_jobs.create({
             data: {
                 created_by: createdBy,
@@ -184,7 +201,7 @@ export class BulkVoucherJobsService {
                 issue_date: new Date(dto.issue_date),
                 due_date: new Date(dto.due_date),
                 validity_date: dto.validity_date ? new Date(dto.validity_date) : null,
-                bank_account_id: dto.bank_account_id,
+                bank_account_id: bankAccountId!,
                 skip_already_issued: dto.skip_already_issued ?? true,
                 apply_late_fee: dto.apply_late_fee ?? true,
                 late_fee_amount: dto.late_fee_amount ?? 1000,

@@ -146,13 +146,29 @@ export class VouchersService {
             });
 
             // 2. Create the voucher record (initial creation with placeholder totals)
+            let bankAccountId = dto.bank_account_id;
+            if (!bankAccountId) {
+                const defaultBank = await tx.bank_accounts.findFirst({
+                    where: { is_default: true },
+                });
+                if (defaultBank) {
+                    bankAccountId = defaultBank.id;
+                } else {
+                    const firstBank = await tx.bank_accounts.findFirst();
+                    if (!firstBank) {
+                        throw new BadRequestException('No bank account found in the system to issue the voucher.');
+                    }
+                    bankAccountId = firstBank.id;
+                }
+            }
+
             const newVoucher = await tx.vouchers.create({
                 data: {
                     student_id: dto.student_id,
                     campus_id: dto.campus_id,
                     class_id: dto.class_id,
                     section_id: dto.section_id,
-                    bank_account_id: dto.bank_account_id,
+                    bank_account_id: bankAccountId!,
                     issue_date: issueDate,
                     due_date: dueDate,
                     validity_date: validityDate,

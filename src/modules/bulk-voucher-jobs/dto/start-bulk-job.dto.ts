@@ -71,8 +71,8 @@ export class StartBulkJobDto {
     // ── Bank ───────────────────────────────────────────────────────────────
     @Type(() => Number)
     @IsInt()
-    @IsNotEmpty()
-    bank_account_id: number;
+    @IsOptional()
+    bank_account_id?: number;
 
     // ── Flags ──────────────────────────────────────────────────────────────
     @IsBoolean()

@@ -9,8 +9,15 @@ export class BankAccountsService {
 
     async create(createBankAccountDto: CreateBankAccountDto) {
         try {
-            return await this.prisma.bank_accounts.create({
-                data: createBankAccountDto,
+            return await this.prisma.$transaction(async (tx) => {
+                if (createBankAccountDto.is_default) {
+                    await tx.bank_accounts.updateMany({
+                        data: { is_default: false },
+                    });
+                }
+                return await tx.bank_accounts.create({
+                    data: createBankAccountDto,
+                });
             });
         } catch (error) {
             if (error.code === 'P2002') {
@@ -22,7 +29,7 @@ export class BankAccountsService {
 
     async findAll() {
         return await this.prisma.bank_accounts.findMany({
-            orderBy: { account_title: 'asc' },
+            orderBy: [{ is_default: 'desc' }, { account_title: 'asc' }],
         });
     }
 
@@ -38,11 +45,19 @@ export class BankAccountsService {
 
     async update(id: number, updateBankAccountDto: UpdateBankAccountDto) {
         try {
-            const bankAccount = await this.prisma.bank_accounts.update({
-                where: { id },
-                data: updateBankAccountDto,
+            return await this.prisma.$transaction(async (tx) => {
+                if (updateBankAccountDto.is_default) {
+                    await tx.bank_accounts.updateMany({
+                        where: { id: { not: id } },
+                        data: { is_default: false },
+                    });
+                }
+                const bankAccount = await tx.bank_accounts.update({
+                    where: { id },
+                    data: updateBankAccountDto,
+                });
+                return bankAccount;
             });
-            return bankAccount;
         } catch (error) {
             if (error.code === 'P2025') {
                 throw new NotFoundException(`Bank account with ID ${id} not found`);

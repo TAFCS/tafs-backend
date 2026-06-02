@@ -36,4 +36,8 @@ export class CreateBankAccountDto {
     @IsOptional()
     @MaxLength(50)
     iban?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    is_default?: boolean;
 }

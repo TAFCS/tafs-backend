@@ -17,6 +17,7 @@ model bank_accounts {
   branch_code       String?             @db.VarChar(20)
   bank_address      String?
   iban              String?             @unique @db.VarChar(50)
+  is_default        Boolean             @default(false)
   bulk_voucher_jobs bulk_voucher_jobs[]
   vouchers          vouchers[]
 }
