@@ -102,7 +102,8 @@ export class CampusesService {
                 campus_code: dto.campus_code,
                 campus_name: dto.campus_name,
                 address: dto.address,
-            },
+                campus_prefix: dto.campus_prefix,
+            } as any,
         });
     }
 
@@ -127,7 +128,10 @@ export class CampusesService {
                             ...(item.address !== undefined && {
                                 address: item.address,
                             }),
-                        },
+                            ...(item.campus_prefix !== undefined && {
+                                campus_prefix: item.campus_prefix,
+                            }),
+                        } as any,
                     });
                 } else {
                     // Create new
@@ -136,7 +140,8 @@ export class CampusesService {
                             campus_code: item.campus_code || '',
                             campus_name: item.campus_name || '',
                             address: item.address,
-                        },
+                            campus_prefix: item.campus_prefix,
+                        } as any,
                     });
                 }
             }),

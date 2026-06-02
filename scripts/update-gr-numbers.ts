@@ -6,11 +6,16 @@ async function main() {
   const dryRun = process.env.DRY_RUN === 'true';
   console.log(dryRun ? '--- DRY RUN MODE ---' : '--- EXECUTION MODE ---');
 
-  const students = await prisma.students.findMany({
-    where: {
-      deleted_at: null,
-    },
-  });
+  const [students, campuses] = await Promise.all([
+    prisma.students.findMany({
+      where: {
+        deleted_at: null,
+      },
+    }),
+    prisma.campuses.findMany()
+  ]);
+
+  const campusMap = new Map(campuses.map(c => [c.id, c]));
 
   console.log(`Found ${students.length} active students.`);
 
@@ -21,16 +26,20 @@ async function main() {
     const { cc, campus_id, class_id, gr_number } = student;
     let newGrNumber = gr_number;
 
-    let prefix = '';
+    const campus = campus_id ? (campusMap.get(campus_id) as any) : null;
+    let prefix = campus?.campus_prefix || '';
 
-    if (campus_id === 1) {
-      if (class_id === 21 || class_id === 22) {
-        prefix = 'A-';
+    // If no prefix is set in database for campus, fall back to old hardcoded rules
+    if (!prefix && campus_id) {
+      if (campus_id === 1) {
+        if (class_id === 21 || class_id === 22) {
+          prefix = 'A-';
+        }
+      } else if (campus_id === 2) {
+        prefix = 'KF-A';
+      } else if (campus_id === 3) {
+        prefix = 'A-N';
       }
-    } else if (campus_id === 2) {
-      prefix = 'KF-A';
-    } else if (campus_id === 3) {
-      prefix = 'A-N';
     }
 
     if (prefix && (!gr_number || !gr_number.startsWith(prefix))) {

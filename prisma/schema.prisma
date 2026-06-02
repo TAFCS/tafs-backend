@@ -101,6 +101,7 @@ model campuses {
   campus_code              String                     @unique @db.VarChar(10)
   campus_name              String                     @db.VarChar(100)
   address                  String?
+  campus_prefix            String?                    @db.VarChar(10)
   academic_calendar_days   academic_calendar_days[]
   attendance_roll_sessions attendance_roll_sessions[]
   attendance_staff_daily   attendance_staff_daily[]

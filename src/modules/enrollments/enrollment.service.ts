@@ -451,11 +451,11 @@ export class EnrollmentService {
   private async computeNextGr(campusId: number | null, isALevel = false): Promise<string> {
     if (!campusId) return '1';
 
-    // Get campus name for prefix logic
+    // Get campus details for prefix logic
     const campus = await this.prisma.campuses.findUnique({
       where: { id: campusId },
-      select: { campus_name: true },
-    });
+      select: { campus_name: true, campus_prefix: true } as any,
+    }) as any;
 
     const getPrefixByCampusName = (name: string, campusId: number) => {
       const uname = name.toUpperCase();
@@ -464,7 +464,9 @@ export class EnrollmentService {
       return '';
     };
 
-    const defaultPrefix = isALevel ? 'A-' : (campus ? getPrefixByCampusName(campus.campus_name, campusId) : '');
+    const defaultPrefix = isALevel 
+      ? 'A-' 
+      : (campus?.campus_prefix || (campus ? getPrefixByCampusName(campus.campus_name, campusId) : ''));
 
     // Optimize: Instead of fetching ALL students, fetch the most recent ones 
     // to determine the current GR sequence and prefix.
