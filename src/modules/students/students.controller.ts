@@ -1,4 +1,6 @@
 import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import type { Response } from 'express';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
@@ -32,8 +34,11 @@ export class StudentsController {
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  async findAll(@Query() query: GetStudentsDto) {
-    const { items, meta } = await this.studentsService.findAll(query);
+  async findAll(
+    @Query() query: GetStudentsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const { items, meta } = await this.studentsService.findAll(query, user);
     return createPaginatedApiResponse(
       items,
       meta,
@@ -44,8 +49,12 @@ export class StudentsController {
 
   @Get('export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  async exportExcel(@Query() query: GetStudentsDto, @Res() res: Response) {
-    const buffer = await this.studentsService.exportExcel(query);
+  async exportExcel(
+    @Query() query: GetStudentsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.studentsService.exportExcel(query, user);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="student-directory-${new Date().toISOString().slice(0, 10)}.xlsx"`,

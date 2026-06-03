@@ -48,6 +48,7 @@ export class UsersService {
         full_name: true,
         role: true,
         campus_id: true,
+        allowed_class_ids: true,
         is_active: true,
         created_at: true,
         campuses: {
@@ -73,6 +74,7 @@ export class UsersService {
         full_name: true,
         role: true,
         campus_id: true,
+        allowed_class_ids: true,
         is_active: true,
         created_at: true,
         campuses: { select: { campus_name: true } },
@@ -108,6 +110,7 @@ export class UsersService {
         password_hash: hash,
         role: dto.role,
         campus_id: dto.campus_id ? Number(dto.campus_id) : null,
+        allowed_class_ids: dto.allowed_class_ids ?? [],
         is_active: true,
         created_at: now,
         updated_at: now,
@@ -118,6 +121,7 @@ export class UsersService {
         full_name: true,
         role: true,
         campus_id: true,
+        allowed_class_ids: true,
         is_active: true,
         created_at: true,
         campuses: { select: { campus_name: true } },
@@ -132,6 +136,7 @@ export class UsersService {
     if (dto.full_name !== undefined) data.full_name = dto.full_name;
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.campus_id !== undefined) data.campus_id = dto.campus_id ? Number(dto.campus_id) : null;
+    if (dto.allowed_class_ids !== undefined) data.allowed_class_ids = dto.allowed_class_ids;
     if (dto.is_active !== undefined) data.is_active = dto.is_active;
     if (dto.password) data.password_hash = await bcrypt.hash(dto.password, 10);
 
@@ -144,6 +149,7 @@ export class UsersService {
         full_name: true,
         role: true,
         campus_id: true,
+        allowed_class_ids: true,
         is_active: true,
         updated_at: true,
         campuses: { select: { campus_name: true } },

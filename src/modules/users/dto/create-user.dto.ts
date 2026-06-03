@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, IsUUID, IsEnum } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsArray, IsInt } from 'class-validator';
+import { Type } from 'class-transformer';
 import { StaffRole } from '@prisma/client';
 
 export class CreateUserDto {
@@ -20,4 +21,10 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   campus_id?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  allowed_class_ids?: number[];
 }

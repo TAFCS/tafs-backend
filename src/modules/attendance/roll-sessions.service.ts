@@ -7,6 +7,7 @@ import {
 import { Prisma, RollSessionStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { assertClassInScope } from '../../common/staff-scope';
 import {
   CreateRollSessionDto,
   ListRollSessionsQueryDto,
@@ -111,11 +112,19 @@ export class RollSessionsService {
       throw new BadRequestException('campus_id is required');
     }
     this.assertCampusAccess(user, campusId);
+    if (query.class_id) {
+      assertClassInScope(user, query.class_id);
+    }
 
+    const allowed = user.allowedClassIds ?? [];
     const where: Prisma.attendance_roll_sessionsWhereInput = {
       session_date: sessionDate,
       campus_id: campusId,
-      ...(query.class_id ? { class_id: query.class_id } : {}),
+      ...(query.class_id
+        ? { class_id: query.class_id }
+        : allowed.length > 0
+          ? { class_id: { in: allowed } }
+          : {}),
       ...(query.section_id ? { section_id: query.section_id } : {}),
       ...(query.period ? { period: query.period } : {}),
     };
@@ -136,6 +145,7 @@ export class RollSessionsService {
       throw new NotFoundException(`Roll session ${id} not found`);
     }
     this.assertCampusAccess(user, session.campus_id);
+    assertClassInScope(user, session.class_id);
     return this.enrichWithRoster(session);
   }
 
@@ -183,6 +193,7 @@ export class RollSessionsService {
 
   async create(dto: CreateRollSessionDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
+    assertClassInScope(user, dto.class_id);
     await this.assertRollCallClass(dto.class_id);
     await this.assertCampusSection(dto.campus_id, dto.class_id, dto.section_id);
 
@@ -235,6 +246,7 @@ export class RollSessionsService {
       throw new NotFoundException(`Roll session ${id} not found`);
     }
     this.assertCampusAccess(user, session.campus_id);
+    assertClassInScope(user, session.class_id);
 
     if (session.status === 'SKIPPED') {
       throw new BadRequestException('Cannot modify a skipped roll session');
@@ -324,6 +336,7 @@ export class RollSessionsService {
       throw new NotFoundException(`Roll session ${id} not found`);
     }
     this.assertCampusAccess(user, session.campus_id);
+    assertClassInScope(user, session.class_id);
 
     if (session.status === 'SUBMITTED') {
       throw new BadRequestException('Cannot skip a submitted roll session');

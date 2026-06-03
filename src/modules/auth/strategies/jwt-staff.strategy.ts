@@ -25,6 +25,9 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
     if (payload.userType !== 'STAFF') {
       throw new UnauthorizedException('Invalid token type');
     }
-    return payload;
+    return {
+      ...payload,
+      allowedClassIds: payload.allowedClassIds ?? [],
+    };
   }
 }

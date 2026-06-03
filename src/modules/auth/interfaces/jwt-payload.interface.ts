@@ -7,6 +7,7 @@ export interface IJwtStaffPayload {
   username: string;
   role: StaffRole;
   campusId: number | null;
+  allowedClassIds: number[];
   userType: 'STAFF';
   permissions: string[];
 }

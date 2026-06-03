@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsBoolean, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsEnum, IsArray, IsInt } from 'class-validator';
+import { Type } from 'class-transformer';
 import { StaffRole } from '@prisma/client';
 
 export class UpdateUserDto {
@@ -21,4 +22,10 @@ export class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  allowed_class_ids?: number[];
 }

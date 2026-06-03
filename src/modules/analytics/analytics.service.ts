@@ -17,12 +17,15 @@ export class AnalyticsService {
     return `${startYear}-${startYear + 1}`;
   }
 
-  async getDashboardStats(campusId?: number) {
+  async getDashboardStats(campusId?: number, allowedClassIds: number[] = []) {
     const currentYear = this.getCurrentAcademicYear();
 
     const studentFilter: any = {
       status: 'ENROLLED',
       ...(campusId ? { campus_id: campusId } : {}),
+      ...(allowedClassIds.length > 0
+        ? { class_id: { in: allowedClassIds } }
+        : {}),
       deleted_at: null,
     };
 
@@ -70,7 +73,7 @@ export class AnalyticsService {
 
     const branchCounts = await this.prisma.students.groupBy({
       by: ['campus_id'],
-      where: { status: 'ENROLLED', deleted_at: null }, 
+      where: studentFilter, 
       _count: {
         cc: true,
       },

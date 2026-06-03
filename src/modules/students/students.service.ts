@@ -9,6 +9,8 @@ import { ClassSelectorDto } from './dto/class-selector.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
@@ -206,7 +208,10 @@ export class StudentsService {
     };
   }
 
-  async buildStudentsWhere(query: GetStudentsDto): Promise<Prisma.studentsWhereInput> {
+  async buildStudentsWhere(
+    query: GetStudentsDto,
+    user?: IJwtStaffPayload,
+  ): Promise<Prisma.studentsWhereInput> {
     const { search, campus_id, class_id, section_id, house_id, status, has_photo } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
@@ -272,14 +277,21 @@ export class StudentsService {
       });
     }
 
+    if (user) {
+      return applyStudentScope(user, where, {
+        campus_id: campus_id,
+        class_id: class_id,
+      });
+    }
+
     return where;
   }
 
-  async findAll(query: GetStudentsDto) {
+  async findAll(query: GetStudentsDto, user?: IJwtStaffPayload) {
     const { page = 1, limit = 10, fields } = query;
     const offset = calculateOffset(page, limit);
 
-    const where = await this.buildStudentsWhere(query);
+    const where = await this.buildStudentsWhere(query, user);
 
     // Determine what relations to include based on user's selected fields
     // If fields is undefined, we return ALL categories by default.
@@ -619,8 +631,8 @@ export class StudentsService {
     return { items: mappedItems, meta };
   }
 
-  async exportExcel(query: GetStudentsDto): Promise<Buffer> {
-    const where = await this.buildStudentsWhere(query);
+  async exportExcel(query: GetStudentsDto, user?: IJwtStaffPayload): Promise<Buffer> {
+    const where = await this.buildStudentsWhere(query, user);
     const count = await this.prisma.students.count({ where });
     if (count > 10000) {
       throw new BadRequestException('Export limit exceeded. Please apply filters to limit search to under 10,000 students.');

@@ -43,11 +43,14 @@ export class AuthService {
 
     const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
 
+    const allowedClassIds = user.allowed_class_ids ?? [];
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
       role: user.role,
       campusId: user.campus_id,
+      allowedClassIds,
       userType: 'STAFF',
       permissions,
     };
@@ -66,6 +69,7 @@ export class AuthService {
         role: user.role,
         campusId: user.campus_id,
         campusName: user.campuses?.campus_name ?? null,
+        allowedClassIds,
         permissions,
       },
     };
@@ -101,11 +105,14 @@ export class AuthService {
 
     const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
 
+    const allowedClassIds = user.allowed_class_ids ?? [];
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
       role: user.role,
       campusId: user.campus_id,
+      allowedClassIds,
       userType: 'STAFF',
       permissions,
     };
@@ -124,6 +131,7 @@ export class AuthService {
         role: user.role,
         campusId: user.campus_id,
         campusName: user.campuses?.campus_name ?? null,
+        allowedClassIds,
         permissions,
       },
     };

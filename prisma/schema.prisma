@@ -581,6 +581,7 @@ model users {
   created_at                                                               DateTime                   @default(now()) @db.Timestamp(6)
   updated_at                                                               DateTime                   @updatedAt
   deleted_at                                                               DateTime?                  @db.Timestamp(6)
+  allowed_class_ids                                                        Int[]                      @default([])
   attendance_roll_sessions_attendance_roll_sessions_created_by_idTousers   attendance_roll_sessions[] @relation("attendance_roll_sessions_created_by_idTousers")
   attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[] @relation("attendance_roll_sessions_submitted_by_idTousers")
   employee_profile                                                         employee_profiles?

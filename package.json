@@ -21,6 +21,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node prisma/seed.ts",
     "seed:hr": "ts-node scripts/seed-hr.ts",
+    "seed:staff": "ts-node scripts/seed-staff-roster.ts",
     "bulk:student-photos": "ts-node scripts/bulk-upload-student-photos-by-gr.ts",
     "bulk:kaneez-fatima-photos": "ts-node scripts/bulk-upload-kaneez-fatima-photos.ts",
     "bulk:north-campus-photos": "ts-node scripts/bulk-upload-north-campus-photos.ts"
