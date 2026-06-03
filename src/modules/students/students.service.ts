@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { calculateOffset } from '../../utils/pagination.util';
@@ -205,10 +206,8 @@ export class StudentsService {
     };
   }
 
-  async findAll(query: GetStudentsDto) {
-    const { page = 1, limit = 10, search, campus_id, class_id, section_id, house_id, status, fields } = query;
-    const offset = calculateOffset(page, limit);
-
+  async buildStudentsWhere(query: GetStudentsDto): Promise<Prisma.studentsWhereInput> {
+    const { search, campus_id, class_id, section_id, house_id, status, has_photo } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
@@ -255,6 +254,32 @@ export class StudentsService {
         where.cc = { in: abnormalCcs };
       }
     }
+
+    if (has_photo === 'true') {
+      if (!where.AND) where.AND = [];
+      (where.AND as any).push({
+        photograph_url: { not: null }
+      }, {
+        photograph_url: { not: '' }
+      });
+    } else if (has_photo === 'false') {
+      if (!where.AND) where.AND = [];
+      (where.AND as any).push({
+        OR: [
+          { photograph_url: null },
+          { photograph_url: '' }
+        ]
+      });
+    }
+
+    return where;
+  }
+
+  async findAll(query: GetStudentsDto) {
+    const { page = 1, limit = 10, fields } = query;
+    const offset = calculateOffset(page, limit);
+
+    const where = await this.buildStudentsWhere(query);
 
     // Determine what relations to include based on user's selected fields
     // If fields is undefined, we return ALL categories by default.
@@ -592,6 +617,141 @@ export class StudentsService {
     const meta = createPaginationMeta(page, limit, total);
 
     return { items: mappedItems, meta };
+  }
+
+  async exportExcel(query: GetStudentsDto): Promise<Buffer> {
+    const where = await this.buildStudentsWhere(query);
+    const count = await this.prisma.students.count({ where });
+    if (count > 10000) {
+      throw new BadRequestException('Export limit exceeded. Please apply filters to limit search to under 10,000 students.');
+    }
+
+    const students = await this.prisma.students.findMany({
+      where,
+      orderBy: { cc: 'desc' },
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+        gender: true,
+        cnic: true,
+        dob: true,
+        status: true,
+        academic_year: true,
+        campuses: { select: { campus_name: true } },
+        classes: { select: { description: true } },
+        sections: { select: { description: true } },
+        student_guardians: {
+          select: {
+            relationship: true,
+            guardians: {
+              select: {
+                full_name: true,
+              }
+            }
+          }
+        },
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+          select: {
+            academic_year: true,
+          }
+        }
+      }
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Students');
+
+    // Define columns
+    worksheet.columns = [
+      { header: 'Student Name', key: 'student_name', width: 25 },
+      { header: 'Father Name', key: 'father_name', width: 25 },
+      { header: 'Mother Name', key: 'mother_name', width: 25 },
+      { header: 'CC', key: 'cc', width: 10 },
+      { header: 'GR', key: 'gr', width: 10 },
+      { header: 'Branch', key: 'branch', width: 20 },
+      { header: 'Class', key: 'class', width: 15 },
+      { header: 'Section', key: 'section', width: 12 },
+      { header: 'Gender', key: 'gender', width: 12 },
+      { header: 'CNIC', key: 'cnic', width: 20 },
+      { header: 'Academic Year', key: 'academic_year', width: 15 },
+      { header: 'DOB', key: 'dob', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+    ];
+
+    // Style the header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E3A8A' } // Dark blue theme
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.height = 25;
+
+    const isFather = (rel: string) => {
+      const r = (rel || '').trim().toUpperCase();
+      return r === 'FATHER' || (r.includes('FATHER') && !r.includes('GRAND'));
+    };
+
+    const isMother = (rel: string) => {
+      const r = (rel || '').trim().toUpperCase();
+      return r === 'MOTHER' || (r.includes('MOTHER') && !r.includes('GRAND'));
+    };
+
+    const formatDob = (dob: Date | null) => {
+      if (!dob) return '';
+      const d = new Date(dob);
+      if (isNaN(d.getTime())) return '';
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    for (const student of students) {
+      const fatherLink = student.student_guardians.find((g) => isFather(g.relationship));
+      const motherLink = student.student_guardians.find((g) => isMother(g.relationship));
+
+      const fatherName = fatherLink?.guardians?.full_name || '';
+      const motherName = motherLink?.guardians?.full_name || '';
+      const academicYear = student.academic_year || student.student_admissions?.[0]?.academic_year || '';
+
+      worksheet.addRow({
+        student_name: student.full_name || '',
+        father_name: fatherName,
+        mother_name: motherName,
+        cc: student.cc,
+        gr: student.gr_number || '',
+        branch: student.campuses?.campus_name || '',
+        class: student.classes?.description || '',
+        section: student.sections?.description || '',
+        gender: student.gender || '',
+        cnic: student.cnic || '',
+        academic_year: academicYear,
+        dob: formatDob(student.dob),
+        status: student.status || '',
+      });
+    }
+
+    // Auto-fit column widths
+    worksheet.columns.forEach((column) => {
+      if (!column || typeof column.eachCell !== 'function') return;
+      let maxLen = 0;
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        const val = cell.value ? String(cell.value) : '';
+        if (val.length > maxLen) {
+          maxLen = val.length;
+        }
+      });
+      column.width = Math.max(maxLen + 4, 10);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
   }
 
   async findOne(id: number) {

@@ -61,4 +61,8 @@ export class GetStudentsDto {
   @IsOptional()
   @IsEnum(['missing_guardian', 'no_family', 'abnormal'])
   audit_type?: 'missing_guardian' | 'no_family' | 'abnormal';
+
+  @IsOptional()
+  @IsEnum(['true', 'false'])
+  has_photo?: 'true' | 'false';
 }

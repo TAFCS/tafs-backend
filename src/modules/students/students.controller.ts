@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { StudentsService } from './students.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { PaymentHistoryQueryDto } from './dto/payment-history-query.dto';
@@ -39,6 +40,18 @@ export class StudentsController {
       HttpStatus.OK,
       STUDENTS_MESSAGES.LIST_SUCCESS,
     );
+  }
+
+  @Get('export')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async exportExcel(@Query() query: GetStudentsDto, @Res() res: Response) {
+    const buffer = await this.studentsService.exportExcel(query);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="student-directory-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      'Content-Length': buffer.length,
+    });
+    res.send(buffer);
   }
 
   @Get(':id')
