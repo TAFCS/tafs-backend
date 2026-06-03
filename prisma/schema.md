@@ -1,0 +1,1015 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model bank_accounts {
+  id                Int                 @id @default(autoincrement())
+  account_title     String              @db.VarChar(100)
+  account_number    String              @unique @db.VarChar(50)
+  bank_name         String              @db.VarChar(100)
+  branch_code       String?             @db.VarChar(20)
+  bank_address      String?
+  iban              String?             @unique @db.VarChar(50)
+  bulk_voucher_jobs bulk_voucher_jobs[]
+  vouchers          vouchers[]
+}
+
+model student_flags {
+  id            Int       @id @default(autoincrement())
+  student_id    Int
+  flag          String    @db.VarChar(100)
+  created_at    DateTime  @default(now()) @db.Timestamp(6)
+  reminder_date DateTime? @db.Date
+  work_done     Boolean   @default(false)
+  comment       String?
+  students      students  @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+
+  @@unique([student_id, flag])
+  @@index([student_id])
+  @@index([flag])
+}
+
+model bulk_voucher_jobs {
+  id                  Int           @id @default(autoincrement())
+  created_by          String        @db.VarChar(255)
+  academic_year       String        @db.VarChar(10)
+  fee_date_from       DateTime      @db.Date
+  fee_date_to         DateTime      @db.Date
+  issue_date          DateTime      @db.Date
+  due_date            DateTime      @db.Date
+  validity_date       DateTime?     @db.Date
+  bank_account_id     Int
+  skip_already_issued Boolean       @default(true)
+  apply_late_fee      Boolean       @default(true)
+  late_fee_amount     Int           @default(1000)
+  status              BulkJobStatus @default(PENDING)
+  total_count         Int           @default(0)
+  success_count       Int           @default(0)
+  skip_count          Int           @default(0)
+  fail_count          Int           @default(0)
+  merged_pdf_url      String?
+  created_at          DateTime      @default(now()) @db.Timestamp(6)
+  updated_at          DateTime      @updatedAt
+  report              Json?         @default("[]")
+  waive_surcharge     Boolean       @default(false)
+  campus_ids          Int[]         @default([])
+  class_ids           Int[]         @default([])
+  section_ids         Int[]         @default([])
+  job_type            String        @default("BULK") @db.VarChar(20)
+  bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
+  @@index([status], map: "idx_bulk_jobs_status")
+}
+
+model campus_classes {
+  id        Int      @id @default(autoincrement())
+  campus_id Int
+  class_id  Int
+  is_active Boolean? @default(true)
+  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes   classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id], map: "campus_classes_unique")
+  @@index([campus_id], map: "idx_campus_classes_campus")
+}
+
+model campus_sections {
+  id         Int      @id @default(autoincrement())
+  campus_id  Int
+  class_id   Int
+  section_id Int
+  is_active  Boolean? @default(true)
+  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes    classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections   sections @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id, section_id], map: "campus_sections_unique")
+  @@index([campus_id], map: "idx_campus_sections_campus")
+}
+
+model campuses {
+  id                       Int                        @id @default(autoincrement())
+  campus_code              String                     @unique @db.VarChar(10)
+  campus_name              String                     @db.VarChar(100)
+  address                  String?
+  academic_calendar_days   academic_calendar_days[]
+  attendance_roll_sessions attendance_roll_sessions[]
+  attendance_staff_daily   attendance_staff_daily[]
+  campus_classes           campus_classes[]
+  campus_sections          campus_sections[]
+  class_fee_schedule       class_fee_schedule[]
+  hr_policy_sets           hr_policy_sets[]
+  students                 students[]
+  users                    users[]
+  vouchers                 vouchers[]
+}
+
+model class_fee_schedule {
+  id            Int       @id @default(autoincrement())
+  class_id      Int
+  fee_id        Int
+  amount        Decimal   @db.Decimal(10, 2)
+  campus_id     Int?
+  academic_year String    @default("2024-25") @db.VarChar(10)
+  campuses      campuses? @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes       classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fee_types     fee_types @relation(fields: [fee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([class_id, fee_id, campus_id, academic_year])
+}
+
+model classes {
+  id                       Int                        @id @default(autoincrement())
+  description              String                     @db.VarChar(255)
+  class_code               String                     @db.VarChar(10)
+  academic_system          String                     @db.VarChar(20)
+  term_start_month         Int                        @default(8)
+  attendance_roll_sessions attendance_roll_sessions[]
+  campus_classes           campus_classes[]
+  campus_sections          campus_sections[]
+  class_attendance_modes   class_attendance_modes?
+  class_fee_schedule       class_fee_schedule[]
+  students                 students[]
+  graduated_students       students[]                 @relation("GraduatedFromClass")
+  vouchers                 vouchers[]
+}
+
+model deposit_allocations {
+  id                        Int                        @id @default(autoincrement())
+  deposit_id                Int
+  student_fee_id            Int?
+  voucher_id                Int?
+  amount                    Decimal                    @db.Decimal(12, 2)
+  type                      String                     @db.VarChar(20)
+  surcharge_id              Int?
+  deposits                  deposits                   @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
+  student_fees              student_fees?              @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  voucher_arrear_surcharges voucher_arrear_surcharges? @relation(fields: [surcharge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                  vouchers?                  @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model deposits {
+  id                  Int                   @id @default(autoincrement())
+  student_id          Int
+  total_amount        Decimal               @db.Decimal(12, 2)
+  deposit_date        DateTime              @default(now()) @db.Timestamp(6)
+  payment_method      String?               @db.VarChar(50)
+  reference_number    String?               @db.VarChar(100)
+  remarks             String?
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  bank_code           String?               @db.VarChar(20)
+  bank_name           String?               @db.VarChar(100)
+  date_of_return      DateTime?             @db.Date
+  deposit_allocations deposit_allocations[]
+  students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model families {
+  id                      Int                       @id @default(autoincrement())
+  legacy_pid              String?                   @db.VarChar(50)
+  household_name          String                    @db.VarChar(100)
+  primary_address         String?
+  password_hash           String?                   @db.VarChar(255)
+  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at              DateTime?                 @db.Timestamp(6)
+  email                   String?                   @db.VarChar(100)
+  home_phone              String?                   @db.VarChar(20)
+  chat_conversations      chat_conversations?
+  family_refresh_tokens   family_refresh_tokens[]
+  fcm_device_tokens       fcm_device_tokens[]
+  message_acknowledgments message_acknowledgments[]
+  notice_post_reads       notice_post_reads[]
+  parent_change_requests  parent_change_requests[]
+  student_siblings        student_siblings[]
+  students                students[]
+}
+
+model family_refresh_tokens {
+  id         String    @id @default(uuid())
+  family_id  Int
+  token_hash String    @db.VarChar(255)
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now()) @db.Timestamp(6)
+  families   families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id, revoked_at, expires_at], map: "idx_family_rf_tokens_lookup")
+}
+
+model fee_types {
+  id                       Int                        @id @default(autoincrement())
+  description              String                     @db.VarChar(255)
+  freq                     fee_frequency?
+  breakup                  Json?
+  priority_order           Int?
+  class_fee_schedule       class_fee_schedule[]
+  student_fee_installments student_fee_installments[]
+  student_fees             student_fees[]
+}
+
+model guardians {
+  id                         Int                      @id @default(autoincrement())
+  cnic                       String?                  @unique @db.VarChar(15)
+  full_name                  String?                  @db.VarChar(100)
+  dob                        DateTime?                @db.Date
+  primary_phone              String?                  @db.VarChar(20)
+  whatsapp_number            String?                  @db.VarChar(20)
+  work_phone                 String?                  @db.VarChar(20)
+  email_address              String?                  @db.VarChar(100)
+  education_level            String?                  @db.VarChar(50)
+  occupation                 String?                  @db.VarChar(100)
+  organization               String?                  @db.VarChar(100)
+  job_position               String?                  @db.VarChar(100)
+  monthly_income             Decimal?                 @db.Decimal(12, 2)
+  work_address               String?
+  created_at                 DateTime?                @default(now()) @db.Timestamp(6)
+  deleted_at                 DateTime?                @db.Timestamp(6)
+  photo_url                  String?
+  mailing_address            String?
+  house_appt_name            String?                  @db.VarChar(100)
+  house_appt_number          String?                  @db.VarChar(50)
+  area_block                 String?                  @db.VarChar(100)
+  country                    String?                  @db.VarChar(50)
+  province                   String?                  @db.VarChar(50)
+  city                       String?                  @db.VarChar(50)
+  occupational_position      String?                  @db.VarChar(100)
+  cnic_pic_url               String?
+  passport_front_url         String?
+  passport_back_url          String?
+  place_of_birth             String?                  @db.VarChar(100)
+  primary_phone_country_code String?                  @default("+92") @db.VarChar(10)
+  whatsapp_country_code      String?                  @default("+92") @db.VarChar(10)
+  work_phone_country_code    String?                  @default("+92") @db.VarChar(10)
+  postal_code                String?                  @db.VarChar(20)
+  fax_number                 String?                  @db.VarChar(20)
+  additional_phones          Json?
+  parent_change_requests     parent_change_requests[]
+  student_guardians          student_guardians[]
+}
+
+model parent_change_requests {
+  id             Int       @id @default(autoincrement())
+  guardian_id    Int
+  family_id      Int
+  requested_data Json
+  status         String    @default("PENDING")
+  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  updated_at     DateTime  @updatedAt @db.Timestamp(6)
+  comment        String?
+  processed_by   String?   @db.VarChar(255)
+  processed_at   DateTime? @db.Timestamp(6)
+  families       families  @relation(fields: [family_id], references: [id])
+  guardians      guardians @relation(fields: [guardian_id], references: [id])
+  processor      users?    @relation(fields: [processed_by], references: [id])
+}
+
+model houses {
+  id          Int        @id @default(autoincrement())
+  house_name  String?    @db.VarChar(100)
+  house_color String?    @db.VarChar(50)
+  students    students[]
+}
+
+model relatives_attending_tafs {
+  id           Int      @id @default(autoincrement())
+  name         String?  @db.VarChar(100)
+  class        String?  @db.VarChar(20)
+  relationship String?  @db.VarChar(50)
+  student_id   Int
+  students     students @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model sections {
+  id                       Int                        @id @default(autoincrement())
+  description              String                     @db.VarChar(255)
+  attendance_roll_sessions attendance_roll_sessions[]
+  campus_sections          campus_sections[]
+  students                 students[]
+  vouchers                 vouchers[]
+}
+
+model student_activities {
+  id               Int       @id @default(autoincrement())
+  student_id       Int?
+  activity_name    String?   @db.VarChar(100)
+  grade            String?   @db.VarChar(20)
+  honors_awards    String?
+  continue_at_tafs Boolean?  @default(true)
+  students         students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_admissions {
+  id               Int       @id @default(autoincrement())
+  student_id       Int
+  academic_system  String    @db.VarChar(20)
+  requested_grade  String    @db.VarChar(20)
+  academic_year    String?   @db.VarChar(10)
+  application_date DateTime? @default(now()) @db.Timestamp(6)
+  discipline       String?   @db.VarChar(50)
+  students         students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")
+}
+
+model student_fee_bundles {
+  id            Int            @id @default(autoincrement())
+  student_id    Int
+  bundle_name   String         @db.VarChar(100)
+  total_amount  Decimal?       @default(0) @db.Decimal(12, 2)
+  academic_year String?        @db.VarChar(20)
+  created_at    DateTime?      @default(now()) @db.Timestamp(6)
+  target_month  Int?
+  students      students       @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  student_fees  student_fees[]
+}
+
+model student_fee_installments {
+  id                Int            @id @default(autoincrement())
+  student_id        Int
+  fee_type_id       Int
+  academic_year     String         @db.VarChar(10)
+  total_amount      Decimal        @db.Decimal(12, 2)
+  installment_count Int
+  created_at        DateTime       @default(now()) @db.Timestamp(6)
+  created_by        String         @db.VarChar(255)
+  fee_types         fee_types      @relation(fields: [fee_type_id], references: [id])
+  students          students       @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  student_fees      student_fees[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model student_fees {
+  id                       Int                       @id @default(autoincrement())
+  student_id               Int
+  fee_type_id              Int?
+  month                    Int?
+  academic_year            String                    @db.VarChar
+  precedence_override      Int                       @default(0)
+  issue_date               DateTime?                 @db.Date
+  due_date                 DateTime?                 @db.Date
+  validity_date            DateTime?                 @db.Date
+  status                   fee_status_enum?          @default(NOT_ISSUED)
+  amount_before_discount   Decimal?                  @db.Decimal(12, 2)
+  target_month             Int
+  bundle_id                Int?
+  fee_date                 DateTime?                 @db.Date
+  amount_paid              Decimal?                  @default(0) @db.Decimal(12, 2)
+  description_prefix       String?                   @db.VarChar(50)
+  is_arrear_surcharge      Boolean                   @default(false)
+  installment_id           Int?
+  installment_amount       Decimal?                  @db.Decimal(12, 2)
+  is_discount              Boolean                   @default(false)
+  discount_type_id         Int?
+  amount                   Decimal?                  @db.Decimal(12, 2)
+  deposit_allocations      deposit_allocations[]
+  student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
+  discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fee_types                fee_types?                @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student_fee_installments student_fee_installments? @relation(fields: [installment_id], references: [id])
+  students                 students                  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  voucher_heads            voucher_heads[]
+
+  @@index([due_date], map: "idx_student_fees_due_date")
+  @@index([precedence_override], map: "idx_student_fees_precedence")
+  @@index([student_id, is_discount], map: "idx_student_fees_discount")
+}
+
+model discount_presets {
+  id           Int            @id @default(autoincrement())
+  title        String         @db.VarChar(255)
+  description  String?        @db.VarChar(500)
+  is_active    Boolean        @default(true)
+  created_at   DateTime       @default(now()) @db.Timestamp(6)
+  student_fees student_fees[]
+}
+
+model student_guardians {
+  student_id           Int
+  guardian_id          Int
+  relationship         String    @db.VarChar(50)
+  is_primary_contact   Boolean?  @default(false)
+  is_emergency_contact Boolean?  @default(false)
+  guardians            guardians @relation(fields: [guardian_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students             students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([student_id, guardian_id])
+}
+
+model student_languages {
+  id            Int       @id @default(autoincrement())
+  student_id    Int?
+  language_name String?   @db.VarChar(50)
+  can_speak     Boolean?
+  can_read      Boolean?
+  can_write     Boolean?
+  students      students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_previous_schools {
+  id                 Int       @id @default(autoincrement())
+  student_id         Int?
+  school_name        String?   @db.VarChar(100)
+  location           String?   @db.VarChar(100)
+  class_studied_from String?   @db.VarChar(20)
+  class_studied_to   String?   @db.VarChar(20)
+  reason_for_leaving String?
+  students           students? @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model student_siblings {
+  id                     Int       @id @default(autoincrement())
+  family_id              Int?
+  full_name              String?   @db.VarChar(100)
+  relationship           String?   @db.VarChar(50)
+  age                    Int?
+  current_school         String?   @db.VarChar(100)
+  pick_and_drop          Boolean?  @default(false)
+  numbers_among_siblings Int?
+  families               families? @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model students {
+  cc                         Int                        @id @default(autoincrement())
+  family_id                  Int?
+  campus_id                  Int?
+  gr_number                  String?                    @db.VarChar(50)
+  dob                        DateTime?                  @db.Date
+  gender                     String?                    @db.VarChar(10)
+  nationality                String?                    @db.VarChar(50)
+  religion                   String?                    @db.VarChar(50)
+  identification_marks       String?
+  medical_info               String?
+  interests                  String?
+  admission_age_years        Int?
+  status                     student_status
+  created_at                 DateTime?                  @default(now()) @db.Timestamp(6)
+  deleted_at                 DateTime?                  @db.Timestamp(6)
+  photograph_url             String?
+  country                    String?                    @db.VarChar(50)
+  province                   String?                    @db.VarChar(50)
+  city                       String?                    @db.VarChar(50)
+  physical_impairment        String?
+  consent_publicity          Boolean?                   @default(false)
+  school_leaving_cert_url    String?
+  achievements_cert_url      String?
+  photo_blue_bg_url          String?
+  whatsapp_number            String?                    @db.VarChar(20)
+  primary_phone              String?                    @db.VarChar(20)
+  email                      String?                    @db.VarChar(100)
+  class_id                   Int?
+  section_id                 Int?
+  house_id                   Int?
+  doa                        DateTime?                  @db.Date
+  full_name                  String                     @db.VarChar(100)
+  place_of_birth             String?                    @db.VarChar(100)
+  primary_phone_country_code String?                    @default("+92") @db.VarChar(10)
+  whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
+  academic_year              String?                    @db.VarChar(10)
+  home_phone                 String?                    @db.VarChar(20)
+  is_complementary           Boolean                    @default(false)
+  is_fee_endowment           Boolean                    @default(false)
+  fee_start_term             String?                    @db.VarChar(10)
+  graduated_from_class_id    Int?
+  cnic                       String?                    @unique @db.VarChar(15)
+  attendance_roll_records    attendance_roll_records[]
+  deposits                   deposits[]
+  postdated_cheques          postdated_cheques[]
+  relatives_attending_tafs   relatives_attending_tafs[]
+  student_activities         student_activities[]
+  student_admissions         student_admissions[]
+  student_alevel_details     student_alevel_details?
+  student_fee_bundles        student_fee_bundles[]
+  student_fee_installments   student_fee_installments[]
+  student_fees               student_fees[]
+  student_flags              student_flags[]
+  student_guardians          student_guardians[]
+  student_languages          student_languages[]
+  student_previous_schools   student_previous_schools[]
+  campuses                   campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                    classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
+  houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                   vouchers[]
+
+  @@index([campus_id], map: "idx_students_campus_id")
+  @@index([class_id], map: "idx_students_class_id")
+  @@index([deleted_at], map: "idx_students_deleted_at")
+  @@index([family_id], map: "idx_students_family_id")
+  @@index([full_name], map: "idx_students_full_name")
+  @@index([section_id], map: "idx_students_section_id")
+  @@index([status], map: "idx_students_status")
+}
+
+model student_alevel_details {
+  id         Int      @id @default(autoincrement())
+  student_id Int      @unique
+  details    Json
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @updatedAt @db.Timestamp(6)
+  students   students @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+}
+
+model user_refresh_tokens {
+  id         String    @id @default(uuid())
+  user_id    String
+  token_hash String    @db.VarChar(255)
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now()) @db.Timestamp(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, revoked_at, expires_at], map: "idx_user_rf_tokens_lookup")
+}
+
+model permissions {
+  id               Int                @id @default(autoincrement())
+  key              String             @unique @db.VarChar(100)
+  module           String             @db.VarChar(50)
+  description      String             @db.VarChar(255)
+  role_permissions role_permissions[]
+  user_permissions user_permissions[]
+}
+
+model role_permissions {
+  id            Int         @id @default(autoincrement())
+  role          StaffRole
+  permission_id Int
+  permissions   permissions @relation(fields: [permission_id], references: [id])
+
+  @@unique([role, permission_id], name: "role_permission_id")
+}
+
+model user_permissions {
+  id              Int         @id @default(autoincrement())
+  user_id         String
+  permission_id   Int
+  granted         Boolean
+  granted_by      String
+  granted_at      DateTime    @default(now()) @db.Timestamp(6)
+  note            String?     @db.VarChar(255)
+  granted_by_user users       @relation("granted_by_rel", fields: [granted_by], references: [id])
+  permissions     permissions @relation(fields: [permission_id], references: [id])
+  users           users       @relation("user_permissions_link", fields: [user_id], references: [id])
+
+  @@unique([user_id, permission_id])
+}
+
+model users {
+  id                                                                       String                     @id
+  username                                                                 String                     @unique @db.VarChar(50)
+  password_hash                                                            String                     @db.VarChar(255)
+  email                                                                    String?                    @unique @db.VarChar(100)
+  full_name                                                                String                     @db.VarChar(100)
+  role                                                                     StaffRole
+  campus_id                                                                Int?
+  is_active                                                                Boolean                    @default(true)
+  created_at                                                               DateTime                   @default(now()) @db.Timestamp(6)
+  updated_at                                                               DateTime                   @updatedAt
+  deleted_at                                                               DateTime?                  @db.Timestamp(6)
+  attendance_roll_sessions_attendance_roll_sessions_created_by_idTousers   attendance_roll_sessions[] @relation("attendance_roll_sessions_created_by_idTousers")
+  attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[] @relation("attendance_roll_sessions_submitted_by_idTousers")
+  employee_profile                                                         employee_profiles?
+  notice_board_posts                                                       notice_board_posts[]
+  processed_change_requests                                                parent_change_requests[]
+  postdated_cheques_cashed                                                 postdated_cheques[]        @relation("ChequeCashedBy")
+  postdated_cheques_received                                               postdated_cheques[]        @relation("ChequeReceivedBy")
+  granted_overrides                                                        user_permissions[]         @relation("granted_by_rel")
+  user_permissions                                                         user_permissions[]         @relation("user_permissions_link")
+  user_refresh_tokens                                                      user_refresh_tokens[]
+  campuses                                                                 campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model voucher_heads {
+  id                 Int          @id @default(autoincrement())
+  voucher_id         Int
+  student_fee_id     Int
+  discount_amount    Decimal?     @default(0) @db.Decimal(12, 2)
+  net_amount         Decimal      @db.Decimal(12, 2)
+  amount_deposited   Decimal?     @default(0) @db.Decimal(12, 2)
+  balance            Decimal?     @default(0) @db.Decimal(12, 2)
+  discount_label     String?      @db.VarChar(100)
+  description_prefix String?      @db.VarChar(255)
+  student_fees       student_fees @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "voucher_heads_student_fee_fkey")
+  vouchers           vouchers     @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "voucher_heads_voucher_fkey")
+
+  @@unique([voucher_id, student_fee_id], map: "voucher_heads_unique")
+  @@index([voucher_id], map: "idx_voucher_heads_voucher")
+}
+
+model voucher_arrear_surcharges {
+  id                  Int                   @id @default(autoincrement())
+  voucher_id          Int
+  arrear_fee_date     DateTime              @db.Date
+  arrear_month        Int
+  arrear_year         String                @db.VarChar(10)
+  amount              Decimal               @db.Decimal(12, 2)
+  waived              Boolean               @default(false)
+  waived_by           String?               @db.VarChar(255)
+  amount_paid         Decimal               @default(0) @db.Decimal(12, 2)
+  deposit_allocations deposit_allocations[]
+  vouchers            vouchers              @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
+
+  @@index([voucher_id])
+}
+
+model vouchers {
+  id                        Int                         @id @default(autoincrement())
+  student_id                Int
+  campus_id                 Int
+  class_id                  Int
+  bank_account_id           Int
+  issue_date                DateTime                    @db.Date
+  due_date                  DateTime                    @db.Date
+  status                    String?                     @default("UNPAID") @db.VarChar(20)
+  validity_date             DateTime?                   @db.Date
+  late_fee_charge           Boolean
+  section_id                Int?
+  academic_year             String?                     @db.VarChar(10)
+  month                     Int?
+  pdf_url                   String?
+  total_payable_before_due  Decimal?                    @default(0) @db.Decimal(12, 2)
+  total_payable_after_due   Decimal?                    @default(0) @db.Decimal(12, 2)
+  late_fee_deposited        Decimal?                    @default(0) @db.Decimal(12, 2)
+  fee_date                  DateTime?                   @db.Date
+  surcharge_waived          Boolean                     @default(false)
+  surcharge_waived_by       String?                     @db.VarChar(100)
+  total_arrears             Decimal?                    @default(0) @db.Decimal(12, 2)
+  voucher_number            String?                     @unique @db.VarChar(11)
+  deposit_allocations       deposit_allocations[]
+  voucher_arrear_surcharges voucher_arrear_surcharges[]
+  voucher_heads             voucher_heads[]
+  bank_accounts             bank_accounts               @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses                  campuses                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                   classes                     @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                  sections?                   @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students                  students                    @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model bundle_fee_type_names {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.VarChar(255)
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now()) @db.Timestamp(6)
+}
+
+model chat_conversations {
+  id                   String          @id @default(uuid())
+  family_id            Int?            @unique
+  last_message_at      DateTime        @default(now())
+  last_message_snippet String?         @db.VarChar(255)
+  unread_by_admin      Int             @default(0)
+  unread_by_parent     Int             @default(0)
+  created_at           DateTime        @default(now())
+  updated_at           DateTime        @updatedAt
+  admin_last_read_at   DateTime?
+  parent_last_read_at  DateTime?
+  families             families?       @relation(fields: [family_id], references: [id])
+  messages             chat_messages[]
+
+  @@index([last_message_at(sort: Desc)])
+}
+
+model chat_messages {
+  id                      String                    @id @default(uuid())
+  conversation_id         String
+  sender_type             ChatSenderType
+  sender_id               String?
+  message_type            ChatMessageType
+  content                 String
+  media_metadata          Json?
+  is_read                 Boolean                   @default(false)
+  created_at              DateTime                  @default(now())
+  is_announcement         Boolean                   @default(false)
+  sender_name             String?                   @db.VarChar(100)
+  target_grade            String?                   @db.VarChar(50)
+  target_section          String?                   @db.VarChar(50)
+  status                  MessageStatus             @default(APPROVED)
+  requires_acknowledgment Boolean                   @default(false)
+  conversation            chat_conversations        @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  message_acknowledgments message_acknowledgments[]
+
+  @@index([conversation_id, created_at(sort: Desc)])
+  @@index([is_announcement, target_grade, target_section])
+}
+
+model fcm_device_tokens {
+  id             Int      @id @default(autoincrement())
+  family_id      Int
+  device_token   String   @unique @db.VarChar(255)
+  device_os      String?  @db.VarChar(20)
+  last_active_at DateTime @default(now())
+  families       families @relation(fields: [family_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id])
+}
+
+model complaints {
+  id          Int      @id @default(autoincrement())
+  family_id   Int
+  subject     String   @db.VarChar(255)
+  description String
+  file_url    String?
+  status      String   @default("open") @db.VarChar(50)
+  created_at  DateTime @default(now()) @db.Timestamp(6)
+}
+
+model departments {
+  id                Int                 @id @default(autoincrement())
+  name              String              @db.VarChar(100)
+  description       String?             @db.VarChar(255)
+  designations      designations[]
+  employee_profiles employee_profiles[]
+}
+
+model designations {
+  id                Int                 @id @default(autoincrement())
+  department_id     Int
+  title             String              @db.VarChar(100)
+  description       String?             @db.VarChar(255)
+  departments       departments         @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  employee_profiles employee_profiles[]
+}
+
+model employee_profiles {
+  id                     Int                      @id @default(autoincrement())
+  user_id                String?                  @unique
+  cnic                   String?                  @unique @db.VarChar(20)
+  join_date              DateTime?                @db.Date
+  employment_type        String?                  @db.VarChar(50)
+  department_id          Int?
+  designation_id         Int?
+  reporting_manager_id   Int?
+  attendance_staff_daily attendance_staff_daily[]
+  departments            departments?             @relation(fields: [department_id], references: [id])
+  designations           designations?            @relation(fields: [designation_id], references: [id])
+  reporting_manager      employee_profiles?       @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
+  subordinates           employee_profiles[]      @relation("ReportingManager")
+  users                  users?                   @relation(fields: [user_id], references: [id])
+}
+
+model academic_calendar_days {
+  id          Int      @id @default(autoincrement())
+  campus_id   Int
+  date        DateTime @db.Date
+  day_type    String   @db.VarChar(20)
+  description String?  @db.VarChar(255)
+  campuses    campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+
+  @@unique([campus_id, date])
+}
+
+model class_attendance_modes {
+  id       Int     @id @default(autoincrement())
+  class_id Int     @unique
+  mode     String  @default("BIOMETRIC_DAILY") @db.VarChar(50)
+  classes  classes @relation(fields: [class_id], references: [id], onDelete: Cascade)
+}
+
+model hr_policy_sets {
+  id              Int               @id @default(autoincrement())
+  campus_id       Int
+  academic_year   String            @db.VarChar(10)
+  effective_from  DateTime          @db.Date
+  description     String?           @db.VarChar(255)
+  hr_policy_rules hr_policy_rules[]
+  campuses        campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+}
+
+model hr_policy_rules {
+  id             Int            @id @default(autoincrement())
+  policy_set_id  Int
+  rule_type      String         @db.VarChar(100)
+  value_json     Json           @default("{}")
+  applies_to     String?        @db.VarChar(50)
+  description    String?        @db.VarChar(255)
+  hr_policy_sets hr_policy_sets @relation(fields: [policy_set_id], references: [id], onDelete: Cascade)
+
+  @@unique([policy_set_id, rule_type])
+}
+
+model leave_types {
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
+  is_paid     Boolean @default(true)
+}
+
+model attendance_roll_records {
+  id                       Int                      @id @default(autoincrement())
+  session_id               Int
+  student_cc               Int
+  status                   RollRecordStatus
+  notes                    String?                  @db.VarChar(255)
+  attendance_roll_sessions attendance_roll_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students                 students                 @relation(fields: [student_cc], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([session_id, student_cc])
+  @@index([student_cc])
+}
+
+model attendance_roll_sessions {
+  id                                                    Int                       @id @default(autoincrement())
+  campus_id                                             Int
+  class_id                                              Int
+  section_id                                            Int
+  session_date                                          DateTime                  @db.Date
+  period                                                Int                       @default(1)
+  status                                                RollSessionStatus         @default(DRAFT)
+  skip_reason                                           String?                   @db.VarChar(500)
+  created_by_id                                         String?
+  submitted_by_id                                       String?
+  submitted_at                                          DateTime?                 @db.Timestamp(6)
+  created_at                                            DateTime                  @default(now()) @db.Timestamp(6)
+  updated_at                                            DateTime                  @updatedAt @db.Timestamp(6)
+  attendance_roll_records                               attendance_roll_records[]
+  campuses                                              campuses                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                                              sections                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([campus_id, class_id, section_id, session_date, period], map: "attendance_roll_sessions_campus_id_class_id_section_id_session_")
+  @@index([session_date, campus_id])
+  @@index([status, session_date])
+}
+
+model attendance_staff_daily {
+  id                Int                   @id @default(autoincrement())
+  employee_id       Int
+  campus_id         Int
+  date              DateTime              @db.Date
+  status            StaffAttendanceStatus
+  notes             String?               @db.VarChar(500)
+  marked_by         String?
+  created_at        DateTime              @default(now()) @db.Timestamp(6)
+  updated_at        DateTime              @updatedAt @db.Timestamp(6)
+  campuses          campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
+  employee_profiles employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, date])
+  @@index([date, campus_id])
+}
+
+model postdated_cheques {
+  id               Int                   @id @default(autoincrement())
+  student_id       Int
+  cheque_number    String                @db.VarChar(50)
+  bank_name        String?               @db.VarChar(100)
+  amount           Decimal               @db.Decimal(12, 2)
+  cheque_date      DateTime              @db.Date
+  received_date    DateTime              @db.Date
+  received_by      String?               @db.VarChar(255)
+  status           PostdatedChequeStatus @default(PENDING)
+  cashed_date      DateTime?             @db.Date
+  cashed_by        String?               @db.VarChar(255)
+  notes            String?
+  created_at       DateTime              @default(now()) @db.Timestamp(6)
+  cashed_by_user   users?                @relation("ChequeCashedBy", fields: [cashed_by], references: [id], onDelete: NoAction)
+  received_by_user users?                @relation("ChequeReceivedBy", fields: [received_by], references: [id], onDelete: NoAction)
+  students         students              @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+
+  @@index([student_id])
+  @@index([status])
+  @@index([cheque_date])
+}
+
+model notice_board_posts {
+  id          Int                 @id @default(autoincrement())
+  posted_by   String              @db.VarChar(255)
+  title       String?             @db.VarChar(255)
+  body        String
+  campus_ids  Int[]               @default([])
+  class_ids   Int[]               @default([])
+  section_ids Int[]               @default([])
+  media_urls  Json?               @default("[]")
+  media_types Json?               @default("[]")
+  is_pinned   Boolean             @default(false)
+  posted_at   DateTime            @default(now()) @db.Timestamp(6)
+  expires_at  DateTime?           @db.Timestamp(6)
+  deleted_at  DateTime?           @db.Timestamp(6)
+  users       users               @relation(fields: [posted_by], references: [id])
+  post_reads  notice_post_reads[]
+
+  @@index([posted_at(sort: Desc)])
+  @@index([campus_ids], type: Gin)
+  @@index([class_ids], type: Gin)
+  @@index([section_ids], type: Gin)
+}
+
+model notice_post_reads {
+  id        Int                @id @default(autoincrement())
+  post_id   Int
+  family_id Int
+  read_at   DateTime           @default(now()) @db.Timestamp(6)
+  families  families           @relation(fields: [family_id], references: [id])
+  posts     notice_board_posts @relation(fields: [post_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, family_id])
+}
+
+model message_acknowledgments {
+  id              Int           @id @default(autoincrement())
+  message_id      String
+  family_id       Int
+  acknowledged_at DateTime      @default(now()) @db.Timestamp(6)
+  families        families      @relation(fields: [family_id], references: [id])
+  messages        chat_messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
+
+  @@unique([message_id, family_id])
+}
+
+enum BulkJobStatus {
+  PENDING
+  PROCESSING
+  DONE
+  PARTIAL_FAILURE
+  FAILED
+}
+
+enum StaffRole {
+  SUPER_ADMIN
+  CAMPUS_ADMIN
+  PRINCIPAL
+  FINANCE_CLERK
+  RECEPTIONIST
+  TEACHER
+  STAFF_EDITOR
+}
+
+enum fee_frequency {
+  MONTHLY
+  ONE_TIME
+}
+
+enum fee_status_enum {
+  NOT_ISSUED
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  DISCOUNT
+}
+
+enum student_status {
+  SOFT_ADMISSION
+  ENROLLED
+  EXPELLED
+  GRADUATED
+  LEFT
+}
+
+enum ChatMessageType {
+  TEXT
+  IMAGE
+  VOICE
+  DOCUMENT
+}
+
+enum ChatSenderType {
+  GUARDIAN
+  ADMIN
+}
+
+enum MessageStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RollRecordStatus {
+  PRESENT
+  ABSENT
+}
+
+enum RollSessionStatus {
+  DRAFT
+  SUBMITTED
+  SKIPPED
+}
+
+enum StaffAttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  EXCUSED
+}
+
+enum PostdatedChequeStatus {
+  PENDING
+  CASHED
+  BOUNCED
+  RETURNED
+  CANCELLED
+}
