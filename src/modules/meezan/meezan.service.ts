@@ -58,6 +58,10 @@ export class MeezanService {
       const dueDate = voucher.due_date;
       const validityDate = voucher.validity_date;
 
+      if (voucher.status === 'VOID') {
+        return { ResponseCode: '093', ResponseDesc: 'Voucher is void' };
+      }
+
       if (voucher.status === 'PAID') {
         return { ResponseCode: '097', ResponseDesc: 'Voucher is already paid' };
       }
