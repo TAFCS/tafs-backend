@@ -638,15 +638,34 @@ export class StudentsService {
         dob: true,
         status: true,
         academic_year: true,
+        is_complementary: true,
+        is_fee_endowment: true,
+        fee_start_term: true,
+        primary_phone: true,
+        whatsapp_number: true,
+        families: {
+          select: {
+            primary_address: true,
+            students: {
+              where: { deleted_at: null },
+              select: { cc: true }
+            }
+          }
+        },
         campuses: { select: { campus_name: true } },
         classes: { select: { description: true } },
         sections: { select: { description: true } },
+        houses: { select: { house_name: true } },
         student_guardians: {
           select: {
             relationship: true,
+            is_emergency_contact: true,
             guardians: {
               select: {
                 full_name: true,
+                cnic: true,
+                primary_phone: true,
+                whatsapp_number: true,
               }
             }
           }
@@ -660,37 +679,6 @@ export class StudentsService {
         }
       }
     });
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Students');
-
-    // Define columns
-    worksheet.columns = [
-      { header: 'Student Name', key: 'student_name', width: 25 },
-      { header: 'Father Name', key: 'father_name', width: 25 },
-      { header: 'Mother Name', key: 'mother_name', width: 25 },
-      { header: 'CC', key: 'cc', width: 10 },
-      { header: 'GR', key: 'gr', width: 10 },
-      { header: 'Branch', key: 'branch', width: 20 },
-      { header: 'Class', key: 'class', width: 15 },
-      { header: 'Section', key: 'section', width: 12 },
-      { header: 'Gender', key: 'gender', width: 12 },
-      { header: 'CNIC', key: 'cnic', width: 20 },
-      { header: 'Academic Year', key: 'academic_year', width: 15 },
-      { header: 'DOB', key: 'dob', width: 15 },
-      { header: 'Status', key: 'status', width: 15 },
-    ];
-
-    // Style the header row
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    headerRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF1E3A8A' } // Dark blue theme
-    };
-    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-    headerRow.height = 25;
 
     const isFather = (rel: string) => {
       const r = (rel || '').trim().toUpperCase();
@@ -712,29 +700,73 @@ export class StudentsService {
       return `${year}-${month}-${day}`;
     };
 
+    // Columns config mapping
+    const columnsConfig: Record<string, { header: string; width: number; getValue: (s: any) => any }> = {
+      // Student columns
+      student_name: { header: 'Student Name', width: 25, getValue: (s) => s.full_name || '' },
+      cc: { header: 'CC', width: 10, getValue: (s) => s.cc },
+      gr: { header: 'GR', width: 10, getValue: (s) => s.gr_number || '' },
+      cnic: { header: 'Student CNIC', width: 20, getValue: (s) => s.cnic || '' },
+      dob: { header: 'Date of Birth', width: 15, getValue: (s) => formatDob(s.dob) },
+      gender: { header: 'Gender', width: 12, getValue: (s) => s.gender || '' },
+      branch: { header: 'Branch', width: 20, getValue: (s) => s.campuses?.campus_name || '' },
+      class: { header: 'Class', width: 15, getValue: (s) => s.classes?.description || '' },
+      section: { header: 'Section', width: 12, getValue: (s) => s.sections?.description || '' },
+      house: { header: 'House', width: 15, getValue: (s) => s.houses?.house_name || '' },
+      status: { header: 'Status', width: 15, getValue: (s) => s.status || '' },
+      academic_year: { header: 'Academic Year', width: 15, getValue: (s) => s.academic_year || s.student_admissions?.[0]?.academic_year || '' },
+      is_complementary: { header: 'Is Complementary', width: 18, getValue: (s) => s.is_complementary ? 'Yes' : 'No' },
+      is_fee_endowment: { header: 'Is Fee Endowment', width: 18, getValue: (s) => s.is_fee_endowment ? 'Yes' : 'No' },
+      fee_start_term: { header: 'Fee Start Term', width: 15, getValue: (s) => s.fee_start_term || '' },
+      residential_address: { header: 'Residential Address', width: 35, getValue: (s) => s.families?.primary_address || '' },
+      sibling_count: { header: 'Sibling Count', width: 15, getValue: (s) => s.families?.students ? Math.max(0, s.families.students.length - 1) : 0 },
+      primary_phone: { header: 'Primary Phone', width: 20, getValue: (s) => s.primary_phone || '' },
+      whatsapp_number: { header: 'WhatsApp Number', width: 20, getValue: (s) => s.whatsapp_number || '' },
+
+      // Parent columns
+      father_name: { header: 'Father Name', width: 25, getValue: (s) => s.student_guardians.find((g: any) => isFather(g.relationship))?.guardians?.full_name || '' },
+      father_cnic: { header: 'Father CNIC', width: 20, getValue: (s) => s.student_guardians.find((g: any) => isFather(g.relationship))?.guardians?.cnic || '' },
+      father_phone: { header: 'Father Phone', width: 20, getValue: (s) => s.student_guardians.find((g: any) => isFather(g.relationship))?.guardians?.primary_phone || s.student_guardians.find((g: any) => isFather(g.relationship))?.guardians?.whatsapp_number || '' },
+      mother_name: { header: 'Mother Name', width: 25, getValue: (s) => s.student_guardians.find((g: any) => isMother(g.relationship))?.guardians?.full_name || '' },
+      mother_cnic: { header: 'Mother CNIC', width: 20, getValue: (s) => s.student_guardians.find((g: any) => isMother(g.relationship))?.guardians?.cnic || '' },
+      mother_phone: { header: 'Mother Phone', width: 20, getValue: (s) => s.student_guardians.find((g: any) => isMother(g.relationship))?.guardians?.primary_phone || s.student_guardians.find((g: any) => isMother(g.relationship))?.guardians?.whatsapp_number || '' },
+      emergency_contact_name: { header: 'Emergency Contact Name', width: 25, getValue: (s) => s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.full_name || '' },
+      emergency_contact_phone: { header: 'Emergency Contact Phone', width: 20, getValue: (s) => s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.primary_phone || s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.whatsapp_number || '' },
+    };
+
+    // Determine columns to export
+    const requestedColumns = query.columns ? query.columns.split(',') : [];
+    const columnsToExport = requestedColumns.length > 0 
+      ? requestedColumns.filter(col => columnsConfig[col]) 
+      : ['student_name', 'father_name', 'mother_name', 'cc', 'gr', 'branch', 'class', 'section', 'gender', 'cnic', 'academic_year', 'dob', 'status'];
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Students');
+
+    // Define worksheet columns
+    worksheet.columns = columnsToExport.map(col => ({
+      header: columnsConfig[col].header,
+      key: col,
+      width: columnsConfig[col].width
+    }));
+
+    // Style the header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E3A8A' } // Dark blue theme
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.height = 25;
+
     for (const student of students) {
-      const fatherLink = student.student_guardians.find((g) => isFather(g.relationship));
-      const motherLink = student.student_guardians.find((g) => isMother(g.relationship));
-
-      const fatherName = fatherLink?.guardians?.full_name || '';
-      const motherName = motherLink?.guardians?.full_name || '';
-      const academicYear = student.academic_year || student.student_admissions?.[0]?.academic_year || '';
-
-      worksheet.addRow({
-        student_name: student.full_name || '',
-        father_name: fatherName,
-        mother_name: motherName,
-        cc: student.cc,
-        gr: student.gr_number || '',
-        branch: student.campuses?.campus_name || '',
-        class: student.classes?.description || '',
-        section: student.sections?.description || '',
-        gender: student.gender || '',
-        cnic: student.cnic || '',
-        academic_year: academicYear,
-        dob: formatDob(student.dob),
-        status: student.status || '',
-      });
+      const rowData: Record<string, any> = {};
+      for (const col of columnsToExport) {
+        rowData[col] = columnsConfig[col].getValue(student);
+      }
+      worksheet.addRow(rowData);
     }
 
     // Auto-fit column widths

@@ -65,4 +65,8 @@ export class GetStudentsDto {
   @IsOptional()
   @IsEnum(['true', 'false'])
   has_photo?: 'true' | 'false';
+
+  @IsOptional()
+  @IsString()
+  columns?: string;
 }
