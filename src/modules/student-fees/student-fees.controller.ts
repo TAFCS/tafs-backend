@@ -298,4 +298,12 @@ export class StudentFeesController {
         const data = await this.studentFeesService.deleteDiscount(id);
         return { success: true, data };
     }
+
+    @Delete('reset/:studentId')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Manage, 'all'))
+    async resetAllHeads(@Param('studentId', ParseIntPipe) studentId: number) {
+        const data = await this.studentFeesService.resetAllHeads(studentId);
+        return { success: true, data };
+    }
 }

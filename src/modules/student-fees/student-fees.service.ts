@@ -1306,6 +1306,39 @@ export class StudentFeesService {
     }
 
     /**
+     * Hard-reset a student's fee history:
+     *   1. Delete all deposits  → cascades to deposit_allocations
+     *   2. Delete all vouchers  → cascades to voucher_heads + voucher_arrear_surcharges
+     *   3. Reset every student_fee back to NOT_ISSUED (status, dates, amount_paid)
+     * Runs inside a single transaction so either everything rolls back or everything commits.
+     */
+    async resetAllHeads(studentId: number) {
+        const student = await this.prisma.students.findUnique({ where: { cc: studentId }, select: { cc: true } });
+        if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+
+        const [deletedDeposits, deletedVouchers, resetFees] = await this.prisma.$transaction([
+            this.prisma.deposits.deleteMany({ where: { student_id: studentId } }),
+            this.prisma.vouchers.deleteMany({ where: { student_id: studentId } }),
+            this.prisma.student_fees.updateMany({
+                where: { student_id: studentId, status: { not: 'NOT_ISSUED' } },
+                data: {
+                    status: 'NOT_ISSUED',
+                    issue_date: null,
+                    due_date: null,
+                    validity_date: null,
+                    amount_paid: 0,
+                },
+            }),
+        ]);
+
+        return {
+            deletedDeposits: deletedDeposits.count,
+            deletedVouchers: deletedVouchers.count,
+            resetFees: resetFees.count,
+        };
+    }
+
+    /**
      * Delete a discount row. Discount rows are safe to delete unless they appear
      * on a non-VOID voucher (same protection as regular fee rows).
      */
