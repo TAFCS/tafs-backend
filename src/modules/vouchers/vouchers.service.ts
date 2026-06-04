@@ -445,22 +445,45 @@ export class VouchersService {
         page: number = 1,
         limit: number = 50,
         singleFeeDate?: boolean,
+        multipleFeeHeads?: boolean,
     ) {
         try {
             const skip = (page - 1) * limit;
             const take = limit;
 
-            let singleFeeDateIds: number[] | undefined;
-            if (singleFeeDate) {
-                const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
-                    SELECT vh.voucher_id
-                    FROM voucher_heads vh
-                    JOIN student_fees sf ON vh.student_fee_id = sf.id
-                    WHERE sf.fee_date IS NOT NULL
-                    GROUP BY vh.voucher_id
-                    HAVING COUNT(DISTINCT sf.fee_date) = 1
-                `;
-                singleFeeDateIds = rows.map(r => Number(r.voucher_id));
+            let validIds: number[] | undefined;
+
+            if (singleFeeDate || multipleFeeHeads) {
+                let ids1: number[] | undefined;
+                let ids2: number[] | undefined;
+
+                if (singleFeeDate) {
+                    const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
+                        SELECT vh.voucher_id
+                        FROM voucher_heads vh
+                        JOIN student_fees sf ON vh.student_fee_id = sf.id
+                        WHERE sf.fee_date IS NOT NULL
+                        GROUP BY vh.voucher_id
+                        HAVING COUNT(DISTINCT sf.fee_date) = 1
+                    `;
+                    ids1 = rows.map(r => Number(r.voucher_id));
+                }
+
+                if (multipleFeeHeads) {
+                    const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
+                        SELECT voucher_id
+                        FROM voucher_heads
+                        GROUP BY voucher_id
+                        HAVING COUNT(id) > 1
+                    `;
+                    ids2 = rows.map(r => Number(r.voucher_id));
+                }
+
+                if (ids1 !== undefined && ids2 !== undefined) {
+                    validIds = ids1.filter(id => ids2!.includes(id));
+                } else {
+                    validIds = ids1 !== undefined ? ids1 : ids2;
+                }
             }
 
             const where: Prisma.vouchersWhereInput = {
@@ -493,21 +516,46 @@ export class VouchersService {
                         },
                     }
                     : {}),
-                ...(singleFeeDateIds !== undefined ? { id: { in: singleFeeDateIds } } : {}),
+                ...(validIds !== undefined ? { id: { in: validIds } } : {}),
             };
 
             // Stats groupBy uses the same where but without the status filter,
             // so the cards always show a full breakdown across all statuses.
             const { status: _omit, ...statsWhere } = where as any;
 
-            const [total, vouchers, stats] = await Promise.all([
-                this.prisma.vouchers.count({ where }),
+            // Fetch all IDs matching the filter for custom sorting in JS
+            const allMatching = await this.prisma.vouchers.findMany({
+                where,
+                select: { id: true, status: true, issue_date: true },
+            });
+
+            // Custom sort: Unpaid -> Partially Paid -> Paid -> Void
+            const statusOrder: Record<string, number> = {
+                'ISSUED': 1,
+                'OVERDUE': 1,
+                'NOT_ISSUED': 1,
+                'PARTIALLY_PAID': 2,
+                'PAID': 3,
+                'VOID': 4
+            };
+
+            allMatching.sort((a, b) => {
+                const orderA = statusOrder[a.status ?? ''] ?? 5;
+                const orderB = statusOrder[b.status ?? ''] ?? 5;
+                if (orderA !== orderB) return orderA - orderB;
+                const timeA = a.issue_date?.getTime() ?? 0;
+                const timeB = b.issue_date?.getTime() ?? 0;
+                if (timeA !== timeB) return timeB - timeA; // desc issue_date
+                return b.id - a.id; // desc id
+            });
+
+            const total = allMatching.length;
+            const paginatedIds = allMatching.slice(skip, skip + take).map(v => v.id);
+
+            const [unsortedVouchers, stats] = await Promise.all([
                 this.prisma.vouchers.findMany({
-                    where,
+                    where: { id: { in: paginatedIds } },
                     include: VOUCHER_INCLUDE,
-                    orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
-                    skip,
-                    take,
                 }),
                 this.prisma.vouchers.groupBy({
                     by: ['status'],
@@ -515,6 +563,9 @@ export class VouchersService {
                     _count: { _all: true }
                 })
             ]);
+
+            // Restore sorted order
+            const vouchers = unsortedVouchers.sort((a, b) => paginatedIds.indexOf(a.id) - paginatedIds.indexOf(b.id));
 
             const statusStats = {
                 paid: 0,

@@ -76,4 +76,10 @@ export class FilterVouchersDto {
     @Transform(({ value }) => value === 'true' || value === true)
     @IsBoolean()
     single_fee_date?: boolean;
+
+    @ApiPropertyOptional({ description: 'Show only vouchers with multiple fee heads' })
+    @IsOptional()
+    @Transform(({ value }) => value === 'true' || value === true)
+    @IsBoolean()
+    multiple_fee_heads?: boolean;
 }

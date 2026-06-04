@@ -120,6 +120,7 @@ export class VouchersController {
             query.page,
             query.limit,
             query.single_fee_date,
+            query.multiple_fee_heads,
         );
         return {
             success: true,
