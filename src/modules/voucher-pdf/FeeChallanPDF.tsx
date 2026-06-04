@@ -237,11 +237,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         marginTop: 10,
-        marginBottom: 8,
+        marginBottom: 3,
     },
     stampBox: {
         width: 60,
-        height: 35,
+        height: 22,
         borderWidth: 1,
         borderColor: '#999999',
         justifyContent: 'center',
@@ -650,7 +650,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             {details.applyLateFee && (
                 <View style={[styles.tableRow, { borderBottomWidth: 0, marginTop: 2 }]}>
                     <Text style={styles.colDesc}>Late Payment Surcharge</Text>
-                    <Text style={styles.colAmount}>{(details.lateFeeAmount || 1000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                    <Text style={styles.colAmount}>{Number(details.lateFeeAmount || 1000).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</Text>
                 </View>
             )}
 
