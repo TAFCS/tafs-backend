@@ -220,8 +220,11 @@ export class VouchersController {
         const voucher = await this.vouchersService.clearDeposit(id, dto.depositId);
         return {
             success: true,
-            message: 'Deposit cleared successfully and allocations reversed',
+            message: voucher === null
+                ? 'Deposit cleared and PAID voucher deleted — fee heads reset to Not Issued.'
+                : 'Deposit cleared successfully and allocations reversed',
             data: voucher,
+            deleted: voucher === null,
         };
     }
 
