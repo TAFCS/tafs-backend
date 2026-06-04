@@ -846,8 +846,8 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 </View>
 
-                {/* SIBLINGS Section — temporarily commented out */}
-                {/* <View style={styles.historySection}>
+                {/* SIBLINGS Section */}
+                <View style={styles.historySection}>
                     <Text style={styles.historyTitle}>SIBLINGS</Text>
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
@@ -873,7 +873,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             </View>
                         )}
                     </View>
-                </View> */}
+                </View>
 
                 {/* QR CODE — scans directly to the challan PDF */}
                 {qrUrl && (
