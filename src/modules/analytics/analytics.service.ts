@@ -19,6 +19,8 @@ export class AnalyticsService {
 
   async getDashboardStats(campusId?: number, allowedClassIds: number[] = []) {
     const currentYear = this.getCurrentAcademicYear();
+    const startYear = parseInt(currentYear.split('-')[0]);
+    const today = new Date();
 
     const studentFilter: any = {
       status: 'ENROLLED',
@@ -33,38 +35,101 @@ export class AnalyticsService {
       students: studentFilter,
     };
 
-    // 1. Current Year Financials
-    const collectionStats = await this.prisma.student_fees.aggregate({
-      where: {
-        academic_year: currentYear,
-        ...feeFilter,
-      },
-      _sum: {
-        amount: true,
-        amount_paid: true,
-      },
-    });
+    // ─────────────────────────────────────────────────────────────────────
+    // Financials — kept strictly on two separate bases so the numbers never
+    // get mixed:
+    //   • ACCRUAL (what was billed / what remains unpaid against those bills):
+    //     student_fees.amount + amount_paid, plus voucher_arrear_surcharges
+    //     (the late-payment penalties — a real, predictable line item from
+    //     the moment a voucher carrying an arrear is generated). Legacy
+    //     is_arrear_surcharge rows and is_discount memo rows are excluded —
+    //     surcharges now live in their own table, and a discount row's
+    //     amount is already netted into the real fee head's `amount`, so
+    //     counting both would double the bill.
+    //   • CASH (what was actually banked): deposits.total_amount, keyed on
+    //     deposit_date — the only timestamped ledger in the system. Reversed
+    //     deposits are hard-deleted (see reverseDeposit/clearDeposit), so
+    //     this is self-correcting with no extra status filter needed.
+    // ─────────────────────────────────────────────────────────────────────
+    const yearStart = new Date(startYear, 7, 1);
+    const yearEnd = new Date(startYear + 1, 6, 31, 23, 59, 59, 999);
 
-    const expected = Number(collectionStats._sum?.amount || 0);
-    const collected = Number(collectionStats._sum?.amount_paid || 0);
-    const outstanding = expected - collected;
-    const collectionRate = expected > 0 ? (collected / expected) * 100 : 0;
+    const regularFeeWhere = {
+      academic_year: currentYear,
+      is_discount: false,
+      is_arrear_surcharge: false,
+      ...feeFilter,
+    };
 
-    // 2. Arrears (Previous Years)
-    // Filter for fees NOT in the current academic year that are unpaid
-    const arrearsStats = await this.prisma.student_fees.aggregate({
-      where: {
-        academic_year: { not: currentYear },
-        status: { not: 'PAID' },
-        ...feeFilter,
-      },
-      _sum: {
-        amount: true,
-        amount_paid: true,
-      },
-    });
+    const [feeAgg, surchargeAgg, cashAgg] = await Promise.all([
+      this.prisma.student_fees.aggregate({
+        where: regularFeeWhere,
+        _sum: { amount: true, amount_paid: true },
+      }),
+      // Surcharges are attributed by the *carrying voucher's* billing period
+      // (its fee_date), not the arrear month they penalize — the surcharge
+      // doesn't exist as a charge until the arrear actually rolls over onto
+      // a new voucher, so that's when it genuinely becomes "due".
+      this.prisma.voucher_arrear_surcharges.aggregate({
+        where: {
+          waived: false,
+          vouchers: { fee_date: { gte: yearStart, lte: yearEnd }, students: studentFilter },
+        },
+        _sum: { amount: true, amount_paid: true },
+      }),
+      this.prisma.deposits.aggregate({
+        where: {
+          deposit_date: { gte: yearStart, lte: yearEnd },
+          students: studentFilter,
+        },
+        _sum: { total_amount: true },
+      }),
+    ]);
 
-    const arrearsAmount = Number(arrearsStats._sum?.amount || 0) - Number(arrearsStats._sum?.amount_paid || 0);
+    const expected = Number(feeAgg._sum?.amount || 0) + Number(surchargeAgg._sum?.amount || 0);
+    const collectedToDate = Number(feeAgg._sum?.amount_paid || 0) + Number(surchargeAgg._sum?.amount_paid || 0);
+    const outstanding = expected - collectedToDate;
+    const collectionRate = expected > 0 ? (collectedToDate / expected) * 100 : 0;
+    const collected = Number(cashAgg._sum?.total_amount || 0);
+
+    // 2. Arrears — amounts genuinely past their due date and still unpaid,
+    // as of today. (NOT "a different academic_year string": arrears in this
+    // system roll forward month-to-month *within* the same academic year, so
+    // that filter was matching almost nothing real.) Late fees are excluded
+    // here for the same reason they're excluded from "expected" below — see
+    // note there.
+    const [arrearsFeeAgg, arrearsSurchargeAgg] = await Promise.all([
+      this.prisma.student_fees.aggregate({
+        where: {
+          status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
+          due_date: { lt: today },
+          is_discount: false,
+          is_arrear_surcharge: false,
+          ...feeFilter,
+        },
+        _sum: { amount: true, amount_paid: true },
+      }),
+      this.prisma.voucher_arrear_surcharges.aggregate({
+        where: {
+          waived: false,
+          vouchers: { due_date: { lt: today }, students: studentFilter },
+        },
+        _sum: { amount: true, amount_paid: true },
+      }),
+    ]);
+
+    const arrearsAmount =
+      (Number(arrearsFeeAgg._sum?.amount || 0) - Number(arrearsFeeAgg._sum?.amount_paid || 0)) +
+      (Number(arrearsSurchargeAgg._sum?.amount || 0) - Number(arrearsSurchargeAgg._sum?.amount_paid || 0));
+
+    // Note on late fees (vouchers.late_fee_charge / late_fee_deposited):
+    // unlike surcharges, a late fee is contingent — it only materializes if
+    // a voucher is paid after its due date, so it can't be treated as a
+    // stable "billed" amount without the figure retroactively shifting every
+    // day. It's deliberately left out of expected/outstanding/arrears (which
+    // describe predictable billing) but — being real money — it's still
+    // fully captured in `collected` and in the monthly `received` figures
+    // below, since both come straight from the deposits ledger.
 
     // 3. Student Strength
     const totalStudents = await this.prisma.students.count({
@@ -92,44 +157,92 @@ export class AnalyticsService {
       count: b._count.cc,
     }));
 
-    // 4. Monthly Trends (August to July)
-    // The user wants: "total of all the heads in that month through fee_date and thier amounts then compare them too amount_paid"
-    const startYear = parseInt(currentYear.split('-')[0]);
-    const monthNames = ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
-    
+    // Monthly Trends — a TRAILING WINDOW of recent calendar months ending at
+    // the current one (deliberately NOT the academic year). The institution
+    // only went live on this system around June 2026, so an Aug-Jul "whole
+    // year" view would be mostly empty months burying the few that actually
+    // have data — not what an admin wants when checking "how are we doing
+    // month to month". A trailing window is always centered on "now" and
+    // fills in with real figures as time passes; it never ages out.
+    //   • due      = regular fee heads BILLED FOR that calendar month
+    //                (matched on target_month/academic_year — this is what
+    //                keeps an arrear correctly attributed to the month it
+    //                was originally for, e.g. September's unpaid tuition
+    //                still counts as "due for September" even though it
+    //                physically rides on October's voucher) plus arrear
+    //                surcharges newly billed on vouchers issued for that
+    //                period. A stable, accrual figure — once a period's
+    //                billing closes, it doesn't move.
+    //   • received = actual cash that arrived during that calendar month,
+    //                straight from the deposits ledger (deposit_date). This
+    //                is necessarily a blend of current dues + arrears +
+    //                surcharges + late fees — exactly what really happened
+    //                that month, with no attempt to attribute it back to
+    //                whichever bill it settled.
+    // These two are intentionally different lenses (billing vs. cash flow),
+    // not the same measurement at two points in time — that conflation was
+    // the original bug. Note: because this window can straddle an academic-
+    // year boundary (e.g. a window spanning Jun-Nov would cross from
+    // 2025-2026 into 2026-2027), each month resolves its OWN academic_year
+    // string via academicYearFor() rather than assuming `currentYear` — so
+    // "due" stays correct for that specific month no matter where the
+    // window sits. (As a consequence, these monthly figures are no longer
+    // guaranteed to sum to the yearly `expected`/`collected` headline
+    // figures above — that's expected, not a bug, since the windows differ
+    // on purpose.)
+    const MONTHS_TO_SHOW = 6;
+    const academicYearFor = (calYear: number, monthNum: number) => {
+      const ayStartYear = monthNum >= 8 ? calYear : calYear - 1;
+      return `${ayStartYear}-${ayStartYear + 1}`;
+    };
+
     const trends: any[] = [];
-    for (let i = 0; i < monthNames.length; i++) {
-      const name = monthNames[i];
-      // August is month 7 (0-indexed) in JS Date
-      // Sequence: 7, 8, 9, 10, 11 (2025) then 0, 1, 2, 3, 4, 5, 6 (2026)
-      const jsMonth = (i + 7) % 12;
-      const year = (i + 7) >= 12 ? startYear + 1 : startYear;
-      
-      const startDate = new Date(year, jsMonth, 1);
-      const endDate = new Date(year, jsMonth + 1, 0, 23, 59, 59);
+    for (let offset = MONTHS_TO_SHOW - 1; offset >= 0; offset--) {
+      const ref = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+      const calYear = ref.getFullYear();
+      const jsMonth = ref.getMonth();
+      const monthNum = jsMonth + 1;
+      const label = ref.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+      const ay = academicYearFor(calYear, monthNum);
 
-      const stats = await this.prisma.student_fees.aggregate({
-        where: {
-          fee_date: {
-            gte: startDate,
-            lte: endDate
+      const startDate = new Date(calYear, jsMonth, 1);
+      const endDate = new Date(calYear, jsMonth + 1, 0, 23, 59, 59, 999);
+
+      const [dueFeeAgg, dueSurchargeAgg, receivedAgg] = await Promise.all([
+        this.prisma.student_fees.aggregate({
+          where: {
+            target_month: monthNum,
+            academic_year: ay,
+            is_discount: false,
+            is_arrear_surcharge: false,
+            ...feeFilter,
           },
-          ...feeFilter
-        },
-        _sum: {
-          amount: true,
-          amount_paid: true
-        }
-      });
+          _sum: { amount: true },
+        }),
+        this.prisma.voucher_arrear_surcharges.aggregate({
+          where: {
+            waived: false,
+            vouchers: { fee_date: { gte: startDate, lte: endDate }, students: studentFilter },
+          },
+          _sum: { amount: true },
+        }),
+        this.prisma.deposits.aggregate({
+          where: {
+            deposit_date: { gte: startDate, lte: endDate },
+            students: studentFilter,
+          },
+          _sum: { total_amount: true },
+        }),
+      ]);
 
-      const exp = Number(stats._sum?.amount || 0);
-      const coll = Number(stats._sum?.amount_paid || 0);
+      const due = Number(dueFeeAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
+      const received = Number(receivedAgg._sum?.total_amount || 0);
 
       trends.push({
-        month: name,
-        collected: coll,
-        expected: exp,
-        shortfall: Math.max(0, exp - coll)
+        month: label,
+        due,
+        received,
+        gap: due - received,
       });
     }
 
