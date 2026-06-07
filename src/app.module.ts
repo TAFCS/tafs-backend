@@ -32,6 +32,7 @@ import { MeezanModule } from './modules/meezan/meezan.module';
 import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
 import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { SupportTicketsModule } from './modules/support-tickets/support-tickets.module';
 import { BackupsModule } from './modules/backups/backups.module';
 import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
@@ -70,6 +71,7 @@ import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
     DiscountPresetsModule,
     ParentChangeRequestsModule,
     ChatModule,
+    SupportTicketsModule,
     BackupsModule,
     HrModule,
     AttendanceModule,

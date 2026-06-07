@@ -92,6 +92,14 @@ export class CaslAbilityFactory {
         case 'employees': subjects = ['Employee']; break;
         case 'policies': subjects = ['Policy', 'Calendar', 'ClassAttendanceMode']; break;
         case 'calendar': subjects = ['Calendar']; break;
+        case 'support_tickets': subjects = ['SupportTicket']; break;
+      }
+
+      if (resource === 'support_tickets' && action === 'approve') {
+        subjects.forEach((subject) => {
+          can(Action.Manage, subject);
+        });
+        return;
       }
 
       subjects.forEach((subject) => {
@@ -118,6 +126,8 @@ export class CaslAbilityFactory {
     can(Action.Read, 'Challan', { familyId: user.familyId } as any);
     can(Action.Read, 'Class');
     can(Action.Read, 'Section');
+    can(Action.Read, 'SupportTicket');
+    can(Action.Manage, 'SupportTicket');
 
     return build();
   }

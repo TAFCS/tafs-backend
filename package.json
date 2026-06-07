@@ -25,7 +25,8 @@
     "bulk:student-photos": "ts-node scripts/bulk-upload-student-photos-by-gr.ts",
     "bulk:kaneez-fatima-photos": "ts-node scripts/bulk-upload-kaneez-fatima-photos.ts",
     "bulk:north-campus-photos": "ts-node scripts/bulk-upload-north-campus-photos.ts",
-    "verify:chat-socket": "ts-node scripts/verify-chat-socket.ts"
+    "verify:chat-socket": "ts-node scripts/verify-chat-socket.ts",
+    "verify:support-tickets": "ts-node scripts/verify-support-tickets.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

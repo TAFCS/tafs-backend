@@ -194,6 +194,7 @@ model families {
   parent_change_requests  parent_change_requests[]
   student_siblings        student_siblings[]
   students                students[]
+  support_tickets         support_tickets[]
 }
 
 model family_refresh_tokens {
@@ -257,6 +258,10 @@ model guardians {
   additional_phones          Json?
   parent_change_requests     parent_change_requests[]
   student_guardians          student_guardians[]
+  tickets_closed             support_tickets[]        @relation("TicketClosedByGuardian")
+  tickets_opened             support_tickets[]        @relation("TicketOpenedByGuardian")
+  ticket_events              ticket_events[]          @relation("TicketEventActorGuardian")
+  ticket_messages_sent       ticket_messages[]        @relation("TicketMessageSenderGuardian")
 }
 
 model parent_change_requests {
@@ -504,6 +509,7 @@ model students {
   graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  support_tickets            support_tickets[]
   vouchers                   vouchers[]
 
   @@index([campus_id], map: "idx_students_campus_id")
@@ -589,6 +595,13 @@ model users {
   processed_change_requests                                                parent_change_requests[]
   postdated_cheques_cashed                                                 postdated_cheques[]        @relation("ChequeCashedBy")
   postdated_cheques_received                                               postdated_cheques[]        @relation("ChequeReceivedBy")
+  tickets_closed                                                           support_tickets[]          @relation("TicketClosedByUser")
+  tickets_assigned                                                         support_tickets[]          @relation("TicketCurrentAssignee")
+  ticket_events_actor                                                      ticket_events[]            @relation("TicketEventActorUser")
+  ticket_events_from                                                       ticket_events[]            @relation("TicketEventFromUser")
+  ticket_events_to                                                         ticket_events[]            @relation("TicketEventToUser")
+  ticket_messages_reviewed                                                 ticket_messages[]          @relation("TicketMessageReviewer")
+  ticket_messages_sent                                                     ticket_messages[]          @relation("TicketMessageSenderUser")
   granted_overrides                                                        user_permissions[]         @relation("granted_by_rel")
   user_permissions                                                         user_permissions[]         @relation("user_permissions_link")
   user_refresh_tokens                                                      user_refresh_tokens[]
@@ -718,6 +731,87 @@ model fcm_device_tokens {
   families       families @relation(fields: [family_id], references: [id], onDelete: Cascade)
 
   @@index([family_id])
+}
+
+model support_tickets {
+  id                    String            @id @default(uuid())
+  family_id             Int
+  category              TicketCategory
+  subtopic              String?           @db.VarChar(100)
+  student_id            Int?
+  description           String
+  status                TicketStatus      @default(OPEN)
+  current_assignee_id   String?
+  routed_role           StaffRole
+  opened_by_guardian_id Int?
+  closed_by_user_id     String?
+  closed_by_guardian_id Int?
+  closed_at             DateTime?
+  last_message_at       DateTime          @default(now())
+  last_message_snippet  String?           @db.VarChar(255)
+  unread_by_staff       Int               @default(0)
+  unread_by_parent      Int               @default(0)
+  staff_last_read_at    DateTime?
+  parent_last_read_at   DateTime?
+  created_at            DateTime          @default(now())
+  updated_at            DateTime          @updatedAt
+  closed_by_guardian    guardians?        @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
+  closed_by_user        users?            @relation("TicketClosedByUser", fields: [closed_by_user_id], references: [id])
+  current_assignee      users?            @relation("TicketCurrentAssignee", fields: [current_assignee_id], references: [id])
+  families              families          @relation(fields: [family_id], references: [id])
+  opened_by_guardian    guardians?        @relation("TicketOpenedByGuardian", fields: [opened_by_guardian_id], references: [id])
+  students              students?         @relation(fields: [student_id], references: [cc])
+  events                ticket_events[]
+  messages              ticket_messages[]
+
+  @@index([family_id, status])
+  @@index([status, routed_role])
+  @@index([current_assignee_id, status])
+  @@index([last_message_at(sort: Desc)])
+  @@index([closed_at(sort: Desc)])
+}
+
+model ticket_messages {
+  id                 String           @id @default(uuid())
+  ticket_id          String
+  sender_type        TicketSenderType
+  sender_user_id     String?
+  sender_guardian_id Int?
+  message_type       ChatMessageType
+  content            String
+  media_metadata     Json?
+  status             MessageStatus    @default(APPROVED)
+  is_read            Boolean          @default(false)
+  reviewed_by        String?
+  reviewed_at        DateTime?
+  review_comment     String?
+  created_at         DateTime         @default(now())
+  reviewer           users?           @relation("TicketMessageReviewer", fields: [reviewed_by], references: [id])
+  sender_guardian    guardians?       @relation("TicketMessageSenderGuardian", fields: [sender_guardian_id], references: [id])
+  sender_user        users?           @relation("TicketMessageSenderUser", fields: [sender_user_id], references: [id])
+  ticket             support_tickets  @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id, created_at(sort: Desc)])
+  @@index([status, sender_type])
+}
+
+model ticket_events {
+  id                Int             @id @default(autoincrement())
+  ticket_id         String
+  event_type        TicketEventType
+  actor_user_id     String?
+  actor_guardian_id Int?
+  from_user_id      String?
+  to_user_id        String?
+  note              String?
+  created_at        DateTime        @default(now())
+  actor_guardian    guardians?      @relation("TicketEventActorGuardian", fields: [actor_guardian_id], references: [id])
+  actor_user        users?          @relation("TicketEventActorUser", fields: [actor_user_id], references: [id])
+  from_user         users?          @relation("TicketEventFromUser", fields: [from_user_id], references: [id])
+  ticket            support_tickets @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  to_user           users?          @relation("TicketEventToUser", fields: [to_user_id], references: [id])
+
+  @@index([ticket_id, created_at])
 }
 
 model complaints {
@@ -935,6 +1029,15 @@ model message_acknowledgments {
   @@unique([message_id, family_id])
 }
 
+model app_config {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(100)
+  value       String
+  description String?  @db.VarChar(255)
+  updated_at  DateTime @db.Timestamp(6)
+  updated_by  String?  @db.VarChar(255)
+}
+
 enum BulkJobStatus {
   PENDING
   PROCESSING
@@ -951,6 +1054,35 @@ enum StaffRole {
   RECEPTIONIST
   TEACHER
   STAFF_EDITOR
+  GENERAL_RESPONDENT
+}
+
+enum TicketCategory {
+  GENERAL
+  FINANCIAL
+}
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  CLOSED
+}
+
+enum TicketSenderType {
+  GUARDIAN
+  STAFF
+}
+
+enum TicketEventType {
+  CREATED
+  CLAIMED
+  TRANSFERRED
+  FORWARDED
+  REPLY_SUBMITTED
+  REPLY_APPROVED
+  REPLY_REJECTED
+  CLOSED_BY_STAFF
+  CLOSED_BY_PARENT
 }
 
 enum fee_frequency {
