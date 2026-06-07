@@ -36,6 +36,7 @@ import { BackupsModule } from './modules/backups/backups.module';
 import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
+import { AppConfigModule } from './modules/app-config/app-config.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
     HrModule,
     AttendanceModule,
     NoticeBoardModule,
+    AppConfigModule,
   ],
   controllers: [AppController],
   providers: [AppService],

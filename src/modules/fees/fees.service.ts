@@ -1,11 +1,15 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { VouchersService } from '../vouchers/vouchers.service';
 import { SubmitStudentFeesDto } from './dto/submit-student-fees.dto';
 
 @Injectable()
 export class FeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly vouchersService: VouchersService,
+  ) {}
 
   /**
    * Upsert student fee rows — one per (fee_type × month).
@@ -70,38 +74,22 @@ export class FeesService {
       _sum: { amount: true },
     });
 
-    // 3. All vouchers for this student
-    const vouchers = await this.prisma.vouchers.findMany({
-      where: { student_id: studentCc },
-      select: {
-        id: true,
-        status: true,
-        total_payable_before_due: true,
-        voucher_heads: {
-          select: {
-            amount_deposited: true,
-            balance: true,
-          },
-        },
-      },
-    });
+    // 3. Normalized vouchers (includes arrear surcharge in total_balance)
+    const vouchers = await this.vouchersService.findByStudentCC(
+      studentCc,
+      familyId,
+    );
 
     const totalPaid = vouchers.reduce(
-      (sum, v) =>
-        sum +
-        v.voucher_heads.reduce(
-          (s, h) => s + Number(h.amount_deposited ?? 0),
-          0,
-        ),
+      (sum, v) => sum + Number((v as any).total_deposited ?? 0),
       0,
     );
 
     const unpaidVouchers = vouchers.filter(
-      (v) => v.status === 'UNPAID' || v.status === 'PARTIALLY_PAID',
+      (v) => v.status !== 'PAID' && v.status !== 'VOID',
     );
-    const overdueAmount = unpaidVouchers.reduce(
-      (sum, v) =>
-        sum + v.voucher_heads.reduce((s, h) => s + Number(h.balance ?? 0), 0),
+    const outstandingBalance = unpaidVouchers.reduce(
+      (sum, v) => sum + Number((v as any).total_balance ?? 0),
       0,
     );
 
@@ -109,8 +97,8 @@ export class FeesService {
       academicYear,
       totalCharged: Number(totalCharged._sum.amount ?? 0),
       totalPaid,
-      outstandingBalance: overdueAmount,
-      hasOverdue: overdueAmount > 0,
+      outstandingBalance,
+      hasOverdue: outstandingBalance > 0,
       overdueCount: unpaidVouchers.length,
     };
   }

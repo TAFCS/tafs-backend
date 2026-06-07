@@ -1018,3 +1018,12 @@ enum PostdatedChequeStatus {
   RETURNED
   CANCELLED
 }
+
+model app_config {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(100)
+  value       String
+  description String?  @db.VarChar(255)
+  updated_at  DateTime @updatedAt @db.Timestamp(6)
+  updated_by  String?  @db.VarChar(255)
+}
