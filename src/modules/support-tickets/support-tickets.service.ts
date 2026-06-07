@@ -180,7 +180,7 @@ export class SupportTicketsService {
     return { items, total, take, skip };
   }
 
-  async listPendingApprovals(staff: IJwtStaffPayload) {
+  async listPendingApprovals(staff: IJwtStaffPayload, take = 50, skip = 0) {
     if (staff.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('Super Admin access required');
     }
@@ -188,6 +188,8 @@ export class SupportTicketsService {
     return this.prisma.ticket_messages.findMany({
       where: { status: MessageStatus.PENDING, sender_type: 'STAFF' },
       orderBy: { created_at: 'asc' },
+      take,
+      skip,
       include: {
         sender_user: { select: { id: true, full_name: true, role: true } },
         ticket: {
@@ -233,8 +235,10 @@ export class SupportTicketsService {
       }),
     ]);
 
+    const eventWhere = this.eventVisibilityWhere(actor);
+
     const events = await this.prisma.ticket_events.findMany({
-      where: { ticket_id: id },
+      where: { ticket_id: id, ...eventWhere },
       orderBy: { created_at: 'asc' },
       include: {
         actor_user: { select: { id: true, full_name: true } },
@@ -617,14 +621,21 @@ export class SupportTicketsService {
         : `[${message.message_type}]`;
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const reviewed = await tx.ticket_messages.update({
-        where: { id: messageId },
+      const updateResult = await tx.ticket_messages.updateMany({
+        where: { id: messageId, status: MessageStatus.PENDING },
         data: {
           status: dto.status,
           review_comment: dto.comment,
           reviewed_by: superAdmin.sub,
           reviewed_at: new Date(),
         },
+      });
+      if (updateResult.count === 0) {
+        throw new ConflictException('Reply has already been reviewed');
+      }
+
+      const reviewed = await tx.ticket_messages.findUniqueOrThrow({
+        where: { id: messageId },
         include: {
           sender_user: { select: { id: true, full_name: true, role: true } },
           reviewer: { select: { id: true, full_name: true } },
@@ -884,6 +895,24 @@ export class SupportTicketsService {
       throw new ForbiddenException('Student not found in your family');
     }
     return student;
+  }
+
+  private eventVisibilityWhere(
+    actor: IJwtStaffPayload | IJwtParentPayload,
+  ): Prisma.ticket_eventsWhereInput {
+    if (actor.userType !== 'PARENT') {
+      return {};
+    }
+
+    return {
+      event_type: {
+        in: [
+          TicketEventType.CREATED,
+          TicketEventType.CLOSED_BY_STAFF,
+          TicketEventType.CLOSED_BY_PARENT,
+        ],
+      },
+    };
   }
 
   private messageVisibilityWhere(

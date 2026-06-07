@@ -26,9 +26,11 @@ describe('SupportTicketsService leak-proofing', () => {
     ticket_messages: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     ticket_events: { create: jest.fn() },
     $transaction: jest.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma)),
@@ -54,6 +56,27 @@ describe('SupportTicketsService leak-proofing', () => {
       { sender_type: 'GUARDIAN' },
       { sender_type: 'STAFF', status: MessageStatus.APPROVED },
     ]);
+  });
+
+  it('parent event filter hides internal workflow events', () => {
+    const where = (service as any).eventVisibilityWhere({
+      userType: 'PARENT',
+      familyId: 1,
+    });
+    expect(where.event_type.in).toEqual([
+      'CREATED',
+      'CLOSED_BY_STAFF',
+      'CLOSED_BY_PARENT',
+    ]);
+  });
+
+  it('staff event filter returns all events', () => {
+    const where = (service as any).eventVisibilityWhere({
+      userType: 'STAFF',
+      sub: 'staff-1',
+      role: 'PRINCIPAL',
+    });
+    expect(where).toEqual({});
   });
 
   it('staff reply is created as PENDING without parent side effects', async () => {
@@ -96,7 +119,8 @@ describe('SupportTicketsService leak-proofing', () => {
       ...pendingMessage,
       ticket: { id: 't1', family_id: 5 },
     });
-    prisma.ticket_messages.update.mockResolvedValue({
+    prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
+    prisma.ticket_messages.findUniqueOrThrow.mockResolvedValue({
       ...pendingMessage,
       status: MessageStatus.APPROVED,
     });
@@ -134,7 +158,8 @@ describe('SupportTicketsService leak-proofing', () => {
       status: MessageStatus.PENDING,
       ticket: { id: 't1' },
     });
-    prisma.ticket_messages.update.mockResolvedValue({
+    prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
+    prisma.ticket_messages.findUniqueOrThrow.mockResolvedValue({
       id: 'm1',
       status: MessageStatus.REJECTED,
     });
@@ -149,6 +174,25 @@ describe('SupportTicketsService leak-proofing', () => {
 
     expect(mockGateway.broadcastReplyRejected).toHaveBeenCalled();
     expect(mockFcm.sendToFamily).not.toHaveBeenCalled();
+  });
+
+  it('approve flow throws ConflictException when message already reviewed', async () => {
+    prisma.ticket_messages.findUnique.mockResolvedValue({
+      id: 'm1',
+      ticket_id: 't1',
+      sender_user_id: 'staff-1',
+      status: MessageStatus.PENDING,
+      ticket: { id: 't1', family_id: 5 },
+    });
+    prisma.ticket_messages.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.reviewReply(
+        'm1',
+        { status: MessageStatus.APPROVED },
+        { sub: 'admin-1', role: 'SUPER_ADMIN', userType: 'STAFF' } as any,
+      ),
+    ).rejects.toThrow('Reply has already been reviewed');
   });
 
   it('finance claim uses atomic updateMany', async () => {

@@ -163,6 +163,17 @@ async function main() {
   }
   console.log('OK: Parent REST thread excludes pending staff messages');
 
+  const events = thread.events ?? thread.data?.events ?? [];
+  const leakedEvents = events.some((e: { event_type: string }) =>
+    ['REPLY_SUBMITTED', 'REPLY_REJECTED', 'REPLY_APPROVED', 'CLAIMED', 'TRANSFERRED', 'FORWARDED'].includes(
+      e.event_type,
+    ),
+  );
+  if (leakedEvents) {
+    throw new Error('LEAK: Parent REST thread includes internal ticket events');
+  }
+  console.log('OK: Parent REST thread excludes internal ticket events');
+
   parentReceivedBeforeApproval = false;
   parentSocket.off('ticketMessageReceived');
 
@@ -219,6 +230,60 @@ async function main() {
     throw new Error(`Mark read failed: ${markReadRes.status}`);
   }
   console.log('OK: Mark read succeeded');
+
+  // Reject flow — parent must not see rejected staff reply
+  const rejectMsgRes = await fetch(`${API_BASE_URL}/api/v1/support-tickets/${ticketId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${staffToken}`,
+    },
+    body: JSON.stringify({
+      messageType: 'TEXT',
+      content: 'This reply will be rejected — parent must never see it.',
+    }),
+  });
+  if (!rejectMsgRes.ok) {
+    throw new Error(`Second staff message failed: ${rejectMsgRes.status}`);
+  }
+  const rejectMsg = await rejectMsgRes.json();
+  const rejectMessageId = rejectMsg.id ?? rejectMsg.data?.id;
+
+  const rejectReviewRes = await fetch(
+    `${API_BASE_URL}/api/v1/support-tickets/messages/${rejectMessageId}/review`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${superAdminToken}`,
+      },
+      body: JSON.stringify({ status: 'REJECTED', comment: 'Please revise' }),
+    },
+  );
+  if (!rejectReviewRes.ok) {
+    throw new Error(`Reject failed: ${rejectReviewRes.status} ${await rejectReviewRes.text()}`);
+  }
+  console.log('Super Admin rejected second reply');
+
+  const threadReject = await fetch(`${API_BASE_URL}/api/v1/support-tickets/${ticketId}`, {
+    headers: { Authorization: `Bearer ${parent.token}` },
+  });
+  const threadRejectBody = await threadReject.json();
+  const rejectMessages = threadRejectBody.messages ?? threadRejectBody.data?.messages ?? [];
+  const rejectLeaked = rejectMessages.some(
+    (m: { id: string; status: string }) => m.id === rejectMessageId,
+  );
+  if (rejectLeaked) {
+    throw new Error('LEAK: Parent REST thread includes REJECTED staff message');
+  }
+  const rejectEvents = threadRejectBody.events ?? threadRejectBody.data?.events ?? [];
+  const rejectEventLeaked = rejectEvents.some((e: { event_type: string }) =>
+    e.event_type === 'REPLY_REJECTED' || e.event_type === 'REPLY_SUBMITTED',
+  );
+  if (rejectEventLeaked) {
+    throw new Error('LEAK: Parent REST thread includes reject/submit events');
+  }
+  console.log('OK: Parent cannot see rejected reply or internal events');
 
   parentSocket.disconnect();
   staffSocket.disconnect();

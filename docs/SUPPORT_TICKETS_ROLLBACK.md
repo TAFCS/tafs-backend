@@ -26,9 +26,35 @@
 
 ## Production hardening (implemented)
 
-- **Backend:** FCM presence uses `family_app_{id}` (not staff in ticket room); `enterTicket` ACL; `PoliciesGuard` on staff routes; atomic forward; pagination caps; `closed_at` index; guardian opening message on create.
-- **Webapp:** Redux thunks (mark-read, send, claim, transfer, forward, close, review); incremental socket updates; staff picker modals; permission page guard; Super Admin jump-to-ticket; media upload in thread.
-- **Flutter:** Shared chat socket for tickets; FCM `SUPPORT_TICKET_MESSAGE` deep link; live unread badge; `ChatBubble` + `MessageInput` in thread; parent close query.
+### Backend
+- FCM presence uses `family_app_{id}`; `enterTicket` ACL; `PoliciesGuard` on staff routes
+- Atomic claim/transfer/forward; pagination caps; `closed_at` index
+- Guardian opening message on ticket create
+- **Parent event timeline filtered** — parents only see `CREATED`, `CLOSED_BY_STAFF`, `CLOSED_BY_PARENT` events
+- **Atomic approval** — concurrent Super Admin reviews use `updateMany` on `PENDING` status
+- Pending approvals list capped at 50 per request
+
+### Webapp (staff)
+- Redux thunks with `rejectWithValue` API errors; split `queueError` / `detailError` / `actionError`
+- Stale thread cleared on ticket switch; close ticket sends `note` (not `comment`)
+- UI aligned with Announcements Chat + HR: `Loader2` spinners, rose error banners, reconnect banner, HR modals
+- Role-based page access (`canViewSupportTickets`); auth hydration on refresh
+- Super Admin per-item approval loading; read-only banner for non-assignees
+
+### Flutter (parent)
+- Single `TicketThreadCubit` lifecycle; web-safe media upload
+- Send appends API response (no full reload); friendly error messages + retry
+- Themed list cards, origination load/submit errors, in-app notification on ticket socket when not in thread
+- FCM `SUPPORT_TICKET_MESSAGE` deep link; live unread badge on app bar
+
+## Automated verify script checks
+
+`npm run verify:support-tickets` validates:
+- Parent socket/REST do not leak PENDING staff messages before approval
+- Parent event timeline excludes internal workflow events
+- Approve flow delivers APPROVED message to parent REST
+- Reject flow hides rejected message and reject/submit events from parent
+- Mark-read succeeds
 
 ## E2E scenarios (manual)
 
@@ -39,8 +65,10 @@
 | Financial | MCQ → finance queue | Finance Queue → Claim → reply | Approve |
 | Staff reply leak | Must NOT see PENDING | Send reply (PENDING) | Approve in queue |
 | Reject | Never sees rejected text | Sees rejection reason | Reject with comment |
-| Close | Close query button | Assignee closes | — |
-| Permissions | — | Re-login after seed; nav visible | All Open tab |
+| Close | Close query button | Assignee closes (note in modal) | — |
+| Permissions | — | Re-login after seed; refresh page OK | All Open tab |
+| Stale thread | — | Switch tickets rapidly — no wrong thread | — |
+| Offline | — | Disconnect socket → banner + disabled composer | — |
 | FCM | Tap notification → thread | — | — |
 
 Test accounts: `muhammad.hussain.mirza`, `hira.khadim`, `nimla.asad`, `general.respondent` (passwords in `scripts/seed-staff-roster-credentials.csv` after roster seed).
