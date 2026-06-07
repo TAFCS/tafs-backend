@@ -391,11 +391,10 @@ export class AuthService {
   }
 
   /**
-   * Register a new parent account using a verified CNIC
-   * Creates a family record and sets email/password for login
+   * Register a parent account using a verified CNIC.
+   * Attaches login credentials to the guardian's existing institutional family.
    */
   async registerParent(dto: RegisterParentDto) {
-    // Verify CNIC exists
     const guardian = await this.prisma.guardians.findUnique({
       where: { cnic: dto.cnic },
       select: { id: true, full_name: true },
@@ -405,24 +404,48 @@ export class AuthService {
       throw new BadRequestException('CNIC not found in system');
     }
 
-    // Check if email already in use
-    const existingFamily = await this.prisma.families.findFirst({
-      where: { email: dto.email },
+    const resolvedFamilyId = await this._resolveFamilyIdByGuardianId(guardian.id);
+    if (!resolvedFamilyId) {
+      throw new BadRequestException(
+        'No students linked to this CNIC. Please contact the school office.',
+      );
+    }
+
+    const institutionalFamily = await this.prisma.families.findUnique({
+      where: { id: resolvedFamilyId },
     });
 
-    if (existingFamily) {
+    if (!institutionalFamily) {
+      throw new BadRequestException(
+        'No students linked to this CNIC. Please contact the school office.',
+      );
+    }
+
+    if (institutionalFamily.email || institutionalFamily.password_hash) {
+      throw new ConflictException(
+        'Account already registered. Please log in.',
+      );
+    }
+
+    const emailTakenElsewhere = await this.prisma.families.findFirst({
+      where: {
+        email: dto.email,
+        id: { not: resolvedFamilyId },
+      },
+    });
+
+    if (emailTakenElsewhere) {
       throw new ConflictException('Email already in use');
     }
 
-    // Hash password
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
-    // Create family account with email and password
-    const family = await this.prisma.families.create({
+    const family = await this.prisma.families.update({
+      where: { id: resolvedFamilyId },
       data: {
         email: dto.email,
         password_hash: passwordHash,
-        household_name: guardian.full_name || 'New Household',
+        household_name: guardian.full_name || institutionalFamily.household_name,
       },
     });
 
@@ -462,6 +485,42 @@ export class AuthService {
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Resolve the institutional family for a guardian via student_guardians → students.family_id.
+   */
+  private async _resolveFamilyIdByGuardianId(
+    guardianId: number,
+  ): Promise<number | null> {
+    const links = await this.prisma.student_guardians.findMany({
+      where: { guardian_id: guardianId },
+      include: {
+        students: {
+          select: { family_id: true, deleted_at: true },
+        },
+      },
+    });
+
+    const familyIds = new Set<number>();
+    for (const link of links) {
+      const student = link.students;
+      if (student && !student.deleted_at && student.family_id) {
+        familyIds.add(student.family_id);
+      }
+    }
+
+    if (familyIds.size === 0) {
+      return null;
+    }
+
+    if (familyIds.size > 1) {
+      throw new BadRequestException(
+        'Multiple households found for this CNIC. Please contact the school office.',
+      );
+    }
+
+    return [...familyIds][0];
+  }
 
   private async generateTokenPair(
     payload: IJwtStaffPayload | IJwtParentPayload,
