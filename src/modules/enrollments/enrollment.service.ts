@@ -26,6 +26,28 @@ export class EnrollmentService {
     });
   }
 
+  async updatePursuitStatus(cc: number, notPursuing: boolean) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+    });
+    if (!student || student.status !== 'SOFT_ADMISSION') {
+      throw new NotFoundException(`Valid candidate with CC #${cc} not found`);
+    }
+    return this.prisma.students.update({
+      where: { cc },
+      data: { not_pursuing: notPursuing },
+      include: {
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1
+        }
+      },
+    });
+  }
+
   async getSuggestions(cc: number, sectionId?: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
