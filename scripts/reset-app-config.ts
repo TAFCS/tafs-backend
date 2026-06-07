@@ -22,7 +22,7 @@ async function main() {
     await prisma.app_config.upsert({
       where: { key },
       update: { value, updated_by: 'TEST_CLEANUP' },
-      create: { key, value, updated_by: 'TEST_CLEANUP', updated_at: new Date() },
+      create: { key, value, updated_by: 'TEST_CLEANUP' },
     });
     console.log(`  ${key} = ${value}`);
   }
