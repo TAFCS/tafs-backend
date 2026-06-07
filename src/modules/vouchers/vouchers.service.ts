@@ -26,7 +26,7 @@ const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
 
 // Set to false before going to production.
-const DEV_ALLOW_VOID_DEPOSITS = true;
+const DEV_ALLOW_VOID_DEPOSITS = false;
 
 
 
@@ -2289,6 +2289,20 @@ export class VouchersService {
                     description_prefix: (sf as any).description_prefix ?? null,
                 });
 
+            } else if (sf.status === 'DISCOUNT' || (sf as any).is_discount === true) {
+                // Discount rows reduce what's owed and never receive a deposit — they
+                // always travel with the balance/unpaid side, unchanged (student_fee_id
+                // stays put; only the owning voucher changes).
+                unpaidHeadRows.push({
+                    student_fee_id: sf.id,
+                    discount_amount: new Prisma.Decimal(h.discount_amount ?? 0),
+                    discount_label: h.discount_label,
+                    net_amount: new Prisma.Decimal(h.net_amount ?? 0),
+                    amount_deposited: new Prisma.Decimal(0),
+                    balance: new Prisma.Decimal(h.balance ?? 0),
+                    description_prefix: (sf as any).description_prefix ?? null,
+                });
+
             } else {
                 throw new BadRequestException(
                     `Voucher head #${h.id}: unsupported student_fees.status ${sf.status} for split.`,
@@ -2410,6 +2424,21 @@ export class VouchersService {
                 });
             }
 
+            // ── Step 1b: Build a uniform lineage map covering EVERY fee head — not just
+            //    the PARTIALLY_PAID ones splitReplacement tracks — so the re-link pass
+            //    below can be comprehensive. This is what restores the
+            //    deposit_allocations.voucher_id invariant that reverseDeposit/clearDeposit
+            //    rely on as ground truth (see Step 9).
+            const feeLineage = new Map<number, { side: 'paid' | 'unpaid'; newStudentFeeId: number }>();
+            for (const row of paidHeadRows) {
+                const rep = splitReplacement.get(row.student_fee_id);
+                feeLineage.set(row.student_fee_id, { side: 'paid', newStudentFeeId: rep ? rep.paidId : row.student_fee_id });
+            }
+            for (const row of unpaidHeadRows) {
+                const rep = splitReplacement.get(row.student_fee_id);
+                feeLineage.set(row.student_fee_id, { side: 'unpaid', newStudentFeeId: rep ? rep.unpaidId : row.student_fee_id });
+            }
+
             // ── Step 2: Delete all heads on the original voucher (they'll be re-created
             //           under the two new vouchers).
             await tx.voucher_heads.deleteMany({ where: { voucher_id: voucherId } });
@@ -2432,7 +2461,16 @@ export class VouchersService {
                 return side === 'paid' ? rep.prefixPaid : rep.prefixBalance;
             };
 
-            const feeRef = allHeads[0]?.student_fees;
+            // ── Derive feeRef from the head whose fee_date matches the voucher's own
+            //    fee_date (the "current period" head), not just the lowest-id head — an
+            //    arrear head can easily have the lowest id, which would bake the wrong
+            //    MMYY into the new voucher numbers via toMeezanVoucherNumber. Mirrors how
+            //    _destroyVoucherInTx derives "current period" via MAX(fee_date).
+            const currentPeriodHead = allHeads.find((h) => {
+                const fd = h.student_fees?.fee_date;
+                return fd && original.fee_date && new Date(fd).getTime() === new Date(original.fee_date).getTime();
+            });
+            const feeRef = currentPeriodHead?.student_fees ?? allHeads[0]?.student_fees;
             const targetMonth = feeRef?.target_month ?? original.month;
             const targetYear = feeRef?.academic_year ?? original.academic_year;
             const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
@@ -2485,22 +2523,6 @@ export class VouchersService {
                 data: { voucher_number: toMeezanVoucherNumber(paid.id, targetFeeDate ? new Date(targetFeeDate) : new Date(original.issue_date)) } as any,
             });
 
-            // ── Re-link deposit_allocations' voucher_id from original to paid voucher.
-            //    Step 1 updated student_fee_id to the new paid SF rows but couldn't update
-            //    voucher_id because the paid voucher didn't exist yet. Without this, both
-            //    reverseDeposit and clearDeposit would target the VOID original instead of
-            //    the paid split voucher, leaving it stuck as PAID and un-deletable.
-            const paidSfIds = [...splitReplacement.values()].map(r => r.paidId);
-            if (paidSfIds.length > 0) {
-                await tx.deposit_allocations.updateMany({
-                    where: {
-                        voucher_id: voucherId,
-                        student_fee_id: { in: paidSfIds },
-                    },
-                    data: { voucher_id: paid.id },
-                });
-            }
-
             const unpaid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
@@ -2547,36 +2569,154 @@ export class VouchersService {
                 } as any)),
             });
 
-            // ── Step 8: Copy surcharge rows from original to the unpaid voucher.
-            //    The original's surcharges cascade-delete when the original is voided later,
-            //    so we must copy them before that happens.
-            //    Only copy surcharges with an outstanding balance. Store just the outstanding
-            //    portion (amount - amount_paid) with amount_paid = 0, so normalizeVoucher does
-            //    not see any deposit on the balance voucher and correctly computes status UNPAID.
+            // ── Step 8: Classify and (re)create arrear surcharge rows on the correct
+            //    side, symmetric to the fee-head treatment above. voucher_arrear_surcharges
+            //    support partial payment (amount_paid increments independently of `amount`
+            //    — see recordDeposit's surcharge_allocations handling), so a forward-copy
+            //    -only approach is lossy: it drops waived rows entirely and discards
+            //    payment history on consumed/partial ones. Each new row's id is captured
+            //    immediately (via .create, not createMany) so surchargeLineage can drive
+            //    the re-link pass below.
             const originalSurcharges: any[] = (original as any).voucher_arrear_surcharges ?? [];
-            const outstandingSurcharges = originalSurcharges
-                .filter((s: any) => !s.waived)
-                .map((s: any) => {
-                    const outstanding = new Prisma.Decimal(s.amount || 0).sub(new Prisma.Decimal(s.amount_paid || 0));
-                    return outstanding.gt(0) ? {
-                        voucher_id: unpaid.id,
-                        arrear_fee_date: s.arrear_fee_date,
-                        arrear_month: s.arrear_month,
-                        arrear_year: s.arrear_year,
-                        amount: outstanding,
-                        amount_paid: 0,
-                        waived: false,
-                        waived_by: null,
-                    } : null;
-                })
-                .filter(Boolean);
-            if (outstandingSurcharges.length > 0) {
-                await (tx as any).voucher_arrear_surcharges.createMany({
-                    data: outstandingSurcharges,
+            const surchargeLineage = new Map<number, { side: 'paid' | 'unpaid'; newSurchargeId: number }>();
+
+            for (const s of originalSurcharges) {
+                const amount = new Prisma.Decimal(s.amount || 0);
+                const amountPaid = new Prisma.Decimal(s.amount_paid || 0);
+                const baseFields = {
+                    arrear_fee_date: s.arrear_fee_date,
+                    arrear_month: s.arrear_month,
+                    arrear_year: s.arrear_year,
+                };
+
+                if (s.waived) {
+                    // Waived — preserve the audit trail (waived/waived_by) on the unpaid
+                    // side; the old code dropped these rows (and their history) entirely.
+                    const created = await (tx as any).voucher_arrear_surcharges.create({
+                        data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: amountPaid, waived: true, waived_by: s.waived_by ?? null },
+                    });
+                    surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
+
+                } else if (amountPaid.lte(0)) {
+                    // Untouched — copy forward as-is (today's behavior for this case).
+                    const created = await (tx as any).voucher_arrear_surcharges.create({
+                        data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
+                    });
+                    surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
+
+                } else if (amountPaid.gte(amount)) {
+                    // Fully consumed — travels whole, with its payment history, to the paid side.
+                    const created = await (tx as any).voucher_arrear_surcharges.create({
+                        data: { voucher_id: paid.id, ...baseFields, amount, amount_paid: amountPaid, waived: false, waived_by: null },
+                    });
+                    surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: created.id });
+
+                } else {
+                    // Partially consumed — split into a paid portion that carries the
+                    // existing payment history forward, plus a fresh balance portion,
+                    // mirroring the PARTIALLY_PAID fee-head split above. Every pre-existing
+                    // deposit_allocation against this surcharge funded `amount_paid`, so all
+                    // of them belong on the paid portion — the balance portion starts clean.
+                    const remaining = amount.sub(amountPaid);
+                    const paidPortion = await (tx as any).voucher_arrear_surcharges.create({
+                        data: { voucher_id: paid.id, ...baseFields, amount: amountPaid, amount_paid: amountPaid, waived: false, waived_by: null },
+                    });
+                    await (tx as any).voucher_arrear_surcharges.create({
+                        data: { voucher_id: unpaid.id, ...baseFields, amount: remaining, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
+                    });
+                    surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: paidPortion.id });
+                }
+            }
+
+            // ── Step 9: Re-link every live deposit_allocations row so its voucher_id
+            //    (and, for surcharges, surcharge_id) points at whichever new voucher now
+            //    owns the underlying student_fee / surcharge. Both reverseDeposit and
+            //    clearDeposit trust deposit_allocations.voucher_id as ground truth — if
+            //    this invariant breaks, reversing a deposit after a split corrupts data
+            //    (resurrected "ghost" vouchers, or vouchers permanently stuck PAID).
+            //    feeLineage/surchargeLineage are comprehensive — built from the very same
+            //    arrays used to create the new heads/surcharges — so this single pass
+            //    supersedes the old narrow `paidSfIds`-only re-link, which silently missed
+            //    every originally-PAID head and EVERY surcharge allocation (surcharges have
+            //    student_fee_id=null and can never match a student_fee_id-keyed filter).
+            for (const side of ['paid', 'unpaid'] as const) {
+                const targetVoucherId = side === 'paid' ? paid.id : unpaid.id;
+
+                const feeIdsForSide = new Set<number>();
+                for (const [oldId, lineage] of feeLineage) {
+                    if (lineage.side !== side) continue;
+                    feeIdsForSide.add(oldId);
+                    feeIdsForSide.add(lineage.newStudentFeeId);
+                }
+                if (feeIdsForSide.size > 0) {
+                    await tx.deposit_allocations.updateMany({
+                        where: { voucher_id: voucherId, student_fee_id: { in: [...feeIdsForSide] } },
+                        data: { voucher_id: targetVoucherId },
+                    });
+                }
+
+                for (const [oldSurchargeId, lineage] of surchargeLineage) {
+                    if (lineage.side !== side) continue;
+                    await tx.deposit_allocations.updateMany({
+                        where: { voucher_id: voucherId, surcharge_id: oldSurchargeId },
+                        data: { voucher_id: targetVoucherId, surcharge_id: lineage.newSurchargeId },
+                    });
+                }
+            }
+
+            // Late-fee allocations (student_fee_id=null, surcharge_id=null, type=LATE_FEE)
+            // represent a flat charge already paid against this voucher — not tied to any
+            // single head — so they (and the cached late_fee_deposited total) travel with
+            // the settled/paid side as a unit.
+            const lateFeeDeposited = new Prisma.Decimal((original as any).late_fee_deposited ?? 0);
+            if (lateFeeDeposited.gt(0)) {
+                await tx.deposit_allocations.updateMany({
+                    where: { voucher_id: voucherId, type: 'LATE_FEE' },
+                    data: { voucher_id: paid.id },
+                });
+                await tx.vouchers.update({
+                    where: { id: paid.id },
+                    data: { late_fee_deposited: lateFeeDeposited } as any,
                 });
             }
 
-            // ── Step 9: Void the original voucher.
+            // ── Sweep safety net: validate the invariant directly instead of trusting the
+            //    bookkeeping above. In steady state this finds nothing. If it finds rows, a
+            //    status branch (or surcharge disposition) was added without registering
+            //    lineage — log loudly, self-heal what's discoverable, and abort rather than
+            //    silently void a voucher that live payment history still depends on. Modeled
+            //    on _destroyVoucherInTx's "idempotent — clearDeposit may have already done
+            //    this" defense-in-depth philosophy.
+            const stragglers = await tx.deposit_allocations.findMany({ where: { voucher_id: voucherId } });
+            if (stragglers.length > 0) {
+                this.logger.warn(
+                    `splitPartiallyPaid: ${stragglers.length} deposit_allocations row(s) still ` +
+                    `reference voucher #${voucherId} after re-link (about to be voided) — self-healing.`,
+                );
+                for (const alloc of stragglers) {
+                    if (alloc.student_fee_id != null) {
+                        const head = await tx.voucher_heads.findFirst({
+                            where: { student_fee_id: alloc.student_fee_id, voucher_id: { in: [paid.id, unpaid.id] } },
+                            select: { voucher_id: true },
+                        });
+                        if (head) {
+                            await tx.deposit_allocations.update({ where: { id: alloc.id }, data: { voucher_id: head.voucher_id } });
+                            continue;
+                        }
+                    }
+                    // Surcharge allocations can't be discovered post-hoc: splitting always
+                    // mints fresh voucher_arrear_surcharges rows, so the old surcharge_id has
+                    // no queryable new home outside the surchargeLineage map built above — if
+                    // we're here, that map is incomplete and must be fixed, not papered over.
+                    throw new BadRequestException(
+                        `splitPartiallyPaid: could not resolve deposit_allocation #${alloc.id} ` +
+                        `(student_fee_id=${alloc.student_fee_id}, surcharge_id=${alloc.surcharge_id}, type=${alloc.type}) ` +
+                        `to either split voucher — aborting to avoid orphaning live payment history.`,
+                    );
+                }
+            }
+
+            // ── Step 10: Void the original voucher.
             await tx.vouchers.update({
                 where: { id: voucherId },
                 data: { status: 'VOID' },
@@ -3000,16 +3140,18 @@ export class VouchersService {
             const heads = voucher.voucher_heads || [];
             const regularFeeIds = heads.map(h => h.student_fee_id);
 
-            // 1. Reset regular student_fees to NOT_ISSUED
+            // 1. Reset regular student_fees to NOT_ISSUED (amount_paid included — a
+            //    "deleted/reversed" fee must not be left NOT_ISSUED with a stale paid amount).
             if (regularFeeIds.length > 0) {
                 await tx.student_fees.updateMany({
                     where: { id: { in: regularFeeIds } },
                     data: {
                         status: 'NOT_ISSUED',
+                        amount_paid: new Prisma.Decimal(0),
                         issue_date: null,
                         due_date: null,
                         validity_date: null,
-                    }
+                    } as any
                 });
             }
 
@@ -3137,6 +3279,9 @@ export class VouchersService {
         }
 
         // STEP 6: Reset regular current-period student_fees → NOT_ISSUED.
+        //         amount_paid must be zeroed too — otherwise a "reversed" fee ends up
+        //         NOT_ISSUED while still carrying its old paid amount, corrupting the
+        //         very ledger this whole deletion/reversal path exists to restore.
         const regularCurrentFeeIds: number[] = currentHeads
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null)
@@ -3144,7 +3289,13 @@ export class VouchersService {
         if (regularCurrentFeeIds.length > 0) {
             await tx.student_fees.updateMany({
                 where: { id: { in: regularCurrentFeeIds } },
-                data: { status: 'NOT_ISSUED', issue_date: null, due_date: null, validity_date: null },
+                data: {
+                    status: 'NOT_ISSUED',
+                    amount_paid: new Prisma.Decimal(0),
+                    issue_date: null,
+                    due_date: null,
+                    validity_date: null,
+                } as any,
             });
         }
 
