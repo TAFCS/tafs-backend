@@ -489,6 +489,7 @@ model students {
   fee_start_term             String?                    @db.VarChar(10)
   graduated_from_class_id    Int?
   cnic                       String?                    @unique @db.VarChar(15)
+  not_pursuing               Boolean                    @default(false)
   attendance_roll_records    attendance_roll_records[]
   deposits                   deposits[]
   postdated_cheques          postdated_cheques[]
@@ -1034,7 +1035,7 @@ model app_config {
   key         String   @unique @db.VarChar(100)
   value       String
   description String?  @db.VarChar(255)
-  updated_at  DateTime @db.Timestamp(6)
+  updated_at  DateTime @updatedAt @db.Timestamp(6)
   updated_by  String?  @db.VarChar(255)
 }
 
@@ -1149,13 +1150,4 @@ enum PostdatedChequeStatus {
   BOUNCED
   RETURNED
   CANCELLED
-}
-
-model app_config {
-  id          Int      @id @default(autoincrement())
-  key         String   @unique @db.VarChar(100)
-  value       String
-  description String?  @db.VarChar(255)
-  updated_at  DateTime @updatedAt @db.Timestamp(6)
-  updated_by  String?  @db.VarChar(255)
 }
