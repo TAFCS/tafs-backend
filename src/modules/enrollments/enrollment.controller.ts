@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
 import { EnrollmentService } from './enrollment.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
@@ -45,6 +45,20 @@ export class EnrollmentController {
       student,
       HttpStatus.OK,
       'Student enrolled successfully'
+    );
+  }
+
+  @Patch(':cc/pursuit-status')
+  @ApiOperation({ summary: 'Update whether a candidate is not pursuing admission' })
+  async updatePursuitStatus(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Body('not_pursuing') notPursuing: boolean,
+  ) {
+    const student = await this.enrollmentService.updatePursuitStatus(cc, notPursuing);
+    return createApiResponse(
+      student,
+      HttpStatus.OK,
+      'Student pursuit status updated successfully'
     );
   }
 

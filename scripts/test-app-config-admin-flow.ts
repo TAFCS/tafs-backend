@@ -23,7 +23,7 @@ async function setKey(key: string, value: string) {
   await prisma.app_config.upsert({
     where: { key },
     update: { value, updated_by: 'TEST_ADMIN_FLOW' },
-    create: { key, value, updated_by: 'TEST_ADMIN_FLOW' },
+    create: { key, value, updated_by: 'TEST_ADMIN_FLOW', updated_at: new Date() },
   });
 }
 

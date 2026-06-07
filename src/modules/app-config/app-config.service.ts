@@ -69,6 +69,7 @@ export class AppConfigService {
         key,
         value,
         updated_by: userId,
+        updated_at: new Date(),
       },
     });
   }

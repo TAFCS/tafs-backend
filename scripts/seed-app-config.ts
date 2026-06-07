@@ -23,6 +23,7 @@ async function main() {
         value: config.value,
         description: config.description,
         updated_by: 'SEED',
+        updated_at: new Date(),
       },
     });
   }
