@@ -65,6 +65,12 @@ const permissionsList = [
     { key: 'attendance.student.rollcall.mark', module: 'HR & Attendance', description: 'Mark student roll call attendance' },
     { key: 'attendance.student.rollcall.view', module: 'HR & Attendance', description: 'View student roll call attendance' },
     { key: 'attendance.student.edit_locked', module: 'HR & Attendance', description: 'Edit locked student attendance records' },
+
+    // Communication
+    { key: 'communication.view_chats', module: 'Communication', description: 'View legacy chat hub (announcements)' },
+    { key: 'communication.send_announcements', module: 'Communication', description: 'Send announcements and notice board posts' },
+    { key: 'communication.support_tickets.view', module: 'Communication', description: 'View and respond to support tickets' },
+    { key: 'communication.support_tickets.approve', module: 'Communication', description: 'Approve staff ticket replies before delivery to parents' },
 ];
 
 async function main() {
@@ -97,14 +103,16 @@ async function main() {
             'system.analytics.view', 'system.analytics.view_amounts',
             'hr.employees.view', 'hr.leave.apply', 'hr.leave.approve', 'attendance.reports.view',
             'attendance.staff.mark',
-            'attendance.student.biometric.view', 'attendance.student.rollcall.view', 'attendance.student.edit_locked'
+            'attendance.student.biometric.view', 'attendance.student.rollcall.view', 'attendance.student.edit_locked',
+            'communication.support_tickets.view', 'communication.view_chats',
         ],
         FINANCE_CLERK: [
             'students.directory.view', 'students.families.view',
             'finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 
             'finance.vouchers.view', 'finance.vouchers.download', 'finance.vouchers.split_partial',
             'finance.deposits.record', 'finance.deposits.view', 'finance.banks.view',
-            'hr.leave.apply'
+            'hr.leave.apply',
+            'communication.support_tickets.view',
         ],
         RECEPTIONIST: [
             'students.registration.create', 'students.directory.view', 'students.families.view',
@@ -116,6 +124,9 @@ async function main() {
         ],
         STAFF_EDITOR: [
             'students.directory.view', 'students.directory.edit', 'students.registration.view', 'hr.leave.apply'
+        ],
+        GENERAL_RESPONDENT: [
+            'communication.support_tickets.view',
         ],
     };
 

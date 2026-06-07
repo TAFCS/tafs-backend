@@ -8,12 +8,14 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
+import { Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { SupportTicketsService } from '../support-tickets/support-tickets.service';
 
 @WebSocketGateway({
   cors: {
@@ -44,6 +46,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
+    @Inject(forwardRef(() => SupportTicketsService))
+    private readonly supportTicketsService: SupportTicketsService,
   ) {}
 
   // ─── Socket.IO Middleware (runs BEFORE connection is established) ──────────
@@ -90,6 +94,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     try {
       if (payload.userType === 'STAFF') {
         client.join('admin_inbox');
+        client.join(`staff_inbox_${payload.sub}`);
+        if (payload.role === 'FINANCE_CLERK') client.join('finance_queue');
+        if (payload.role === 'SUPER_ADMIN') client.join('super_admin_approvals');
+        if (payload.role === 'GENERAL_RESPONDENT') client.join('general_respondent_inbox');
         console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
       } else if (payload.userType === 'PARENT') {
         const familyId = Number(payload.familyId || payload.sub);
@@ -533,5 +541,171 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       console.error('[ChatGateway] Delete failed:', err);
       return { success: false, error: 'Delete failed' };
     }
+  }
+
+  // ─── Support Tickets ───────────────────────────────────────────────────────
+
+  /** True when the parent app has an active socket in family_app_{familyId}. */
+  isParentInTicketRoom(familyId: number, _ticketId: string): boolean {
+    const sockets = this.familySockets.get(familyId);
+    return !!sockets && sockets.size > 0;
+  }
+
+  @SubscribeMessage('enterTicket')
+  async handleEnterTicket(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { ticketId: string },
+  ) {
+    const payload = (client as any).tafsPayload;
+    if (!payload) return { error: 'unauthorized' };
+    try {
+      await this.supportTicketsService.assertCanEnterTicketRoom(
+        data.ticketId,
+        payload,
+      );
+      client.join(`ticket_${data.ticketId}`);
+      return { success: true };
+    } catch (err: any) {
+      return { error: err.message ?? 'forbidden' };
+    }
+  }
+
+  @SubscribeMessage('leaveTicket')
+  handleLeaveTicket(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { ticketId: string },
+  ) {
+    client.leave(`ticket_${data.ticketId}`);
+  }
+
+  @SubscribeMessage('sendTicketMessage')
+  async handleSendTicketMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      ticketId: string;
+      messageType: ChatMessageType;
+      content: string;
+      mediaMetadata?: Record<string, unknown>;
+    },
+  ) {
+    const payload = (client as any).tafsPayload;
+    if (!payload) return { error: 'unauthorized' };
+
+    try {
+      return await this.supportTicketsService.sendTicketMessageFromSocket(
+        data.ticketId,
+        payload,
+        {
+          messageType: data.messageType,
+          content: data.content,
+          mediaMetadata: data.mediaMetadata,
+        },
+      );
+    } catch (err: any) {
+      return { error: err.message ?? 'failed' };
+    }
+  }
+
+  async broadcastTicketCreated(ticket: any) {
+    this.server.to('super_admin_approvals').emit('ticketCreated', { ticket });
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketCreated', { ticket });
+    }
+    if (ticket.routed_role === 'FINANCE_CLERK') {
+      this.server.to('finance_queue').emit('ticketCreated', { ticket });
+    }
+    if (ticket.routed_role === 'GENERAL_RESPONDENT') {
+      this.server.to('general_respondent_inbox').emit('ticketCreated', { ticket });
+    }
+  }
+
+  async broadcastTicketClaimed(ticket: any) {
+    this.server.to('finance_queue').emit('ticketClaimed', { ticket });
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketClaimed', { ticket });
+    }
+  }
+
+  async broadcastTicketTransferred(ticket: any, fromUserId: string, toUserId: string) {
+    this.server.to(`staff_inbox_${fromUserId}`).emit('ticketTransferred', { ticket, toUserId });
+    this.server.to(`staff_inbox_${toUserId}`).emit('ticketTransferred', { ticket, fromUserId });
+    this.server.to('finance_queue').emit('ticketTransferred', { ticket });
+  }
+
+  async broadcastTicketForwarded(ticket: any, fromUserId: string, toUserId: string) {
+    this.server.to(`staff_inbox_${fromUserId}`).emit('ticketForwarded', { ticket, toUserId });
+    this.server.to(`staff_inbox_${toUserId}`).emit('ticketForwarded', { ticket, fromUserId });
+  }
+
+  async broadcastReplyPendingApproval(message: any, ticket: any) {
+    this.server.to('super_admin_approvals').emit('replyPendingApproval', { message, ticket });
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('replyPendingApproval', { message, ticket, status: 'PENDING' });
+    }
+  }
+
+  async broadcastApprovedTicketMessage(ticket: any, message: any) {
+    this.server
+      .to(`family_app_${ticket.family_id}`)
+      .emit('ticketMessageReceived', { ticket, message });
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketMessageReceived', { ticket, message });
+    }
+    this.server.to('super_admin_approvals').emit('replyReviewed', {
+      ticket,
+      message,
+      status: 'APPROVED',
+    });
+  }
+
+  async broadcastReplyRejected(
+    ticketId: string,
+    responderId: string,
+    comment: string | undefined,
+    message: any,
+  ) {
+    this.server.to(`staff_inbox_${responderId}`).emit('replyReviewed', {
+      ticketId,
+      message,
+      status: 'REJECTED',
+      reviewComment: comment,
+    });
+    this.server.to('super_admin_approvals').emit('replyReviewed', {
+      ticketId,
+      message,
+      status: 'REJECTED',
+    });
+  }
+
+  async broadcastTicketMessageToStaff(ticket: any, message: any) {
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketMessageReceived', { ticket, message });
+    }
+    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
+      this.server.to('finance_queue').emit('ticketMessageReceived', { ticket, message });
+    }
+  }
+
+  async broadcastTicketClosed(ticket: any) {
+    this.server
+      .to(`family_app_${ticket.family_id}`)
+      .emit('ticketClosed', { ticket });
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketClosed', { ticket });
+    }
+    this.server.to('super_admin_approvals').emit('ticketClosed', { ticket });
   }
 }

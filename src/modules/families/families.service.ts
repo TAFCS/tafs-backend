@@ -154,6 +154,17 @@ export class FamiliesService {
                 email_address: true,
                 cnic: true,
                 occupation: true,
+                additional_phones: true,
+                photo_url: true,
+                whatsapp_number: true,
+                house_appt_name: true,
+                house_appt_number: true,
+                area_block: true,
+                city: true,
+                postal_code: true,
+                province: true,
+                country: true,
+                work_phone: true,
               },
             },
           },
@@ -164,7 +175,12 @@ export class FamiliesService {
     const { password_hash, ...safeFamily } = family;
     return {
       ...safeFamily,
-      guardians: guardians.map((sg) => ({ ...sg.guardians, relationship: sg.relationship })),
+      guardians: guardians.map((sg) => ({
+        ...sg.guardians,
+        relationship: sg.relationship,
+        is_primary_contact: sg.is_primary_contact,
+        is_emergency_contact: sg.is_emergency_contact,
+      })),
     };
   }
 

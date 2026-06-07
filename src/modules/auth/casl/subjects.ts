@@ -21,4 +21,5 @@ export type AppSubjects =
   | 'ClassAttendanceMode'
   | 'RollSession'
   | 'StaffAttendance'
+  | 'SupportTicket'
   | 'all';

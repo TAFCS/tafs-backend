@@ -36,6 +36,9 @@ const ROSTER: RosterEntry[] = [
   // CAMPUS_ADMIN — all campuses
   { username: 'asifa.soomro', full_name: 'Asifa Soomro', role: 'CAMPUS_ADMIN', campus_id: null },
 
+  // GENERAL_RESPONDENT — triage desk for general non-child queries
+  { username: 'general.respondent', full_name: 'General Query Desk', role: 'GENERAL_RESPONDENT', campus_id: null },
+
   // PRINCIPAL
   { username: 'samia.abbas', full_name: 'Samia Abbas', role: 'PRINCIPAL', campus_id: 2, allowed_class_ids: [] },
   { username: 'ferwa.sabir', full_name: 'Ferwa Sabir', role: 'PRINCIPAL', campus_id: 3, allowed_class_ids: [] },
