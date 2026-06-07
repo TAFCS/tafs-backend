@@ -46,14 +46,14 @@ const ROSTER: RosterEntry[] = [
   { username: 'hira.khadim', full_name: 'Hira Khadim', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.VI_X },
   { username: 'syed.komail.hassan', full_name: 'Syed Komail Hassan', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.OA },
 
-  // FINANCE_CLERK — institution-wide + editor overrides for Fozia/Nimla
+  // SUPER_ADMIN — Fozia Hussain (all campuses)
   {
     username: 'fozia.hussain',
     full_name: 'Fozia Hussain',
-    role: 'FINANCE_CLERK',
+    role: 'SUPER_ADMIN',
     campus_id: null,
-    grant_permissions: ['students.directory.edit', 'students.registration.view'],
   },
+  // FINANCE_CLERK — institution-wide + editor overrides for Nimla
   {
     username: 'nimla.asad',
     full_name: 'Nimla Asad',

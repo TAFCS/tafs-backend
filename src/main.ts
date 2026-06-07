@@ -13,14 +13,34 @@ import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  const redisUrl = process.env.REDIS_URL?.trim();
+  const isProduction = process.env.NODE_ENV === 'production';
   const redisIoAdapter = new RedisIoAdapter(app);
-  try {
-    await redisIoAdapter.connectToRedis();
-    app.useWebSocketAdapter(redisIoAdapter);
-    console.log('✅ Redis Socket.io adapter connected');
-  } catch (err: any) {
-    const errMsg = err?.message || (err?.errors ? err.errors.map((e: any) => e.message).join(', ') : String(err));
-    console.error('❌ Failed to connect Redis Socket.io adapter, falling back to default adapter:', errMsg);
+
+  if (isProduction && !redisUrl) {
+    console.error(
+      '⚠️ [Startup] REDIS_URL is not set. Socket.IO will use the in-memory adapter — chat will NOT sync across multiple backend instances.',
+    );
+  }
+
+  if (redisUrl) {
+    try {
+      await redisIoAdapter.connectToRedis(redisUrl);
+      app.useWebSocketAdapter(redisIoAdapter);
+      console.log('✅ Redis Socket.io adapter connected');
+    } catch (err: any) {
+      await redisIoAdapter.disconnect();
+      const errMsg =
+        err?.message ||
+        (err?.errors ? err.errors.map((e: any) => e.message).join(', ') : String(err));
+      console.warn(
+        `ℹ️ Redis not available (${errMsg || 'connection refused'}); using in-memory Socket.IO adapter`,
+      );
+    }
+  } else if (!isProduction) {
+    console.log(
+      'ℹ️ REDIS_URL not set — using in-memory Socket.IO adapter (OK for local dev)',
+    );
   }
 
   app.setGlobalPrefix('api/v1');
