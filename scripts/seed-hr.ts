@@ -30,6 +30,23 @@ async function main() {
   }
   console.log('Leave types seeded.');
 
+  // 1b. Seed Staff Types
+  const staffTypes = [
+    { code: 'domestic', name: 'Domestic', description: 'Domestic staff' },
+    { code: 'old_admin', name: 'Old Admin', description: 'Existing administrative staff' },
+    { code: 'new_admin', name: 'New Admin', description: 'Newly hired administrative staff' },
+    { code: 'teacher', name: 'Teacher', description: 'Teaching staff' },
+  ];
+
+  for (const st of staffTypes) {
+    await prisma.staff_types.upsert({
+      where: { code: st.code },
+      update: { name: st.name, description: st.description },
+      create: st,
+    });
+  }
+  console.log('Staff types seeded.');
+
   // 2. Seed Class Attendance Modes
   const classes = await prisma.classes.findMany();
   for (const c of classes) {

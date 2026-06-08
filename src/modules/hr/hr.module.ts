@@ -9,6 +9,8 @@ import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { ClassAttendanceModesController } from './class-attendance-modes/class-attendance-modes.controller';
 import { ClassAttendanceModesService } from './class-attendance-modes/class-attendance-modes.service';
+import { StaffTypesController } from './staff-types/staff-types.controller';
+import { StaffTypesService } from './staff-types/staff-types.service';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
@@ -19,6 +21,7 @@ import { AuthModule } from '../auth/auth.module';
     PoliciesController,
     CalendarController,
     ClassAttendanceModesController,
+    StaffTypesController,
   ],
   providers: [
     EmployeesService,
@@ -26,6 +29,7 @@ import { AuthModule } from '../auth/auth.module';
     PoliciesService,
     CalendarService,
     ClassAttendanceModesService,
+    StaffTypesService,
   ],
   exports: [
     EmployeesService,
@@ -33,6 +37,7 @@ import { AuthModule } from '../auth/auth.module';
     PoliciesService,
     CalendarService,
     ClassAttendanceModesService,
+    StaffTypesService,
   ],
 })
 export class HrModule {}

@@ -110,6 +110,7 @@ model campuses {
   campus_classes           campus_classes[]
   campus_sections          campus_sections[]
   class_fee_schedule       class_fee_schedule[]
+  employee_profiles        employee_profiles[]
   hr_policy_sets           hr_policy_sets[]
   students                 students[]
   users                    users[]
@@ -131,19 +132,20 @@ model class_fee_schedule {
 }
 
 model classes {
-  id                       Int                        @id @default(autoincrement())
-  description              String                     @db.VarChar(255)
-  class_code               String                     @db.VarChar(10)
-  academic_system          String                     @db.VarChar(20)
-  term_start_month         Int                        @default(8)
-  attendance_roll_sessions attendance_roll_sessions[]
-  campus_classes           campus_classes[]
-  campus_sections          campus_sections[]
-  class_attendance_modes   class_attendance_modes?
-  class_fee_schedule       class_fee_schedule[]
-  students                 students[]
-  graduated_students       students[]                 @relation("GraduatedFromClass")
-  vouchers                 vouchers[]
+  id                                 Int                                  @id @default(autoincrement())
+  description                        String                               @db.VarChar(255)
+  class_code                         String                               @db.VarChar(10)
+  academic_system                    String                               @db.VarChar(20)
+  term_start_month                   Int                                  @default(8)
+  attendance_roll_sessions           attendance_roll_sessions[]
+  campus_classes                     campus_classes[]
+  campus_sections                    campus_sections[]
+  class_attendance_modes             class_attendance_modes?
+  class_fee_schedule                 class_fee_schedule[]
+  employee_class_section_assignments employee_class_section_assignments[]
+  students                           students[]
+  graduated_students                 students[]                           @relation("GraduatedFromClass")
+  vouchers                           vouchers[]
 }
 
 model deposit_allocations {
@@ -297,12 +299,13 @@ model relatives_attending_tafs {
 }
 
 model sections {
-  id                       Int                        @id @default(autoincrement())
-  description              String                     @db.VarChar(255)
-  attendance_roll_sessions attendance_roll_sessions[]
-  campus_sections          campus_sections[]
-  students                 students[]
-  vouchers                 vouchers[]
+  id                                 Int                                  @id @default(autoincrement())
+  description                        String                               @db.VarChar(255)
+  attendance_roll_sessions           attendance_roll_sessions[]
+  campus_sections                    campus_sections[]
+  employee_class_section_assignments employee_class_section_assignments[]
+  students                           students[]
+  vouchers                           vouchers[]
 }
 
 model student_activities {
@@ -843,20 +846,62 @@ model designations {
 }
 
 model employee_profiles {
-  id                     Int                      @id @default(autoincrement())
-  user_id                String?                  @unique
-  cnic                   String?                  @unique @db.VarChar(20)
-  join_date              DateTime?                @db.Date
-  employment_type        String?                  @db.VarChar(50)
-  department_id          Int?
-  designation_id         Int?
-  reporting_manager_id   Int?
-  attendance_staff_daily attendance_staff_daily[]
-  departments            departments?             @relation(fields: [department_id], references: [id])
-  designations           designations?            @relation(fields: [designation_id], references: [id])
-  reporting_manager      employee_profiles?       @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
-  subordinates           employee_profiles[]      @relation("ReportingManager")
-  users                  users?                   @relation(fields: [user_id], references: [id])
+  id                                 Int                                  @id @default(autoincrement())
+  user_id                            String?                              @unique
+  cnic                               String?                              @unique @db.VarChar(20)
+  join_date                          DateTime?                            @db.Date
+  employment_type                    String?                              @db.VarChar(50)
+  department_id                      Int?
+  designation_id                     Int?
+  reporting_manager_id               Int?
+  employee_code                      String?                              @unique @db.VarChar(50)
+  full_name                          String?                              @db.VarChar(100)
+  father_name                        String?                              @db.VarChar(100)
+  mother_name                        String?                              @db.VarChar(100)
+  date_of_birth                      DateTime?                            @db.Date
+  address                            String?
+  personal_phone                     String?                              @db.VarChar(20)
+  personal_email                     String?                              @db.VarChar(100)
+  job_title                          String?                              @db.VarChar(100)
+  job_description                    String?
+  notes                              String?
+  reporting_time                     DateTime?                            @db.Time(0)
+  leaving_time                       DateTime?                            @db.Time(0)
+  late_relaxation_minutes            Int?
+  monthly_pay                        Decimal?                             @db.Decimal(12, 2)
+  staff_type_id                      Int?
+  campus_id                          Int?
+  days_per_week                      Int?
+  attendance_staff_daily             attendance_staff_daily[]
+  employee_class_section_assignments employee_class_section_assignments[]
+  campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
+  departments                        departments?                         @relation(fields: [department_id], references: [id])
+  designations                       designations?                        @relation(fields: [designation_id], references: [id])
+  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
+  subordinates                       employee_profiles[]                  @relation("ReportingManager")
+  staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
+  users                              users?                               @relation(fields: [user_id], references: [id])
+}
+
+model staff_types {
+  id                Int                 @id @default(autoincrement())
+  code              String              @unique @db.VarChar(50)
+  name              String              @db.VarChar(100)
+  description       String?             @db.VarChar(255)
+  is_active         Boolean             @default(true)
+  employee_profiles employee_profiles[]
+}
+
+model employee_class_section_assignments {
+  id                Int               @id @default(autoincrement())
+  employee_id       Int
+  class_id          Int
+  section_id        Int
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  classes           classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  sections          sections          @relation(fields: [section_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, class_id, section_id])
 }
 
 model academic_calendar_days {

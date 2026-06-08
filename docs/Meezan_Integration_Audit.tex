@@ -1,0 +1,402 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper, margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage{verbatim}
+
+
+\title{TAFS \,--\, Meezan Bank Bill Collection API \\ Integration Audit \& Reference Document}
+\author{TAFS Development Team}
+\date{8 June 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Purpose of This Document}
+This document supersedes the previously shared integration guide and is prepared in direct
+response to the points raised by the Meezan Bank IT Team. It provides:
+\begin{itemize}
+    \item Full request and response payload samples for \textbf{Bill Inquiry} and \textbf{Bill Payment}, covering both \textbf{success} and \textbf{failure} scenarios.
+    \item A clear explanation that the fields returned for an \textbf{unsuccessful Bill Inquiry} are \textbf{structurally different} from those returned for a \textbf{successful Bill Inquiry} (different field names entirely \,--\, not just different values).
+    \item A consolidated table of all \textbf{API response codes} used across both services.
+    \item Direct clarifications against each point raised by the IT team.
+\end{itemize}
+This audit is based directly on the production source code of the integration
+(\texttt{meezan.service.ts} / \texttt{meezan.controller.ts}), so every payload shown here is
+guaranteed to match what the live system sends and receives.
+
+\section{Base URL \& Authentication}
+
+\subsection{Base URL}
+\begin{quote}
+\begin{verbatim}
+https://tafs-backend-production.up.railway.app/api/v1/meezan
+\end{verbatim}
+\end{quote}
+
+\subsection{Authentication Fields}
+Every request (both Bill Inquiry and Bill Payment) must carry the following three
+authentication fields in the JSON body. These are validated on \emph{every} call before any
+business logic executes:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{ServiceUserId} & string & Service authentication ID issued to Meezan \\
+\texttt{UserPassword} & string & Password associated with the service user ID \\
+\texttt{BillCompanyCode} & string & Company / campus identifier (\texttt{TAFCS}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Validation order:}
+\begin{enumerate}
+    \item \texttt{ServiceUserId} and \texttt{UserPassword} are checked first. If either is wrong, the request is rejected with \texttt{ResponseCode "094"}.
+    \item If \texttt{BillCompanyCode} is supplied and does not match, the request is rejected with \texttt{ResponseCode "095"}.
+    \item Only after both checks pass does the system proceed to look up the voucher.
+\end{enumerate}
+
+\section{Service 1 \,--\, Bill Inquiry}
+\textbf{Endpoint:} \texttt{POST /bill-inquiry} \hfill \textbf{HTTP Status:} Always \texttt{200 OK}
+
+\noindent The HTTP status code is always \texttt{200}; the actual outcome (success or failure)
+is communicated through the JSON body \,--\, see Section~2.4 for why this matters.
+
+\subsection{Request Payload}
+\begin{quote}
+\begin{verbatim}
+{
+  "ServiceUserId": "0b986d818b54b6eeedbf7658",
+  "UserPassword": "e67f36b15bd1d034017354db2486a82b",
+  "BillCompanyCode": "TAFCS",
+  "VoucherNumber": "05260003357"
+}
+\end{verbatim}
+\end{quote}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Required} & \textbf{Description} \\
+\midrule
+\texttt{ServiceUserId} & string & Yes & Authentication ID \\
+\texttt{UserPassword} & string & Yes & Authentication password \\
+\texttt{BillCompanyCode} & string & Yes & Company / campus identifier \\
+\texttt{VoucherNumber} & string & Yes & Voucher number to look up \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Success Response \,--\, Voucher Found and Unpaid}
+\textbf{HTTP 200}
+
+\begin{quote}
+\begin{verbatim}
+{
+  "StatusCode": "00",
+  "StatusDesc": "Unpaid",
+  "student_name": "TEST STUDENT B",
+  "student_id": "2",
+  "due_date": "20260521",
+  "Amount_WID_Date": "50000",
+  "Amount_AD_Date": "51000",
+  "BillingMonth": "2504",
+  "Remarks": "Late payment surcharge applies"
+}
+\end{verbatim}
+\end{quote}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Field} & \textbf{Description} \\
+\midrule
+\texttt{StatusCode} & \texttt{"00"} \,--\, indicates a successful lookup \\
+\texttt{StatusDesc} & \texttt{"Unpaid"} \,--\, the voucher exists and is payable \\
+\texttt{student\_name} & Full name of the student \\
+\texttt{student\_id} & Student CC (registration) number \\
+\texttt{due\_date} & Due date, format \texttt{YYYYMMDD} \\
+\texttt{Amount\_WID\_Date} & Amount payable \emph{within} (on or before) due date, in PKR \\
+\texttt{Amount\_AD\_Date} & Amount payable \emph{after} due date (includes late surcharge), in PKR \\
+\texttt{BillingMonth} & Billing period, format \texttt{YYMM} \\
+\texttt{Remarks} & \texttt{"Surcharge waived"}, \texttt{"Late payment surcharge applies"}, or \texttt{""} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textit{Note:} \texttt{Remarks} is set to \texttt{"Surcharge waived"} when the voucher
+has been manually exempted from late fees, \texttt{"Late payment surcharge applies"} when the
+inquiry is being made after the due date, and an empty string \texttt{""} otherwise.
+
+\subsection{Failure Response \,--\, Voucher Not Found / Invalid / Void / Paid / Expired / Auth Error}
+\textbf{HTTP 200} (the transport-level status remains \texttt{200}; failure is indicated purely
+by the body)
+
+\begin{quote}
+\begin{verbatim}
+{
+  "ResponseCode": "091",
+  "ResponseDesc": "Voucher Id is invalid"
+}
+\end{verbatim}
+\end{quote}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Field} & \textbf{Description} \\
+\midrule
+\texttt{ResponseCode} & 3-digit numeric code identifying the failure reason (see Section~4) \\
+\texttt{ResponseDesc} & Human-readable description of the failure \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{IMPORTANT \,--\, Field Differences Between Success and Failure Responses}
+\label{sec:field-diff}
+This is the point specifically raised by the IT team and must be handled carefully on the
+bank's parsing side: \textbf{a successful Bill Inquiry response and a failed/erroneous Bill
+Inquiry response do not share the same field names.} They are two structurally distinct
+payload shapes returned from the same endpoint:
+
+\begin{center}
+\begin{tabular}{@{}p{0.46\textwidth}p{0.46\textwidth}@{}}
+\toprule
+\textbf{Successful Inquiry \,--\, fields present} & \textbf{Failed Inquiry \,--\, fields present} \\
+\midrule
+\texttt{StatusCode} & \texttt{ResponseCode} \\
+\texttt{StatusDesc} & \texttt{ResponseDesc} \\
+\texttt{student\_name} & \emph{(none of the voucher/student fields are present)} \\
+\texttt{student\_id} & \\
+\texttt{due\_date} & \\
+\texttt{Amount\_WID\_Date} & \\
+\texttt{Amount\_AD\_Date} & \\
+\texttt{BillingMonth} & \\
+\texttt{Remarks} & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Practical guidance for the bank's integration layer:}
+\begin{itemize}
+    \item Do \emph{not} assume the voucher/student fields (\texttt{student\_name}, \texttt{due\_date}, etc.) will always be present \,--\, they are \emph{only} present when \texttt{StatusCode == "00"}.
+    \item The presence of the \texttt{ResponseCode} key (rather than \texttt{StatusCode}) is itself the signal that the inquiry failed.
+    \item Recommended parsing logic: check for \texttt{StatusCode} first \,--\, if present and equal to \texttt{"00"}, treat as success and read the voucher fields; otherwise, read \texttt{ResponseCode}/\texttt{ResponseDesc} and treat as a failure using the table in Section~4.
+\end{itemize}
+
+\section{Service 2 \,--\, Bill Payment}
+\textbf{Endpoint:} \texttt{POST /bill-payment} \hfill \textbf{HTTP Status:} Always \texttt{200 OK}
+
+\subsection{Request Payload}
+\begin{quote}
+\begin{verbatim}
+{
+  "ServiceUserId": "0b986d818b54b6eeedbf7658",
+  "UserPassword": "e67f36b15bd1d034017354db2486a82b",
+  "BillCompanyCode": "TAFCS",
+  "VoucherNumber": "05260003357",
+  "TransDate": "20260512",
+  "TransAuthenticationCode": "AUTH123456",
+  "TransAmount": "50000",
+  "PaymentMode": "ONLINE",
+  "BankCode": "MEZN",
+  "BankName": "Meezan Bank Limited",
+  "ChequeNo": "",
+  "Status": "C",
+  "ReasonCode": "",
+  "DateOfReturn": "",
+  "ReasonDescription": ""
+}
+\end{verbatim}
+\end{quote}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Required} & \textbf{Description} \\
+\midrule
+\texttt{ServiceUserId} & string & Yes & Authentication ID \\
+\texttt{UserPassword} & string & Yes & Authentication password \\
+\texttt{BillCompanyCode} & string & No\textsuperscript{*} & Company / campus identifier \\
+\texttt{VoucherNumber} & string & Yes & Voucher number being paid \\
+\texttt{TransDate} & string & Yes & Transaction date, format \texttt{YYYYMMDD} \\
+\texttt{TransAuthenticationCode} & string & Yes & Bank transaction reference / auth code \\
+\texttt{TransAmount} & string & Yes & Amount paid, in PKR \\
+\texttt{PaymentMode} & string & Yes & Payment mode (e.g. \texttt{CASH}, \texttt{CHQ}, \texttt{ONLINE}) \\
+\texttt{BankCode} & string & Yes & Bank's branch / routing code \\
+\texttt{BankName} & string & Yes & Name of the bank / branch \\
+\texttt{ChequeNo} & string & No & Cheque number (cheque payments only) \\
+\texttt{Status} & string & Yes & \texttt{C} = Cleared, \texttt{L} = Lodged, \texttt{R} = Returned \\
+\texttt{ReasonCode} & string & No & Reason code (used when \texttt{Status = R}) \\
+\texttt{DateOfReturn} & string & No & Return date, format \texttt{YYYYMMDD} (used when \texttt{Status = R}) \\
+\texttt{ReasonDescription} & string & No & Reason description (used when \texttt{Status = R}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent\textsuperscript{*}\,\texttt{BillCompanyCode} is optional in the payment request body;
+however, if it \emph{is} supplied, it is still validated against our records and a mismatch
+returns \texttt{ResponseCode "095"}.
+
+\subsection{Status Field \,--\, Behaviour}
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Status} & \textbf{Meaning} & \textbf{System action} \\
+\midrule
+\texttt{C} & Cleared \,--\, payment confirmed & Voucher marked \texttt{PAID}; deposit \\
+ & & created; fee heads and (if applicable) \\
+ & & overdue surcharges allocated and settled \\
+\texttt{L} & Lodged \,--\, payment pending & No ledger update; logged only \\
+\texttt{R} & Returned \,--\, payment rejected & No ledger update; reason logged only \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent Only \texttt{Status = "C"} triggers actual ledger posting (deposit creation, fee
+allocation, surcharge settlement, and marking the voucher \texttt{PAID}). \texttt{L} and
+\texttt{R} are acknowledged with a \texttt{StatusCode "00"} response but make \emph{no} change
+to the voucher or student ledger.
+
+\subsection{Success Response \,--\, Payment Posted (\texttt{Status = "C"})}
+\textbf{HTTP 200}
+\begin{quote}
+\begin{verbatim}
+{
+  "StatusCode": "00",
+  "StatusDesc": "Success"
+}
+\end{verbatim}
+\end{quote}
+This confirms the voucher has been marked \texttt{PAID}, a deposit record has been created,
+and all applicable fee heads (and overdue surcharges, where relevant) have been settled.
+
+\subsection{Acknowledged but Not Posted \,--\, Lodged / Returned (\texttt{Status = "L"} or \texttt{"R"})}
+\textbf{HTTP 200}
+\begin{quote}
+\begin{verbatim}
+{
+  "StatusCode": "00",
+  "StatusDesc": "Lodged/Returned \xe2\x80\x94 not posted"
+}
+\end{verbatim}
+\end{quote}
+\noindent This is \emph{not} an error \,--\, \texttt{StatusCode "00"} confirms the request was
+received and acknowledged. It simply means no ledger posting occurred because the
+transaction was not in a \texttt{Cleared} state. The reason (for \texttt{Status = "R"}, including
+\texttt{ReasonCode}/\texttt{ReasonDescription}) is recorded in our internal logs for audit
+purposes.
+
+\subsection{Failure Response \,--\, Voucher Not Found / Already Paid / Expired / Auth Error / Exception}
+\textbf{HTTP 200}
+\begin{quote}
+\begin{verbatim}
+{
+  "ResponseCode": "097",
+  "ResponseDesc": "Voucher already paid"
+}
+\end{verbatim}
+\end{quote}
+\noindent As with Bill Inquiry, failure responses use the \texttt{ResponseCode}/\texttt{ResponseDesc}
+field pair rather than \texttt{StatusCode}/\texttt{StatusDesc}, and carry no payment/voucher
+detail fields.
+
+\section{Consolidated API Response Code Reference}
+\label{sec:codes}
+The following codes are returned (in the \texttt{ResponseCode} field, for failure cases) or as
+\texttt{StatusCode "00"} for success/acknowledgement cases, across \textbf{both} Bill Inquiry
+and Bill Payment:
+
+\begin{center}
+\begin{longtable}{@{}lp{0.30\textwidth}p{0.40\textwidth}@{}}
+\toprule
+\textbf{Code} & \textbf{Description} & \textbf{Returned by / Meaning} \\
+\midrule
+\endhead
+\texttt{00} (\texttt{StatusCode}) & Success / Unpaid / Acknowledged & Both services. For Inquiry: voucher found and unpaid. For Payment: payment posted (\texttt{Status=C}), or acknowledged without posting (\texttt{Status=L/R}). \\[4pt]
+\texttt{091} & Voucher Id is invalid & Both services. No voucher exists for the supplied \texttt{VoucherNumber} (including the 11-digit fallback lookup). \\[4pt]
+\texttt{092} & Voucher date is expired & Both services. The voucher's \texttt{validity\_date} has passed relative to the inquiry/transaction date. \\[4pt]
+\texttt{093} & Voucher is void & Bill Inquiry only. The voucher has been administratively voided. \\[4pt]
+\texttt{094} & User invalid & Both services. \texttt{ServiceUserId} or \texttt{UserPassword} did not match our records. \\[4pt]
+\texttt{095} & Company code mismatch & Both services. \texttt{BillCompanyCode} was supplied but did not match our records. \\[4pt]
+\texttt{096} & General exception & Both services. An unexpected server-side error occurred while processing the request. \\[4pt]
+\texttt{097} & Voucher is already paid / Voucher already paid & Both services. The voucher's status is already \texttt{PAID}. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\noindent\textbf{Notes on code usage:}
+\begin{itemize}
+    \item Codes \texttt{091}, \texttt{092}, \texttt{094}, \texttt{095}, \texttt{096}, and \texttt{097} are common to both Bill Inquiry and Bill Payment.
+    \item Code \texttt{093} (\textit{Voucher is void}) is returned \textbf{only} by Bill Inquiry. Bill Payment does not currently perform a separate void check (a voided voucher would typically already be reflected through one of the other statuses).
+    \item All response codes are returned with \textbf{HTTP 200} \,--\, the bank's integration layer must inspect the JSON body (\texttt{StatusCode} vs. \texttt{ResponseCode}) to determine the outcome, not the HTTP transport status.
+\end{itemize}
+
+\section{Voucher Number Resolution Logic}
+For both services, the voucher is first looked up by an exact match on \texttt{voucher\_number}.
+If no match is found \emph{and} the supplied \texttt{VoucherNumber} is exactly 11 characters
+long, the system attempts a fallback lookup by treating the last 7 characters as a numeric
+internal voucher ID (\texttt{VoucherNumber.slice(4)}). This allows older/short-format voucher
+numbers issued by the bank to still resolve correctly. If neither lookup succeeds,
+\texttt{ResponseCode "091"} (\textit{Voucher Id is invalid}) is returned.
+
+\section{Overdue Surcharge Logic}
+\begin{itemize}
+    \item \texttt{Amount\_WID\_Date} \,--\, payable amount if settled \emph{on or before} the due date.
+    \item \texttt{Amount\_AD\_Date} \,--\, payable amount if settled \emph{after} the due date (includes the applicable late-payment surcharge).
+    \item Whether a transaction is treated as overdue is determined by comparing the
+    transaction/inquiry date to the voucher's \texttt{due\_date} (both normalized to midnight,
+    so same-day payments are \emph{not} considered overdue).
+    \item If a voucher has been manually marked as \texttt{surcharge\_waived}, no surcharge is
+    applied regardless of the date, and \texttt{Remarks} will read \texttt{"Surcharge waived"}.
+    \item During Bill Payment with \texttt{Status = "C"} on an overdue transaction, any
+    un-waived arrear surcharges linked to the voucher are automatically settled alongside the
+    regular fee heads in the same transaction.
+\end{itemize}
+
+\section{Clarifications on Points Raised by the IT Team}
+\begin{enumerate}
+    \item \textbf{``The previous document does not include API request and response samples.''} \\
+    Resolved \,--\, Sections~2.1, 2.2, 2.3, 3.1, 3.3, 3.4 of this document now provide complete,
+    code-accurate JSON samples for every request and response variant (success and failure)
+    of both Bill Inquiry and Bill Payment.
+
+    \item \textbf{``The API response codes are not mentioned.''} \\
+    Resolved \,--\, Section~4 provides a single consolidated table of every response code
+    (\texttt{00}, \texttt{091}--\texttt{097}) returned by either service, with its meaning and
+    which service(s) return it.
+
+    \item \textbf{``The fields received for an unsuccessful Inquiry are different from those in
+    a successful Inquiry.''} \\
+    Confirmed and documented in detail in Section~2.4. This is by design: a successful
+    inquiry returns voucher/student details under \texttt{StatusCode}/\texttt{StatusDesc} plus
+    the amount and billing fields, whereas a failed inquiry returns only
+    \texttt{ResponseCode}/\texttt{ResponseDesc} with no voucher data. We recommend the bank's
+    parser branch on the presence of \texttt{StatusCode == "00"} to distinguish the two shapes,
+    as detailed in Section~2.4.
+\end{enumerate}
+
+\section{Recommended Integration Flow}
+\begin{enumerate}
+    \item \texttt{POST /bill-inquiry} with \texttt{VoucherNumber}.
+    \item Check whether the response contains \texttt{StatusCode == "00"}:
+    \begin{itemize}
+        \item If yes \,--\, voucher is valid and unpaid; compare today's date against
+        \texttt{due\_date} to decide whether to use \texttt{Amount\_WID\_Date} or
+        \texttt{Amount\_AD\_Date}.
+        \item If no \,--\, read \texttt{ResponseCode}/\texttt{ResponseDesc} and handle per
+        Section~4 (e.g. do not proceed to payment if the voucher is invalid, void, expired,
+        or already paid).
+    \end{itemize}
+    \item \texttt{POST /bill-payment} with \texttt{VoucherNumber}, the correct
+    \texttt{TransAmount}, and \texttt{Status = "C"}.
+    \item Check the response: \texttt{StatusCode == "00"} with \texttt{StatusDesc == "Success"}
+    confirms posting; \texttt{StatusDesc == "Lodged/Returned \,--\, not posted"} confirms
+    acknowledgement without posting; a \texttt{ResponseCode} indicates a failure to be handled
+    per Section~4.
+\end{enumerate}
+
+\end{document}
