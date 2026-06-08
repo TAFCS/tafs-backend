@@ -62,13 +62,14 @@ Group the ~25 fields into clear sections (use card/section dividers, similar vis
 - `father_name` (text)
 - `mother_name` (text)
 - `cnic` (text, required, format `XXXXX-XXXXXXX-X` — reuse existing CNIC formatting/validation if the student form has one)
+cnic mein dash hone chahiyen on frontend pehle se
 - `date_of_birth` (date picker, optional)
 - `address` (textarea)
 - `personal_phone` (text, optional)
 - `personal_email` (email, optional)
 
 **3. Employment Details**
-- `employee_code` (text, required, unique — explain "assigned by school")
+- `employee_code` (text, required, unique — explain "assigned by school") give next available ideally 
 - `staff_type_id` (dropdown, populated from `hrService.listStaffTypes()`, required)
 - `department_id` → `designation_id` (dependent dropdowns, same pattern as the existing employee modal)
 - `job_title` (text)
@@ -90,8 +91,11 @@ Group the ~25 fields into clear sections (use card/section dividers, similar vis
 - "+ Add another class" button to add more rows; each row removable
 - This directly maps to the spreadsheet's `6:A,B;7:A,C` notation — no need to expose raw text syntax to the user, build it from dropdowns
 
+ fetched from campus_classes and campus_sections, wahan premade classes aur sectins hein 
+
 **6. Account Link** (optional, existing behavior)
 - Keep the existing `user_id` linking dropdown (from `hrService.getUnlinkedUsers()`) — for staff who need a login
+all staff needs a login, bhale wo domestic hi kyun na ho, sabke bana do 
 
 ### Submit behavior
 - On create: `hrService.createEmployee(payload)` where payload includes all scalar fields + `class_section_assignments`
