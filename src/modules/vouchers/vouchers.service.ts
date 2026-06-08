@@ -3249,11 +3249,27 @@ export class VouchersService {
                     where: { student_fee_id: sfPaid.id, voucher_id: { not: id } },
                     data: { student_fee_id: balanceSf.id },
                 });
+
+                // The split divided the original amount exactly in two — paidGross/
+                // unpaidGross and totalPaidOnFee/unpaidNet each sum back to the
+                // pre-split amount_before_discount/amount (see splitPartiallyPaid's
+                // Step 1). Re-merging must add sfPaid's half back onto balanceSf's
+                // half to restore that original total — leaving balanceSf's figures
+                // untouched would silently shrink the head to just its balance
+                // portion, with the paid portion's amount lost forever once sfPaid
+                // is deleted in STEP 5 below.
+                const mergedAmount = new Prisma.Decimal(balanceSf.amount ?? 0)
+                    .add(new Prisma.Decimal(sfPaid.amount ?? 0));
+                const mergedGross = new Prisma.Decimal(balanceSf.amount_before_discount ?? 0)
+                    .add(new Prisma.Decimal(sfPaid.amount_before_discount ?? 0));
+
                 await tx.student_fees.update({
                     where: { id: balanceSf.id },
                     data: {
                         status: 'NOT_ISSUED',
                         description_prefix: null,
+                        amount: mergedAmount,
+                        amount_before_discount: mergedGross,
                         amount_paid: new Prisma.Decimal(0),
                         issue_date: null,
                         due_date: null,
