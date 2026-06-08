@@ -538,19 +538,50 @@ export class StudentFeesService {
                 );
 
                 // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
-                const toDelete = existingFees
+                const toDeleteRows = existingFees
                     .filter((f) => {
                         const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
                         const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
                         return !incomingKeys.has(key);
                     })
-                    .filter((f) => f.voucher_heads.length === 0)
-                    .map((f) => f.id);
+                    .filter((f) => f.voucher_heads.length === 0);
+
+                const toDelete = toDeleteRows.map((f) => f.id);
 
                 if (toDelete.length > 0) {
                     await tx.student_fees.deleteMany({
                         where: { id: { in: toDelete } },
                     });
+
+                    // This path can remove installment-linked heads directly (bypassing
+                    // installments.service.removeHead), so replicate its bookkeeping here:
+                    // recalc total_amount/installment_count for affected plans, or drop a
+                    // plan entirely once its last head is gone — otherwise plans are left
+                    // with stale totals/counts or orphaned with zero heads.
+                    const affectedPlanIds = Array.from(
+                        new Set(
+                            toDeleteRows
+                                .map((f) => f.installment_id)
+                                .filter((id): id is number => id != null),
+                        ),
+                    );
+
+                    for (const planId of affectedPlanIds) {
+                        const remaining = await tx.student_fees.findMany({
+                            where: { installment_id: planId },
+                            select: { amount: true },
+                        });
+
+                        if (remaining.length === 0) {
+                            await tx.student_fee_installments.delete({ where: { id: planId } });
+                        } else {
+                            const newTotal = remaining.reduce((sum, f) => sum + Number(f.amount || 0), 0);
+                            await tx.student_fee_installments.update({
+                                where: { id: planId },
+                                data: { total_amount: newTotal, installment_count: remaining.length },
+                            });
+                        }
+                    }
                 }
 
                 // 2. Map existing fees by key for manual lookup (since NULL fee_date breaks unique constraint)

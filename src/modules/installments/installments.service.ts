@@ -26,6 +26,32 @@ export class InstallmentsService {
           const mergeTarget = dto.merge_targets?.find(mt => mt.index === i);
 
           if (mergeTarget) {
+            const targetFee = await tx.student_fees.findUnique({
+              where: { id: mergeTarget.existing_head_id },
+              select: { student_id: true, status: true, installment_id: true },
+            });
+
+            // Merging must only ever land on a fee head that (a) belongs to this
+            // student, (b) hasn't been issued/paid yet — issuing snapshots
+            // voucher_heads.net_amount from student_fees.amount, so incrementing
+            // amount afterwards desyncs the voucher from the live balance — and
+            // (c) isn't already part of another installment plan.
+            if (!targetFee || targetFee.student_id !== dto.student_id) {
+              throw new BadRequestException(
+                `Merge target #${mergeTarget.existing_head_id} does not belong to this student.`,
+              );
+            }
+            if (targetFee.status !== 'NOT_ISSUED') {
+              throw new BadRequestException(
+                `Merge target #${mergeTarget.existing_head_id} has already been issued and can no longer be merged into.`,
+              );
+            }
+            if (targetFee.installment_id !== null) {
+              throw new BadRequestException(
+                `Merge target #${mergeTarget.existing_head_id} is already part of another installment plan.`,
+              );
+            }
+
             await tx.student_fees.update({
               where: { id: mergeTarget.existing_head_id },
               data: {
@@ -54,6 +80,7 @@ export class InstallmentsService {
         return installmentGroup;
       }, { maxWait: 5000, timeout: 30000 });
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       console.error('Error creating installment:', error);
       throw new InternalServerErrorException('Failed to create installment schedule');
     }

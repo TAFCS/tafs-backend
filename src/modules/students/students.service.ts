@@ -2114,8 +2114,16 @@ export class StudentsService {
         amount_paid: Number(f.amount_paid),
         amount_before_discount: Number(f.amount_before_discount),
         fee_type_description: `${f.description_prefix || ''} ${f.fee_types?.description ?? 'Discount'}`.trim(),
-        installment_label: f.installment_id && f.student_fee_installments
-            ? `Installment ${fees.filter(sf => sf.installment_id === f.installment_id && sf.id <= f.id).length} of ${f.student_fee_installments.installment_count}`
+        // 'PARTIAL PAYMENT OF...' rows are the paid half of a voucher split; their
+        // 'BALANCE PAYMENT OF...' sibling keeps the original id and already occupies
+        // that slot, so split fragments get neither their own label nor a count slot
+        // (otherwise siblings would show e.g. "Installment 5 of 4").
+        installment_label: f.installment_id && f.student_fee_installments && !((f.description_prefix || '').startsWith('PARTIAL PAYMENT OF'))
+            ? `Installment ${fees.filter(sf =>
+                sf.installment_id === f.installment_id &&
+                sf.id <= f.id &&
+                !((sf.description_prefix || '').startsWith('PARTIAL PAYMENT OF'))
+              ).length} of ${f.student_fee_installments.installment_count}`
             : null,
         bundle_name: f.student_fee_bundles?.bundle_name,
         deposit_trail: f.deposit_allocations.map((a) => ({

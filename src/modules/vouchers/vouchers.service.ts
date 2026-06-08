@@ -641,7 +641,12 @@ export class VouchersService {
         // Group by installment_id for sequence lookup
         const installmentGroups = new Map<number, any[]>();
         (studentInstallmentFees as any[]).forEach(f => {
-            if (f.installment_id) {
+            // 'PARTIAL PAYMENT OF...' rows are the paid half of a voucher split — their
+            // sibling 'BALANCE PAYMENT OF...' row keeps the original id/target_month and
+            // already occupies that installment's slot. Counting both would duplicate a
+            // slot and shift every later installment's sequence number ("X/Y") by one.
+            const isSplitPaidFragment = ((f.description_prefix ?? '') as string).startsWith('PARTIAL PAYMENT OF');
+            if (f.installment_id && !isSplitPaidFragment) {
                 if (!installmentGroups.has(f.installment_id)) installmentGroups.set(f.installment_id, []);
                 installmentGroups.get(f.installment_id)!.push(f);
             }
@@ -1202,6 +1207,10 @@ export class VouchersService {
                     .filter(f => {
                         const isStandalone = f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id;
                         if (!isStandalone) return false;
+                        // Split-paid fragments ('PARTIAL PAYMENT OF...') are the other half
+                        // of a 'BALANCE PAYMENT OF...' row that already represents this slot
+                        // in the history — listing both would show the same installment twice.
+                        if (((f.description_prefix ?? '') as string).startsWith('PARTIAL PAYMENT OF')) return false;
                         // Exclude only the installment(s) that are the current voucher month —
                         // those are already shown in the main fee columns.
                         // Past arrear installments and future installments all belong in the plan.
@@ -2400,6 +2409,13 @@ export class VouchersService {
                         fee_date: oldFee.fee_date,
                         amount_paid: totalPaidOnFee,
                         description_prefix: prefixPaid,
+                        // Keep this row attached to the original installment plan (if any) —
+                        // otherwise the paid portion silently drops out of the plan's head
+                        // list/total. installment_amount is deliberately left unset: it
+                        // stays on balanceSf as the full snapshot, so aggregates that sum
+                        // it (e.g. calculateFeeSuggestions) keep adding up to the original
+                        // total instead of double-counting across both halves.
+                        installment_id: oldFee.installment_id,
                     } as any,
                 });
 
