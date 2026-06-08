@@ -337,11 +337,17 @@ export class FamiliesService {
 
       // Enrichment: If the incoming student is missing a relationship that the family HAS, add it
       const incomingRels = new Set(incomingGuardians.map(g => g.relationship?.trim().toUpperCase()).filter(Boolean));
+      const incomingGuardianIds = new Set(incomingGuardians.map(g => g.guardian_id));
       for (const [rel, familyGuardians] of hostByRel.entries()) {
         if (!incomingRels.has(rel)) {
           // New student doesn't have this role (e.g. FATHER), but family does. Pick the best one.
           const bestFamilyG = familyGuardians.find(g => !isPlaceholder(g)) || familyGuardians[0];
           if (bestFamilyG && !isPlaceholder(bestFamilyG)) {
+             // Avoid primary key / unique constraint collision if the student is already linked to this guardian ID
+             if (incomingGuardianIds.has(bestFamilyG.guardian_id)) {
+               continue;
+             }
+             
              // Create link for the new student
              await tx.student_guardians.create({
                 data: {
@@ -352,6 +358,7 @@ export class FamiliesService {
                   is_emergency_contact: false,
                 }
              });
+             incomingGuardianIds.add(bestFamilyG.guardian_id);
           }
         }
       }
