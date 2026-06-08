@@ -28,6 +28,13 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Unlinked users retrieved successfully');
   }
 
+  @Get('next-code')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async getNextEmployeeCode() {
+    const data = await this.employeesService.getNextEmployeeCode();
+    return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
+  }
+
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   async findOne(@Param('id', ParseIntPipe) id: number) {

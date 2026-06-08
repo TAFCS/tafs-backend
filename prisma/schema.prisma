@@ -494,6 +494,7 @@ model students {
   cnic                       String?                    @unique @db.VarChar(15)
   not_pursuing               Boolean                    @default(false)
   attendance_roll_records    attendance_roll_records[]
+  audit_logs                 audit_logs[]
   deposits                   deposits[]
   postdated_cheques          postdated_cheques[]
   relatives_attending_tafs   relatives_attending_tafs[]
@@ -872,6 +873,7 @@ model employee_profiles {
   staff_type_id                      Int?
   campus_id                          Int?
   days_per_week                      Int?
+  photo_url                          String?
   attendance_staff_daily             attendance_staff_daily[]
   employee_class_section_assignments employee_class_section_assignments[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
@@ -897,11 +899,11 @@ model employee_class_section_assignments {
   employee_id       Int
   class_id          Int
   section_id        Int
-  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   classes           classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   sections          sections          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
-  @@unique([employee_id, class_id, section_id])
+  @@unique([employee_id, class_id, section_id], map: "employee_class_section_assignments_employee_id_class_id_se_key")
 }
 
 model academic_calendar_days {
@@ -1082,6 +1084,25 @@ model app_config {
   description String?  @db.VarChar(255)
   updated_at  DateTime @updatedAt @db.Timestamp(6)
   updated_by  String?  @db.VarChar(255)
+}
+
+model audit_logs {
+  id          Int       @id @default(autoincrement())
+  entity_type String    @db.VarChar(50)
+  entity_id   String    @db.VarChar(50)
+  action      String    @db.VarChar(50)
+  field       String?   @db.VarChar(100)
+  old_value   String?
+  new_value   String?
+  changed_by  String    @db.VarChar(255)
+  changed_at  DateTime  @default(now())
+  note        String?
+  student_id  Int?
+  students    students? @relation(fields: [student_id], references: [cc])
+
+  @@index([changed_at(sort: Desc)])
+  @@index([entity_type, entity_id])
+  @@index([student_id])
 }
 
 enum BulkJobStatus {

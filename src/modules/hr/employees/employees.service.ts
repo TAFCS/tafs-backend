@@ -1,41 +1,104 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import {
+  IsOptional, IsString, IsNumber, IsInt, IsArray,
+  ValidateNested, Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class ClassSectionAssignmentDto {
+  @IsInt()
   class_id: number;
+
+  @IsInt()
   section_id: number;
 }
 
 export class CreateEmployeeDto {
+  @IsOptional() @IsString()
   user_id?: string;
+
+  @IsOptional() @IsString()
   cnic?: string;
+
+  @IsOptional() @IsString()
   join_date?: string;
+
+  @IsOptional() @IsString()
   employment_type?: string;
+
+  @IsOptional() @IsInt()
   department_id?: number;
+
+  @IsOptional() @IsInt()
   designation_id?: number;
+
+  @IsOptional() @IsInt()
   reporting_manager_id?: number;
+
+  @IsOptional() @IsString()
   employee_code?: string;
+
+  @IsOptional() @IsString()
   full_name?: string;
+
+  @IsOptional() @IsString()
   father_name?: string;
+
+  @IsOptional() @IsString()
   mother_name?: string;
+
+  @IsOptional() @IsString()
   date_of_birth?: string;
+
+  @IsOptional() @IsString()
   address?: string;
+
+  @IsOptional() @IsString()
   personal_phone?: string;
+
+  @IsOptional() @IsString()
   personal_email?: string;
+
+  @IsOptional() @IsString()
   job_title?: string;
+
+  @IsOptional() @IsString()
   job_description?: string;
+
+  @IsOptional() @IsString()
   notes?: string;
+
+  @IsOptional() @IsString()
   reporting_time?: string;
+
+  @IsOptional() @IsString()
   leaving_time?: string;
+
+  @IsOptional() @IsInt() @Min(0)
   late_relaxation_minutes?: number;
+
+  @IsOptional() @IsNumber()
   monthly_pay?: number;
+
+  @IsOptional() @IsInt()
   staff_type_id?: number;
+
+  @IsOptional() @IsInt()
   campus_id?: number;
+
+  @IsOptional() @IsInt()
   days_per_week?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ClassSectionAssignmentDto)
   class_section_assignments?: ClassSectionAssignmentDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
+
 
 const includeRelations = {
   users: {
@@ -59,6 +122,23 @@ const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) 
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Throws ConflictException if employee_code is already taken by another record */
+  private async assertCodeAvailable(code: string, excludeId?: number) {
+    const existing = await this.prisma.employee_profiles.findFirst({
+      where: {
+        employee_code: { equals: code, mode: 'insensitive' },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: { id: true, full_name: true },
+    });
+    if (existing) {
+      const who = existing.full_name ? ` (${existing.full_name})` : '';
+      throw new ConflictException(
+        `Employee code "${code}" is already assigned to another employee${who}. Please choose a different code.`
+      );
+    }
+  }
+
   async findAll() {
     return this.prisma.employee_profiles.findMany({
       include: includeRelations
@@ -78,6 +158,11 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto) {
     const { class_section_assignments, ...rest } = dto;
+
+    // Check employee code uniqueness before insert
+    if (rest.employee_code) {
+      await this.assertCodeAvailable(rest.employee_code);
+    }
     return this.prisma.employee_profiles.create({
       data: {
         user_id: rest.user_id || null,
@@ -120,6 +205,11 @@ export class EmployeesService {
 
   async update(id: number, dto: UpdateEmployeeDto) {
     await this.findOne(id);
+
+    // Check code uniqueness, excluding this employee's own record
+    if (dto.employee_code) {
+      await this.assertCodeAvailable(dto.employee_code, id);
+    }
     const { class_section_assignments, ...rest } = dto;
 
     return this.prisma.$transaction(async (tx) => {
@@ -192,5 +282,27 @@ export class EmployeesService {
         role: true,
       }
     });
+  }
+
+  async getNextEmployeeCode(): Promise<{ code: string }> {
+    // Find all employee codes that match EMP-NNNN pattern and return next one
+    const employees = await this.prisma.employee_profiles.findMany({
+      select: { employee_code: true },
+      where: { employee_code: { not: null } },
+    });
+
+    let maxNum = 0;
+    for (const emp of employees) {
+      if (!emp.employee_code) continue;
+      const match = emp.employee_code.match(/^EMP-(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+
+    const nextNum = maxNum + 1;
+    const code = `EMP-${String(nextNum).padStart(4, '0')}`;
+    return { code };
   }
 }

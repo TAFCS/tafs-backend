@@ -71,6 +71,29 @@ export class MediaController {
     return this.mediaService.uploadGuardianPhoto(id, file);
   }
 
+  @Post('employee/:id/photo')
+  @ApiOperation({ summary: 'Upload employee profile photo' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadEmployeePhoto(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    return this.mediaService.uploadEmployeePhoto(id, file);
+  }
+
   @Get('proxy')
   @ApiOperation({ summary: 'Proxy an image from the CDN to bypass CORS' })
   async getProxy(

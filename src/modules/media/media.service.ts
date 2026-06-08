@@ -45,6 +45,23 @@ export class MediaService {
     return { url };
   }
 
+  async uploadEmployeePhoto(id: number, file: Express.Multer.File) {
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
+
+    const extension = file.originalname.split('.').pop() || 'jpg';
+    const key = `media/employees/${id}/profile-${Date.now()}.${extension}`;
+
+    const url = await this.storage.upload(key, file.buffer, file.mimetype);
+
+    await this.prisma.employee_profiles.update({
+      where: { id },
+      data: { photo_url: url },
+    });
+
+    return { url };
+  }
+
   async getPhotoBuffer(url: string) {
     // Extract the key from the full CDN URL
     const key = this.storage.extractKeyFromUrl(url);

@@ -1,19 +1,52 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 
+import { IsString, IsOptional, IsBoolean, MinLength, MaxLength } from 'class-validator';
+
 export class CreateStaffTypeDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
   code: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
   name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
   description?: string;
+
+  @IsOptional()
+  @IsBoolean()
   is_active?: boolean;
 }
 
 export class UpdateStaffTypeDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
   code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
   name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
   description?: string;
+
+  @IsOptional()
+  @IsBoolean()
   is_active?: boolean;
 }
+
 
 @Injectable()
 export class StaffTypesService {
