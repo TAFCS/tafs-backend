@@ -1009,6 +1009,16 @@ model attendance_staff_daily {
   @@index([date, campus_id])
 }
 
+model zk_push_logs {
+  id          Int      @id @default(autoincrement())
+  sn          String   @db.VarChar(100)
+  raw_payload Json
+  received_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([sn])
+  @@index([received_at(sort: Desc)])
+}
+
 model postdated_cheques {
   id               Int                   @id @default(autoincrement())
   student_id       Int
