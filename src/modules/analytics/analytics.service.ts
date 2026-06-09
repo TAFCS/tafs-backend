@@ -197,6 +197,7 @@ export class AnalyticsService {
     };
 
     const trends: any[] = [];
+    const feedate_trends: any[] = [];
     for (let offset = MONTHS_TO_SHOW - 1; offset >= 0; offset--) {
       const ref = new Date(today.getFullYear(), today.getMonth() - offset, 1);
       const calYear = ref.getFullYear();
@@ -208,7 +209,7 @@ export class AnalyticsService {
       const startDate = new Date(calYear, jsMonth, 1);
       const endDate = new Date(calYear, jsMonth + 1, 0, 23, 59, 59, 999);
 
-      const [dueFeeAgg, dueSurchargeAgg, receivedAgg] = await Promise.all([
+      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg] = await Promise.all([
         this.prisma.student_fees.aggregate({
           where: {
             target_month: monthNum,
@@ -233,6 +234,18 @@ export class AnalyticsService {
           },
           _sum: { total_amount: true },
         }),
+        // fee_date-based view: all heads whose fee_date falls in this calendar
+        // month, regardless of which target_month they were originally for.
+        // amount_paid tracks how much of that voucher cycle has since been settled.
+        this.prisma.student_fees.aggregate({
+          where: {
+            fee_date: { gte: startDate, lte: endDate },
+            is_discount: false,
+            is_arrear_surcharge: false,
+            ...feeFilter,
+          },
+          _sum: { amount: true, amount_paid: true },
+        }),
       ]);
 
       const due = Number(dueFeeAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
@@ -243,6 +256,16 @@ export class AnalyticsService {
         due,
         received,
         gap: due - received,
+      });
+
+      const fd_due = Number(feeDateAgg._sum?.amount || 0);
+      const fd_collected = Number(feeDateAgg._sum?.amount_paid || 0);
+
+      feedate_trends.push({
+        month: label,
+        due: fd_due,
+        collected: fd_collected,
+        gap: fd_due - fd_collected,
       });
     }
 
@@ -263,6 +286,7 @@ export class AnalyticsService {
       },
       campuses: campusesList,
       trends,
+      feedate_trends,
       postdated_cheques: postdatedCheques,
     };
   }
