@@ -7,15 +7,18 @@ import { RollCallAnnouncementsService } from './roll-call-announcements.service'
 import { RollSessionsSchedulerService } from './roll-sessions-scheduler.service';
 import { StaffAttendanceController } from './staff-attendance.controller';
 import { StaffAttendanceService } from './staff-attendance.service';
+import { ZkPushController } from './zk-push.controller';
+import { ZkPushService } from './zk-push.service';
 
 @Module({
   imports: [AuthModule, ChatModule],
-  controllers: [RollSessionsController, StaffAttendanceController],
+  controllers: [RollSessionsController, StaffAttendanceController, ZkPushController],
   providers: [
     RollSessionsService,
     RollCallAnnouncementsService,
     RollSessionsSchedulerService,
     StaffAttendanceService,
+    ZkPushService,
   ],
   exports: [RollSessionsService, StaffAttendanceService],
 })
