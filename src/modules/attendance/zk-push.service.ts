@@ -8,19 +8,21 @@ export class ZkPushService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async handlePush(payload: Record<string, unknown>): Promise<{ result: string }> {
-    const sn = typeof payload['sn'] === 'string' ? payload['sn'] : 'unknown';
-
+  async handlePush(payload: {
+    sn: string;
+    query: Record<string, string>;
+    body: string;
+  }): Promise<void> {
     try {
       await this.prisma.zk_push_logs.create({
-        data: { sn, raw_payload: payload as Prisma.InputJsonValue },
+        data: {
+          sn: payload.sn,
+          raw_payload: payload as unknown as Prisma.InputJsonValue,
+        },
       });
     } catch (err: any) {
-      this.logger.error(`Failed to log ZK push from ${sn}: ${err.message}`);
+      this.logger.error(`Failed to log ZK push from ${payload.sn}: ${err.message}`);
     }
-
-    // Always return OK — if we return an error, the device retries endlessly
-    return { result: 'OK' };
   }
 
   async getLogs(sn?: string) {

@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 // Triggering reload to connect to Redis service
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import * as express from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
@@ -43,7 +44,16 @@ async function bootstrap() {
     );
   }
 
-  app.setGlobalPrefix('api/v1');
+  // Parse ZKTeco device bodies as raw text before NestJS touches them
+  app.use('/iclock', express.text({ type: '*/*', limit: '1mb' }));
+
+  app.setGlobalPrefix('api/v1', {
+    exclude: [
+      { path: 'iclock/cdata', method: RequestMethod.GET },
+      { path: 'iclock/cdata', method: RequestMethod.POST },
+      { path: 'iclock/getrequest', method: RequestMethod.GET },
+    ],
+  });
 
   // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;
