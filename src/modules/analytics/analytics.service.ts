@@ -89,8 +89,8 @@ export class AnalyticsService {
     const expected = Number(feeAgg._sum?.amount || 0) + Number(surchargeAgg._sum?.amount || 0);
     const collectedToDate = Number(feeAgg._sum?.amount_paid || 0) + Number(surchargeAgg._sum?.amount_paid || 0);
     const outstanding = expected - collectedToDate;
-    const collectionRate = expected > 0 ? (collectedToDate / expected) * 100 : 0;
     const collected = Number(cashAgg._sum?.total_amount || 0);
+    const collectionRate = expected > 0 ? (collected / expected) * 100 : 0;
 
     // 2. Arrears — amounts genuinely past their due date and still unpaid,
     // as of today. (NOT "a different academic_year string": arrears in this
@@ -209,7 +209,7 @@ export class AnalyticsService {
       const startDate = new Date(calYear, jsMonth, 1);
       const endDate = new Date(calYear, jsMonth + 1, 0, 23, 59, 59, 999);
 
-      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg] = await Promise.all([
+      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg, overdueTargetAgg, overdueFeedateAgg] = await Promise.all([
         this.prisma.student_fees.aggregate({
           where: {
             target_month: monthNum,
@@ -220,12 +220,14 @@ export class AnalyticsService {
           },
           _sum: { amount: true },
         }),
+        // Surcharges on vouchers issued this calendar month — reused for both
+        // trends.due and feedate_trends.due since both group by the voucher's fee_date.
         this.prisma.voucher_arrear_surcharges.aggregate({
           where: {
             waived: false,
             vouchers: { fee_date: { gte: startDate, lte: endDate }, students: studentFilter },
           },
-          _sum: { amount: true },
+          _sum: { amount: true, amount_paid: true },
         }),
         this.prisma.deposits.aggregate({
           where: {
@@ -246,26 +248,62 @@ export class AnalyticsService {
           },
           _sum: { amount: true, amount_paid: true },
         }),
+        // Overdue by target_month: heads originally for this month that are
+        // still unpaid and past their due_date.
+        this.prisma.student_fees.aggregate({
+          where: {
+            target_month: monthNum,
+            academic_year: ay,
+            status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
+            due_date: { lt: today },
+            is_discount: false,
+            is_arrear_surcharge: false,
+            ...feeFilter,
+          },
+          _sum: { amount: true, amount_paid: true },
+        }),
+        // Overdue by fee_date: heads from this billing cycle that are unpaid
+        // and past their due_date.
+        this.prisma.student_fees.aggregate({
+          where: {
+            fee_date: { gte: startDate, lte: endDate },
+            status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
+            due_date: { lt: today },
+            is_discount: false,
+            is_arrear_surcharge: false,
+            ...feeFilter,
+          },
+          _sum: { amount: true, amount_paid: true },
+        }),
       ]);
 
       const due = Number(dueFeeAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
       const received = Number(receivedAgg._sum?.total_amount || 0);
+      const overdue_target = Math.max(0,
+        Number(overdueTargetAgg._sum?.amount || 0) - Number(overdueTargetAgg._sum?.amount_paid || 0),
+      );
 
       trends.push({
         month: label,
         due,
         received,
         gap: due - received,
+        overdue: overdue_target,
       });
 
-      const fd_due = Number(feeDateAgg._sum?.amount || 0);
-      const fd_collected = Number(feeDateAgg._sum?.amount_paid || 0);
+      // feedate due includes surcharges on vouchers issued this month (same dueSurchargeAgg)
+      const fd_due = Number(feeDateAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
+      const fd_collected = Number(feeDateAgg._sum?.amount_paid || 0) + Number(dueSurchargeAgg._sum?.amount_paid || 0);
+      const fd_overdue = Math.max(0,
+        Number(overdueFeedateAgg._sum?.amount || 0) - Number(overdueFeedateAgg._sum?.amount_paid || 0),
+      );
 
       feedate_trends.push({
         month: label,
         due: fd_due,
         collected: fd_collected,
         gap: fd_due - fd_collected,
+        overdue: fd_overdue,
       });
     }
 
