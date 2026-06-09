@@ -19,6 +19,7 @@ import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 
@@ -104,9 +105,10 @@ export class VouchersService {
         private readonly storage: StorageService,
         private readonly pdfService: VoucherPdfService,
         private readonly bulkLogic: BulkVoucherLogicService,
+        private readonly auditLogs: AuditLogsService,
     ) { }
 
-    async create(dto: CreateVoucherDto, pdfBuffer?: Buffer) {
+    async create(dto: CreateVoucherDto, pdfBuffer?: Buffer, changedBy: string = 'system') {
         // --- Temporary Debug Check for orderedFeeIds ---
         if (!dto.orderedFeeIds || dto.orderedFeeIds.length === 0) {
             throw new BadRequestException({
@@ -310,7 +312,7 @@ export class VouchersService {
             const totalBeforeDueWithSurcharge = totalBeforeDueDecimal.add(activeSurchargeTotal);
             const totalAfterDueDecimal = totalBeforeDueWithSurcharge.add(lateFeeVal);
 
-            await tx.vouchers.update({
+            const updatedVoucher = await tx.vouchers.update({
                 where: { id: newVoucher.id },
                 data: {
                     total_payable_before_due: totalBeforeDueWithSurcharge,
@@ -318,6 +320,7 @@ export class VouchersService {
                     total_arrears: totalArrearsDecimal,
                     voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
                 },
+                include: VOUCHER_INCLUDE,
             });
 
             // 5a. Write voucher_arrear_surcharges rows (one per distinct arrear month)
@@ -396,8 +399,10 @@ export class VouchersService {
                 }
             }
 
-            return newVoucher;
+            return updatedVoucher;
         }, { timeout: 15000 });
+
+        let finalVoucher = voucher;
 
         // 6. Upload PDF if provided (Outside transaction to avoid timeout)
         if (pdfBuffer) {
@@ -419,15 +424,36 @@ export class VouchersService {
                     include: VOUCHER_INCLUDE,
                 });
 
-                return updatedVoucher;
+                finalVoucher = updatedVoucher;
             } catch (error) {
                 this.logger.error(`Failed to upload PDF for voucher ${voucher.id}: ${(error as Error).message}`);
-                // Return the voucher anyway as the DB records are already committed
-                return voucher;
+                // Use the committed voucher anyway
             }
         }
 
-        return voucher;
+        const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const monthLabel = finalVoucher.month ? months[finalVoucher.month - 1] : null;
+        const amountStr = finalVoucher.total_payable_before_due ? `Rs. ${Number(finalVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
+        const issueDateStr = finalVoucher.issue_date ? new Date(finalVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+        
+        const logNote = [
+            `Voucher #${finalVoucher.id} (no. ${finalVoucher.voucher_number || 'N/A'}) created.`,
+            `Amount: ${amountStr}`,
+            `Issue Date: ${issueDateStr}`,
+            monthLabel ? `Month: ${monthLabel}` : null,
+            finalVoucher.academic_year ? `AY: ${finalVoucher.academic_year}` : null,
+        ].filter(Boolean).join(' | ');
+
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(finalVoucher.id),
+            action: 'CREATED',
+            changed_by: changedBy,
+            student_id: dto.student_id,
+            note: logNote,
+        });
+
+        return finalVoucher;
     }
 
 
@@ -1383,7 +1409,7 @@ export class VouchersService {
         });
     }
 
-    async recordDeposit(voucherId: number, dto: RecordVoucherDepositDto) {
+    async recordDeposit(voucherId: number, dto: RecordVoucherDepositDto, changedBy: string = 'system') {
         const depositAmount = new Prisma.Decimal(dto.amount);
         const lateFeeAmount = new Prisma.Decimal(dto.late_fee ?? 0);
         const distributionEntries = Object.entries(dto.distributions ?? {})
@@ -1521,6 +1547,8 @@ export class VouchersService {
             );
         }
 
+        let createdDepositId: number | undefined;
+
         // 2. LEAN TRANSACTION
         await this.prisma.$transaction(
             async (tx) => {
@@ -1630,6 +1658,7 @@ export class VouchersService {
                         reference_number: dto.reference_number ?? null,
                     },
                 });
+                createdDepositId = depositRecord.id;
 
                 // One allocation per non-zero head distribution
                 const allocationData: {
@@ -1830,6 +1859,17 @@ export class VouchersService {
             { timeout: 30000 },
         );
 
+        if (createdDepositId) {
+            await this.auditLogs.log({
+                entity_type: 'DEPOSIT',
+                entity_id: String(createdDepositId),
+                action: 'CREATED',
+                changed_by: changedBy,
+                student_id: voucher.student_id,
+                note: `Deposit of Rs. ${depositAmount.toFixed(2)} registered (Ref: ${dto.reference_number || 'N/A'}, Method: ${dto.payment_method || 'N/A'}) against Voucher #${voucherId}.`,
+            });
+        }
+
         // 3. FINAL FULL FETCH
         return this.findOne(voucherId);
     }
@@ -1848,7 +1888,7 @@ export class VouchersService {
      * specified voucher are deleted. The deposits record only gets deleted if no
      * allocations remain after this targeted deletion.
      */
-    async reverseDeposit(depositId: number) {
+    async reverseDeposit(depositId: number, changedBy: string = 'system') {
         const deposit = await this.prisma.deposits.findUnique({
             where: { id: depositId },
             include: { deposit_allocations: true },
@@ -1908,10 +1948,19 @@ export class VouchersService {
             await tx.deposits.delete({ where: { id: depositId } });
         }, { timeout: 15000 });
 
+        await this.auditLogs.log({
+            entity_type: 'DEPOSIT',
+            entity_id: String(depositId),
+            action: 'DELETED',
+            changed_by: changedBy,
+            student_id: deposit.student_id,
+            note: `Deposit of Rs. ${new Prisma.Decimal(deposit.total_amount).toFixed(2)} reversed/deleted (Ref: ${deposit.reference_number || 'N/A'}).`,
+        });
+
         return { reversed: true, deposit_id: depositId };
     }
 
-    async clearDeposit(voucherId: number, depositId: number) {
+    async clearDeposit(voucherId: number, depositId: number, changedBy: string = 'system') {
         // Fetch with full include so the PAID path can run the deletion logic.
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
@@ -1921,6 +1970,10 @@ export class VouchersService {
         if (!voucher) {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
+
+        const deposit = await this.prisma.deposits.findUnique({
+            where: { id: depositId },
+        });
 
         const isPaidVoucher = voucher.status === 'PAID';
 
@@ -2011,6 +2064,17 @@ export class VouchersService {
                 });
             }
         }, { timeout: 15000 });
+
+        if (deposit) {
+            await this.auditLogs.log({
+                entity_type: 'DEPOSIT',
+                entity_id: String(depositId),
+                action: 'DELETED',
+                changed_by: changedBy,
+                student_id: voucher.student_id,
+                note: `Deposit of Rs. ${new Prisma.Decimal(deposit.total_amount).toFixed(2)} cleared/reversed (Ref: ${deposit.reference_number || 'N/A'}) against Voucher #${voucherId}.`,
+            });
+        }
 
         // Voucher was deleted — nothing to fetch back.
         if (isPaidVoucher) return null;
@@ -2167,6 +2231,7 @@ export class VouchersService {
     async splitPartiallyPaid(
         voucherId: number,
         dto: SplitPartiallyPaidDto,
+        changedBy: string = 'system',
     ) {
         const original = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
@@ -2766,6 +2831,76 @@ export class VouchersService {
             this.prisma.vouchers.update({ where: { id: unpaidVoucher.id }, data: { pdf_url: uUrl } }),
         ]);
 
+        try {
+            const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            const monthLabel = original.month ? months[original.month - 1] : null;
+
+            const paidAmtStr = paidVoucher.total_payable_before_due ? `Rs. ${Number(paidVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
+            const paidIssueStr = paidVoucher.issue_date ? new Date(paidVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+
+            const unpaidAmtStr = unpaidVoucher.total_payable_before_due ? `Rs. ${Number(unpaidVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
+            const unpaidIssueStr = unpaidVoucher.issue_date ? new Date(unpaidVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+
+            const originalAmtStr = original.total_payable_before_due ? `Rs. ${Number(original.total_payable_before_due).toLocaleString()}` : 'N/A';
+            const originalIssueStr = original.issue_date ? new Date(original.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+
+            const voidNote = [
+                `Voucher #${voucherId} split into PAID #${paidVoucher.id} and UNPAID #${unpaidVoucher.id} and marked VOID.`,
+                `Original Amount: ${originalAmtStr}`,
+                `Original Issue Date: ${originalIssueStr}`,
+                monthLabel ? `Month: ${monthLabel}` : null,
+                original.academic_year ? `AY: ${original.academic_year}` : null,
+            ].filter(Boolean).join(' | ');
+
+            const paidNote = [
+                `Paid Voucher #${paidVoucher.id} created from split of Voucher #${voucherId}.`,
+                `Amount: ${paidAmtStr}`,
+                `Issue Date: ${paidIssueStr}`,
+                monthLabel ? `Month: ${monthLabel}` : null,
+                paidVoucher.academic_year ? `AY: ${paidVoucher.academic_year}` : null,
+            ].filter(Boolean).join(' | ');
+
+            const unpaidNote = [
+                `Balance Voucher #${unpaidVoucher.id} created from split of Voucher #${voucherId}.`,
+                `Amount: ${unpaidAmtStr}`,
+                `Issue Date: ${unpaidIssueStr}`,
+                monthLabel ? `Month: ${monthLabel}` : null,
+                unpaidVoucher.academic_year ? `AY: ${unpaidVoucher.academic_year}` : null,
+            ].filter(Boolean).join(' | ');
+
+            await Promise.all([
+                this.auditLogs.log({
+                    entity_type: 'VOUCHER',
+                    entity_id: String(voucherId),
+                    action: 'UPDATED',
+                    field: 'status',
+                    old_value: 'PARTIALLY_PAID',
+                    new_value: 'VOID',
+                    changed_by: changedBy,
+                    student_id: original.student_id,
+                    note: voidNote,
+                }),
+                this.auditLogs.log({
+                    entity_type: 'VOUCHER',
+                    entity_id: String(paidVoucher.id),
+                    action: 'CREATED',
+                    changed_by: changedBy,
+                    student_id: original.student_id,
+                    note: paidNote,
+                }),
+                this.auditLogs.log({
+                    entity_type: 'VOUCHER',
+                    entity_id: String(unpaidVoucher.id),
+                    action: 'CREATED',
+                    changed_by: changedBy,
+                    student_id: original.student_id,
+                    note: unpaidNote,
+                }),
+            ]);
+        } catch (logErr) {
+            this.logger.error(`Failed to write audit logs for split voucher: ${(logErr as Error).message}`);
+        }
+
         return {
             paid_voucher_id: paidVoucher.id,
             unpaid_voucher_id: unpaidVoucher.id,
@@ -3345,7 +3480,7 @@ export class VouchersService {
         return tx.vouchers.delete({ where: { id } });
     }
 
-    async remove(id: number) {
+    async remove(id: number, changedBy: string = 'system') {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
             include: { voucher_heads: { include: { student_fees: true } } },
@@ -3365,10 +3500,21 @@ export class VouchersService {
             );
         }
 
-        return this.prisma.$transaction(
+        const result = await this.prisma.$transaction(
             (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID'),
             { maxWait: 5000, timeout: 15000 },
         );
+
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(id),
+            action: 'DELETED',
+            changed_by: changedBy,
+            student_id: voucher.student_id,
+            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) deleted/voided.`,
+        });
+
+        return result;
     }
 
     async batchPreview(dto: BatchPreviewDto) {

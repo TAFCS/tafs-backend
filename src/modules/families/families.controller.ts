@@ -22,6 +22,9 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+
 @Controller('families')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class FamiliesController {
@@ -90,12 +93,14 @@ export class FamiliesController {
   async assignChild(
     @Param('id', ParseIntPipe) familyId: number,
     @Body() dto: AssignStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     // eslint-disable-next-line no-console
     console.log(`[FamiliesController] familyId: ${familyId}, Raw Body: ${JSON.stringify(dto)}`);
     const student = await this.familiesService.assignChildToFamily(
       familyId,
       dto.student_id,
+      user.username,
     );
     return {
       success: true,

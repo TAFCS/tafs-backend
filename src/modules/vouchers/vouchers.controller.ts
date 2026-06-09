@@ -65,7 +65,8 @@ export class VouchersController {
         if (dto.waive_surcharge && !dto.waived_by) {
             dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
         }
-        const voucher = await this.vouchersService.create(dto, pdf?.buffer);
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.create(dto, pdf?.buffer, changedBy);
         return {
             success: true,
             message: 'Voucher created successfully',
@@ -197,8 +198,10 @@ export class VouchersController {
     async recordDeposit(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: RecordVoucherDepositDto,
+        @Req() req: any,
     ) {
-        const voucher = await this.vouchersService.recordDeposit(id, dto);
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.recordDeposit(id, dto, changedBy);
         return {
             success: true,
             message: 'Voucher deposit recorded successfully',
@@ -217,8 +220,10 @@ export class VouchersController {
     async clearDeposit(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: ClearDepositDto,
+        @Req() req: any,
     ) {
-        const voucher = await this.vouchersService.clearDeposit(id, dto.depositId);
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.clearDeposit(id, dto.depositId, changedBy);
         return {
             success: true,
             message: voucher === null
@@ -265,8 +270,10 @@ export class VouchersController {
     async splitPartiallyPaid(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: SplitPartiallyPaidDto,
+        @Req() req: any,
     ) {
-        const result = await this.vouchersService.splitPartiallyPaid(id, dto);
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.splitPartiallyPaid(id, dto, changedBy);
         return {
             success: true,
             message: 'Voucher split into paid and unpaid records successfully.',
@@ -402,8 +409,9 @@ export class VouchersController {
             ability.can(Action.Delete, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async remove(@Param('id', ParseIntPipe) id: number) {
-        const result = await this.vouchersService.remove(id);
+    async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.remove(id, changedBy);
         return {
             success: true,
             message: 'Voucher deleted and fee heads reset successfully.',

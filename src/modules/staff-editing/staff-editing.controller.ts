@@ -10,6 +10,7 @@ import {
   ParseIntPipe,
   HttpStatus,
   HttpCode,
+  UseGuards,
 } from '@nestjs/common';
 import { StaffEditingService } from './staff-editing.service';
 import { GetSheetStudentsDto } from './dto/get-sheet-students.dto';
@@ -20,8 +21,12 @@ import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationshi
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('staff-editing')
+@UseGuards(JwtStaffGuard)
 export class StaffEditingController {
   constructor(private readonly staffEditingService: StaffEditingService) {}
 
@@ -51,8 +56,9 @@ export class StaffEditingController {
   async updateStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.staffEditingService.updateStudent(id, dto);
+    const student = await this.staffEditingService.updateStudent(id, dto, user.username);
     return createApiResponse(
       student,
       HttpStatus.OK,
@@ -73,9 +79,10 @@ export class StaffEditingController {
   @Patch('students/:id/family-address')
   async updateFamilyAddress(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any, // Using any temporarily or import DTO
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const result = await this.staffEditingService.updateFamilyAddress(id, dto);
+    const result = await this.staffEditingService.updateFamilyAddress(id, dto, user.username);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -102,10 +109,12 @@ export class StaffEditingController {
   async addGuardianToStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: CreateGuardianDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     const guardian = await this.staffEditingService.addGuardianToStudent(
       studentId,
       dto,
+      user.username,
     );
     return createApiResponse(
       guardian,
@@ -118,10 +127,12 @@ export class StaffEditingController {
   async linkExistingGuardian(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: LinkExistingGuardianDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     const guardian = await this.staffEditingService.linkExistingGuardian(
       studentId,
       dto,
+      user.username,
     );
     return createApiResponse(
       guardian,
@@ -135,11 +146,13 @@ export class StaffEditingController {
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
     @Body() dto: UpdateGuardianRelationshipDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     const result = await this.staffEditingService.updateGuardianRelationship(
       studentId,
       guardianId,
       dto,
+      user.username,
     );
     return createApiResponse(
       result,
@@ -153,10 +166,12 @@ export class StaffEditingController {
   async removeGuardianFromStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.removeGuardianFromStudent(
       studentId,
       guardianId,
+      user.username,
     );
     return createApiResponse(
       null,
@@ -181,8 +196,9 @@ export class StaffEditingController {
   async updateGuardian(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateGuardianDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const guardian = await this.staffEditingService.updateGuardian(id, dto);
+    const guardian = await this.staffEditingService.updateGuardian(id, dto, user.username);
     return createApiResponse(
       guardian,
       HttpStatus.OK,
@@ -249,6 +265,7 @@ export class StaffEditingController {
     await this.staffEditingService.deletePreviousSchool(id);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
+
   @Post('students/:id/alevel-details')
   async upsertALevelDetails(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
     return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto), HttpStatus.OK, 'Saved');

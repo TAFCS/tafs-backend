@@ -9,9 +9,14 @@ import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationshi
 import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+
 @Injectable()
 export class StaffEditingService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) { }
 
   // ─── Date Helpers ─────────────────────────────────────────────────────────
 
@@ -276,7 +281,7 @@ export class StaffEditingService {
     return this.flattenStudentFull(s);
   }
 
-  async updateStudent(cc: number, dto: UpdateStudentDto) {
+  async updateStudent(cc: number, dto: UpdateStudentDto, changedBy: string) {
     const {
       dob,
       doa,
@@ -300,6 +305,61 @@ export class StaffEditingService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
+        // Fetch existing record first for diff logging
+        const existing = await tx.students.findUnique({
+          where: { cc },
+        });
+        if (!existing) {
+          throw new NotFoundException(`Student #${cc} not found`);
+        }
+
+        // Log student field changes
+        const TRACKED_STUDENT_FIELDS = [
+          'full_name', 'cnic', 'gender', 'nationality', 'religion',
+          'place_of_birth', 'identification_marks', 'medical_info',
+          'interests', 'country', 'province', 'city', 'whatsapp_number',
+          'primary_phone', 'email', 'campus_id', 'class_id', 'section_id',
+          'house_id', 'academic_year', 'gr_number', 'status', 'is_complementary',
+          'is_fee_endowment'
+        ];
+
+        for (const field of TRACKED_STUDENT_FIELDS) {
+          if ((dto as any)[field] !== undefined) {
+            let oldVal: string | null = null;
+            let newVal: string | null = null;
+
+            if (field === 'dob' || field === 'doa') {
+              const oldDate = (existing as any)[field];
+              const newDateStr = (dto as any)[field];
+              const newDate = newDateStr ? new Date(newDateStr) : null;
+              if (oldDate?.getTime() !== newDate?.getTime()) {
+                oldVal = oldDate ? oldDate.toISOString().split('T')[0] : null;
+                newVal = newDate ? newDate.toISOString().split('T')[0] : null;
+              }
+            } else {
+              const oldRaw = (existing as any)[field];
+              const newRaw = (dto as any)[field];
+              if (String(oldRaw ?? '') !== String(newRaw ?? '')) {
+                oldVal = oldRaw !== null && oldRaw !== undefined ? String(oldRaw) : null;
+                newVal = newRaw !== null && newRaw !== undefined ? String(newRaw) : null;
+              }
+            }
+
+            if (oldVal !== null || newVal !== null) {
+              await this.auditLogs.log({
+                entity_type: 'STUDENT',
+                entity_id: String(cc),
+                action: 'UPDATED',
+                field: `student.${field}`,
+                old_value: oldVal,
+                new_value: newVal,
+                changed_by: changedBy,
+                student_id: cc,
+              });
+            }
+          }
+        }
+
         // 1. Update student fields
         if (Object.keys(studentData).length > 0) {
           await tx.students.update({
@@ -332,6 +392,35 @@ export class StaffEditingService {
             const guardianUpdate: any = {};
             if (father_name !== undefined) guardianUpdate.full_name = father_name;
             if (father_cnic !== undefined) guardianUpdate.cnic = fCnicNormalized;
+
+            const existingFather = await tx.guardians.findUnique({ where: { id: fatherLink.guardian_id } });
+            if (existingFather) {
+              if (father_name !== undefined && String(existingFather.full_name ?? '') !== String(father_name)) {
+                await this.auditLogs.log({
+                  entity_type: 'GUARDIAN',
+                  entity_id: String(existingFather.id),
+                  action: 'UPDATED',
+                  field: 'guardian.full_name',
+                  old_value: existingFather.full_name,
+                  new_value: father_name,
+                  changed_by: changedBy,
+                  student_id: cc,
+                });
+              }
+              if (father_cnic !== undefined && String(existingFather.cnic ?? '') !== String(fCnicNormalized ?? '')) {
+                await this.auditLogs.log({
+                  entity_type: 'GUARDIAN',
+                  entity_id: String(existingFather.id),
+                  action: 'UPDATED',
+                  field: 'guardian.cnic',
+                  old_value: existingFather.cnic,
+                  new_value: fCnicNormalized,
+                  changed_by: changedBy,
+                  student_id: cc,
+                });
+              }
+            }
+
             await tx.guardians.update({
               where: { id: fatherLink.guardian_id },
               data: guardianUpdate,
@@ -354,6 +443,15 @@ export class StaffEditingService {
               update: { relationship: 'FATHER' },
               create: { student_id: cc, guardian_id: guardian.id, relationship: 'FATHER' },
             });
+
+            await this.auditLogs.log({
+              entity_type: 'GUARDIAN',
+              entity_id: String(guardian.id),
+              action: 'CREATED',
+              changed_by: changedBy,
+              student_id: cc,
+              note: `Created/linked Father guardian for student #${cc}`,
+            });
           }
         }
 
@@ -367,6 +465,35 @@ export class StaffEditingService {
             const guardianUpdate: any = {};
             if (mother_name !== undefined) guardianUpdate.full_name = mother_name;
             if (mother_cnic !== undefined) guardianUpdate.cnic = mCnicNormalized;
+
+            const existingMother = await tx.guardians.findUnique({ where: { id: motherLink.guardian_id } });
+            if (existingMother) {
+              if (mother_name !== undefined && String(existingMother.full_name ?? '') !== String(mother_name)) {
+                await this.auditLogs.log({
+                  entity_type: 'GUARDIAN',
+                  entity_id: String(existingMother.id),
+                  action: 'UPDATED',
+                  field: 'guardian.full_name',
+                  old_value: existingMother.full_name,
+                  new_value: mother_name,
+                  changed_by: changedBy,
+                  student_id: cc,
+                });
+              }
+              if (mother_cnic !== undefined && String(existingMother.cnic ?? '') !== String(mCnicNormalized ?? '')) {
+                await this.auditLogs.log({
+                  entity_type: 'GUARDIAN',
+                  entity_id: String(existingMother.id),
+                  action: 'UPDATED',
+                  field: 'guardian.cnic',
+                  old_value: existingMother.cnic,
+                  new_value: mCnicNormalized,
+                  changed_by: changedBy,
+                  student_id: cc,
+                });
+              }
+            }
+
             await tx.guardians.update({
               where: { id: motherLink.guardian_id },
               data: guardianUpdate,
@@ -388,6 +515,15 @@ export class StaffEditingService {
               where: { student_id_guardian_id: { student_id: cc, guardian_id: guardian.id } },
               update: { relationship: 'MOTHER' },
               create: { student_id: cc, guardian_id: guardian.id, relationship: 'MOTHER' },
+            });
+
+            await this.auditLogs.log({
+              entity_type: 'GUARDIAN',
+              entity_id: String(guardian.id),
+              action: 'CREATED',
+              changed_by: changedBy,
+              student_id: cc,
+              note: `Created/linked Mother guardian for student #${cc}`,
             });
           }
         }
@@ -462,7 +598,7 @@ export class StaffEditingService {
 
   // ─── Guardians ────────────────────────────────────────────────────────────
 
-  async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto) {
+  async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto, changedBy: string) {
     const { bulk_sync, ...addressData } = dto;
     
     // Find the current student's links
@@ -472,13 +608,26 @@ export class StaffEditingService {
     });
     const currentGuardianIds = currentLinks.map(l => l.guardian_id);
 
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: { family_id: true }
+    });
+    const familyId = student?.family_id;
+
+    // Log the family address change
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: familyId ? String(familyId) : String(studentCc),
+      action: 'UPDATED',
+      field: 'family.address',
+      new_value: `Updated address to: ${dto.house_appt_name || ''}, ${dto.city || ''}`,
+      changed_by: changedBy,
+      student_id: studentCc,
+      note: bulk_sync ? 'Bulk synced to all family members' : 'Individual update',
+    });
+
     if (bulk_sync) {
       return this.prisma.$transaction(async (tx) => {
-        const student = await tx.students.findUnique({
-          where: { cc: studentCc },
-          select: { family_id: true }
-        });
-
         if (student?.family_id) {
           await tx.families.update({
             where: { id: student.family_id },
@@ -559,7 +708,7 @@ export class StaffEditingService {
     }));
   }
 
-  async addGuardianToStudent(studentCc: number, dto: CreateGuardianDto) {
+  async addGuardianToStudent(studentCc: number, dto: CreateGuardianDto, changedBy: string) {
     await this.assertStudentExists(studentCc);
 
     const { relationship, is_primary_contact = false, is_emergency_contact = false, ...guardianFields } = dto;
@@ -619,6 +768,15 @@ export class StaffEditingService {
       create: { student_id: studentCc, guardian_id: guardian.id, ...joinData },
     });
 
+    await this.auditLogs.log({
+      entity_type: 'GUARDIAN',
+      entity_id: String(guardian.id),
+      action: 'CREATED',
+      changed_by: changedBy,
+      student_id: studentCc,
+      note: `Added/linked guardian (${relationship}) to student #${studentCc}`,
+    });
+
     return {
       guardian_id: guardian.id,
       relationship,
@@ -629,7 +787,7 @@ export class StaffEditingService {
     };
   }
 
-  async linkExistingGuardian(studentCc: number, dto: LinkExistingGuardianDto) {
+  async linkExistingGuardian(studentCc: number, dto: LinkExistingGuardianDto, changedBy: string) {
     await this.assertStudentExists(studentCc);
 
     const { guardian_id, relationship, is_primary_contact = false, is_emergency_contact = false } = dto;
@@ -646,6 +804,15 @@ export class StaffEditingService {
       update: joinData,
       create: { student_id: studentCc, guardian_id, ...joinData },
       include: { guardians: true },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'GUARDIAN',
+      entity_id: String(guardian_id),
+      action: 'UPDATED',
+      changed_by: changedBy,
+      student_id: studentCc,
+      note: `Linked existing guardian #${guardian_id} (${relationship}) to student #${studentCc}`,
     });
 
     return {
@@ -666,7 +833,12 @@ export class StaffEditingService {
       dob: this.formatDateToFrontend(guardian.dob),
     };
   }
-  async updateGuardian(id: number, dto: UpdateGuardianDto) {
+  async updateGuardian(id: number, dto: UpdateGuardianDto, changedBy: string) {
+    const existing = await this.prisma.guardians.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new NotFoundException(`Guardian #${id} not found`);
+
     const { dob, cnic, ...rest } = dto;
     const data: Record<string, unknown> = {
       ...rest,
@@ -681,7 +853,78 @@ export class StaffEditingService {
       delete data.email;
     }
     if (dob !== undefined) {
-      data.dob = this.parseDateFromFrontend(dob as string);
+      data.dob = dob ? this.parseDateFromFrontend(dob as string) : null;
+    }
+
+    // Log changes
+    const TRACKED_GUARDIAN_FIELDS = [
+      'full_name', 'primary_phone', 'whatsapp_number', 'cnic', 'email_address',
+      'occupation', 'organization', 'house_appt_name', 'city', 'province', 'country'
+    ];
+
+    const links = await this.prisma.student_guardians.findMany({
+      where: { guardian_id: id },
+      select: { student_id: true }
+    });
+
+    for (const field of TRACKED_GUARDIAN_FIELDS) {
+      const newValKey = field === 'email_address' && dto.email !== undefined ? 'email' : field;
+      let newRaw = (dto as any)[newValKey];
+      if (field === 'cnic' && cnic !== undefined) {
+        newRaw = (cnic && cnic !== "N/A") ? cnic : null;
+      }
+      const oldRaw = (existing as any)[field];
+
+      if (newRaw !== undefined && String(oldRaw ?? '') !== String(newRaw ?? '')) {
+        const logData = {
+          entity_type: 'GUARDIAN',
+          entity_id: String(id),
+          action: 'UPDATED',
+          field: `guardian.${field}`,
+          old_value: oldRaw ? String(oldRaw) : null,
+          new_value: newRaw ? String(newRaw) : null,
+          changed_by: changedBy,
+        };
+
+        if (links.length > 0) {
+          for (const link of links) {
+            await this.auditLogs.log({
+              ...logData,
+              student_id: link.student_id,
+            });
+          }
+        } else {
+          await this.auditLogs.log(logData);
+        }
+      }
+    }
+
+    // Diff DOB
+    if (dob !== undefined) {
+      const oldDob = existing.dob;
+      const newDob = dob ? this.parseDateFromFrontend(dob as string) : null;
+      if (oldDob?.getTime() !== newDob?.getTime()) {
+        const logData = {
+          entity_type: 'GUARDIAN',
+          entity_id: String(id),
+          action: 'UPDATED',
+          field: 'guardian.dob',
+          old_value: oldDob ? this.formatDateToFrontend(oldDob) : null,
+          new_value: dob as string || null,
+          changed_by: changedBy,
+        };
+
+        if (links.length > 0) {
+          for (const link of links) {
+            await this.auditLogs.log({
+              ...logData,
+              student_id: link.student_id,
+            });
+          }
+        } else {
+          await this.auditLogs.log(logData);
+        }
+      }
     }
 
     try {
@@ -714,6 +957,7 @@ export class StaffEditingService {
     studentCc: number,
     guardianId: number,
     dto: UpdateGuardianRelationshipDto,
+    changedBy: string,
   ) {
     const { relationship, is_primary_contact, is_emergency_contact, dob, ...guardianFields } = dto;
 
@@ -733,6 +977,81 @@ export class StaffEditingService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const existingLink = await tx.student_guardians.findUnique({
+          where: {
+            student_id_guardian_id: {
+              student_id: studentCc,
+              guardian_id: guardianId,
+            },
+          },
+          include: { guardians: true },
+        });
+        if (!existingLink) {
+          throw new NotFoundException(`No link between student #${studentCc} and guardian #${guardianId}`);
+        }
+
+        // Log relationship field changes
+        const relationshipFields = ['relationship', 'is_primary_contact', 'is_emergency_contact'];
+        for (const field of relationshipFields) {
+          const newVal = (dto as any)[field];
+          const oldVal = (existingLink as any)[field];
+          if (newVal !== undefined && String(oldVal ?? '') !== String(newVal ?? '')) {
+            await this.auditLogs.log({
+              entity_type: 'GUARDIAN',
+              entity_id: String(guardianId),
+              action: 'UPDATED',
+              field: `guardian.${field}`,
+              old_value: oldVal !== null && oldVal !== undefined ? String(oldVal) : null,
+              new_value: newVal !== null && newVal !== undefined ? String(newVal) : null,
+              changed_by: changedBy,
+              student_id: studentCc,
+            });
+          }
+        }
+
+        // Log guardian personal field changes
+        const TRACKED_GUARDIAN_FIELDS = [
+          'full_name', 'primary_phone', 'whatsapp_number', 'cnic', 'email_address',
+          'occupation', 'organization', 'house_appt_name', 'city', 'province', 'country'
+        ];
+
+        for (const field of TRACKED_GUARDIAN_FIELDS) {
+          const newValKey = field === 'email_address' && dto.email !== undefined ? 'email' : field;
+          const newVal = (dto as any)[newValKey];
+          const oldVal = (existingLink.guardians as any)[field];
+
+          if (newVal !== undefined && String(oldVal ?? '') !== String(newVal ?? '')) {
+            await this.auditLogs.log({
+              entity_type: 'GUARDIAN',
+              entity_id: String(guardianId),
+              action: 'UPDATED',
+              field: `guardian.${field}`,
+              old_value: oldVal ? String(oldVal) : null,
+              new_value: newVal ? String(newVal) : null,
+              changed_by: changedBy,
+              student_id: studentCc,
+            });
+          }
+        }
+
+        // Diff DOB
+        if (dob !== undefined) {
+          const oldDob = existingLink.guardians.dob;
+          const newDob = dob ? this.parseDateFromFrontend(dob as string) : null;
+          if (oldDob?.getTime() !== newDob?.getTime()) {
+            await this.auditLogs.log({
+              entity_type: 'GUARDIAN',
+              entity_id: String(guardianId),
+              action: 'UPDATED',
+              field: 'guardian.dob',
+              old_value: oldDob ? this.formatDateToFrontend(oldDob) : null,
+              new_value: dob as string || null,
+              changed_by: changedBy,
+              student_id: studentCc,
+            });
+          }
+        }
+
         // 1. Update relationship if any field provided
         if (Object.keys(relationshipData).length > 0) {
           await tx.student_guardians.update({
@@ -777,7 +1096,7 @@ export class StaffEditingService {
         };
       });
     } catch (e: any) {
-      if (e?.code === 'P2025') {
+      if (e?.code === 'P2025' || e instanceof NotFoundException) {
         throw new NotFoundException(
           `No link between student #${studentCc} and guardian #${guardianId}`,
         );
@@ -786,7 +1105,7 @@ export class StaffEditingService {
     }
   }
 
-  async removeGuardianFromStudent(studentCc: number, guardianId: number) {
+  async removeGuardianFromStudent(studentCc: number, guardianId: number, changedBy: string) {
     try {
       await this.prisma.student_guardians.delete({
         where: {
@@ -795,6 +1114,15 @@ export class StaffEditingService {
             guardian_id: guardianId,
           },
         },
+      });
+
+      await this.auditLogs.log({
+        entity_type: 'GUARDIAN',
+        entity_id: String(guardianId),
+        action: 'DELETED',
+        changed_by: changedBy,
+        student_id: studentCc,
+        note: `Unlinked guardian #${guardianId} from student #${studentCc}`,
       });
     } catch (e: any) {
       if (e?.code === 'P2025') {

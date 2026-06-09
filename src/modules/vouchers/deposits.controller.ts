@@ -1,4 +1,4 @@
-import { Controller, Delete, HttpCode, HttpStatus, Param, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { Controller, Delete, HttpCode, HttpStatus, Param, ParseIntPipe, UseGuards, Req } from '@nestjs/common';
 import { VouchersService } from './vouchers.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -17,8 +17,9 @@ export class DepositsController {
             ability.can(Action.Delete, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async reverseDeposit(@Param('id', ParseIntPipe) id: number) {
-        const result = await this.vouchersService.reverseDeposit(id);
+    async reverseDeposit(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.reverseDeposit(id, changedBy);
         return {
             success: true,
             message: 'Deposit reversed and deleted successfully',

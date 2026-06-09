@@ -12,9 +12,14 @@ import { UpdateFamilyDto } from './dto/update-family.dto';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
 
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+
 @Injectable()
 export class FamiliesService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) { }
 
   // ── List (paginated + search) ─────────────────────────────────────────────
 
@@ -245,7 +250,7 @@ export class FamiliesService {
 
   // ── Assign child to family ────────────────────────────────────────────────
 
-  async assignChildToFamily(familyId: number, studentId: number) {
+  async assignChildToFamily(familyId: number, studentId: number, changedBy: string) {
     const [family, student] = await Promise.all([
       this.prisma.families.findFirst({
         where: { id: familyId, deleted_at: null },
@@ -264,6 +269,17 @@ export class FamiliesService {
         `Student #${studentId} is already in family #${familyId}`,
       );
     }
+
+    // Log the family assignment change
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: String(familyId),
+      action: 'UPDATED',
+      field: 'family.student_assignment',
+      new_value: `Assigned student #${studentId} to family #${familyId}`,
+      changed_by: changedBy,
+      student_id: studentId,
+    });
 
     // Fetch target family siblings and the incoming student's current guardians
     const [targetSiblings, incomingGuardians] = await Promise.all([

@@ -48,9 +48,14 @@ type ResolvedClass = {
   academic_system: string;
 };
 
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) { }
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
     if (classId) return classId;
@@ -1043,13 +1048,31 @@ export class StudentsService {
 
   }
 
-  async assignStudent(id: number, dto: any) {
+  async assignStudent(id: number, dto: any, changedBy: string) {
     const student = await this.prisma.students.findUnique({
         where: { cc: id },
     });
 
     if (!student || student.deleted_at) {
         throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    const fields = ['campus_id', 'class_id', 'section_id', 'house_id'];
+    for (const field of fields) {
+      const newVal = dto[field];
+      const oldVal = (student as any)[field];
+      if (newVal !== undefined && String(oldVal ?? '') !== String(newVal ?? '')) {
+        await this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(id),
+          action: 'UPDATED',
+          field: `student.${field}`,
+          old_value: oldVal !== null && oldVal !== undefined ? String(oldVal) : null,
+          new_value: newVal !== null && newVal !== undefined ? String(newVal) : null,
+          changed_by: changedBy,
+          student_id: id,
+        });
+      }
     }
 
     return this.prisma.students.update({
@@ -1064,7 +1087,7 @@ export class StudentsService {
     });
   }
 
-  async unexpelStudent(id: number) {
+  async unexpelStudent(id: number, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
       select: {
@@ -1108,15 +1131,26 @@ export class StudentsService {
           flag: `UNEXPELLED_LOG_${Date.now()}`,
           reminder_date: new Date(),
           work_done: true,
-          comment: 'Student status restored to ENROLLED',
+          comment: 'Status changed back to Enrolled',
         },
+      });
+
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(id),
+        action: 'STATUS_CHANGED',
+        new_value: 'ENROLLED',
+        old_value: 'EXPELLED',
+        changed_by: changedBy,
+        student_id: id,
+        note: 'Status unexpelled back to Enrolled',
       });
 
       return updated;
     });
   }
 
-  async undoLeftStudent(id: number) {
+  async undoLeftStudent(id: number, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
       select: {
@@ -1165,11 +1199,22 @@ export class StudentsService {
         },
       });
 
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(id),
+        action: 'STATUS_CHANGED',
+        new_value: 'ENROLLED',
+        old_value: 'LEFT',
+        changed_by: changedBy,
+        student_id: id,
+        note: 'Status restored to Enrolled from Left',
+      });
+
       return updated;
     });
   }
 
-  async changeStatus(id: number, newStatus: StudentStatus, reason?: string) {
+  async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
       select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true },
@@ -1220,6 +1265,17 @@ export class StudentsService {
           // Always record the exact date/time this action was performed
           reminder_date: new Date(),
         },
+      });
+
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(id),
+        action: 'STATUS_CHANGED',
+        new_value: newStatus,
+        old_value: student.status,
+        changed_by: changedBy || 'system',
+        student_id: id,
+        note: reason?.trim() || null,
       });
 
       return updated;

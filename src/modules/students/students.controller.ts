@@ -96,8 +96,9 @@ export class StudentsController {
   async assignStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AssignStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const updated = await this.studentsService.assignStudent(id, dto);
+    const updated = await this.studentsService.assignStudent(id, dto, user.username);
     return createApiResponse(
       updated,
       HttpStatus.OK,
@@ -107,8 +108,11 @@ export class StudentsController {
 
   @Patch(':id/unexpel')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  async unexpelStudent(@Param('id', ParseIntPipe) id: number) {
-    const updated = await this.studentsService.unexpelStudent(id);
+  async unexpelStudent(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const updated = await this.studentsService.unexpelStudent(id, user.username);
     return createApiResponse(
       updated,
       HttpStatus.OK,
@@ -118,8 +122,11 @@ export class StudentsController {
 
   @Patch(':id/undo-left')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  async undoLeftStudent(@Param('id', ParseIntPipe) id: number) {
-    const updated = await this.studentsService.undoLeftStudent(id);
+  async undoLeftStudent(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const updated = await this.studentsService.undoLeftStudent(id, user.username);
     return createApiResponse(
       updated,
       HttpStatus.OK,
@@ -132,8 +139,9 @@ export class StudentsController {
   async changeStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ChangeStatusDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const updated = await this.studentsService.changeStatus(id, dto.status, dto.reason);
+    const updated = await this.studentsService.changeStatus(id, dto.status, dto.reason, user.username);
     return createApiResponse(
       updated,
       HttpStatus.OK,

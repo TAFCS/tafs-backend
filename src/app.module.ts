@@ -38,6 +38,7 @@ import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
+import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { AppConfigModule } from './modules/app-config/app-config.module';
     AttendanceModule,
     NoticeBoardModule,
     AppConfigModule,
+    AuditLogsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
