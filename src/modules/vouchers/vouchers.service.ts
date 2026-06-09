@@ -3414,11 +3414,38 @@ export class VouchersService {
                 const mergedGross = new Prisma.Decimal(balanceSf.amount_before_discount ?? 0)
                     .add(new Prisma.Decimal(sfPaid.amount_before_discount ?? 0));
 
+                // Determine whether other "PARTIAL PAYMENT OF" rows still exist for
+                // this fee slot. If yes, balanceSf is still the balance row for
+                // those higher-level splits and must keep its "BALANCE PAYMENT OF"
+                // prefix so the next reversal can locate it. If no (this was the
+                // last/only split being reversed), restore the prefix to null — the
+                // row goes back to its pristine pre-split state. Without this check
+                // every multi-level reversal would wipe the prefix on the first
+                // reversal, making every subsequent reversal silently skip the
+                // merge (balanceSf query returns nothing) and lose the paid amount.
+                const otherPartialCount = await tx.student_fees.count({
+                    where: {
+                        student_id: voucher.student_id,
+                        fee_type_id: sfPaid.fee_type_id,
+                        fee_date: sfPaid.fee_date,
+                        id: { not: sfPaid.id },
+                        description_prefix: { startsWith: 'PARTIAL PAYMENT OF' },
+                    } as any,
+                });
+                // Derive the correct balance prefix from sfPaid's own prefix so
+                // custom-named heads (e.g. "PARTIAL PAYMENT OF TRANSPORT FEE")
+                // are correctly restored to "BALANCE PAYMENT OF TRANSPORT FEE"
+                // rather than the bare "BALANCE PAYMENT OF".
+                const baseLabel = this.stripSplitPrefix(sfPaid.description_prefix);
+                const { prefixBalance: restoredPrefix } = otherPartialCount > 0
+                    ? this.buildSplitPrefixes(baseLabel)
+                    : { prefixBalance: null };
+
                 await tx.student_fees.update({
                     where: { id: balanceSf.id },
                     data: {
                         status: 'NOT_ISSUED',
-                        description_prefix: null,
+                        description_prefix: restoredPrefix,
                         amount: mergedAmount,
                         amount_before_discount: mergedGross,
                         amount_paid: new Prisma.Decimal(0),
