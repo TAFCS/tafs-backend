@@ -41,6 +41,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   // Reverse: Map<socketId, familyId> — so we can clean up on disconnect
   private socketAdminViewing = new Map<string, number>();
 
+  // Parent ticket room presence: familyId → ticketId → socketIds
+  private familyTicketRooms = new Map<number, Map<string, Set<string>>>();
+  // socketId → ticket rooms joined (for disconnect cleanup)
+  private socketTicketRooms = new Map<string, Array<{ familyId: number; ticketId: string }>>();
+
   constructor(
     private readonly chatService: ChatService,
     private readonly jwtService: JwtService,
@@ -170,6 +175,25 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.adminViewingFamily.delete(viewingFamilyId);
         }
       }
+    }
+
+    // Clean up ticket room tracking
+    const ticketRooms = this.socketTicketRooms.get(client.id);
+    if (ticketRooms) {
+      for (const { familyId, ticketId } of ticketRooms) {
+        const familyRooms = this.familyTicketRooms.get(familyId);
+        const sockets = familyRooms?.get(ticketId);
+        if (sockets) {
+          sockets.delete(client.id);
+          if (sockets.size === 0) {
+            familyRooms!.delete(ticketId);
+            if (familyRooms!.size === 0) {
+              this.familyTicketRooms.delete(familyId);
+            }
+          }
+        }
+      }
+      this.socketTicketRooms.delete(client.id);
     }
   }
 
@@ -545,10 +569,59 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   // ─── Support Tickets ───────────────────────────────────────────────────────
 
-  /** True when the parent app has an active socket in family_app_{familyId}. */
-  isParentInTicketRoom(familyId: number, _ticketId: string): boolean {
-    const sockets = this.familySockets.get(familyId);
+  /** True when the parent is actively viewing this support ticket (entered ticket room). */
+  isParentInTicketRoom(familyId: number, ticketId: string): boolean {
+    const familyRooms = this.familyTicketRooms.get(familyId);
+    if (!familyRooms) return false;
+    const sockets = familyRooms.get(ticketId);
     return !!sockets && sockets.size > 0;
+  }
+
+  private trackTicketRoom(
+    socketId: string,
+    familyId: number,
+    ticketId: string,
+  ): void {
+    if (!this.familyTicketRooms.has(familyId)) {
+      this.familyTicketRooms.set(familyId, new Map());
+    }
+    const familyRooms = this.familyTicketRooms.get(familyId)!;
+    if (!familyRooms.has(ticketId)) {
+      familyRooms.set(ticketId, new Set());
+    }
+    familyRooms.get(ticketId)!.add(socketId);
+
+    const rooms = this.socketTicketRooms.get(socketId) ?? [];
+    if (!rooms.some((r) => r.familyId === familyId && r.ticketId === ticketId)) {
+      rooms.push({ familyId, ticketId });
+    }
+    this.socketTicketRooms.set(socketId, rooms);
+  }
+
+  private untrackTicketRoom(
+    socketId: string,
+    familyId: number,
+    ticketId: string,
+  ): void {
+    const familyRooms = this.familyTicketRooms.get(familyId);
+    const sockets = familyRooms?.get(ticketId);
+    if (sockets) {
+      sockets.delete(socketId);
+      if (sockets.size === 0) {
+        familyRooms!.delete(ticketId);
+        if (familyRooms!.size === 0) {
+          this.familyTicketRooms.delete(familyId);
+        }
+      }
+    }
+
+    const rooms = this.socketTicketRooms.get(socketId);
+    if (rooms) {
+      this.socketTicketRooms.set(
+        socketId,
+        rooms.filter((r) => !(r.familyId === familyId && r.ticketId === ticketId)),
+      );
+    }
   }
 
   @SubscribeMessage('enterTicket')
@@ -564,6 +637,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         payload,
       );
       client.join(`ticket_${data.ticketId}`);
+      if (payload.userType === 'PARENT') {
+        const familyId = Number(payload.familyId || payload.sub);
+        if (!isNaN(familyId)) {
+          this.trackTicketRoom(client.id, familyId, data.ticketId);
+        }
+      }
       return { success: true };
     } catch (err: any) {
       return { error: err.message ?? 'forbidden' };
@@ -575,7 +654,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { ticketId: string },
   ) {
+    const payload = (client as any).tafsPayload;
     client.leave(`ticket_${data.ticketId}`);
+    if (payload?.userType === 'PARENT') {
+      const familyId = Number(payload.familyId || payload.sub);
+      if (!isNaN(familyId)) {
+        this.untrackTicketRoom(client.id, familyId, data.ticketId);
+      }
+    }
   }
 
   @SubscribeMessage('sendTicketMessage')

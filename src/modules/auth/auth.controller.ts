@@ -14,6 +14,8 @@ import type { Request, Response } from 'express';
 import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
 import { ParentChangeRequestsService } from '../parent-change-requests/parent-change-requests.service';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
+import { RegisterFcmTokenDto } from './dto/register-fcm-token.dto';
+import { FcmService } from '../../common/fcm/fcm.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -60,6 +62,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly parentChangeRequestsService: ParentChangeRequestsService,
+    private readonly fcmService: FcmService,
   ) {}
 
   // ─── Staff (cookie-based — webapp only) ────────────────────────────────────
@@ -140,6 +143,21 @@ export class AuthController {
   @UseGuards(JwtParentGuard)
   logoutParent(@CurrentUser() user: IJwtParentPayload) {
     return this.authService.logoutParent(user.familyId);
+  }
+
+  @Post('parent/fcm-token')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtParentGuard)
+  async registerParentFcmToken(
+    @CurrentUser() user: IJwtParentPayload,
+    @Body() dto: RegisterFcmTokenDto,
+  ) {
+    await this.fcmService.registerToken(
+      user.familyId,
+      dto.fcmToken,
+      dto.deviceType,
+    );
+    return createApiResponse({}, HttpStatus.OK, 'FCM token registered');
   }
 
   // ─── Parent Signup (Flutter mobile app) ───────────────────────────────────

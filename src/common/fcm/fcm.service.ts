@@ -25,6 +25,14 @@ export class FcmService implements OnModuleInit {
   }
 
   async sendToFamily(familyId: number, title: string, body: string, data?: Record<string, string>) {
+    if (admin.apps.length === 0) {
+      console.error(
+        `[FCM] Firebase Admin not initialized — cannot send to family ${familyId}. ` +
+          'Set FIREBASE_SERVICE_ACCOUNT_JSON on the server.',
+      );
+      return;
+    }
+
     const tokens = await this.prisma.fcm_device_tokens.findMany({
       where: { family_id: familyId },
     });
@@ -57,8 +65,7 @@ export class FcmService implements OnModuleInit {
             // These error codes indicate the token is permanently invalid
             if (
               errCode === 'messaging/registration-token-not-registered' ||
-              errCode === 'messaging/invalid-registration-token' ||
-              errCode === 'messaging/invalid-argument'
+              errCode === 'messaging/invalid-registration-token'
             ) {
               staleTokens.push(tokens[idx].device_token);
             }

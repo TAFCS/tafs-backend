@@ -11,11 +11,13 @@ import { CaslAbilityFactory } from './casl/casl-ability.factory';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ParentChangeRequestsModule } from '../parent-change-requests/parent-change-requests.module';
+import { FcmModule } from '../../common/fcm/fcm.module';
 
 @Module({
   imports: [
     forwardRef(() => UsersModule),
     forwardRef(() => ParentChangeRequestsModule),
+    FcmModule,
     PassportModule,
     ConfigModule,
     JwtModule.registerAsync({
