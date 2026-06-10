@@ -1011,12 +1011,12 @@ model attendance_staff_daily {
 
 model zk_push_logs {
   id          Int      @id @default(autoincrement())
-  sn          String   @db.VarChar(100)
+  sn          String   @db.VarChar(50)
   raw_payload Json
   received_at DateTime @default(now()) @db.Timestamp(6)
 
   @@index([sn])
-  @@index([received_at(sort: Desc)])
+  @@index([received_at])
 }
 
 model postdated_cheques {

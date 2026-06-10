@@ -10,10 +10,12 @@ import { JwtParentStrategy } from './strategies/jwt-parent.strategy';
 import { CaslAbilityFactory } from './casl/casl-ability.factory';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ParentChangeRequestsModule } from '../parent-change-requests/parent-change-requests.module';
 
 @Module({
   imports: [
     forwardRef(() => UsersModule),
+    forwardRef(() => ParentChangeRequestsModule),
     PassportModule,
     ConfigModule,
     JwtModule.registerAsync({

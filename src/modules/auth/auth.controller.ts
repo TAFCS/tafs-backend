@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
+import { ParentChangeRequestsService } from '../parent-change-requests/parent-change-requests.service';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
@@ -56,7 +57,10 @@ function clearAuthCookies(res: Response) {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly parentChangeRequestsService: ParentChangeRequestsService,
+  ) {}
 
   // ─── Staff (cookie-based — webapp only) ────────────────────────────────────
 
@@ -146,6 +150,21 @@ export class AuthController {
   async getParentProfile(@CurrentUser() user: IJwtParentPayload) {
     const result = await this.authService.getParentProfile(user.familyId);
     return createApiResponse(result, HttpStatus.OK, 'Profile fetched successfully');
+  }
+
+  @Post('parent/account/deletion-request')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtParentGuard)
+  async requestParentAccountDeletion(@CurrentUser() user: IJwtParentPayload) {
+    const request =
+      await this.parentChangeRequestsService.createAccountDeletionRequestForFamily(
+        user.familyId,
+      );
+    return createApiResponse(
+      request,
+      HttpStatus.CREATED,
+      'Account deletion request submitted for admin review',
+    );
   }
 
   @Delete('parent/account')

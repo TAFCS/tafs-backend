@@ -1,12 +1,68 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateChangeRequestDto } from './dto/create-change-request.dto';
 import { ProcessChangeRequestDto, ChangeRequestStatus } from './dto/process-change-request.dto';
 import { Prisma } from '@prisma/client';
+import { AuthService } from '../auth/auth.service';
+
+export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 
 @Injectable()
 export class ParentChangeRequestsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Inject(forwardRef(() => AuthService))
+    private readonly authService: AuthService,
+  ) {}
+
+  async createAccountDeletionRequestForFamily(familyId: number) {
+    const familyGuardianLinks = await this.prisma.student_guardians.findMany({
+      where: {
+        students: { family_id: familyId },
+      },
+      include: { guardians: true },
+      orderBy: { guardian_id: 'asc' },
+    });
+
+    if (familyGuardianLinks.length === 0) {
+      throw new NotFoundException('Guardian not found for this family');
+    }
+
+    const primaryLink =
+      familyGuardianLinks.find((link) => link.is_primary_contact) ??
+      familyGuardianLinks[0];
+    const guardian = primaryLink.guardians;
+
+    const pending = await this.prisma.parent_change_requests.findFirst({
+      where: {
+        family_id: familyId,
+        status: 'PENDING',
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    if (
+      pending &&
+      (pending.requested_data as Record<string, unknown>)?.request_type ===
+        ACCOUNT_DELETION_REQUEST_TYPE
+    ) {
+      throw new BadRequestException(
+        'An account deletion request is already pending admin review',
+      );
+    }
+
+    return this.createRequest({
+      guardian_id: guardian.id,
+      family_id: familyId,
+      requested_data: { request_type: ACCOUNT_DELETION_REQUEST_TYPE },
+    });
+  }
 
   async createRequest(dto: CreateChangeRequestDto) {
     // Check if guardian and family exist
@@ -88,11 +144,18 @@ export class ParentChangeRequestsService {
       });
 
       if (dto.status === ChangeRequestStatus.APPROVED) {
-        // Apply changes to the guardian record
-        await tx.guardians.update({
-          where: { id: request.guardian_id },
-          data: request.requested_data as Prisma.InputJsonValue,
-        });
+        const requestedData = request.requested_data as Record<string, unknown>;
+        const isAccountDeletion =
+          requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
+
+        if (isAccountDeletion) {
+          await this.authService.deleteParentAccount(request.family_id);
+        } else {
+          await tx.guardians.update({
+            where: { id: request.guardian_id },
+            data: request.requested_data as Prisma.InputJsonValue,
+          });
+        }
       }
 
       return updatedRequest;

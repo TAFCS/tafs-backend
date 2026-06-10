@@ -1,6 +1,4 @@
-import { IsNumber, IsObject, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
-import { UpdateGuardianDto } from '../../staff-editing/dto/update-guardian.dto';
+import { IsNumber, IsObject } from 'class-validator';
 
 export class CreateChangeRequestDto {
   @IsNumber()
@@ -10,7 +8,5 @@ export class CreateChangeRequestDto {
   family_id: number;
 
   @IsObject()
-  @ValidateNested()
-  @Type(() => UpdateGuardianDto)
-  requested_data: UpdateGuardianDto;
+  requested_data: Record<string, unknown>;
 }
