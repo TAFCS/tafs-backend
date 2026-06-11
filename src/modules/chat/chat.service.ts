@@ -114,6 +114,10 @@ export class ChatService {
         cc: true,
         full_name: true,
         photograph_url: true,
+        gr_number: true,
+        primary_phone: true,
+        whatsapp_number: true,
+        whatsapp_country_code: true,
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
         campuses: { select: { campus_name: true } }

@@ -43,6 +43,12 @@ const ticketInclude = {
     select: {
       cc: true,
       full_name: true,
+      photograph_url: true,
+      photo_blue_bg_url: true,
+      gr_number: true,
+      primary_phone: true,
+      whatsapp_number: true,
+      whatsapp_country_code: true,
       classes: { select: { description: true } },
       sections: { select: { description: true } },
       campuses: { select: { campus_name: true } },

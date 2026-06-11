@@ -496,10 +496,9 @@ model students {
   not_pursuing               Boolean                    @default(false)
   attendance_roll_records    attendance_roll_records[]
   attendance_student_daily   attendance_student_daily[]
-  device_user_mappings       device_user_mappings[]
-  zk_attendance_scans        zk_attendance_scans[]
   audit_logs                 audit_logs[]
   deposits                   deposits[]
+  device_user_mappings       device_user_mappings[]
   postdated_cheques          postdated_cheques[]
   relatives_attending_tafs   relatives_attending_tafs[]
   student_activities         student_activities[]
@@ -520,6 +519,7 @@ model students {
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   support_tickets            support_tickets[]
   vouchers                   vouchers[]
+  zk_attendance_scans        zk_attendance_scans[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -879,9 +879,8 @@ model employee_profiles {
   days_per_week                      Int?
   photo_url                          String?
   attendance_staff_daily             attendance_staff_daily[]
-  employee_class_section_assignments employee_class_section_assignments[]
   device_user_mappings               device_user_mappings[]
-  zk_attendance_scans                zk_attendance_scans[]
+  employee_class_section_assignments employee_class_section_assignments[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
   designations                       designations?                        @relation(fields: [designation_id], references: [id])
@@ -889,6 +888,7 @@ model employee_profiles {
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
+  zk_attendance_scans                zk_attendance_scans[]
 }
 
 model staff_types {
@@ -1006,12 +1006,12 @@ model attendance_staff_daily {
   status            StaffAttendanceStatus
   notes             String?               @db.VarChar(500)
   marked_by         String?
-  source            AttendanceSource      @default(MANUAL)
+  created_at        DateTime              @default(now()) @db.Timestamp(6)
+  updated_at        DateTime              @updatedAt @db.Timestamp(6)
   check_in_at       DateTime?             @db.Timestamp(6)
   check_out_at      DateTime?             @db.Timestamp(6)
   last_scan_at      DateTime?             @db.Timestamp(6)
-  created_at        DateTime              @default(now()) @db.Timestamp(6)
-  updated_at        DateTime              @updatedAt @db.Timestamp(6)
+  source            AttendanceSource      @default(MANUAL)
   campuses          campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
   employee_profiles employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
@@ -1070,9 +1070,9 @@ model zk_attendance_scans {
   notified_at       DateTime?          @db.Timestamp(6)
   zk_push_log_id    Int?
   received_at       DateTime           @default(now()) @db.Timestamp(6)
-  employee_profiles employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: SetNull)
-  students          students?          @relation(fields: [student_cc], references: [cc], onDelete: SetNull)
-  zk_push_logs      zk_push_logs?      @relation(fields: [zk_push_log_id], references: [id], onDelete: SetNull)
+  employee_profiles employee_profiles? @relation(fields: [employee_id], references: [id])
+  students          students?          @relation(fields: [student_cc], references: [cc])
+  zk_push_logs      zk_push_logs?      @relation(fields: [zk_push_log_id], references: [id])
 
   @@unique([device_sn, device_pin, scan_time], map: "zk_attendance_scans_sn_pin_time_key")
   @@index([employee_id, attendance_date])
