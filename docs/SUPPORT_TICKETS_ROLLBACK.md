@@ -22,7 +22,7 @@
    - `STAFF_USERNAME=general.respondent`, `STAFF_PASSWORD` (from `seed-staff-roster-credentials.csv`)
    - `SUPER_ADMIN_USERNAME=muhammad.hussain.mirza`, `SUPER_ADMIN_PASSWORD`
 
-3. Deploy backend, webapp, and Flutter parent app together.
+3. Deploy backend, webapp, and Flutter app (parent + staff dual login) together.
 
 ## Production hardening (implemented)
 
@@ -47,6 +47,15 @@
 - Themed list cards, origination load/submit errors, in-app notification on ticket socket when not in thread
 - FCM `SUPPORT_TICKET_MESSAGE` deep link; live unread badge on app bar
 
+### Flutter (staff — dual login)
+- Login screen **Parent | Staff** tabs; staff uses ERP username (not parent email)
+- `POST /auth/staff/mobile/login` + `/auth/staff/mobile/refresh` (Bearer tokens, no cookies)
+- Staff session stored separately (`CACHED_STAFF`); parent and staff sessions are mutually exclusive
+- `AuthAuthenticatedStaff` → `StaffSupportTicketsShell` (skips student selection)
+- Role-gated queue tabs mirror web: My Queue, Finance (FINANCE_CLERK / SUPER_ADMIN), All Open (SUPER_ADMIN), Closed
+- Thread actions: claim, transfer, forward, close, Super Admin inline approve/reject on PENDING messages
+- Staff must **re-login** after `seed-permissions.ts` so JWT includes `communication.support_tickets.view`
+
 ## Automated verify script checks
 
 `npm run verify:support-tickets` validates:
@@ -58,7 +67,7 @@
 
 ## E2E scenarios (manual)
 
-| Scenario | Parent (Flutter) | Staff (Webapp) | Super Admin |
+| Scenario | Parent (Flutter) | Staff (Web / Flutter) | Super Admin |
 |----------|------------------|----------------|-------------|
 | General + child | MCQ wizard → principal route | My Queue → reply | Approve |
 | General no child | MCQ → General Respondent | My Queue / forward | Approve |
@@ -72,6 +81,16 @@
 | FCM | Tap notification → thread | — | — |
 
 Test accounts: `muhammad.hussain.mirza`, `hira.khadim`, `nimla.asad`, `general.respondent` (passwords in `scripts/seed-staff-roster-credentials.csv` after roster seed).
+
+### Flutter staff login (manual matrix)
+
+| Account | Role | Expected in Flutter |
+|---------|------|---------------------|
+| `general.respondent` | GENERAL_RESPONDENT | My Queue → assigned ticket → send pending reply |
+| `nimla.asad` | FINANCE_CLERK | Finance Queue → claim → reply |
+| `muhammad.hussain.mirza` | SUPER_ADMIN | All Open + approval queue → approve inline |
+| `hira.khadim` | PRINCIPAL | My Queue only |
+| Parent account | — | Parent tab → unchanged parent flow |
 
 ## Rollback
 

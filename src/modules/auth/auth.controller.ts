@@ -120,6 +120,29 @@ export class AuthController {
     return this.authService.logoutStaff(user.sub);
   }
 
+  // ─── Staff mobile (body-based — Flutter dual login) ───────────────────────
+
+  @Post('staff/mobile/login')
+  @HttpCode(HttpStatus.OK)
+  async loginStaffMobile(@Body() dto: LoginDto) {
+    const result = await this.authService.loginStaff(dto);
+    return createApiResponse(result, HttpStatus.OK, 'Staff mobile login successful');
+  }
+
+  @Post('staff/mobile/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refreshStaffMobile(@Body() dto: RefreshTokenDto) {
+    const result = await this.authService.refreshStaffToken(dto.refreshToken);
+    return createApiResponse(result, HttpStatus.OK, 'Staff mobile token refreshed');
+  }
+
+  @Post('staff/mobile/logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtStaffGuard)
+  logoutStaffMobile(@CurrentUser() user: IJwtStaffPayload) {
+    return this.authService.logoutStaff(user.sub);
+  }
+
   // ─── Parent (body-based — Flutter mobile app) ──────────────────────────────
   // Flutter uses FlutterSecureStorage (OS keychain), not browser cookies.
   // Tokens are kept in the request/response body for mobile compatibility.

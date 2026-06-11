@@ -32,7 +32,10 @@ export class CaslAbilityFactory {
     const permissions = user.permissions || [];
 
     permissions.forEach((perm) => {
-      const parts = perm.split('.');
+      if (!perm) return;
+
+      const parts = perm.split('.').filter(Boolean);
+      if (parts.length < 3) return;
 
       // attendance.staff.mark
       if (parts[0] === 'attendance' && parts[1] === 'staff') {
@@ -63,12 +66,15 @@ export class CaslAbilityFactory {
         return;
       }
 
-      const [module, resource, action] = parts.length >= 3
-        ? [parts[0], parts[1], parts.slice(2).join('.')]
-        : parts;
+      const resource = parts[1];
+      const action = parts.slice(2).join('.');
+      if (!resource || !action) return;
 
       // Simple mapping logic: edit/create/manage maps to Manage, view maps to Read
-      const caslAction = (action === 'view' || action.endsWith('.view')) ? Action.Read : Action.Manage;
+      const caslAction =
+        action === 'view' || action.endsWith('.view')
+          ? Action.Read
+          : Action.Manage;
 
       // Map permission resource keys to CASL Subjects
       let subjects: AppSubjects[] = [];

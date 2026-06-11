@@ -9,8 +9,8 @@ import { IJwtStaffPayload } from '../interfaces/jwt-payload.interface';
 export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
   constructor(configService: ConfigService) {
     super({
-      // Staff tokens are delivered via httpOnly cookie — never Authorization header
       jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
         (req: Request) => {
           const token = req?.cookies?.['tafs_access'];
           return typeof token === 'string' ? token : null;
@@ -28,6 +28,7 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
     return {
       ...payload,
       allowedClassIds: payload.allowedClassIds ?? [],
+      permissions: payload.permissions ?? [],
     };
   }
 }
