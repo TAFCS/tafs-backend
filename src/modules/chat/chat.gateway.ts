@@ -209,11 +209,15 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any },
   ) {
     const familyId = Number(data.familyId);
-    // Join the family-specific chat room (used for FCM suppression)
-    client.join(`family_chat_${familyId}`);
-
-    // Track admin viewing for FCM suppression
     const payload = (client as any).tafsPayload;
+
+    // Only parents join family_chat_* (FCM suppression when parent has chat open).
+    // Staff must NOT join this room — it caused isParentInChatRoom() to always
+    // return true while an admin had the webapp chat open, blocking all pushes.
+    if (payload?.userType === 'PARENT') {
+      client.join(`family_chat_${familyId}`);
+    }
+
     if (payload?.userType === 'STAFF') {
       // Clean up previous admin view if switching conversations
       const previousFamilyId = this.socketAdminViewing.get(client.id);
@@ -240,10 +244,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any },
   ) {
     const familyId = Number(data.familyId);
-    client.leave(`family_chat_${familyId}`);
-
-    // Clean up admin viewing tracking
     const payload = (client as any).tafsPayload;
+
+    if (payload?.userType === 'PARENT') {
+      client.leave(`family_chat_${familyId}`);
+    }
+
     if (payload?.userType === 'STAFF') {
       this.socketAdminViewing.delete(client.id);
       const admins = this.adminViewingFamily.get(familyId);
@@ -297,6 +303,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             messageId: newMessage.id,
           },
         );
+      } else {
+        console.log(
+          `[FCM] Chat push skipped for family ${familyId}: parent has chat screen open`,
+        );
       }
     }
   }
@@ -308,7 +318,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private isParentInChatRoom(familyId: number): boolean {
     const roomName = `family_chat_${familyId}`;
     const room = this.server.sockets.adapter.rooms.get(roomName);
-    return room !== undefined && room.size > 0;
+    if (!room || room.size === 0) return false;
+
+    for (const socketId of room) {
+      const socket = this.server.sockets.sockets.get(socketId);
+      const payload = (socket as any)?.tafsPayload;
+      if (payload?.userType === 'PARENT') {
+        return true;
+      }
+    }
+    return false;
   }
 
   broadcastMessagesRead(familyId: number, by: 'ADMIN' | 'GUARDIAN') {
@@ -327,6 +346,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   ) {
     const familyId = Number(data.familyId);
     const payload = (client as any).tafsPayload;
+
+    console.log(
+      `[ChatGateway] sendMessage family=${familyId} sender=${data.senderType} type=${data.messageType} from=${payload?.userType ?? 'unknown'}`,
+    );
 
     // Parents must only send messages for their own family.
     if (payload?.userType === 'PARENT') {
@@ -350,12 +373,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     if (!isDuplicate) {
       await this.broadcastNewMessage(
-      familyId,
-      newMessage,
-      updatedConv,
-      data.senderType,
-      data.messageType,
-      data.content,
+        familyId,
+        newMessage,
+        updatedConv,
+        data.senderType,
+        data.messageType,
+        data.content,
       );
     }
 
