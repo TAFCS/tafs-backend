@@ -122,14 +122,49 @@ export class AnalyticsService {
       (Number(arrearsFeeAgg._sum?.amount || 0) - Number(arrearsFeeAgg._sum?.amount_paid || 0)) +
       (Number(arrearsSurchargeAgg._sum?.amount || 0) - Number(arrearsSurchargeAgg._sum?.amount_paid || 0));
 
-    // Note on late fees (vouchers.late_fee_charge / late_fee_deposited):
-    // unlike surcharges, a late fee is contingent — it only materializes if
-    // a voucher is paid after its due date, so it can't be treated as a
-    // stable "billed" amount without the figure retroactively shifting every
-    // day. It's deliberately left out of expected/outstanding/arrears (which
-    // describe predictable billing) but — being real money — it's still
-    // fully captured in `collected` and in the monthly `received` figures
-    // below, since both come straight from the deposits ledger.
+    // 2b. Overdue vouchers — once a voucher passes its due_date unpaid, the
+    // amount actually owed becomes total_payable_after_due (which bakes in
+    // the Rs. 1,000 late fee, when late_fee_charge=true), not
+    // total_payable_before_due. `arrearsAmount` above only covers the fee
+    // heads / surcharges (the before_due portion); lateFeeOutstanding adds
+    // the late-fee penalty that's now due on top of that.
+    const overdueVoucherWhere = {
+      status: { in: ['UNPAID', 'OVERDUE', 'PARTIALLY_PAID'] },
+      due_date: { lt: today },
+      students: studentFilter,
+    };
+
+    const [overdueVoucherCount, overdueLateFeeAgg, lateFeesCollectedAgg] = await Promise.all([
+      this.prisma.vouchers.count({ where: overdueVoucherWhere }),
+      this.prisma.vouchers.aggregate({
+        where: { ...overdueVoucherWhere, late_fee_charge: true },
+        _sum: { total_payable_after_due: true, total_payable_before_due: true, late_fee_deposited: true },
+        _count: true,
+      }),
+      // Late fees actually banked this year, from vouchers that were paid
+      // after their due_date. This cash is already inside `collected` /
+      // `received` (it comes through the deposits ledger) — surfaced here
+      // separately so it's clear those cash figures DO include late payers.
+      this.prisma.vouchers.aggregate({
+        where: {
+          late_fee_deposited: { gt: 0 },
+          fee_date: { gte: yearStart, lte: yearEnd },
+          students: studentFilter,
+        },
+        _sum: { late_fee_deposited: true },
+        _count: true,
+      }),
+    ]);
+
+    const lateFeeOutstanding = Math.max(0,
+      Number(overdueLateFeeAgg._sum?.total_payable_after_due || 0) -
+      Number(overdueLateFeeAgg._sum?.total_payable_before_due || 0) -
+      Number(overdueLateFeeAgg._sum?.late_fee_deposited || 0),
+    );
+    const overdueLateFeeVoucherCount = overdueLateFeeAgg._count || 0;
+    const totalOwedNow = arrearsAmount + lateFeeOutstanding;
+    const lateFeesCollected = Number(lateFeesCollectedAgg._sum?.late_fee_deposited || 0);
+    const lateFeesCollectedCount = lateFeesCollectedAgg._count || 0;
 
     // 3. Student Strength
     const totalStudents = await this.prisma.students.count({
@@ -209,7 +244,7 @@ export class AnalyticsService {
       const startDate = new Date(calYear, jsMonth, 1);
       const endDate = new Date(calYear, jsMonth + 1, 0, 23, 59, 59, 999);
 
-      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg, overdueTargetAgg, overdueFeedateAgg] = await Promise.all([
+      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg] = await Promise.all([
         this.prisma.student_fees.aggregate({
           where: {
             target_month: monthNum,
@@ -218,7 +253,7 @@ export class AnalyticsService {
             is_arrear_surcharge: false,
             ...feeFilter,
           },
-          _sum: { amount: true },
+          _sum: { amount: true, amount_paid: true },
         }),
         // Surcharges on vouchers issued this calendar month — reused for both
         // trends.due and feedate_trends.due since both group by the voucher's fee_date.
@@ -248,39 +283,22 @@ export class AnalyticsService {
           },
           _sum: { amount: true, amount_paid: true },
         }),
-        // Overdue by target_month: heads originally for this month that are
-        // still unpaid and past their due_date.
-        this.prisma.student_fees.aggregate({
-          where: {
-            target_month: monthNum,
-            academic_year: ay,
-            status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
-            due_date: { lt: today },
-            is_discount: false,
-            is_arrear_surcharge: false,
-            ...feeFilter,
-          },
-          _sum: { amount: true, amount_paid: true },
-        }),
-        // Overdue by fee_date: heads from this billing cycle that are unpaid
-        // and past their due_date.
-        this.prisma.student_fees.aggregate({
-          where: {
-            fee_date: { gte: startDate, lte: endDate },
-            status: { in: ['ISSUED', 'PARTIALLY_PAID'] },
-            due_date: { lt: today },
-            is_discount: false,
-            is_arrear_surcharge: false,
-            ...feeFilter,
-          },
-          _sum: { amount: true, amount_paid: true },
-        }),
       ]);
 
       const due = Number(dueFeeAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
       const received = Number(receivedAgg._sum?.total_amount || 0);
-      const overdue_target = Math.max(0,
-        Number(overdueTargetAgg._sum?.amount || 0) - Number(overdueTargetAgg._sum?.amount_paid || 0),
+      // Accrual outstanding for this target_month bucket — amount billed for
+      // this month minus amount paid against it to date, regardless of which
+      // voucher those heads currently ride on. Deliberately NOT due_date-based:
+      // due_date reflects whichever voucher a head is CURRENTLY on (it gets
+      // overwritten every time an arrear is carried forward — see
+      // vouchers.service.ts), so a per-month "is it overdue" filter would mix
+      // an old billing period with a brand-new voucher's deadline and produce
+      // numbers that don't track the original month at all. "Overdue, ever"
+      // is only meaningful as the single institution-wide snapshot already
+      // returned in financials.arrears.
+      const outstanding_target = Math.max(0,
+        due - (Number(dueFeeAgg._sum?.amount_paid || 0) + Number(dueSurchargeAgg._sum?.amount_paid || 0)),
       );
 
       trends.push({
@@ -288,22 +306,18 @@ export class AnalyticsService {
         due,
         received,
         gap: due - received,
-        overdue: overdue_target,
+        outstanding: outstanding_target,
       });
 
       // feedate due includes surcharges on vouchers issued this month (same dueSurchargeAgg)
       const fd_due = Number(feeDateAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
       const fd_collected = Number(feeDateAgg._sum?.amount_paid || 0) + Number(dueSurchargeAgg._sum?.amount_paid || 0);
-      const fd_overdue = Math.max(0,
-        Number(overdueFeedateAgg._sum?.amount || 0) - Number(overdueFeedateAgg._sum?.amount_paid || 0),
-      );
 
       feedate_trends.push({
         month: label,
         due: fd_due,
         collected: fd_collected,
         gap: fd_due - fd_collected,
-        overdue: fd_overdue,
       });
     }
 
@@ -317,6 +331,12 @@ export class AnalyticsService {
         outstanding,
         collectionRate,
         arrears: arrearsAmount,
+        overdueVoucherCount,
+        lateFeeOutstanding,
+        overdueLateFeeVoucherCount,
+        totalOwedNow,
+        lateFeesCollected,
+        lateFeesCollectedCount,
       },
       students: {
         total: totalStudents,
