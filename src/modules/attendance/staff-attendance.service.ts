@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { AttendanceSource } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { BulkMarkStaffAttendanceDto, GetStaffAttendanceQueryDto } from './dto/staff-attendance.dto';
@@ -92,11 +93,13 @@ export class StaffAttendanceService {
           status: mark.status,
           notes: mark.notes ?? null,
           marked_by: user.sub,
+          source: AttendanceSource.MANUAL,
         },
         update: {
           status: mark.status,
           notes: mark.notes ?? null,
           marked_by: user.sub,
+          source: AttendanceSource.MANUAL,
         },
       }),
     );

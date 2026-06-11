@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   Query,
   Res,
@@ -11,11 +13,12 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
-import { PoliciesGuard } from '../../common/guards/policies.guard';
-import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { Action } from '../auth/casl/actions';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { GetZkLogsQueryDto } from './dto/zk-push.dto';
+import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkPushService } from './zk-push.service';
 
 /**
@@ -25,7 +28,12 @@ import { ZkPushService } from './zk-push.service';
 @ApiTags('ZK Device')
 @Controller('iclock')
 export class ZkDeviceController {
-  constructor(private readonly zkPushService: ZkPushService) {}
+  private readonly logger = new Logger(ZkDeviceController.name);
+
+  constructor(
+    private readonly zkPushService: ZkPushService,
+    private readonly zkAttendanceProcessor: ZkAttendanceProcessorService,
+  ) {}
 
   // Device checks in on GET — tell it to push attendance logs every 60s
   @Get('cdata')
@@ -44,7 +52,14 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
-    await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
+    const pushLog = await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
+
+    // Don't await: a single push can contain thousands of backfill ATTLOG lines,
+    // and the device retries (causing duplicate work) if cdata responds slowly.
+    this.zkAttendanceProcessor
+      .processPush({ sn, query, body: rawBody ?? '', pushLogId: pushLog?.id ?? null })
+      .catch((err) => this.logger.error(`Attendance processing failed for ${sn}: ${err.message}`));
+
     res.setHeader('Content-Type', 'text/plain');
     res.send('OK\n');
   }
@@ -64,13 +79,16 @@ export class ZkDeviceController {
 @ApiTags('Attendance ZK Logs')
 @ApiBearerAuth()
 @Controller('attendance')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard)
 export class ZkLogsController {
   constructor(private readonly zkPushService: ZkPushService) {}
 
   @Get('zk-push-logs')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  async getLogs(@Query() query: GetZkLogsQueryDto) {
+  async getLogs(@Query() query: GetZkLogsQueryDto, @CurrentUser() user: IJwtStaffPayload) {
+    if (user.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only super admins can view ZK device logs');
+    }
+
     const [logs, devices] = await Promise.all([
       this.zkPushService.getLogs(query.sn),
       this.zkPushService.getDistinctDevices(),

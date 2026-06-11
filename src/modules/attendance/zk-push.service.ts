@@ -8,13 +8,9 @@ export class ZkPushService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async handlePush(payload: {
-    sn: string;
-    query: Record<string, string>;
-    body: string;
-  }): Promise<void> {
+  async handlePush(payload: { sn: string; query: Record<string, string>; body: string }) {
     try {
-      await this.prisma.zk_push_logs.create({
+      return await this.prisma.zk_push_logs.create({
         data: {
           sn: payload.sn,
           raw_payload: payload as unknown as Prisma.InputJsonValue,
@@ -22,6 +18,7 @@ export class ZkPushService {
       });
     } catch (err: any) {
       this.logger.error(`Failed to log ZK push from ${payload.sn}: ${err.message}`);
+      return null;
     }
   }
 

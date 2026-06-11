@@ -107,6 +107,7 @@ model campuses {
   academic_calendar_days   academic_calendar_days[]
   attendance_roll_sessions attendance_roll_sessions[]
   attendance_staff_daily   attendance_staff_daily[]
+  attendance_student_daily attendance_student_daily[]
   campus_classes           campus_classes[]
   campus_sections          campus_sections[]
   class_fee_schedule       class_fee_schedule[]
@@ -494,6 +495,9 @@ model students {
   cnic                       String?                    @unique @db.VarChar(15)
   not_pursuing               Boolean                    @default(false)
   attendance_roll_records    attendance_roll_records[]
+  attendance_student_daily   attendance_student_daily[]
+  device_user_mappings       device_user_mappings[]
+  zk_attendance_scans        zk_attendance_scans[]
   audit_logs                 audit_logs[]
   deposits                   deposits[]
   postdated_cheques          postdated_cheques[]
@@ -876,6 +880,8 @@ model employee_profiles {
   photo_url                          String?
   attendance_staff_daily             attendance_staff_daily[]
   employee_class_section_assignments employee_class_section_assignments[]
+  device_user_mappings               device_user_mappings[]
+  zk_attendance_scans                zk_attendance_scans[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
   designations                       designations?                        @relation(fields: [designation_id], references: [id])
@@ -1000,6 +1006,10 @@ model attendance_staff_daily {
   status            StaffAttendanceStatus
   notes             String?               @db.VarChar(500)
   marked_by         String?
+  source            AttendanceSource      @default(MANUAL)
+  check_in_at       DateTime?             @db.Timestamp(6)
+  check_out_at      DateTime?             @db.Timestamp(6)
+  last_scan_at      DateTime?             @db.Timestamp(6)
   created_at        DateTime              @default(now()) @db.Timestamp(6)
   updated_at        DateTime              @updatedAt @db.Timestamp(6)
   campuses          campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
@@ -1010,13 +1020,95 @@ model attendance_staff_daily {
 }
 
 model zk_push_logs {
-  id          Int      @id @default(autoincrement())
-  sn          String   @db.VarChar(50)
-  raw_payload Json
-  received_at DateTime @default(now()) @db.Timestamp(6)
+  id                  Int                   @id @default(autoincrement())
+  sn                  String                @db.VarChar(50)
+  raw_payload         Json
+  received_at         DateTime              @default(now()) @db.Timestamp(6)
+  zk_attendance_scans zk_attendance_scans[]
 
   @@index([sn])
   @@index([received_at])
+}
+
+model device_user_mappings {
+  id                Int                @id @default(autoincrement())
+  device_sn         String             @db.VarChar(50)
+  device_pin        String             @db.VarChar(50)
+  person_type       DevicePersonType
+  employee_id       Int?
+  student_cc        Int?
+  display_name      String?            @db.VarChar(100)
+  is_active         Boolean            @default(true)
+  notes             String?            @db.VarChar(255)
+  created_by        String?
+  created_at        DateTime           @default(now()) @db.Timestamp(6)
+  updated_at        DateTime           @updatedAt @db.Timestamp(6)
+  employee_profiles employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  students          students?          @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@unique([device_sn, device_pin])
+  @@index([employee_id])
+  @@index([student_cc])
+}
+
+model zk_attendance_scans {
+  id                Int                @id @default(autoincrement())
+  device_sn         String             @db.VarChar(50)
+  device_pin        String             @db.VarChar(50)
+  person_type       DevicePersonType?
+  employee_id       Int?
+  student_cc        Int?
+  scan_time         DateTime           @db.Timestamp(6)
+  attendance_date   DateTime           @db.Date
+  verify_mode       String?            @db.VarChar(10)
+  device_status     String?            @db.VarChar(10)
+  work_code         String?            @db.VarChar(20)
+  sequence_no       Int?
+  direction         ScanDirection?
+  is_duplicate      Boolean            @default(false)
+  is_live           Boolean            @default(false)
+  notified_at       DateTime?          @db.Timestamp(6)
+  zk_push_log_id    Int?
+  received_at       DateTime           @default(now()) @db.Timestamp(6)
+  employee_profiles employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: SetNull)
+  students          students?          @relation(fields: [student_cc], references: [cc], onDelete: SetNull)
+  zk_push_logs      zk_push_logs?      @relation(fields: [zk_push_log_id], references: [id], onDelete: SetNull)
+
+  @@unique([device_sn, device_pin, scan_time], map: "zk_attendance_scans_sn_pin_time_key")
+  @@index([employee_id, attendance_date])
+  @@index([student_cc, attendance_date])
+  @@index([device_pin, attendance_date])
+  @@index([attendance_date])
+}
+
+model zk_pin_name_hints {
+  device_sn      String   @db.VarChar(50)
+  device_pin     String   @db.VarChar(50)
+  suggested_name String?  @db.VarChar(100)
+  updated_at     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@id([device_sn, device_pin])
+}
+
+model attendance_student_daily {
+  id           Int              @id @default(autoincrement())
+  student_cc   Int
+  campus_id    Int
+  date         DateTime         @db.Date
+  status       RollRecordStatus @default(PRESENT)
+  source       AttendanceSource @default(BIOMETRIC)
+  check_in_at  DateTime?        @db.Timestamp(6)
+  check_out_at DateTime?        @db.Timestamp(6)
+  last_scan_at DateTime?        @db.Timestamp(6)
+  notes        String?          @db.VarChar(500)
+  marked_by    String?
+  created_at   DateTime         @default(now()) @db.Timestamp(6)
+  updated_at   DateTime         @updatedAt @db.Timestamp(6)
+  campuses     campuses         @relation(fields: [campus_id], references: [id], onDelete: NoAction)
+  students     students         @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@unique([student_cc, date])
+  @@index([date, campus_id])
 }
 
 model postdated_cheques {
@@ -1218,6 +1310,21 @@ enum StaffAttendanceStatus {
   LATE
   HALF_DAY
   EXCUSED
+}
+
+enum DevicePersonType {
+  STAFF
+  STUDENT
+}
+
+enum ScanDirection {
+  IN
+  OUT
+}
+
+enum AttendanceSource {
+  MANUAL
+  BIOMETRIC
 }
 
 enum PostdatedChequeStatus {
