@@ -27,13 +27,20 @@ describe('CaslAbilityFactory', () => {
     expect(ability.can(Action.Read, 'SupportTicket')).toBe(true);
   });
 
-  it('does not throw on two-segment communication permissions', () => {
-    expect(() =>
-      factory.createForStaff(
-        staff({
-          permissions: ['communication.view_chats', 'communication.send_announcements'],
-        }),
-      ),
-    ).not.toThrow();
+  it('maps communication.view_chats to Chat read', () => {
+    const ability = factory.createForStaff(
+      staff({ permissions: ['communication.view_chats'] }),
+    );
+
+    expect(ability.can(Action.Read, 'Chat')).toBe(true);
+    expect(ability.can(Action.Manage, 'Chat')).toBe(false);
+  });
+
+  it('maps communication.send_announcements to Chat manage', () => {
+    const ability = factory.createForStaff(
+      staff({ permissions: ['communication.send_announcements'] }),
+    );
+
+    expect(ability.can(Action.Manage, 'Chat')).toBe(true);
   });
 });

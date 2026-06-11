@@ -51,10 +51,18 @@
 - Login screen **Parent | Staff** tabs; staff uses ERP username (not parent email)
 - `POST /auth/staff/mobile/login` + `/auth/staff/mobile/refresh` (Bearer tokens, no cookies)
 - Staff session stored separately (`CACHED_STAFF`); parent and staff sessions are mutually exclusive
-- `AuthAuthenticatedStaff` → `StaffSupportTicketsShell` (skips student selection)
+- `AuthAuthenticatedStaff` → `StaffMainShell` (skips student selection)
 - Role-gated queue tabs mirror web: My Queue, Finance (FINANCE_CLERK / SUPER_ADMIN), All Open (SUPER_ADMIN), Closed
 - Thread actions: claim, transfer, forward, close, Super Admin inline approve/reject on PENDING messages
 - Staff must **re-login** after `seed-permissions.ts` so JWT includes `communication.support_tickets.view`
+
+### Flutter (staff — announcements chat)
+- Bottom nav **Tickets | Announcements** when staff has both `communication.support_tickets.view` and `communication.view_chats`
+- Announcements tab: Official channel only (`GET /chat/history/admin/0`, socket `sendAnnouncement`)
+- Grade/section targeting via `GET /classes` + `GET /sections` (same as web `AnnouncementSelectors`)
+- Socket-only send — offline banner disables composer (no REST fallback)
+- Roles with announcements only (no tickets): single Announcements screen
+- FINANCE_CLERK / GENERAL_RESPONDENT: tickets tab only (no announcements)
 
 ## Automated verify script checks
 
@@ -86,10 +94,10 @@ Test accounts: `muhammad.hussain.mirza`, `hira.khadim`, `nimla.asad`, `general.r
 
 | Account | Role | Expected in Flutter |
 |---------|------|---------------------|
-| `general.respondent` | GENERAL_RESPONDENT | My Queue → assigned ticket → send pending reply |
-| `nimla.asad` | FINANCE_CLERK | Finance Queue → claim → reply |
+| `general.respondent` | GENERAL_RESPONDENT | My Queue → assigned ticket → send pending reply (no Announcements) |
+| `nimla.asad` | FINANCE_CLERK | Finance Queue → claim → reply (no Announcements) |
 | `muhammad.hussain.mirza` | SUPER_ADMIN | All Open + approval queue → approve inline |
-| `hira.khadim` | PRINCIPAL | My Queue only |
+| `hira.khadim` | PRINCIPAL | Tickets + Announcements tabs; send grade-targeted broadcast |
 | Parent account | — | Parent tab → unchanged parent flow |
 
 ## Rollback

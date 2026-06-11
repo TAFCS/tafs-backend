@@ -35,6 +35,15 @@ export class CaslAbilityFactory {
       if (!perm) return;
 
       const parts = perm.split('.').filter(Boolean);
+      if (parts.length === 2 && parts[0] === 'communication') {
+        if (parts[1] === 'view_chats') {
+          can(Action.Read, 'Chat');
+        }
+        if (parts[1] === 'send_announcements') {
+          can(Action.Manage, 'Chat');
+        }
+        return;
+      }
       if (parts.length < 3) return;
 
       // attendance.staff.mark

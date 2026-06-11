@@ -1,9 +1,12 @@
-import { Controller, Get, Post, Param, Query, Body, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException, Res } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, Body, UseGuards, UseInterceptors, UploadedFile, ParseIntPipe, BadRequestException, ForbiddenException, Res } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
 import { ChatMessageType } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { Action } from '../auth/casl/actions';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -18,7 +21,10 @@ export class ChatController {
   ) {}
 
   @Get('inbox')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Get all conversations for admin inbox' })
   getInbox() {
     return this.chatService.getAdminInbox();
@@ -39,13 +45,20 @@ export class ChatController {
   }
 
   @Get('history/admin/:familyId')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin fetch chat history with a family' })
   getAdminChatHistory(
+    @CurrentUser() user: any,
     @Param('familyId', ParseIntPipe) familyId: number,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
+    if (familyId === 0 && !this.canAccessAnnouncements(user)) {
+      throw new ForbiddenException('Announcements chat access required');
+    }
     return this.chatService.getChatHistory(familyId, take ? parseInt(take) : 50, skip ? parseInt(skip) : 0);
   }
 
@@ -103,7 +116,10 @@ export class ChatController {
   }
 
   @Post('messages/admin')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin sends a chat message via REST (offline fallback when socket is down)' })
   async sendAdminMessage(
     @CurrentUser() user: any,
@@ -175,5 +191,17 @@ export class ChatController {
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=31536000');
     res.send(buffer);
+  }
+
+  private canAccessAnnouncements(user: {
+    role?: string;
+    permissions?: string[];
+  }): boolean {
+    if (user?.role === 'SUPER_ADMIN') return true;
+    const perms = user?.permissions ?? [];
+    return (
+      perms.includes('communication.view_chats') ||
+      perms.includes('communication.send_announcements')
+    );
   }
 }

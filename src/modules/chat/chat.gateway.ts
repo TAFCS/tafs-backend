@@ -7,6 +7,7 @@ import {
   OnGatewayInit,
   ConnectedSocket,
   MessageBody,
+  WsException,
 } from '@nestjs/websockets';
 import { Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
@@ -491,6 +492,20 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       .catch((e) => console.error(`FCM failed for family ${familyId}:`, e.message));
   }
 
+  private canSendAnnouncement(payload: {
+    userType?: string;
+    role?: string;
+    permissions?: string[];
+  }): boolean {
+    if (payload?.userType !== 'STAFF') return false;
+    if (payload.role === 'SUPER_ADMIN') return true;
+    const perms = payload.permissions ?? [];
+    return (
+      perms.includes('communication.view_chats') ||
+      perms.includes('communication.send_announcements')
+    );
+  }
+
   @SubscribeMessage('sendAnnouncement')
   async handleSendAnnouncement(
     @ConnectedSocket() client: Socket,
@@ -502,6 +517,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       mediaMetadata?: any 
     },
   ) {
+    const payload = (client as any).tafsPayload;
+    if (!this.canSendAnnouncement(payload)) {
+      throw new WsException('Forbidden');
+    }
+
     console.log('[ChatGateway] Received sendAnnouncement:', data);
 
     const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';

@@ -22,4 +22,5 @@ export type AppSubjects =
   | 'RollSession'
   | 'StaffAttendance'
   | 'SupportTicket'
+  | 'Chat'
   | 'all';
