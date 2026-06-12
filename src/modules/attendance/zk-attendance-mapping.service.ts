@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { device_user_mappings, DevicePersonType } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
-import { CreateDeviceMappingDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
+import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
 
 @Injectable()
 export class ZkAttendanceMappingService {
@@ -143,6 +143,44 @@ export class ZkAttendanceMappingService {
       orderBy: { full_name: 'asc' },
       take: 20,
     });
+  }
+
+  // Builds a synthetic ATTLOG line and feeds it through the same processPush()
+  // path a real device push uses — for dev/testing without physical hardware.
+  async simulateScan(dto: SimulateScanDto) {
+    const scanTime = dto.scan_time ? new Date(dto.scan_time) : new Date();
+    const line = `${dto.device_pin}\t${this.formatDeviceDateTime(scanTime)}\t1\t1\t0`;
+
+    await this.processor.processPush({
+      sn: dto.device_sn,
+      query: { table: 'ATTLOG' },
+      body: line,
+      pushLogId: null,
+    });
+
+    const scan = await this.prisma.zk_attendance_scans.findFirst({
+      where: { device_sn: dto.device_sn, device_pin: dto.device_pin },
+      orderBy: { id: 'desc' },
+    });
+
+    let record: unknown = null;
+    if (scan?.person_type === DevicePersonType.STAFF && scan.employee_id) {
+      record = await this.prisma.attendance_staff_daily.findUnique({
+        where: { employee_id_date: { employee_id: scan.employee_id, date: scan.attendance_date } },
+      });
+    } else if (scan?.person_type === DevicePersonType.STUDENT && scan.student_cc) {
+      record = await this.prisma.attendance_student_daily.findUnique({
+        where: { student_cc_date: { student_cc: scan.student_cc, date: scan.attendance_date } },
+      });
+    }
+
+    return { scan, record };
+  }
+
+  // "YYYY-MM-DD HH:MM:SS" — same naive device wall-clock format ZkAttendanceProcessorService parses.
+  private formatDeviceDateTime(d: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
   }
 
   private validatePersonRefs(personType: DevicePersonType, employeeId?: number | null, studentCc?: number | null) {

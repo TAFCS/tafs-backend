@@ -43,3 +43,11 @@ export class BulkMarkStaffAttendanceDto {
   @Type(() => StaffAttendanceMarkDto)
   records: StaffAttendanceMarkDto[];
 }
+
+export class GetStaffTimelineQueryDto {
+  @IsDateString()
+  date_from: string;
+
+  @IsDateString()
+  date_to: string;
+}

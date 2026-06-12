@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsISO8601, IsInt, IsOptional, IsString } from 'class-validator';
 import { DevicePersonType } from '@prisma/client';
 
 export class CreateDeviceMappingDto {
@@ -66,4 +66,16 @@ export class SearchPersonsQueryDto {
   @IsOptional()
   @IsString()
   q?: string;
+}
+
+export class SimulateScanDto {
+  @IsString()
+  device_sn: string;
+
+  @IsString()
+  device_pin: string;
+
+  @IsOptional()
+  @IsISO8601()
+  scan_time?: string;
 }

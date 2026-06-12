@@ -378,13 +378,27 @@ export class ZkAttendanceProcessorService {
     });
     if (!student?.family_id) return;
 
-    const title = direction === ScanDirection.IN ? 'Arrived at School' : 'Left School';
     const time = scanRow.scan_time.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
       timeZone: 'UTC',
     });
-    const body = `${student.full_name} ${direction === ScanDirection.IN ? 'checked in' : 'checked out'} at ${time}`;
+    const title = direction === ScanDirection.IN ? 'Clocked In' : 'Clocked Out';
+    const body =
+      direction === ScanDirection.IN
+        ? `${student.full_name} has clocked into TAFS at ${time}`
+        : `${student.full_name} has clocked out of TAFS at ${time}`;
+
+    await this.prisma.attendance_notifications.create({
+      data: {
+        family_id: student.family_id,
+        student_cc: studentCc,
+        direction,
+        scan_time: scanRow.scan_time,
+        title,
+        body,
+      },
+    });
 
     await this.fcmService.sendToFamily(student.family_id, title, body, {
       type: 'biometric_attendance',

@@ -180,24 +180,25 @@ model deposits {
 }
 
 model families {
-  id                      Int                       @id @default(autoincrement())
-  legacy_pid              String?                   @db.VarChar(50)
-  household_name          String                    @db.VarChar(100)
-  primary_address         String?
-  password_hash           String?                   @db.VarChar(255)
-  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
-  deleted_at              DateTime?                 @db.Timestamp(6)
-  email                   String?                   @db.VarChar(100)
-  home_phone              String?                   @db.VarChar(20)
-  chat_conversations      chat_conversations?
-  family_refresh_tokens   family_refresh_tokens[]
-  fcm_device_tokens       fcm_device_tokens[]
-  message_acknowledgments message_acknowledgments[]
-  notice_post_reads       notice_post_reads[]
-  parent_change_requests  parent_change_requests[]
-  student_siblings        student_siblings[]
-  students                students[]
-  support_tickets         support_tickets[]
+  id                       Int                        @id @default(autoincrement())
+  legacy_pid               String?                    @db.VarChar(50)
+  household_name           String                     @db.VarChar(100)
+  primary_address          String?
+  password_hash            String?                    @db.VarChar(255)
+  created_at               DateTime?                  @default(now()) @db.Timestamp(6)
+  deleted_at               DateTime?                  @db.Timestamp(6)
+  email                    String?                    @db.VarChar(100)
+  home_phone               String?                    @db.VarChar(20)
+  attendance_notifications attendance_notifications[]
+  chat_conversations       chat_conversations?
+  family_refresh_tokens    family_refresh_tokens[]
+  fcm_device_tokens        fcm_device_tokens[]
+  message_acknowledgments  message_acknowledgments[]
+  notice_post_reads        notice_post_reads[]
+  parent_change_requests   parent_change_requests[]
+  student_siblings         student_siblings[]
+  students                 students[]
+  support_tickets          support_tickets[]
 }
 
 model family_refresh_tokens {
@@ -494,6 +495,7 @@ model students {
   graduated_from_class_id    Int?
   cnic                       String?                    @unique @db.VarChar(15)
   not_pursuing               Boolean                    @default(false)
+  attendance_notifications   attendance_notifications[]
   attendance_roll_records    attendance_roll_records[]
   attendance_student_daily   attendance_student_daily[]
   audit_logs                 audit_logs[]
@@ -1109,6 +1111,23 @@ model attendance_student_daily {
 
   @@unique([student_cc, date])
   @@index([date, campus_id])
+}
+
+model attendance_notifications {
+  id         Int           @id @default(autoincrement())
+  family_id  Int
+  student_cc Int
+  direction  ScanDirection
+  scan_time  DateTime      @db.Timestamp(6)
+  title      String        @db.VarChar(255)
+  body       String
+  read_at    DateTime?     @db.Timestamp(6)
+  created_at DateTime      @default(now()) @db.Timestamp(6)
+  families   families      @relation(fields: [family_id], references: [id], onDelete: Cascade)
+  students   students      @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@index([family_id, created_at(sort: Desc)])
+  @@index([student_cc])
 }
 
 model postdated_cheques {

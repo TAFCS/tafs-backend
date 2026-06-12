@@ -4,7 +4,12 @@ import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { CreateDeviceMappingDto, SearchPersonsQueryDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
+import {
+  CreateDeviceMappingDto,
+  SearchPersonsQueryDto,
+  SimulateScanDto,
+  UpdateDeviceMappingDto,
+} from './dto/zk-attendance.dto';
 import { ZkAttendanceMappingService } from './zk-attendance-mapping.service';
 
 @ApiTags('Attendance ZK Device Mappings')
@@ -36,6 +41,12 @@ export class ZkAttendanceMappingController {
   async createMapping(@Body() dto: CreateDeviceMappingDto, @CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
     return this.mappingService.createMapping(dto, user.sub);
+  }
+
+  @Post('simulate-scan')
+  async simulateScan(@Body() dto: SimulateScanDto, @CurrentUser() user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    return this.mappingService.simulateScan(dto);
   }
 
   @Patch(':id')

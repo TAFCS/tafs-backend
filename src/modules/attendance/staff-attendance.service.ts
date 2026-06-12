@@ -1,8 +1,12 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import { AttendanceSource } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { attendance_staff_daily, AttendanceSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { BulkMarkStaffAttendanceDto, GetStaffAttendanceQueryDto } from './dto/staff-attendance.dto';
+import {
+  BulkMarkStaffAttendanceDto,
+  GetStaffAttendanceQueryDto,
+  GetStaffTimelineQueryDto,
+} from './dto/staff-attendance.dto';
 
 @Injectable()
 export class StaffAttendanceService {
@@ -57,6 +61,273 @@ export class StaffAttendanceService {
       employee: emp,
       record: recordMap.get(emp.id) ?? null,
     }));
+  }
+
+  // Shared employee scope lookup for the summary/dashboard endpoints — same
+  // campus + department filtering as getRegister().
+  private async getEmployeesInScope(campusId: number, departmentId?: number) {
+    return this.prisma.employee_profiles.findMany({
+      where: {
+        users: { campus_id: campusId, is_active: true, deleted_at: null },
+        ...(departmentId ? { department_id: departmentId } : {}),
+      },
+      include: {
+        users: { select: { id: true, full_name: true, role: true, email: true } },
+        departments: { select: { id: true, name: true } },
+        designations: { select: { id: true, title: true } },
+        campuses: { select: { id: true, campus_name: true } },
+      },
+      orderBy: [{ departments: { name: 'asc' } }, { id: 'asc' }],
+    });
+  }
+
+  // Classifies a check-in time relative to the employee's reporting time
+  // (± late_relaxation_minutes): before reporting time = early, within
+  // relaxation = on_time, after = late. Independent of the persisted
+  // attendance_staff_daily.status (PRESENT/LATE), which only distinguishes
+  // on_time vs late.
+  private classifyCheckIn(
+    checkInAt: Date,
+    reportingTime: Date | null,
+    lateRelaxationMinutes: number | null,
+  ): 'on_time' | 'late' | 'early' {
+    if (!reportingTime) return 'on_time';
+    const reportingMinutes = reportingTime.getUTCHours() * 60 + reportingTime.getUTCMinutes();
+    const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
+    const relaxation = lateRelaxationMinutes ?? 0;
+    if (checkInMinutes < reportingMinutes) return 'early';
+    if (checkInMinutes <= reportingMinutes + relaxation) return 'on_time';
+    return 'late';
+  }
+
+  private computeDailyCounts(
+    employees: { id: number; reporting_time: Date | null; late_relaxation_minutes: number | null }[],
+    records: Map<number, attendance_staff_daily>,
+  ) {
+    let onTime = 0;
+    let late = 0;
+    let early = 0;
+    let absent = 0;
+    let noClockIn = 0;
+    let noClockOut = 0;
+
+    for (const emp of employees) {
+      const record = records.get(emp.id);
+      if (!record) {
+        noClockIn++;
+        continue;
+      }
+      if (record.status === StaffAttendanceStatus.ABSENT) {
+        absent++;
+        continue;
+      }
+      if (!record.check_in_at) {
+        noClockIn++;
+      } else {
+        const cls = this.classifyCheckIn(record.check_in_at, emp.reporting_time, emp.late_relaxation_minutes);
+        if (cls === 'on_time') onTime++;
+        else if (cls === 'late') late++;
+        else early++;
+      }
+      if (!record.check_out_at) noClockOut++;
+    }
+
+    return { onTime, late, early, absent, noClockIn, noClockOut };
+  }
+
+  private async getCountsForDate(campusId: number, departmentId: number | undefined, date: Date) {
+    const employees = await this.getEmployeesInScope(campusId, departmentId);
+    if (employees.length === 0) {
+      return { onTime: 0, late: 0, early: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
+    }
+
+    const records = await this.prisma.attendance_staff_daily.findMany({
+      where: { date, employee_id: { in: employees.map((e) => e.id) } },
+    });
+    const recordMap = new Map(records.map((r) => [r.employee_id, r]));
+
+    return this.computeDailyCounts(employees, recordMap);
+  }
+
+  async getSummary(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
+    const date = this.parseDate(query.date);
+    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    if (!campusId) throw new BadRequestException('campus_id is required');
+    this.assertCampusAccess(user, campusId);
+
+    const previousDate = new Date(date);
+    previousDate.setUTCDate(previousDate.getUTCDate() - 1);
+
+    const [today, yesterday] = await Promise.all([
+      this.getCountsForDate(campusId, query.department_id, date),
+      this.getCountsForDate(campusId, query.department_id, previousDate),
+    ]);
+
+    const card = (key: keyof typeof today) => ({ count: today[key], delta: today[key] - yesterday[key] });
+
+    return {
+      present_summary: {
+        on_time: card('onTime'),
+        late: card('late'),
+        early: card('early'),
+      },
+      not_present_summary: {
+        absent: card('absent'),
+        no_clock_in: card('noClockIn'),
+        no_clock_out: card('noClockOut'),
+        invalid: { count: 0, delta: 0 },
+      },
+      away_summary: {
+        day_off: { count: 0, delta: 0 },
+        time_off: { count: 0, delta: 0 },
+      },
+    };
+  }
+
+  // max(0, check_out_at - leaving_time) in minutes, or null when not computable.
+  private computeOvertimeMinutes(checkOutAt: Date | null | undefined, leavingTime: Date | null | undefined): number | null {
+    if (!checkOutAt || !leavingTime) return null;
+    const checkOutMinutes = checkOutAt.getUTCHours() * 60 + checkOutAt.getUTCMinutes();
+    const leavingMinutes = leavingTime.getUTCHours() * 60 + leavingTime.getUTCMinutes();
+    return Math.max(0, checkOutMinutes - leavingMinutes);
+  }
+
+  async getDashboard(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
+    const date = this.parseDate(query.date);
+    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    if (!campusId) throw new BadRequestException('campus_id is required');
+    this.assertCampusAccess(user, campusId);
+
+    const employees = await this.getEmployeesInScope(campusId, query.department_id);
+    if (employees.length === 0) return [];
+
+    const records = await this.prisma.attendance_staff_daily.findMany({
+      where: { date, employee_id: { in: employees.map((e) => e.id) } },
+    });
+    const recordMap = new Map(records.map((r) => [r.employee_id, r]));
+
+    return employees.map((emp) => {
+      const record = recordMap.get(emp.id) ?? null;
+      return {
+        employee: {
+          id: emp.id,
+          full_name: emp.full_name,
+          employee_code: emp.employee_code,
+          job_title: emp.job_title,
+          photo_url: emp.photo_url,
+          department: emp.departments?.name ?? null,
+        },
+        check_in_at: record?.check_in_at ?? null,
+        check_out_at: record?.check_out_at ?? null,
+        overtime_minutes: this.computeOvertimeMinutes(record?.check_out_at, emp.leaving_time),
+        location: emp.campuses?.campus_name ?? null,
+        note: record?.notes ?? null,
+        status: record?.status ?? null,
+      };
+    });
+  }
+
+  // Derives Working time (IN->OUT), Break (OUT->IN gaps), and Over time
+  // (the portion of the final OUT after leaving_time) segments for one day
+  // from the persisted scan sequence. A full-day "Requested day off" segment
+  // is approximated from status=EXCUSED — there is no leave-request model yet.
+  private buildDaySegments(
+    scans: zk_attendance_scans[],
+    leavingTime: Date | null,
+    record: attendance_staff_daily | null,
+  ) {
+    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
+
+    if (record?.status === StaffAttendanceStatus.EXCUSED) {
+      segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
+      return segments;
+    }
+
+    for (let i = 0; i + 1 < scans.length; i += 2) {
+      const inTime = scans[i].scan_time;
+      const outTime = scans[i + 1].scan_time;
+      const isLastPair = i + 2 >= scans.length;
+
+      if (isLastPair && leavingTime) {
+        const leavingMinutes = leavingTime.getUTCHours() * 60 + leavingTime.getUTCMinutes();
+        const outMinutes = outTime.getUTCHours() * 60 + outTime.getUTCMinutes();
+        const inMinutes = inTime.getUTCHours() * 60 + inTime.getUTCMinutes();
+
+        if (outMinutes > leavingMinutes && leavingMinutes > inMinutes) {
+          const overtimeStart = new Date(outTime);
+          overtimeStart.setUTCHours(leavingTime.getUTCHours(), leavingTime.getUTCMinutes(), 0, 0);
+          segments.push({ type: 'WORK', start: inTime.toISOString(), end: overtimeStart.toISOString() });
+          segments.push({ type: 'OVERTIME', start: overtimeStart.toISOString(), end: outTime.toISOString() });
+          continue;
+        }
+
+        if (outMinutes > leavingMinutes) {
+          segments.push({ type: 'OVERTIME', start: inTime.toISOString(), end: outTime.toISOString() });
+          continue;
+        }
+      }
+
+      segments.push({ type: 'WORK', start: inTime.toISOString(), end: outTime.toISOString() });
+
+      if (i + 2 < scans.length) {
+        segments.push({ type: 'BREAK', start: outTime.toISOString(), end: scans[i + 2].scan_time.toISOString() });
+      }
+    }
+
+    return segments;
+  }
+
+  async getTimeline(employeeId: number, query: GetStaffTimelineQueryDto, user: IJwtStaffPayload) {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { id: true, full_name: true, leaving_time: true, campus_id: true },
+    });
+    if (!employee) throw new NotFoundException('Employee not found');
+    if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+
+    const dateFrom = this.parseDate(query.date_from);
+    const dateTo = this.parseDate(query.date_to);
+    if (dateFrom > dateTo) throw new BadRequestException('date_from must be before date_to');
+
+    const [scans, records] = await Promise.all([
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          employee_id: employeeId,
+          person_type: 'STAFF',
+          is_duplicate: false,
+          attendance_date: { gte: dateFrom, lte: dateTo },
+        },
+        orderBy: { scan_time: 'asc' },
+      }),
+      this.prisma.attendance_staff_daily.findMany({
+        where: { employee_id: employeeId, date: { gte: dateFrom, lte: dateTo } },
+      }),
+    ]);
+
+    const scansByDate = new Map<string, zk_attendance_scans[]>();
+    for (const scan of scans) {
+      const key = scan.attendance_date.toISOString();
+      const bucket = scansByDate.get(key);
+      if (bucket) bucket.push(scan);
+      else scansByDate.set(key, [scan]);
+    }
+    const recordMap = new Map(records.map((r) => [r.date.toISOString(), r]));
+
+    const days: { date: string; status: StaffAttendanceStatus | null; segments: ReturnType<StaffAttendanceService['buildDaySegments']> }[] = [];
+    for (let d = new Date(dateFrom); d <= dateTo; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))) {
+      const key = d.toISOString();
+      const record = recordMap.get(key) ?? null;
+      days.push({
+        date: key.slice(0, 10),
+        status: record?.status ?? null,
+        segments: this.buildDaySegments(scansByDate.get(key) ?? [], employee.leaving_time, record),
+      });
+    }
+
+    return {
+      employee: { id: employee.id, full_name: employee.full_name },
+      days,
+    };
   }
 
   async bulkMark(dto: BulkMarkStaffAttendanceDto, user: IJwtStaffPayload) {
