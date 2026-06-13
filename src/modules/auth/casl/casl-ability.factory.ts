@@ -44,17 +44,15 @@ export class CaslAbilityFactory {
         }
         return;
       }
-      if (parts.length < 3) return;
-
+      
       // attendance.staff.mark
       if (parts[0] === 'attendance' && parts[1] === 'staff') {
         const subject: AppSubjects = 'StaffAttendance';
+        can(Action.Manage, subject);
+        can(Action.Read, subject);
         if (user.campusId) {
-          can(Action.Manage, subject, { campusId: user.campusId } as any);
-          can(Action.Read, subject, { campusId: user.campusId } as any);
-        } else {
-          can(Action.Manage, subject);
-          can(Action.Read, subject);
+          can(Action.Manage, subject, { campus_id: user.campusId } as any);
+          can(Action.Read, subject, { campus_id: user.campusId } as any);
         }
         return;
       }
@@ -67,17 +65,16 @@ export class CaslAbilityFactory {
             ? Action.Read
             : Action.Manage;
         const subject: AppSubjects = 'RollSession';
+        can(caslAction, subject);
         if (user.campusId) {
-          can(caslAction, subject, { campusId: user.campusId } as any);
-        } else {
-          can(caslAction, subject);
+          can(caslAction, subject, { campus_id: user.campusId } as any);
         }
         return;
       }
 
-      const resource = parts[1];
-      const action = parts.slice(2).join('.');
-      if (!resource || !action) return;
+      const [module, resource, action] = parts.length >= 3
+        ? [parts[0], parts[1], parts.slice(2).join('.')]
+        : [parts[0], parts[1], parts[1]];
 
       // Simple mapping logic: edit/create/manage maps to Manage, view maps to Read
       const caslAction =
@@ -121,11 +118,10 @@ export class CaslAbilityFactory {
         // Apply campus scoping for non-Super Admins
         const isAdminOrPrincipal = ([StaffRole.CAMPUS_ADMIN, StaffRole.PRINCIPAL] as StaffRole[]).includes(user.role);
         
+        can(caslAction, subject);
         if (user.campusId && subject !== 'all' && subject !== 'User') {
-           // For Student, Fee, Voucher, etc., restrict to campusId
-           can(caslAction, subject, { campusId: user.campusId } as any);
-        } else {
-           can(caslAction, subject);
+           // For Student, Fee, Voucher, etc., restrict to campus_id
+           can(caslAction, subject, { campus_id: user.campusId } as any);
         }
       });
     });

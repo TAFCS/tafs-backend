@@ -141,7 +141,7 @@ export class StudentsController {
     @Body() dto: ChangeStatusDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const updated = await this.studentsService.changeStatus(id, dto.status, dto.reason, user.username);
+    const updated = await this.studentsService.changeStatus(id, dto.status, dto.reason, user.username, user);
     return createApiResponse(
       updated,
       HttpStatus.OK,

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
@@ -1214,14 +1214,18 @@ export class StudentsService {
     });
   }
 
-  async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string) {
+  async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
-      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true },
+      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true },
     });
 
     if (!student || student.deleted_at) {
       throw new NotFoundException(`Student #${id} not found`);
+    }
+
+    if (user && user.campusId != null && student.campus_id !== user.campusId) {
+      throw new ForbiddenException('You do not have access to this student\'s campus');
     }
 
     if ((student.status as any) === newStatus) {
