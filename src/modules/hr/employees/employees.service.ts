@@ -284,6 +284,34 @@ export class EmployeesService {
     });
   }
 
+  async searchSimple(query: string) {
+    const isNumeric = /^\d+$/.test(query);
+    const results: { id: number; full_name: string | null; employee_code: string | null }[] = [];
+
+    if (isNumeric) {
+      const exact = await this.prisma.employee_profiles.findFirst({
+        where: { id: Number(query) },
+        select: { id: true, full_name: true, employee_code: true },
+      });
+      if (exact) results.push(exact);
+    }
+
+    const others = await this.prisma.employee_profiles.findMany({
+      where: {
+        OR: [
+          { full_name: { contains: query, mode: 'insensitive' } },
+          { employee_code: { contains: query, mode: 'insensitive' } },
+        ],
+        ...(results.length ? { NOT: { id: results[0].id } } : {}),
+      },
+      select: { id: true, full_name: true, employee_code: true },
+      orderBy: { full_name: 'asc' },
+      take: 5 - results.length,
+    });
+
+    return [...results, ...others];
+  }
+
   async getNextEmployeeCode(): Promise<{ code: string }> {
     // Find all employee codes that match EMP-NNNN pattern and return next one
     const employees = await this.prisma.employee_profiles.findMany({

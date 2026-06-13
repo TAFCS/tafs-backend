@@ -6,7 +6,6 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
   CreateDeviceMappingDto,
-  SearchPersonsQueryDto,
   SimulateScanDto,
   UpdateDeviceMappingDto,
 } from './dto/zk-attendance.dto';
@@ -29,12 +28,6 @@ export class ZkAttendanceMappingController {
   async getUnmapped(@CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
     return this.mappingService.getUnmappedPins();
-  }
-
-  @Get('search-persons')
-  async searchPersons(@Query() query: SearchPersonsQueryDto, @CurrentUser() user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
-    return this.mappingService.searchPersons(query.type, query.q);
   }
 
   @Post()

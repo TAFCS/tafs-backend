@@ -59,14 +59,6 @@ export class UpdateDeviceMappingDto {
   is_active?: boolean;
 }
 
-export class SearchPersonsQueryDto {
-  @IsEnum(DevicePersonType)
-  type: DevicePersonType;
-
-  @IsOptional()
-  @IsString()
-  q?: string;
-}
 
 export class SimulateScanDto {
   @IsString()

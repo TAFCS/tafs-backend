@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, UseGuards, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus } from '@nestjs/common';
 import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
@@ -33,6 +33,13 @@ export class EmployeesController {
   async getNextEmployeeCode() {
     const data = await this.employeesService.getNextEmployeeCode();
     return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
+  }
+
+  @Get('search-simple')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async searchSimple(@Query('q') q: string) {
+    const data = await this.employeesService.searchSimple(q || '');
+    return createApiResponse(data, HttpStatus.OK, 'Search results retrieved successfully');
   }
 
   @Get(':id')

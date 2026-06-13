@@ -110,41 +110,6 @@ export class ZkAttendanceMappingService {
     }));
   }
 
-  async searchPersons(type: DevicePersonType, q?: string) {
-    if (type === DevicePersonType.STAFF) {
-      return this.prisma.employee_profiles.findMany({
-        where: q
-          ? {
-              OR: [
-                { full_name: { contains: q, mode: 'insensitive' as const } },
-                { employee_code: { contains: q, mode: 'insensitive' as const } },
-              ],
-            }
-          : undefined,
-        select: { id: true, full_name: true, employee_code: true },
-        orderBy: { full_name: 'asc' },
-        take: 20,
-      });
-    }
-
-    return this.prisma.students.findMany({
-      where: {
-        status: 'ENROLLED',
-        ...(q
-          ? {
-              OR: [
-                { full_name: { contains: q, mode: 'insensitive' as const } },
-                { gr_number: { contains: q, mode: 'insensitive' as const } },
-              ],
-            }
-          : {}),
-      },
-      select: { cc: true, full_name: true, gr_number: true },
-      orderBy: { full_name: 'asc' },
-      take: 20,
-    });
-  }
-
   // Builds a synthetic ATTLOG line and feeds it through the same processPush()
   // path a real device push uses — for dev/testing without physical hardware.
   async simulateScan(dto: SimulateScanDto) {
