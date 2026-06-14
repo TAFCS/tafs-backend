@@ -3355,18 +3355,76 @@ export class VouchersService {
             : heads;
 
         // STEP 1: Find superseded VOID vouchers BEFORE modifying any head links.
+        //
+        // Reactivate only the voucher(s) DIRECTLY superseded by this deletion —
+        // completely-absorbed VOID vouchers (every one of their heads is among this
+        // voucher's heads) whose head-set is not itself a subset of another such
+        // candidate's head-set.
+        //
+        // Why: in a chain V1 (heads=[Jan]) -> V2 (heads=[Jan,Feb]) -> V3
+        // (heads=[Jan,Feb,Mar]), each fully absorbing the previous, deleting V3 must
+        // reactivate only V2 — the previously-made voucher chronologically. V1 stays
+        // VOID because V2, once reactivated, still carries Jan as an arrear;
+        // reactivating V1 too would create a duplicate active voucher for Jan.
+        // Independent arrear vouchers whose head-sets don't subset each other (e.g.
+        // a standalone Feb voucher and a standalone Apr voucher both absorbed into a
+        // new combined voucher) are unaffected and all reactivate, as before.
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         let supersededVouchers: { id: number; due_date: Date }[] = [];
         if (reactivate && allFeeIds.length > 0) {
-            supersededVouchers = await tx.vouchers.findMany({
+            const feeIdSet = new Set(allFeeIds);
+
+            const overlappingHeads = await tx.voucher_heads.findMany({
                 where: {
-                    student_id: voucher.student_id,
-                    status: 'VOID',
-                    voucher_heads: { some: { student_fee_id: { in: allFeeIds } } },
+                    student_fee_id: { in: allFeeIds },
+                    voucher_id: { not: id },
                 },
-                select: { id: true, due_date: true },
+                select: { voucher_id: true },
             });
+            const overlappingIds = Array.from(new Set(overlappingHeads.map((h: any) => h.voucher_id)));
+
+            const candidates = overlappingIds.length > 0
+                ? await tx.vouchers.findMany({
+                    where: { id: { in: overlappingIds }, student_id: voucher.student_id, status: 'VOID' },
+                    select: { id: true, due_date: true },
+                })
+                : [];
+
+            if (candidates.length > 0) {
+                const candidateIds = candidates.map((c: any) => c.id);
+                const allCandidateHeads = await tx.voucher_heads.findMany({
+                    where: { voucher_id: { in: candidateIds } },
+                    select: { voucher_id: true, student_fee_id: true },
+                });
+
+                const headsByVoucher = new Map<number, Set<number>>();
+                for (const h of allCandidateHeads) {
+                    if (h.student_fee_id === null) continue;
+                    if (!headsByVoucher.has(h.voucher_id)) headsByVoucher.set(h.voucher_id, new Set());
+                    headsByVoucher.get(h.voucher_id)!.add(h.student_fee_id);
+                }
+
+                // Completely superseded: every head of the candidate is among this voucher's heads.
+                const fullyAbsorbed = candidateIds.filter((cid: number) => {
+                    const heads = headsByVoucher.get(cid);
+                    return !!heads && heads.size > 0 && [...heads].every(fid => feeIdSet.has(fid));
+                });
+
+                // Drop any candidate whose head-set is a proper subset of another
+                // fully-absorbed candidate's — it's covered transitively through that
+                // other voucher, not directly by this deletion.
+                const directlySupersededIds = new Set(fullyAbsorbed.filter((cid: number) => {
+                    const heads = headsByVoucher.get(cid)!;
+                    return !fullyAbsorbed.some((otherId: number) => {
+                        if (otherId === cid) return false;
+                        const otherHeads = headsByVoucher.get(otherId)!;
+                        return heads.size < otherHeads.size && [...heads].every(fid => otherHeads.has(fid));
+                    });
+                }));
+
+                supersededVouchers = candidates.filter((c: any) => directlySupersededIds.has(c.id));
+            }
         }
 
         // STEP 2: Split artifact cleanup.
