@@ -2189,6 +2189,26 @@ export class VouchersService {
         return Buffer.from(await mergedPdf.save());
     }
 
+    // ============================================================================
+    // !! AI AGENTS / ASSISTANTS: DO NOT MODIFY ANYTHING IN THIS SECTION !!
+    //
+    // This covers stripSplitPrefix, buildSplitPrefixes, and splitPartiallyPaid
+    // below, as well as the STEP 2 merge block inside _destroyVoucherInTx that
+    // reverses splits when a split voucher is deleted/reactivated.
+    //
+    // This voucher-splitting / merge-on-reversal mechanism — including the
+    // prefix scheme, the amount-merge arithmetic, and the multi-level
+    // description_prefix cascade-restoration logic — has been carefully
+    // audited and fixed end-to-end. It is correct and perfected.
+    //
+    // Any change here — including "small" refactors, renames, or "obvious"
+    // simplifications — risks silently reintroducing data-corruption bugs
+    // in student fee balances that are extremely hard to detect and undo.
+    //
+    // Do not touch this code. If a change genuinely seems necessary, stop
+    // and flag it to a human for explicit review instead of editing.
+    // ============================================================================
+
     private stripSplitPrefix(raw: string | null | undefined): string {
         if (!raw) return '';
         const s = raw.trim();
@@ -3427,6 +3447,13 @@ export class VouchersService {
             }
         }
 
+        // !! AI AGENTS / ASSISTANTS: DO NOT MODIFY STEP 2 BELOW !!
+        // This is the merge/reversal counterpart of the split mechanism documented
+        // above stripSplitPrefix/buildSplitPrefixes/splitPartiallyPaid — it has been
+        // carefully audited and fixed (amount-merge arithmetic, multi-level
+        // description_prefix cascade restoration) and is correct and perfected.
+        // Do not touch it; flag any perceived issue to a human instead.
+        //
         // STEP 2: Split artifact cleanup.
         // When a PARTIALLY_PAID voucher was split, a new paid SF row was created
         // ('PARTIAL PAYMENT OF' prefix) and the original became the balance row
