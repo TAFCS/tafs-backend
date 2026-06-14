@@ -1977,7 +1977,31 @@ export class VouchersService {
 
         const isPaidVoucher = voucher.status === 'PAID';
 
+        // Is this voucher a product of splitPartiallyPaid? Future splits carry the
+        // split_parent_id marker; legacy splits (pre-marker) are detected via the
+        // PARTIAL/BALANCE PAYMENT OF description_prefix left on their heads.
+        const isSplitVoucher =
+            (voucher as any).split_parent_id != null ||
+            voucher.voucher_heads.some((h) => {
+                const p = (h.student_fees?.description_prefix ?? '') as string;
+                return p.startsWith('PARTIAL PAYMENT OF') || p.startsWith('BALANCE PAYMENT OF');
+            });
+
+        let fullUndoHandled = false;
+
         await this.prisma.$transaction(async (tx) => {
+            // ── Step 0: Full split-undo. If this voucher is a marked split child and the
+            //    situation is the clean single-level / single-deposit case, reverse the split
+            //    entirely — reactivate the original (VOID) voucher with its fees ISSUED + unpaid
+            //    and delete both split children. Otherwise fall through to the existing flow.
+            if ((voucher as any).split_parent_id != null) {
+                const handled = await this._reverseSplitFamilyInTx(voucher as any, depositId, tx);
+                if (handled) {
+                    fullUndoHandled = true;
+                    return;
+                }
+            }
+
             // ── Step 1: Capture affected fee IDs, then delete the allocations.
             const allocations = await tx.deposit_allocations.findMany({
                 where: { deposit_id: depositId, voucher_id: voucherId },
@@ -1998,14 +2022,17 @@ export class VouchersService {
                 await tx.deposits.delete({ where: { id: depositId } });
             }
 
-            if (isPaidVoucher) {
-                // ── PAID path: delete the voucher entirely and reset all heads to NOT_ISSUED.
-                // This is the same logic as remove() — split artifacts are cleaned up, superseded
-                // VOID vouchers are reactivated, and the voucher row is hard-deleted.
+            if (isPaidVoucher && isSplitVoucher) {
+                // ── PAID + SPLIT path (UNCHANGED): delete the voucher entirely and reset all
+                // heads to NOT_ISSUED. Same logic as remove() — split artifacts are cleaned up,
+                // superseded VOID vouchers are reactivated, and the voucher row is hard-deleted.
                 await this._destroyVoucherInTx(voucherId, voucher as any, tx, true);
             } else {
-                // ── PARTIALLY_PAID / UNPAID path: recalculate from remaining allocations
-                // and revert the voucher to UNPAID preserving all original dates.
+                // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from remaining
+                // allocations and revert the voucher to UNPAID preserving all original dates.
+                // A fully-paid non-split voucher lands here: when its last deposit is reversed
+                // its fees drop to ISSUED, heads reset to full balance, and it returns to UNPAID
+                // — the voucher row and its dates are preserved (NOT deleted).
 
                 // Recalculate student_fees.amount_paid from whatever allocations remain.
                 if (affectedFeeIds.length > 0) {
@@ -2076,10 +2103,206 @@ export class VouchersService {
             });
         }
 
-        // Voucher was deleted — nothing to fetch back.
-        if (isPaidVoucher) return null;
+        // The PAID + split delete path and the full split-undo both remove this voucher —
+        // nothing to fetch back in either case.
+        if (fullUndoHandled || (isPaidVoucher && isSplitVoucher)) return null;
 
         return this.findOne(voucherId);
+    }
+
+    /**
+     * Full split-undo for the clean, common case: a deposit recorded BEFORE a
+     * splitPartiallyPaid is being reversed. Reconstructs the original (now VOID)
+     * voucher — recreating its heads, restoring its fees to ISSUED + unpaid, and
+     * merging any partial-split fee rows back — then deletes both split children.
+     *
+     * Returns true if it handled the reversal; false if the situation is NOT the
+     * clean single-level / single-deposit case, in which case the caller falls
+     * back to the existing per-voucher reversal flow (delete + NOT_ISSUED).
+     *
+     * Deliberately self-contained: it does NOT modify _destroyVoucherInTx or the
+     * protected splitPartiallyPaid internals. The tight guard below means anything
+     * remotely complex (multi-level splits, children with independent deposits,
+     * re-split children) bails safely to the proven existing behavior.
+     */
+    private async _reverseSplitFamilyInTx(child: any, depositId: number, tx: any): Promise<boolean> {
+        const parentId = child.split_parent_id;
+        if (parentId == null) return false;
+
+        // The original voucher must still exist and be VOID (the split's end state).
+        const parent = await tx.vouchers.findUnique({
+            where: { id: parentId },
+            include: { voucher_arrear_surcharges: true },
+        });
+        if (!parent || parent.status !== 'VOID') return false;
+
+        // Exactly the two direct split children, neither itself re-split or VOID,
+        // in the normal post-split shape (one PAID + one UNPAID/OVERDUE).
+        const children = await tx.vouchers.findMany({
+            where: { split_parent_id: parentId },
+            include: { voucher_heads: { include: { student_fees: true } } },
+        });
+        if (children.length !== 2) return false;
+        for (const c of children) {
+            if (c.status === 'VOID') return false;
+            const grandchildren = await tx.vouchers.count({ where: { split_parent_id: c.id } });
+            if (grandchildren > 0) return false;
+        }
+        const hasPaid = children.some((c: any) => c.status === 'PAID');
+        const hasUnpaid = children.some((c: any) => c.status === 'UNPAID' || c.status === 'OVERDUE');
+        if (!hasPaid || !hasUnpaid) return false;
+
+        const childIds = children.map((c: any) => c.id);
+
+        // Every deposit_allocation on the children must belong to the deposit being
+        // reversed — otherwise an independent payment exists and a clean undo is impossible.
+        const childAllocs = await tx.deposit_allocations.findMany({
+            where: { voucher_id: { in: childIds } },
+        });
+        if (childAllocs.some((a: any) => a.deposit_id !== depositId)) return false;
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Guard passed — perform the clean full-undo.
+        // ─────────────────────────────────────────────────────────────────────
+        const allChildHeads = children.flatMap((c: any) => c.voucher_heads);
+
+        // 1. Merge each partial-split PAID fee row back into its BALANCE row, restoring
+        //    the original amount and ISSUED status. Single-level only (guarded above).
+        const mergedPaidToBalance = new Map<number, number>(); // paidSfId -> balanceSfId
+        for (const h of allChildHeads) {
+            const sf = h.student_fees;
+            if (!sf) continue;
+            const prefix = (sf.description_prefix ?? '') as string;
+            if (!prefix.startsWith('PARTIAL PAYMENT OF')) continue;
+            if (mergedPaidToBalance.has(sf.id)) continue;
+
+            const balanceSf = await tx.student_fees.findFirst({
+                where: {
+                    student_id: parent.student_id,
+                    fee_type_id: sf.fee_type_id,
+                    fee_date: sf.fee_date,
+                    id: { not: sf.id },
+                    description_prefix: { startsWith: 'BALANCE PAYMENT OF' },
+                } as any,
+            });
+            if (!balanceSf) return false; // unexpected shape — bail (tx rolls back cleanly)
+
+            // Restore balanceSf's prefix correctly for MULTI-LEVEL splits. If OTHER
+            // "PARTIAL PAYMENT OF" rows still exist for this fee slot, balanceSf is still
+            // the balance row of a higher-level split and must KEEP its "BALANCE PAYMENT OF
+            // [base]" prefix. Only when this is the last/only partial being reversed do we
+            // restore it to the bare base label (null for normally-named fees). Mirrors the
+            // otherPartialCount logic in _destroyVoucherInTx STEP 2. (sf.id is excluded —
+            // it's the partial row being merged away in this same pass.)
+            const otherPartialCount = await tx.student_fees.count({
+                where: {
+                    student_id: parent.student_id,
+                    fee_type_id: sf.fee_type_id,
+                    fee_date: sf.fee_date,
+                    id: { not: sf.id },
+                    description_prefix: { startsWith: 'PARTIAL PAYMENT OF' },
+                } as any,
+            });
+            const baseLabel = this.stripSplitPrefix(sf.description_prefix);
+            const restoredPrefix = otherPartialCount > 0
+                ? this.buildSplitPrefixes(baseLabel).prefixBalance
+                : (baseLabel || null);
+            await tx.student_fees.update({
+                where: { id: balanceSf.id },
+                data: {
+                    status: 'ISSUED',
+                    amount: new Prisma.Decimal(balanceSf.amount ?? 0).add(new Prisma.Decimal(sf.amount ?? 0)),
+                    amount_before_discount: new Prisma.Decimal(balanceSf.amount_before_discount ?? 0)
+                        .add(new Prisma.Decimal(sf.amount_before_discount ?? 0)),
+                    amount_paid: new Prisma.Decimal(0),
+                    description_prefix: restoredPrefix,
+                    // issue/due/validity dates are retained from the original row.
+                } as any,
+            });
+            mergedPaidToBalance.set(sf.id, balanceSf.id);
+        }
+
+        // 2. Restore every other paid fee row to ISSUED + unpaid (keep dates/amounts).
+        //    Only PAID / PARTIALLY_PAID rows are touched — ISSUED and DISCOUNT rows are
+        //    left exactly as they are.
+        const seen = new Set<number>();
+        for (const h of allChildHeads) {
+            const sf = h.student_fees;
+            if (!sf || mergedPaidToBalance.has(sf.id) || seen.has(sf.id)) continue;
+            seen.add(sf.id);
+            if (sf.status === 'PAID' || sf.status === 'PARTIALLY_PAID') {
+                await tx.student_fees.update({
+                    where: { id: sf.id },
+                    data: { status: 'ISSUED', amount_paid: new Prisma.Decimal(0) } as any,
+                });
+            }
+        }
+
+        // 3. Aggregate the parent's heads: group child heads by their restored fee row,
+        //    summing the net (paid-side net + balance-side net = original net).
+        const headAgg = new Map<number, { net: Prisma.Decimal; discount: Prisma.Decimal; label: string | null }>();
+        for (const h of allChildHeads) {
+            if (h.student_fee_id == null) continue;
+            const restoredId = mergedPaidToBalance.get(h.student_fee_id) ?? h.student_fee_id;
+            const cur = headAgg.get(restoredId) ?? { net: new Prisma.Decimal(0), discount: new Prisma.Decimal(0), label: null };
+            cur.net = cur.net.add(new Prisma.Decimal(h.net_amount ?? 0));
+            cur.discount = cur.discount.add(new Prisma.Decimal(h.discount_amount ?? 0));
+            if (!cur.label && h.discount_label) cur.label = h.discount_label;
+            headAgg.set(restoredId, cur);
+        }
+
+        // 4. Delete the reversed deposit's child allocations, then the child vouchers
+        //    (cascades their heads + surcharge copies), then the merged-away paid fee rows.
+        await tx.deposit_allocations.deleteMany({ where: { voucher_id: { in: childIds } } });
+        await tx.vouchers.deleteMany({ where: { id: { in: childIds } } });
+        if (mergedPaidToBalance.size > 0) {
+            await tx.student_fees.deleteMany({ where: { id: { in: [...mergedPaidToBalance.keys()] } } });
+        }
+
+        // 5. Recreate the parent's heads from the aggregation (parent had none after the split).
+        await tx.voucher_heads.deleteMany({ where: { voucher_id: parent.id } });
+        const restoredSfRows = await tx.student_fees.findMany({
+            where: { id: { in: [...headAgg.keys()] } },
+            select: { id: true, description_prefix: true },
+        });
+        const sfPrefix = new Map(restoredSfRows.map((r: any) => [r.id, r.description_prefix]));
+        await tx.voucher_heads.createMany({
+            data: [...headAgg.entries()].map(([sfId, agg]) => ({
+                voucher_id: parent.id,
+                student_fee_id: sfId,
+                discount_amount: agg.discount,
+                discount_label: agg.label,
+                net_amount: agg.net,
+                amount_deposited: new Prisma.Decimal(0),
+                balance: agg.net,
+                description_prefix: (sfPrefix.get(sfId) ?? null) as any,
+            } as any)),
+        });
+
+        // 6. Restore the parent's surcharges (undo their payment) and clear the late-fee cache.
+        await tx.voucher_arrear_surcharges.updateMany({
+            where: { voucher_id: parent.id },
+            data: { amount_paid: new Prisma.Decimal(0) },
+        });
+
+        // 7. Reactivate the parent voucher (OVERDUE if its due date has passed, else UNPAID).
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const due = new Date(parent.due_date); due.setHours(0, 0, 0, 0);
+        await tx.vouchers.update({
+            where: { id: parent.id },
+            data: { status: due < today ? 'OVERDUE' : 'UNPAID', late_fee_deposited: new Prisma.Decimal(0) } as any,
+        });
+
+        // 8. Delete the deposit if it is now fully orphaned.
+        const remaining = await tx.deposit_allocations.count({ where: { deposit_id: depositId } });
+        if (remaining === 0) {
+            await tx.deposits.delete({ where: { id: depositId } });
+        }
+
+        this.logger.log(
+            `clearDeposit: full split-undo — reactivated voucher #${parent.id}, deleted split children [${childIds.join(', ')}], reversed deposit #${depositId}.`,
+        );
+        return true;
     }
 
     /**
@@ -2617,6 +2840,7 @@ export class VouchersService {
                     total_payable_before_due: paidTotal,
                     total_payable_after_due: paidTotal,
                     total_arrears: paidArrears,
+                    split_parent_id: original.id,
                 } as any,
             });
             await tx.vouchers.update({
@@ -2634,6 +2858,7 @@ export class VouchersService {
                     total_payable_before_due: unpaidTotal,
                     total_payable_after_due: unpaidTotal.add(lateFeeVal),
                     total_arrears: unpaidArrears,
+                    split_parent_id: original.id,
                 } as any,
             });
             await tx.vouchers.update({
