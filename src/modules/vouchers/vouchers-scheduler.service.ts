@@ -12,7 +12,7 @@ export class VouchersSchedulerService {
    * Cron job that runs at midnight (00:00:00) every day.
    * Updates voucher statuses based on due_date and validity_date:
    * 1. Mark UNPAID vouchers as OVERDUE if due_date has passed
-   * 2. Mark UNPAID/OVERDUE vouchers as VOID if validity_date has passed
+   * 2. Mark UNPAID/OVERDUE vouchers as EXPIRED if validity_date has passed
    */
   @Cron('0 0 * * *')
   async handleVoucherStatusUpdate() {
@@ -35,17 +35,17 @@ export class VouchersSchedulerService {
         this.logger.log(`[Voucher Scheduler] Marked ${overdueResult.count} voucher(s) as OVERDUE`);
       }
 
-      // 2. Mark vouchers as VOID if validity_date has passed
-      const voidResult = await this.prisma.vouchers.updateMany({
+      // 2. Mark vouchers as EXPIRED if validity_date has passed
+      const expiredResult = await this.prisma.vouchers.updateMany({
         where: {
           status: { in: ['UNPAID', 'OVERDUE'] },
           validity_date: { not: null, lt: today },
         },
-        data: { status: 'VOID' },
+        data: { status: 'EXPIRED' },
       });
 
-      if (voidResult.count > 0) {
-        this.logger.log(`[Voucher Scheduler] Marked ${voidResult.count} voucher(s) as VOID due to expired validity_date`);
+      if (expiredResult.count > 0) {
+        this.logger.log(`[Voucher Scheduler] Marked ${expiredResult.count} voucher(s) as EXPIRED due to expired validity_date`);
       }
 
       this.logger.log(`[Voucher Scheduler] Daily status update completed successfully`);

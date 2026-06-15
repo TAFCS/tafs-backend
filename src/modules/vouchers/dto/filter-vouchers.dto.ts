@@ -15,7 +15,7 @@ export class FilterVouchersDto {
     @IsInt()
     campus_id?: number;
 
-    @ApiPropertyOptional({ description: 'Filter by Voucher Status (e.g. UNPAID, PAID, OVERDUE)' })
+    @ApiPropertyOptional({ description: 'Filter by Voucher Status (e.g. UNPAID, PAID, OVERDUE, VOID, EXPIRED)' })
     @IsOptional()
     @IsString()
     status?: string;

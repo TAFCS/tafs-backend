@@ -69,7 +69,7 @@ export class BulkVoucherLogicService {
                 where: {
                     student_id: { in: studentIds },
                     fee_date: { gte: feeDateFrom, lte: feeDateTo },
-                    status: { not: 'VOID' },
+                    status: { notIn: ['VOID', 'EXPIRED'] },
                 },
                 select: { student_id: true, fee_date: true },
             }),
@@ -91,7 +91,7 @@ export class BulkVoucherLogicService {
         const { studentRecords, matchingFees, existingVouchers, expectedFeeDates, skipAlreadyIssued } = params;
         const feeDateFrom = new Date(params.fee_date_from);
         
-        // Set of "cc|dateStr" keys that already have a non-VOID voucher
+        // Set of "cc|dateStr" keys that already have a non-VOID, non-EXPIRED voucher
         const existingVoucherKeys = new Set(
             existingVouchers
                 .filter(v => v.fee_date)

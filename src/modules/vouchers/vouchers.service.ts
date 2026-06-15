@@ -555,14 +555,15 @@ export class VouchersService {
                 select: { id: true, status: true, issue_date: true },
             });
 
-            // Custom sort: Unpaid -> Partially Paid -> Paid -> Void
+            // Custom sort: Unpaid -> Partially Paid -> Paid -> Void/Expired
             const statusOrder: Record<string, number> = {
                 'ISSUED': 1,
                 'OVERDUE': 1,
                 'NOT_ISSUED': 1,
                 'PARTIALLY_PAID': 2,
                 'PAID': 3,
-                'VOID': 4
+                'VOID': 4,
+                'EXPIRED': 4
             };
 
             allMatching.sort((a, b) => {
@@ -597,13 +598,15 @@ export class VouchersService {
                 paid: 0,
                 unpaid: 0,
                 overdue: 0,
-                void: 0
+                void: 0,
+                expired: 0
             };
 
             stats.forEach(s => {
                 const count = s._count._all;
                 if (s.status === 'PAID') statusStats.paid += count;
                 else if (s.status === 'VOID') statusStats.void += count;
+                else if (s.status === 'EXPIRED') statusStats.expired += count;
                 else if (s.status === 'OVERDUE') statusStats.overdue += count;
                 else statusStats.unpaid += count;
             });
@@ -1290,9 +1293,9 @@ export class VouchersService {
             ? {}
             : {
                 OR: [
-                    { status: { not: 'VOID' } },
+                    { status: { notIn: ['VOID', 'EXPIRED'] } },
                     {
-                        status: 'VOID',
+                        status: { in: ['VOID', 'EXPIRED'] },
                         voucher_heads: { some: { amount_deposited: { gt: 0 } } },
                     },
                 ],
@@ -1334,7 +1337,7 @@ export class VouchersService {
         const voucher = await this.prisma.vouchers.findFirst({
             where: {
                 student_id: studentCc,
-                status: { not: 'VOID' },
+                status: { notIn: ['VOID', 'EXPIRED'] },
                 OR: [
                     { academic_year: academicYear },
                     {
@@ -1478,9 +1481,11 @@ export class VouchersService {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
 
-        if (voucher.status === 'VOID' && !DEV_ALLOW_VOID_DEPOSITS) {
+        if ((voucher.status === 'VOID' || voucher.status === 'EXPIRED') && !DEV_ALLOW_VOID_DEPOSITS) {
             throw new BadRequestException(
-                `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
+                voucher.status === 'EXPIRED'
+                    ? `Voucher #${voucherId} has expired. Issue a new voucher for this student and record the deposit against it instead.`
+                    : `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
             );
         }
 
@@ -3830,15 +3835,15 @@ export class VouchersService {
         // PAID and PARTIALLY_PAID vouchers cannot be deleted directly.
         // To undo a payment: clear the deposit via the deposit page — for PAID vouchers the
         // deposit clear automatically deletes the voucher; for PARTIALLY_PAID it reverts to UNPAID.
-        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'VOID') {
+        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'VOID' && voucher.status !== 'EXPIRED') {
             throw new BadRequestException(
-                `Only UNPAID, OVERDUE, or VOID vouchers can be deleted. ` +
+                `Only UNPAID, OVERDUE, VOID, or EXPIRED vouchers can be deleted. ` +
                 `Voucher #${id} is ${voucher.status}. Clear its deposits first.`
             );
         }
 
         const result = await this.prisma.$transaction(
-            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID'),
+            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID' && voucher.status !== 'EXPIRED'),
             { maxWait: 5000, timeout: 15000 },
         );
 
