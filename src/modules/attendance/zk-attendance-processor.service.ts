@@ -141,6 +141,20 @@ export class ZkAttendanceProcessorService {
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   }
 
+  // Converts a real instant to its Asia/Karachi wall-clock components expressed
+  // as a Date.UTC value — the same naive-local convention used for scanTime.
+  private toNaiveLocalMs(d: Date): number {
+    const p = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Karachi',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(d)
+      .reduce<Record<string, string>>((acc, part) => { acc[part.type] = part.value; return acc; }, {});
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  }
+
   private async processOneScan(input: {
     sn: string;
     pin: string;
@@ -178,7 +192,9 @@ export class ZkAttendanceProcessorService {
       }
     }
 
-    const isLive = Math.abs(input.now.getTime() - input.scanTime.getTime()) < LIVE_THRESHOLD_MS;
+    // scanTime is a naive-local (PKT) timestamp stored via Date.UTC, so compare
+    // against now expressed in the same naive-local space, not real UTC.
+    const isLive = Math.abs(input.scanTime.getTime() - this.toNaiveLocalMs(input.now)) < LIVE_THRESHOLD_MS;
 
     let scanRow: zk_attendance_scans;
     try {
