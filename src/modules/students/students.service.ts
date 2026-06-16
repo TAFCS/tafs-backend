@@ -256,7 +256,7 @@ export class StudentsService {
         where.student_guardians = { none: {} };
       } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
-          SELECT student_id FROM student_guardians
+          SELECT student_id FROM public.student_guardians
           GROUP BY student_id
           HAVING COUNT(*) > 2
         `;
@@ -2045,9 +2045,9 @@ export class StudentsService {
     // Identifiable as heads where student_fees.academic_year != vouchers.academic_year
     const arrearsResult: any = await this.prisma.$queryRaw`
       SELECT SUM(vh.net_amount) as total
-      FROM voucher_heads vh
-      JOIN vouchers v ON vh.voucher_id = v.id
-      JOIN student_fees sf ON vh.student_fee_id = sf.id
+      FROM public.voucher_heads vh
+      JOIN public.vouchers v ON vh.voucher_id = v.id
+      JOIN public.student_fees sf ON vh.student_fee_id = sf.id
       WHERE v.student_id = ${studentId}
       AND sf.academic_year != v.academic_year
     `;

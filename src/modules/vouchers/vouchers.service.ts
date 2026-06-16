@@ -486,8 +486,8 @@ export class VouchersService {
                 if (singleFeeDate) {
                     const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
                         SELECT vh.voucher_id
-                        FROM voucher_heads vh
-                        JOIN student_fees sf ON vh.student_fee_id = sf.id
+                        FROM public.voucher_heads vh
+                        JOIN public.student_fees sf ON vh.student_fee_id = sf.id
                         WHERE sf.fee_date IS NOT NULL
                         GROUP BY vh.voucher_id
                         HAVING COUNT(DISTINCT sf.fee_date) = 1
@@ -498,7 +498,7 @@ export class VouchersService {
                 if (multipleFeeHeads) {
                     const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
                         SELECT voucher_id
-                        FROM voucher_heads
+                        FROM public.voucher_heads
                         GROUP BY voucher_id
                         HAVING COUNT(id) > 1
                     `;
@@ -1645,7 +1645,7 @@ export class VouchersService {
 
                 if (distributionHeadIds.length > 0) {
                     await tx.$executeRaw`
-                    UPDATE voucher_heads
+                    UPDATE public.voucher_heads
                     SET balance = GREATEST(
                         COALESCE(net_amount, 0) - COALESCE(amount_deposited, 0),
                         0
@@ -1944,7 +1944,7 @@ export class VouchersService {
                     data: { status: 'UNPAID', late_fee_deposited: 0 } as any,
                 });
                 await (tx as any).$executeRawUnsafe(
-                    `UPDATE voucher_heads SET amount_deposited = 0, balance = net_amount WHERE voucher_id = $1`,
+                    `UPDATE public.voucher_heads SET amount_deposited = 0, balance = net_amount WHERE voucher_id = $1`,
                     vId,
                 );
             }
@@ -2014,6 +2014,9 @@ export class VouchersService {
             const affectedFeeIds = [...new Set(
                 allocations.map(a => a.student_fee_id).filter((id): id is number => id != null)
             )];
+            const affectedSurchargeIds = [...new Set(
+                allocations.map(a => a.surcharge_id).filter((id): id is number => id != null)
+            )];
 
             await tx.deposit_allocations.deleteMany({
                 where: { deposit_id: depositId, voucher_id: voucherId },
@@ -2033,11 +2036,11 @@ export class VouchersService {
                 // superseded VOID vouchers are reactivated, and the voucher row is hard-deleted.
                 await this._destroyVoucherInTx(voucherId, voucher as any, tx, true);
             } else {
-                // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from remaining
-                // allocations and revert the voucher to UNPAID preserving all original dates.
-                // A fully-paid non-split voucher lands here: when its last deposit is reversed
-                // its fees drop to ISSUED, heads reset to full balance, and it returns to UNPAID
-                // — the voucher row and its dates are preserved (NOT deleted).
+                // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from the
+                // remaining allocations and re-derive the voucher status (the exact inverse of
+                // recordDeposit), preserving all original dates. Removing one of several deposits
+                // steps the voucher back PAID → PARTIALLY_PAID → UNPAID/OVERDUE according to what
+                // payment still remains; the voucher row and its dates are preserved (NOT deleted).
 
                 // Recalculate student_fees.amount_paid from whatever allocations remain.
                 if (affectedFeeIds.length > 0) {
@@ -2090,9 +2093,84 @@ export class VouchersService {
                     });
                 }
 
+                // ── Recompute late_fee_deposited from the LATE_FEE allocations that REMAIN
+                //    on this voucher. recordDeposit writes one LATE_FEE allocation per deposit
+                //    recording exactly the late fee it filled, and Step 1 already deleted the
+                //    reversed deposit's row — so this reverses precisely that deposit's late fee.
+                const remLate = await tx.deposit_allocations.aggregate({
+                    where: { voucher_id: voucherId, type: 'LATE_FEE' },
+                    _sum: { amount: true },
+                });
+                const lateFeeDeposited = new Prisma.Decimal(remLate._sum.amount ?? 0);
+
+                // ── Reverse arrear-surcharge amount_paid for every surcharge this deposit
+                //    touched, recomputed from whatever allocations still remain against it.
+                for (const sid of affectedSurchargeIds) {
+                    const remSur = await tx.deposit_allocations.aggregate({
+                        where: { surcharge_id: sid },
+                        _sum: { amount: true },
+                    });
+                    await tx.voucher_arrear_surcharges.update({
+                        where: { id: sid },
+                        data: { amount_paid: new Prisma.Decimal(remSur._sum.amount ?? 0) },
+                    });
+                }
+
+                // ── Derive the voucher status from what payment actually remains — the exact
+                //    inverse of recordDeposit's status logic (PAID → PARTIALLY_PAID → UNPAID/
+                //    OVERDUE). Re-fetch heads so the freshly-recalculated balances are read back.
+                const refreshed = await tx.vouchers.findUnique({
+                    where: { id: voucherId },
+                    include: { voucher_heads: true },
+                });
+                if (!refreshed) {
+                    throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+                }
+
+                const remainingHeads = refreshed.voucher_heads.reduce(
+                    (sum, h) => sum.add(new Prisma.Decimal(h.balance as any ?? 0)),
+                    new Prisma.Decimal(0),
+                );
+                const allMainHeadsPaid = remainingHeads.lte(0);
+                const anyHeadDeposited = refreshed.voucher_heads.some((h) =>
+                    new Prisma.Decimal(h.amount_deposited as any ?? 0).gt(0),
+                );
+
+                const surcharges = await (tx as any).voucher_arrear_surcharges.findMany({
+                    where: { voucher_id: voucherId, waived: false },
+                });
+                const surchargeRem = surcharges.reduce(
+                    (sum: Prisma.Decimal, s: any) =>
+                        sum.add(new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0))),
+                    new Prisma.Decimal(0),
+                );
+                const anySurchargeDep = surcharges.some((s: any) =>
+                    new Prisma.Decimal(s.amount_paid ?? 0).gt(0),
+                );
+
+                const hasAnyDeposit = anyHeadDeposited || lateFeeDeposited.gt(0) || anySurchargeDep;
+                const allSurchargesPaid = surchargeRem.lte(0);
+
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const dueDate = new Date(refreshed.due_date);
+                dueDate.setHours(0, 0, 0, 0);
+                const isOverdue = today > dueDate;
+
+                let nextStatus: string;
+                if (allMainHeadsPaid && allSurchargesPaid) {
+                    nextStatus = 'PAID';
+                } else if (hasAnyDeposit) {
+                    nextStatus = 'PARTIALLY_PAID';
+                } else if (isOverdue) {
+                    nextStatus = 'OVERDUE';
+                } else {
+                    nextStatus = 'UNPAID';
+                }
+
                 await tx.vouchers.update({
                     where: { id: voucherId },
-                    data: { status: 'UNPAID', late_fee_deposited: 0 } as any,
+                    data: { status: nextStatus, late_fee_deposited: lateFeeDeposited } as any,
                 });
             }
         }, { timeout: 15000 });

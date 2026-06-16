@@ -833,7 +833,7 @@ export class StudentFeesService {
             if (fee_ids || target_month !== undefined) {
                 // 1. Revert fees currently in this bundle to their original target_month
                 await tx.$executeRaw`
-                    UPDATE student_fees
+                    UPDATE public.student_fees
                     SET month = target_month
                     WHERE bundle_id = ${id}
                 `;
@@ -868,7 +868,7 @@ export class StudentFeesService {
         return this.prisma.$transaction(async (tx) => {
             // Revert member fees' month to their target_month (original period)
             await tx.$executeRaw`
-                UPDATE student_fees
+                UPDATE public.student_fees
                 SET month = target_month
                 WHERE bundle_id = ${id}
             `;
