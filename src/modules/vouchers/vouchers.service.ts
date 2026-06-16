@@ -3242,9 +3242,10 @@ export class VouchersService {
 
         // VOID is a manual override (superseded voucher) — never recalculate it.
         // PAID is also definitional — hardcoded by deposit flow or split transaction.
+        // EXPIRED is set by the validity-date cron and must not be overridden back to OVERDUE.
         // Re-deriving it from student_fees breaks split vouchers where a head only
         // covers a *portion* of the underlying student_fee amount.
-        if (voucher.status === 'VOID' || voucher.status === 'PAID') {
+        if (voucher.status === 'VOID' || voucher.status === 'PAID' || voucher.status === 'EXPIRED') {
             const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
             const mappedHeads = (voucher.voucher_heads || []).map((h: any) => {
                 const fee = h.student_fees;
