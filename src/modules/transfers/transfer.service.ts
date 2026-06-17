@@ -15,17 +15,32 @@ export class TransferService {
   ) {}
   async searchStudents(q: string) {
     if (!q?.trim()) return [];
-    const isNumeric = /^\d+$/.test(q.trim());
+    const queryStr = q.trim();
+    const queryLower = queryStr.toLowerCase();
+    const isNumeric = /^\d+$/.test(queryStr);
+
+    const ccRanges: any[] = [];
+    if (isNumeric) {
+      const numVal = Number(queryStr);
+      let multiplier = 1;
+      for (let i = 0; i < 6; i++) {
+        const gte = numVal * multiplier;
+        const lte = (numVal + 1) * multiplier - 1;
+        ccRanges.push({ cc: { gte, lte } });
+        multiplier *= 10;
+      }
+    }
+
     const students = await this.prisma.students.findMany({
       where: {
         deleted_at: null,
         OR: [
-          ...(isNumeric ? [{ cc: Number(q) }] : []),
-          { full_name: { contains: q, mode: 'insensitive' as const } },
-          { gr_number: { contains: q, mode: 'insensitive' as const } },
+          ...(isNumeric ? ccRanges : []),
+          { full_name: { contains: queryStr, mode: 'insensitive' as const } },
+          { gr_number: { contains: queryStr, mode: 'insensitive' as const } },
         ],
       },
-      take: 20,
+      take: 150,
       select: {
         cc: true,
         full_name: true,
@@ -36,10 +51,62 @@ export class TransferService {
         classes: { select: { description: true, academic_system: true } },
         sections: { select: { description: true } },
       },
-      orderBy: { full_name: 'asc' },
     });
 
-    return students.map((s) => ({
+    const mapped = students.map((s) => {
+      const ccStr = s.cc.toString();
+      const grStr = (s.gr_number || '').toLowerCase();
+      const nameStr = (s.full_name || '').toLowerCase();
+
+      let score = 0;
+
+      // Exact matches
+      if (isNumeric && s.cc === Number(queryStr)) {
+        score += 1000;
+      }
+      if (grStr === queryLower) {
+        score += 900;
+      }
+      if (nameStr === queryLower) {
+        score += 800;
+      }
+
+      // Starts-with matches
+      if (isNumeric && ccStr.startsWith(queryStr)) {
+        score += 500;
+      }
+      if (grStr.startsWith(queryLower)) {
+        score += 400;
+      }
+      if (nameStr.startsWith(queryLower)) {
+        score += 300;
+      }
+
+      // Contains matches
+      if (grStr.includes(queryLower)) {
+        score += 100;
+      }
+      if (nameStr.includes(queryLower)) {
+        score += 50;
+      }
+
+      return {
+        student: s,
+        score,
+      };
+    });
+
+    // Sort by score descending, then by name ascending
+    mapped.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return (a.student.full_name || '').localeCompare(b.student.full_name || '');
+    });
+
+    const top25 = mapped.slice(0, 25).map((item) => item.student);
+
+    return top25.map((s) => ({
       cc: s.cc,
       full_name: s.full_name,
       gr_number: s.gr_number,
@@ -114,7 +181,7 @@ export class TransferService {
     return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
-  async executeTransfer(cc: number, dto: { to_class_id: number; discipline?: string; remarks?: string; target_academic_year?: string }) {
+  async executeTransfer(cc: number, dto: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string }) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: { classes: { select: { description: true, academic_system: true } } },
@@ -127,6 +194,13 @@ export class TransferService {
       select: { description: true, academic_system: true },
     });
     if (!toClass) throw new BadRequestException(`Target class #${dto.to_class_id} not found`);
+
+    if (dto.to_campus_id) {
+      const targetCampus = await this.prisma.campuses.findUnique({
+        where: { id: dto.to_campus_id },
+      });
+      if (!targetCampus) throw new BadRequestException(`Target campus #${dto.to_campus_id} not found`);
+    }
 
     // Increment academic year or use provided
     const currentYear = student.academic_year;
@@ -145,6 +219,8 @@ export class TransferService {
         where: { cc },
         data: {
           class_id: dto.to_class_id,
+          campus_id: dto.to_campus_id || undefined,
+          section_id: dto.to_section_id !== undefined ? dto.to_section_id : undefined,
           academic_year: nextYear || currentYear || undefined,
         },
       });
@@ -341,8 +417,10 @@ export class TransferService {
       academic_year: academicYear,
       campus_name: student.campuses?.campus_name,
       campus_number: student.campuses?.campus_code,
+      campus_id: student.campus_id,
       class_name: student.classes?.description,
       section_name: student.sections?.description,
+      section_id: student.section_id,
       academic_system: student.classes?.academic_system,
       segment_head: segmentHead,
       address: address,
