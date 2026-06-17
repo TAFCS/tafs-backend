@@ -309,7 +309,7 @@ export class TransferService {
         },
         student_admissions: {
           orderBy: { application_date: 'desc' },
-          take: 1,
+          take: 5,
         },
         student_guardians: {
           include: {
@@ -434,6 +434,7 @@ export class TransferService {
       email: student.email || student.families?.email,
       fax: fatherLink?.guardians?.fax_number,
       photograph_url: student.photograph_url || student.photo_blue_bg_url,
+      admissions: student.student_admissions || [],
     };
   }
 }
