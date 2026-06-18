@@ -16,8 +16,8 @@ export class CalendarController {
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Calendar'))
-  async findAll(@Query('campusId') campusId: string) {
-    const data = await this.calendarService.findAll(parseInt(campusId, 10));
+  async findAll(@Query('campusId') campusId: string, @Query('appliesTo') appliesTo?: string) {
+    const data = await this.calendarService.findAll(parseInt(campusId, 10), appliesTo);
     return createApiResponse(data, HttpStatus.OK, 'Calendar days retrieved successfully');
   }
 

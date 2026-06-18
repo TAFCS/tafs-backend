@@ -921,9 +921,10 @@ model academic_calendar_days {
   date        DateTime @db.Date
   day_type    String   @db.VarChar(20)
   description String?  @db.VarChar(255)
+  applies_to  String   @default("STUDENT") @db.VarChar(20)
   campuses    campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
-  @@unique([campus_id, date])
+  @@unique([campus_id, date, applies_to])
 }
 
 model class_attendance_modes {

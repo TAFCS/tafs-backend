@@ -185,6 +185,7 @@ export class AppPortalService {
             where: {
               campus_id: student.campus_id,
               date: { gte: dateFrom, lte: dateTo },
+              applies_to: 'STUDENT',
             },
           })
         : Promise.resolve([]),

@@ -19,15 +19,22 @@ export class CreateCalendarDayDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsString()
+  @IsIn(['STUDENT', 'STAFF'])
+  applies_to: string;
 }
 
 @Injectable()
 export class CalendarService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(campusId: number) {
+  async findAll(campusId: number, appliesTo?: string) {
     return this.prisma.academic_calendar_days.findMany({
-      where: { campus_id: campusId },
+      where: { 
+        campus_id: campusId,
+        ...(appliesTo ? { applies_to: appliesTo } : {})
+      },
       orderBy: { date: 'asc' }
     });
   }
@@ -48,7 +55,8 @@ export class CalendarService {
         campus_id: dto.campus_id,
         date: new Date(dto.date),
         day_type: dto.day_type,
-        description: dto.description || null
+        description: dto.description || null,
+        applies_to: dto.applies_to
       }
     });
   }
@@ -61,7 +69,8 @@ export class CalendarService {
         campus_id: dto.campus_id,
         date: dto.date ? new Date(dto.date) : undefined,
         day_type: dto.day_type,
-        description: dto.description
+        description: dto.description,
+        applies_to: dto.applies_to
       }
     });
   }
