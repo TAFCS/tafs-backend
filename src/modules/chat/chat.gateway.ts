@@ -772,28 +772,34 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   async broadcastReplyPendingApproval(message: any, ticket: any) {
-    this.server.to('super_admin_approvals').emit('replyPendingApproval', { message, ticket });
+    const payload = { message, ticket, status: 'PENDING' as const };
+    this.server.to('super_admin_approvals').emit('replyPendingApproval', payload);
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
-        .emit('replyPendingApproval', { message, ticket, status: 'PENDING' });
+        .emit('replyPendingApproval', payload);
     }
+    this.emitToTicketRoom(ticket.id, 'replyPendingApproval', payload);
   }
 
   async broadcastApprovedTicketMessage(ticket: any, message: any) {
+    const messagePayload = { ticket, message };
     this.server
       .to(`family_app_${ticket.family_id}`)
-      .emit('ticketMessageReceived', { ticket, message });
+      .emit('ticketMessageReceived', messagePayload);
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
-        .emit('ticketMessageReceived', { ticket, message });
+        .emit('ticketMessageReceived', messagePayload);
     }
-    this.server.to('super_admin_approvals').emit('replyReviewed', {
+    this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', messagePayload);
+    const reviewedPayload = {
       ticket,
       message,
-      status: 'APPROVED',
-    });
+      status: 'APPROVED' as const,
+    };
+    this.server.to('super_admin_approvals').emit('replyReviewed', reviewedPayload);
+    this.emitToTicketRoom(ticket.id, 'replyReviewed', reviewedPayload);
   }
 
   async broadcastReplyRejected(
@@ -802,28 +808,28 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     comment: string | undefined,
     message: any,
   ) {
-    this.server.to(`staff_inbox_${responderId}`).emit('replyReviewed', {
+    const payload = {
       ticketId,
       message,
-      status: 'REJECTED',
+      status: 'REJECTED' as const,
       reviewComment: comment,
-    });
-    this.server.to('super_admin_approvals').emit('replyReviewed', {
-      ticketId,
-      message,
-      status: 'REJECTED',
-    });
+    };
+    this.server.to(`staff_inbox_${responderId}`).emit('replyReviewed', payload);
+    this.server.to('super_admin_approvals').emit('replyReviewed', payload);
+    this.emitToTicketRoom(ticketId, 'replyReviewed', payload);
   }
 
   async broadcastTicketMessageToStaff(ticket: any, message: any) {
+    const payload = { ticket, message };
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
-        .emit('ticketMessageReceived', { ticket, message });
+        .emit('ticketMessageReceived', payload);
     }
     if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageReceived', { ticket, message });
+      this.server.to('finance_queue').emit('ticketMessageReceived', payload);
     }
+    this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', payload);
   }
 
   async broadcastTicketClosed(ticket: any) {
@@ -836,5 +842,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .emit('ticketClosed', { ticket });
     }
     this.server.to('super_admin_approvals').emit('ticketClosed', { ticket });
+    this.emitToTicketRoom(ticket.id, 'ticketClosed', { ticket });
+  }
+
+  private emitToTicketRoom(ticketId: string | null | undefined, event: string, payload: unknown) {
+    if (!ticketId) return;
+    this.server.to(`ticket_${ticketId}`).emit(event, payload);
   }
 }
