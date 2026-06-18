@@ -505,6 +505,53 @@ export class SupportTicketsService {
     if (!ticket) throw new NotFoundException('Ticket not found');
     this.assertCanPostToTicket(ticket, staff);
 
+    if (staff.role === 'SUPER_ADMIN') {
+      const snippet = this.messageSnippet(dto.messageType, dto.content);
+      const now = new Date();
+
+      const message = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.ticket_messages.create({
+          data: {
+            ticket_id: ticketId,
+            sender_type: 'STAFF',
+            sender_user_id: staff.sub,
+            message_type: dto.messageType,
+            content: dto.content,
+            media_metadata: (dto.mediaMetadata ?? undefined) as object | undefined,
+            status: MessageStatus.APPROVED,
+            reviewed_by: staff.sub,
+            reviewed_at: now,
+          },
+          include: {
+            sender_user: { select: { id: true, full_name: true, role: true } },
+            reviewer: { select: { id: true, full_name: true } },
+          },
+        });
+
+        await tx.support_tickets.update({
+          where: { id: ticketId },
+          data: {
+            last_message_at: now,
+            last_message_snippet: snippet,
+            unread_by_parent: { increment: 1 },
+          },
+        });
+
+        await tx.ticket_events.create({
+          data: {
+            ticket_id: ticketId,
+            event_type: TicketEventType.REPLY_APPROVED,
+            actor_user_id: staff.sub,
+          },
+        });
+
+        return created;
+      });
+
+      await this.deliverApprovedStaffMessage(ticket, message);
+      return message;
+    }
+
     const message = await this.prisma.$transaction(async (tx) => {
       const created = await tx.ticket_messages.create({
         data: {
@@ -621,10 +668,7 @@ export class SupportTicketsService {
       throw new BadRequestException('Reply has already been reviewed');
     }
 
-    const snippet =
-      message.message_type === ChatMessageType.TEXT
-        ? message.content.slice(0, 50)
-        : `[${message.message_type}]`;
+    const snippet = this.messageSnippet(message.message_type, message.content);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.ticket_messages.updateMany({
@@ -674,31 +718,8 @@ export class SupportTicketsService {
       return reviewed;
     });
 
-    const ticket = await this.prisma.support_tickets.findUniqueOrThrow({
-      where: { id: message.ticket_id },
-      include: ticketInclude,
-    });
-
     if (dto.status === MessageStatus.APPROVED) {
-      await this.chatGateway.broadcastApprovedTicketMessage(ticket, updated);
-      const parentInTicket = this.chatGateway.isParentInTicketRoom(
-        ticket.family_id,
-        ticket.id,
-      );
-      if (!parentInTicket) {
-        await this.fcmService.sendToFamily(
-          ticket.family_id,
-          'New reply on your query',
-          message.message_type === ChatMessageType.TEXT
-            ? message.content
-            : `New ${message.message_type.toLowerCase()} received`,
-          {
-            type: 'SUPPORT_TICKET_MESSAGE',
-            ticketId: ticket.id,
-            messageId: updated.id,
-          },
-        );
-      }
+      await this.deliverApprovedStaffMessage(message.ticket, updated);
     } else {
       await this.chatGateway.broadcastReplyRejected(
         message.ticket_id,
@@ -716,6 +737,9 @@ export class SupportTicketsService {
       where: { id: ticketId },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.current_assignee_id !== staff.sub) {
+      throw new ForbiddenException('You are not the assigned responder');
+    }
     this.assertCanPostToTicket(ticket, staff);
 
     const updated = await this.closeTicket(
@@ -1003,6 +1027,46 @@ export class SupportTicketsService {
     throw new ForbiddenException('Access denied');
   }
 
+  private messageSnippet(messageType: ChatMessageType, content: string): string {
+    return messageType === ChatMessageType.TEXT
+      ? content.slice(0, 50)
+      : `[${messageType}]`;
+  }
+
+  private async deliverApprovedStaffMessage(
+    ticket: { id: string; family_id: number },
+    message: {
+      id: string;
+      message_type: ChatMessageType;
+      content: string;
+    },
+  ) {
+    const fullTicket = await this.prisma.support_tickets.findUniqueOrThrow({
+      where: { id: ticket.id },
+      include: ticketInclude,
+    });
+
+    await this.chatGateway.broadcastApprovedTicketMessage(fullTicket, message);
+    const parentInTicket = this.chatGateway.isParentInTicketRoom(
+      ticket.family_id,
+      ticket.id,
+    );
+    if (!parentInTicket) {
+      await this.fcmService.sendToFamily(
+        ticket.family_id,
+        'New reply on your query',
+        message.message_type === ChatMessageType.TEXT
+          ? message.content
+          : `New ${message.message_type.toLowerCase()} received`,
+        {
+          type: 'SUPPORT_TICKET_MESSAGE',
+          ticketId: ticket.id,
+          messageId: message.id,
+        },
+      );
+    }
+  }
+
   private assertCanPostToTicket(
     ticket: {
       status: TicketStatus;
@@ -1014,7 +1078,7 @@ export class SupportTicketsService {
     if (ticket.status === TicketStatus.CLOSED) {
       throw new BadRequestException('Ticket is closed');
     }
-    if (ticket.current_assignee_id !== staff.sub) {
+    if (ticket.current_assignee_id !== staff.sub && staff.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('You are not the assigned responder');
     }
     if (

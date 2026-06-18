@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { MessageStatus, TicketCategory, TicketStatus } from '@prisma/client';
 import { SupportTicketsService } from './support-tickets.service';
 import { pickPrincipal } from '../../common/support-ticket-routing';
@@ -104,6 +105,79 @@ describe('SupportTicketsService leak-proofing', () => {
     );
     expect(mockGateway.broadcastReplyPendingApproval).toHaveBeenCalled();
     expect(mockFcm.sendToFamily).not.toHaveBeenCalled();
+  });
+
+  it('super admin reply is auto-approved and delivered to parent', async () => {
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+    });
+    prisma.ticket_messages.create.mockResolvedValue({
+      id: 'm-admin',
+      message_type: 'TEXT',
+      content: 'Direct admin reply',
+      status: MessageStatus.APPROVED,
+    });
+    prisma.support_tickets.update.mockResolvedValue({});
+    prisma.ticket_events.create.mockResolvedValue({});
+    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+    });
+
+    await service.createStaffMessage(
+      't1',
+      { sub: 'admin-1', role: 'SUPER_ADMIN', userType: 'STAFF' } as any,
+      { messageType: 'TEXT', content: 'Direct admin reply' },
+    );
+
+    expect(prisma.ticket_messages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: MessageStatus.APPROVED,
+          reviewed_by: 'admin-1',
+        }),
+      }),
+    );
+    expect(prisma.support_tickets.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          unread_by_parent: { increment: 1 },
+        }),
+      }),
+    );
+    expect(mockGateway.broadcastApprovedTicketMessage).toHaveBeenCalled();
+    expect(mockGateway.broadcastReplyPendingApproval).not.toHaveBeenCalled();
+    expect(mockFcm.sendToFamily).toHaveBeenCalledWith(
+      5,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        type: 'SUPPORT_TICKET_MESSAGE',
+        ticketId: 't1',
+        messageId: 'm-admin',
+      }),
+    );
+  });
+
+  it('non-assignee staff cannot post to ticket', async () => {
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-2',
+      category: TicketCategory.GENERAL,
+    });
+
+    await expect(
+      service.createStaffMessage(
+        't1',
+        { sub: 'staff-1', role: 'PRINCIPAL', userType: 'STAFF' } as any,
+        { messageType: 'TEXT', content: 'Hello parent' },
+      ),
+    ).rejects.toThrow(ForbiddenException);
   });
 
   it('approve flow delivers to parent and triggers FCM when parent offline', async () => {
