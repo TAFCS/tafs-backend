@@ -84,6 +84,46 @@ export class AuditLogsService {
       this.prisma.audit_logs.count({ where }),
     ]);
 
-    return { data, total };
+    // Fetch classes and campuses to map IDs to Names
+    const [allClasses, allCampuses] = await Promise.all([
+      this.prisma.classes.findMany({
+        select: { id: true, description: true }
+      }),
+      this.prisma.campuses.findMany({
+        select: { id: true, campus_name: true }
+      })
+    ]);
+
+    const classMap = new Map(allClasses.map(c => [c.id.toString(), c.description]));
+    const campusMap = new Map(allCampuses.map(c => [c.id.toString(), c.campus_name]));
+
+    const enrichedData = data.map(log => {
+      let oldVal = log.old_value;
+      let newVal = log.new_value;
+
+      if (log.field === 'class_id' || log.field === 'student.class_id') {
+        if (oldVal && classMap.has(oldVal)) {
+          oldVal = classMap.get(oldVal) ?? null;
+        }
+        if (newVal && classMap.has(newVal)) {
+          newVal = classMap.get(newVal) ?? null;
+        }
+      } else if (log.field === 'campus_id' || log.field === 'student.campus_id') {
+        if (oldVal && campusMap.has(oldVal)) {
+          oldVal = campusMap.get(oldVal) ?? null;
+        }
+        if (newVal && campusMap.has(newVal)) {
+          newVal = campusMap.get(newVal) ?? null;
+        }
+      }
+
+      return {
+        ...log,
+        old_value: oldVal,
+        new_value: newVal
+      };
+    });
+
+    return { data: enrichedData, total };
   }
 }

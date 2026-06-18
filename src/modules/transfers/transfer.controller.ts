@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Param, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, ParseIntPipe, HttpStatus, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { TransferService } from './transfer.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -20,8 +21,10 @@ export class TransferController {
   async executeTransfer(
     @Param('cc', ParseIntPipe) cc: number,
     @Body() body: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string },
+    @Req() req: Request,
   ) {
-    const data = await this.transferService.executeTransfer(cc, body);
+    const changedBy = (req as any).user?.username || (req as any).user?.fullName || 'system';
+    const data = await this.transferService.executeTransfer(cc, body, changedBy);
     return createApiResponse(data, HttpStatus.OK, 'Transfer executed successfully');
   }
 
