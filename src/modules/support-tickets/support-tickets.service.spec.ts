@@ -224,6 +224,24 @@ describe('SupportTicketsService leak-proofing', () => {
     );
   });
 
+  it('reject flow requires a rejection reason', async () => {
+    prisma.ticket_messages.findUnique.mockResolvedValue({
+      id: 'm1',
+      ticket_id: 't1',
+      sender_user_id: 'staff-1',
+      status: MessageStatus.PENDING,
+      ticket: { id: 't1' },
+    });
+
+    await expect(
+      service.reviewReply(
+        'm1',
+        { status: MessageStatus.REJECTED },
+        { sub: 'admin-1', role: 'SUPER_ADMIN', userType: 'STAFF' } as any,
+      ),
+    ).rejects.toThrow('Rejection reason is required');
+  });
+
   it('reject flow does not notify parent', async () => {
     prisma.ticket_messages.findUnique.mockResolvedValue({
       id: 'm1',

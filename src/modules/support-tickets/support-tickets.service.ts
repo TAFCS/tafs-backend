@@ -658,6 +658,9 @@ export class SupportTicketsService {
     if (dto.status !== 'APPROVED' && dto.status !== 'REJECTED') {
       throw new BadRequestException('Status must be APPROVED or REJECTED');
     }
+    if (dto.status === MessageStatus.REJECTED && !dto.comment?.trim()) {
+      throw new BadRequestException('Rejection reason is required');
+    }
 
     const message = await this.prisma.ticket_messages.findUnique({
       where: { id: messageId },
@@ -675,7 +678,10 @@ export class SupportTicketsService {
         where: { id: messageId, status: MessageStatus.PENDING },
         data: {
           status: dto.status,
-          review_comment: dto.comment,
+          review_comment:
+            dto.status === MessageStatus.REJECTED
+              ? dto.comment!.trim()
+              : dto.comment,
           reviewed_by: superAdmin.sub,
           reviewed_at: new Date(),
         },
