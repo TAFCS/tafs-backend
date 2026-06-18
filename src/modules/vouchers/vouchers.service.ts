@@ -3205,6 +3205,14 @@ export class VouchersService {
             const originalSurcharges: any[] = (original as any).voucher_arrear_surcharges ?? [];
             const surchargeLineage = new Map<number, { side: 'paid' | 'unpaid'; newSurchargeId: number }>();
 
+            // Tracks every surcharge row landing on each side so the new vouchers'
+            // own surcharge_waived flag can be derived afterwards (Step 8b) instead
+            // of defaulting to false regardless of the rows actually on them.
+            const sideSurchargeFlags: Record<'paid' | 'unpaid', { waived: boolean; waived_by: string | null }[]> = {
+                paid: [],
+                unpaid: [],
+            };
+
             for (const s of originalSurcharges) {
                 const amount = new Prisma.Decimal(s.amount || 0);
                 const amountPaid = new Prisma.Decimal(s.amount_paid || 0);
@@ -3221,6 +3229,7 @@ export class VouchersService {
                         data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: amountPaid, waived: true, waived_by: s.waived_by ?? null },
                     });
                     surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
+                    sideSurchargeFlags.unpaid.push({ waived: true, waived_by: s.waived_by ?? null });
 
                 } else if (amountPaid.lte(0)) {
                     // Untouched — copy forward as-is (today's behavior for this case).
@@ -3228,6 +3237,7 @@ export class VouchersService {
                         data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
                     });
                     surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
+                    sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
 
                 } else if (amountPaid.gte(amount)) {
                     // Fully consumed — travels whole, with its payment history, to the paid side.
@@ -3235,6 +3245,7 @@ export class VouchersService {
                         data: { voucher_id: paid.id, ...baseFields, amount, amount_paid: amountPaid, waived: false, waived_by: null },
                     });
                     surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: created.id });
+                    sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
 
                 } else {
                     // Partially consumed — split into a paid portion that carries the
@@ -3250,7 +3261,24 @@ export class VouchersService {
                         data: { voucher_id: unpaid.id, ...baseFields, amount: remaining, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
                     });
                     surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: paidPortion.id });
+                    sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
+                    sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
                 }
+            }
+
+            // ── Step 8b: Set surcharge_waived on each new voucher from the rows it
+            //    actually ended up with — not left at the schema default (false)
+            //    regardless of outcome. A side is "waived" only if it has at least
+            //    one surcharge row and every one of them is waived.
+            for (const side of ['paid', 'unpaid'] as const) {
+                const flags = sideSurchargeFlags[side];
+                if (flags.length === 0) continue;
+                const allWaived = flags.every(f => f.waived);
+                const waivedBy = allWaived ? (flags.find(f => f.waived_by)?.waived_by ?? null) : null;
+                await tx.vouchers.update({
+                    where: { id: side === 'paid' ? paid.id : unpaid.id },
+                    data: { surcharge_waived: allWaived, surcharge_waived_by: waivedBy } as any,
+                });
             }
 
             // ── Step 9: Re-link every live deposit_allocations row so its voucher_id

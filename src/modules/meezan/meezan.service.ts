@@ -198,7 +198,7 @@ export class MeezanService {
               student_fee_id: head.student_fee_id,
               voucher_id: voucher.id,
               amount: headBalance,
-              type: 'FEE',
+              type: 'FEE_HEAD',
             },
           });
 

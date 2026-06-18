@@ -2104,11 +2104,17 @@ export class StudentsService {
       });
     });
 
-    const totalSurchargesCharged = (vouchers as any[]).reduce(
+    // A superseded/split voucher is only marked VOID, never deleted, so its
+    // surcharge rows are still sitting in the DB alongside the fresh rows the
+    // replacement voucher got for the same arrear — summing across every
+    // voucher here would double-count that surcharge. Excluded the same way
+    // `hasValidVoucher` already excludes VOID vouchers from fee totals above.
+    const nonVoidVouchers = (vouchers as any[]).filter((v) => v.status !== 'VOID');
+    const totalSurchargesCharged = nonVoidVouchers.reduce(
       (sum, v) => sum.add(v.total_arrear_surcharge || 0),
       new Prisma.Decimal(0),
     );
-    const totalSurchargesWaived = (vouchers as any[]).reduce(
+    const totalSurchargesWaived = nonVoidVouchers.reduce(
       (sum, v) =>
         v.surcharge_waived
           ? sum.add(v.total_arrear_surcharge || 0)

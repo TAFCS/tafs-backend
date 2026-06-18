@@ -73,7 +73,13 @@ export class AnalyticsService {
       this.prisma.voucher_arrear_surcharges.aggregate({
         where: {
           waived: false,
-          vouchers: { fee_date: { gte: yearStart, lte: yearEnd }, students: studentFilter },
+          // A voucher that's been superseded/split keeps its old surcharge rows
+          // (no cascade on a status change, only on an actual row delete), and
+          // the replacement voucher gets its own fresh rows for the same arrear
+          // — so a VOID carrier must be excluded here or the same surcharge is
+          // counted twice. Mirrors the `hasValidVoucher` exclusion already
+          // applied to fee heads elsewhere in this file.
+          vouchers: { status: { not: 'VOID' }, fee_date: { gte: yearStart, lte: yearEnd }, students: studentFilter },
         },
         _sum: { amount: true, amount_paid: true },
       }),
@@ -112,7 +118,7 @@ export class AnalyticsService {
       this.prisma.voucher_arrear_surcharges.aggregate({
         where: {
           waived: false,
-          vouchers: { due_date: { lt: today }, students: studentFilter },
+          vouchers: { status: { not: 'VOID' }, due_date: { lt: today }, students: studentFilter },
         },
         _sum: { amount: true, amount_paid: true },
       }),
@@ -260,7 +266,7 @@ export class AnalyticsService {
         this.prisma.voucher_arrear_surcharges.aggregate({
           where: {
             waived: false,
-            vouchers: { fee_date: { gte: startDate, lte: endDate }, students: studentFilter },
+            vouchers: { status: { not: 'VOID' }, fee_date: { gte: startDate, lte: endDate }, students: studentFilter },
           },
           _sum: { amount: true, amount_paid: true },
         }),
