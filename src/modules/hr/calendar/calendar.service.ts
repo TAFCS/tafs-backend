@@ -1,9 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 
-import { IsInt, IsDateString, IsString, IsOptional } from 'class-validator';
+import { IsInt, IsDateString, IsString, IsOptional, IsIn } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCalendarDayDto {
+  @Type(() => Number)
   @IsInt()
   campus_id: number;
 
@@ -11,6 +13,7 @@ export class CreateCalendarDayDto {
   date: string;
 
   @IsString()
+  @IsIn(['WORKDAY', 'HOLIDAY', 'WEEKEND'])
   day_type: string;
 
   @IsOptional()

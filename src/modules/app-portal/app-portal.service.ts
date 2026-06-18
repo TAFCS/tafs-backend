@@ -161,7 +161,13 @@ export class AppPortalService {
     const dateFrom = new Date(Date.UTC(year, month - 1, 1));
     const dateTo = new Date(Date.UTC(year, month, 0)); // last day of month
 
-    const [scans, records] = await Promise.all([
+    // Get the student's campus_id
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: { campus_id: true },
+    });
+
+    const [scans, records, calendarDays] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
           student_cc: studentCc,
@@ -174,6 +180,14 @@ export class AppPortalService {
       this.prisma.attendance_student_daily.findMany({
         where: { student_cc: studentCc, date: { gte: dateFrom, lte: dateTo } },
       }),
+      student?.campus_id
+        ? this.prisma.academic_calendar_days.findMany({
+            where: {
+              campus_id: student.campus_id,
+              date: { gte: dateFrom, lte: dateTo },
+            },
+          })
+        : Promise.resolve([]),
     ]);
 
     const scansByDate = new Map<string, any[]>();
@@ -184,12 +198,16 @@ export class AppPortalService {
       else scansByDate.set(key, [scan]);
     }
     const recordMap = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
+    const holidayMap = new Map<string, any>(
+      (calendarDays as any[]).map((c) => [c.date.toISOString().slice(0, 10), c]),
+    );
 
     const days: any[] = [];
     for (let d = new Date(dateFrom); d <= dateTo; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = d.toISOString().slice(0, 10);
       const record = recordMap.get(key) ?? null;
       const dayScans = scansByDate.get(key) ?? [];
+      const calDay = holidayMap.get(key) ?? null;
 
       const sessions: any[] = [];
       for (let i = 0; i + 1 < dayScans.length; i += 2) {
@@ -209,6 +227,8 @@ export class AppPortalService {
         date: key,
         status: record?.status ?? null, // e.g. PRESENT, ABSENT, etc.
         sessions,
+        holiday_type: calDay?.day_type ?? null,        // 'HOLIDAY' | 'WEEKEND' | 'WORKDAY' | null
+        holiday_description: calDay?.description ?? null,
       });
     }
 
