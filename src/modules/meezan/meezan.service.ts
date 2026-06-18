@@ -164,12 +164,6 @@ export class MeezanService {
         return { StatusCode: '00', StatusDesc: 'Lodged/Returned — not posted' };
       }
 
-      const tNormalized = new Date(today);
-      tNormalized.setHours(0, 0, 0, 0);
-      const dNormalized = new Date(voucher.due_date);
-      dNormalized.setHours(0, 0, 0, 0);
-      const isOverdue = tNormalized > dNormalized;
-
       const remarks = dto.ChequeNo ? `CHQ: ${dto.ChequeNo}` : 'Meezan Bank payment';
 
       const dateOfReturn = dto.DateOfReturn
@@ -217,27 +211,31 @@ export class MeezanService {
           });
         }
 
-        if (isOverdue) {
-          const surcharges = voucher.voucher_arrear_surcharges.filter((s) => !s.waived);
-          for (const s of surcharges) {
-            const sBalance = Number(s.amount) - Number(s.amount_paid);
-            if (sBalance <= 0) continue;
+        // Surcharges exist because of an OLDER unpaid month, not because this
+        // voucher itself is overdue — they're already baked into the amount the
+        // bank quoted and collected (total_payable_before_due), so they must
+        // always be settled here regardless of isOverdue. Gating this on
+        // isOverdue let the bank collect the surcharge cash while the system
+        // kept recording it as unpaid.
+        const surcharges = voucher.voucher_arrear_surcharges.filter((s) => !s.waived);
+        for (const s of surcharges) {
+          const sBalance = Number(s.amount) - Number(s.amount_paid);
+          if (sBalance <= 0) continue;
 
-            await tx.deposit_allocations.create({
-              data: {
-                deposit_id: deposit.id,
-                voucher_id: voucher.id,
-                surcharge_id: s.id,
-                amount: sBalance,
-                type: 'SURCHARGE',
-              },
-            });
+          await tx.deposit_allocations.create({
+            data: {
+              deposit_id: deposit.id,
+              voucher_id: voucher.id,
+              surcharge_id: s.id,
+              amount: sBalance,
+              type: 'SURCHARGE',
+            },
+          });
 
-            await tx.voucher_arrear_surcharges.update({
-              where: { id: s.id },
-              data: { amount_paid: { increment: sBalance } },
-            });
-          }
+          await tx.voucher_arrear_surcharges.update({
+            where: { id: s.id },
+            data: { amount_paid: { increment: sBalance } },
+          });
         }
 
         await tx.vouchers.update({
