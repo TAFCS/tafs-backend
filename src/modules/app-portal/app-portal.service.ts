@@ -151,4 +151,71 @@ export class AppPortalService {
     ];
     return labels[month - 1] || 'Unknown';
   }
+
+  async getStudentAttendanceHistory(studentCc: number, monthStr: string) {
+    if (!monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) {
+      throw new Error('Invalid month format. Expected YYYY-MM');
+    }
+
+    const [year, month] = monthStr.split('-').map(Number);
+    const dateFrom = new Date(Date.UTC(year, month - 1, 1));
+    const dateTo = new Date(Date.UTC(year, month, 0)); // last day of month
+
+    const [scans, records] = await Promise.all([
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          student_cc: studentCc,
+          person_type: 'STUDENT',
+          is_duplicate: false,
+          attendance_date: { gte: dateFrom, lte: dateTo },
+        },
+        orderBy: { scan_time: 'asc' },
+      }),
+      this.prisma.attendance_student_daily.findMany({
+        where: { student_cc: studentCc, date: { gte: dateFrom, lte: dateTo } },
+      }),
+    ]);
+
+    const scansByDate = new Map<string, any[]>();
+    for (const scan of scans) {
+      const key = scan.attendance_date.toISOString().slice(0, 10);
+      const bucket = scansByDate.get(key);
+      if (bucket) bucket.push(scan);
+      else scansByDate.set(key, [scan]);
+    }
+    const recordMap = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
+
+    const days: any[] = [];
+    for (let d = new Date(dateFrom); d <= dateTo; d.setUTCDate(d.getUTCDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      const record = recordMap.get(key) ?? null;
+      const dayScans = scansByDate.get(key) ?? [];
+
+      const sessions: any[] = [];
+      for (let i = 0; i + 1 < dayScans.length; i += 2) {
+        sessions.push({
+          clock_in: dayScans[i].scan_time,
+          clock_out: dayScans[i + 1].scan_time,
+        });
+      }
+      if (dayScans.length % 2 !== 0) {
+        sessions.push({
+          clock_in: dayScans[dayScans.length - 1].scan_time,
+          clock_out: null,
+        });
+      }
+
+      days.push({
+        date: key,
+        status: record?.status ?? null, // e.g. PRESENT, ABSENT, etc.
+        sessions,
+      });
+    }
+
+    return {
+      student_cc: studentCc,
+      month: monthStr,
+      days,
+    };
+  }
 }
