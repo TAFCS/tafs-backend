@@ -117,13 +117,21 @@ export class InstallmentsService {
       academic_year: p.academic_year,
       total_amount: Number(p.total_amount),
       installment_count: p.installment_count,
-      heads: (p as any).student_fees.map((sf: any) => ({
-        id: sf.id,
-        fee_date: sf.fee_date ? new Date(sf.fee_date).toISOString().split('T')[0] : null,
-        target_month: sf.target_month || 0,
-        amount: Number(sf.amount || 0),
-        status: sf.status || 'NOT_ISSUED',
-      })),
+      heads: (p as any).student_fees.map((sf: any) => {
+        const amount = Number(sf.amount || 0);
+        const installmentAmount = Number(sf.installment_amount || 0);
+        return {
+          id: sf.id,
+          fee_date: sf.fee_date ? new Date(sf.fee_date).toISOString().split('T')[0] : null,
+          target_month: sf.target_month || 0,
+          amount,
+          status: sf.status || 'NOT_ISSUED',
+          // A merged head pre-existed this plan (its amount = original balance + installment
+          // chunk); it's already shown inline in the main fee grid, so callers should exclude
+          // it from any "this plan's own rows" list to avoid showing it twice.
+          is_merged: amount - installmentAmount > 0,
+        };
+      }),
     }));
   }
 
@@ -133,16 +141,21 @@ export class InstallmentsService {
         for (const head of dto.heads) {
           const fee = await tx.student_fees.findUnique({
             where: { id: head.student_fee_id },
-            select: { status: true, installment_id: true },
+            select: { status: true, installment_id: true, amount: true, installment_amount: true },
           });
           // Only update NOT_ISSUED heads belonging to this plan
           if (!fee || fee.installment_id !== id || fee.status !== 'NOT_ISSUED') continue;
+
+          // For a merged head, `amount` also carries the pre-existing balance that was
+          // there before merging — preserve it instead of overwriting the whole field
+          // with just the new installment amount.
+          const baseAmount = Number(fee.amount || 0) - Number(fee.installment_amount || 0);
 
           await tx.student_fees.update({
             where: { id: head.student_fee_id },
             data: {
               ...(head.fee_date !== undefined ? { fee_date: new Date(head.fee_date) } : {}),
-              ...(head.amount !== undefined ? { amount: head.amount, installment_amount: head.amount } : {}),
+              ...(head.amount !== undefined ? { amount: baseAmount + head.amount, installment_amount: head.amount } : {}),
             },
           });
         }
@@ -170,7 +183,7 @@ export class InstallmentsService {
       return await this.prisma.$transaction(async (tx) => {
         const head = await tx.student_fees.findUnique({
           where: { id: headId },
-          select: { status: true, installment_id: true },
+          select: { status: true, installment_id: true, amount: true, installment_amount: true },
         });
 
         if (!head || head.installment_id !== planId) {
@@ -180,7 +193,19 @@ export class InstallmentsService {
           throw new BadRequestException('Only pending (NOT_ISSUED) heads can be deleted.');
         }
 
-        await tx.student_fees.delete({ where: { id: headId } });
+        // A merged head's row pre-existed this plan (amount = original balance +
+        // installment chunk) — unmerge it (restore the original balance) instead of
+        // destroying the row. Only a genuine standalone head (created solely for this
+        // plan, base amount 0) is safe to hard-delete.
+        const baseAmount = Number(head.amount || 0) - Number(head.installment_amount || 0);
+        if (baseAmount > 0) {
+          await tx.student_fees.update({
+            where: { id: headId },
+            data: { amount: baseAmount, installment_id: null, installment_amount: null },
+          });
+        } else {
+          await tx.student_fees.delete({ where: { id: headId } });
+        }
 
         const remaining = await tx.student_fees.findMany({
           where: { installment_id: planId },
@@ -209,7 +234,7 @@ export class InstallmentsService {
       return await this.prisma.$transaction(async (tx) => {
         const heads = await tx.student_fees.findMany({
           where: { installment_id: id },
-          select: { id: true, status: true },
+          select: { id: true, status: true, amount: true, installment_amount: true },
         });
 
         const paidHeads = heads.filter(h => h.status === 'PAID' || h.status === 'PARTIALLY_PAID');
@@ -228,10 +253,21 @@ export class InstallmentsService {
           });
         }
 
-        // Delete remaining NOT_ISSUED heads
-        await tx.student_fees.deleteMany({
-          where: { installment_id: id, status: 'NOT_ISSUED' },
-        });
+        // NOT_ISSUED heads: a merged head's row pre-existed this plan (amount = original
+        // balance + installment chunk) — unmerge it (restore the original balance)
+        // instead of destroying the row. Only genuine standalone heads (created solely
+        // for this plan, base amount 0) are safe to hard-delete.
+        for (const h of heads.filter(h => h.status === 'NOT_ISSUED')) {
+          const baseAmount = Number(h.amount || 0) - Number(h.installment_amount || 0);
+          if (baseAmount > 0) {
+            await tx.student_fees.update({
+              where: { id: h.id },
+              data: { amount: baseAmount, installment_id: null, installment_amount: null },
+            });
+          } else {
+            await tx.student_fees.delete({ where: { id: h.id } });
+          }
+        }
 
         return tx.student_fee_installments.delete({ where: { id } });
       }, { maxWait: 5000, timeout: 30000 });
