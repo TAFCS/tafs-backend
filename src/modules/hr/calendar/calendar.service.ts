@@ -1,10 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 
+import { IsInt, IsDateString, IsString, IsOptional } from 'class-validator';
+
 export class CreateCalendarDayDto {
+  @IsInt()
   campus_id: number;
+
+  @IsDateString()
   date: string;
+
+  @IsString()
   day_type: string;
+
+  @IsOptional()
+  @IsString()
   description?: string;
 }
 
