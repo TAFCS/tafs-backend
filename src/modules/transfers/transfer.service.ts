@@ -4,6 +4,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { renderToBuffer } from '@react-pdf/renderer';
 import * as React from 'react';
 import { TransferOrderPDF } from './TransferOrderPDF';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class TransferService {
@@ -12,6 +13,7 @@ export class TransferService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
   async searchStudents(q: string) {
     if (!q?.trim()) return [];
@@ -181,7 +183,7 @@ export class TransferService {
     return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
-  async executeTransfer(cc: number, dto: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string }) {
+  async executeTransfer(cc: number, dto: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string }, changedBy?: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: { classes: { select: { description: true, academic_system: true } } },
@@ -232,6 +234,25 @@ export class TransferService {
           academic_year: nextYear || currentYear || undefined,
         },
       });
+    });
+
+    // Log the transfer
+    const fromClass = student.classes?.description || 'Unknown';
+    const toClassName = toClass.description;
+    let note = `Transferred from ${fromClass} to ${toClassName}`;
+    if (nextYear && nextYear !== currentYear) note += ` (AY ${nextYear})`;
+    if (dto.remarks) note += `. Remarks: ${dto.remarks}`;
+
+    await this.auditLogs.log({
+      entity_type: 'TRANSFER',
+      entity_id: String(cc),
+      action: 'CREATED',
+      field: 'class',
+      old_value: fromClass,
+      new_value: toClassName,
+      changed_by: changedBy || 'system',
+      student_id: cc,
+      note,
     });
 
     // Re-fetch the updated transfer order data for the PDF
