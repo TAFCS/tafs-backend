@@ -631,8 +631,47 @@ export class VouchersService {
 
 
 
+    /**
+     * Is this voucher_head an "arrear" relative to the voucher it's on?
+     *
+     * Extracted verbatim from prepareVoucherPdfData's per-head loop — pure
+     * refactor, no behavior change. Pulled out so the SPECIAL ADMIN WORKFLOW
+     * eligibility guard in generateMainColumnReceipt() can ask "is this head
+     * old?" against the raw voucher_heads rows without re-running the whole
+     * PDF data-prep pipeline (and without duplicating the date-comparison
+     * rules, which would risk the guard drifting out of sync with the real
+     * rendering logic below).
+     */
+    private headIsArrear(h: any, voucher: any): boolean {
+        let isArrear = false;
+
+        const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
+        const getAcademicSortIndex = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
+
+        const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
+        const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
+        const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
+
+        if (!sameFeeDate) {
+            const fMonth = h.student_fees?.target_month;
+            const fYear = h.student_fees?.academic_year;
+            const vMonth = voucher.month;
+            const vYear = voucher.academic_year;
+
+            if (fYear && vYear && fMonth != null && vMonth != null) {
+                if (fYear < vYear) isArrear = true;
+                else if (fYear === vYear && getAcademicSortIndex(fMonth) < getAcademicSortIndex(vMonth)) isArrear = true;
+            }
+            if (!isArrear && h.student_fees?.fee_date && voucher.fee_date) {
+                isArrear = new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
+            }
+        }
+
+        return isArrear;
+    }
+
     /** Helper to prepare data for VoucherPdfService */
-    private async prepareVoucherPdfData(voucher: any, paidStamp = false) {
+    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false) {
         const monthNames = [
             'January', 'February', 'March', 'April', 'May', 'June',
             'July', 'August', 'September', 'October', 'November', 'December'
@@ -815,29 +854,21 @@ export class VouchersService {
 
             // Surcharges no longer appear in voucher_heads — they live in voucher_arrear_surcharges.
             const isSurcharge = false;
-            let isArrear = false;
+            let isArrear = this.headIsArrear(h, voucher);
 
-            const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
-            const getAcademicSortIndex = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
-
-            const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
-            const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
-            const sameFeeDate = feeDateStr && voucherDateStr && feeDateStr === voucherDateStr;
-
-            if (!sameFeeDate) {
-                const fMonth = h.student_fees?.target_month;
-                const fYear = h.student_fees?.academic_year;
-                const vMonth = voucher.month;
-                const vYear = voucher.academic_year;
-
-                if (fYear && vYear && fMonth != null && vMonth != null) {
-                    if (fYear < vYear) isArrear = true;
-                    else if (fYear === vYear && getAcademicSortIndex(fMonth) < getAcademicSortIndex(vMonth)) isArrear = true;
-                }
-                if (!isArrear && h.student_fees?.fee_date && voucher.fee_date) {
-                    isArrear = new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
-                }
-            }
+            // ── SPECIAL ADMIN WORKFLOW OVERRIDE ─────────────────────────────
+            // See VouchersService.generateMainColumnReceipt() for the full
+            // explanation. Only ever true when an admin explicitly asked for
+            // the "main column" receipt format on a PAID voucher produced by
+            // splitPartiallyPaid() that is made up entirely of old (arrear)
+            // heads. Forces this head to be treated as a normal current-period
+            // line for THIS render only — nothing is written back to
+            // student_fees/voucher_heads, and every other caller passes
+            // forceHeadsAsCurrent=false (the default), so this branch is a
+            // no-op everywhere else. Safe to remove this whole feature by
+            // reverting this parameter and this one line; see the removal
+            // checklist in generateMainColumnReceipt()'s docblock.
+            if (forceHeadsAsCurrent) isArrear = false;
 
             const finalPaid = Math.max(Number(h.amount_deposited || 0), Number(h.student_fees?.amount_paid || 0));
             const netAmount = Number(h.net_amount);
@@ -1152,7 +1183,10 @@ export class VouchersService {
             ? new Date(voucher.fee_date).toISOString().slice(0, 10)
             : new Date().toISOString().slice(0, 10);
         const grOrCc = voucher.students?.gr_number || `CC${voucher.student_id}`;
-        const paidSuffix = paidStamp ? '-paid' : '';
+        // SPECIAL ADMIN WORKFLOW: distinct suffix when forceHeadsAsCurrent is on,
+        // so this alternate receipt never collides with / overwrites the
+        // canonical voucher PDF or its pdf_url. See generateMainColumnReceipt().
+        const paidSuffix = (paidStamp ? '-paid' : '') + (forceHeadsAsCurrent ? '-main-receipt' : '');
         const key = `vouchers/${voucher.student_id}/${feeDateStr}-${grOrCc}-${voucher.id}${paidSuffix}.pdf`;
         const qrUrl = this.storage.getPublicUrl(key);
 
@@ -2412,6 +2446,94 @@ export class VouchersService {
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
 
         return { pdf_url: pdfUrl };
+    }
+
+    /**
+     * ───────────────────────────────────────────────────────────────────────
+     * SPECIAL ADMIN WORKFLOW — "arrears paid off, shown as a normal receipt".
+     *
+     * Context: splitPartiallyPaid() is untouched and correct. Its PAID output
+     * voucher inherits its fee_date/month/academic_year from the original
+     * voucher's current period (see splitPartiallyPaid's `currentPeriodHead`/
+     * `feeRef`/`commonFields`), so an old head left alone on it still reads
+     * as an "arrear" by the standard rule (headIsArrear / prepareVoucherPdfData)
+     * — there's no "current" head left on that voucher to contrast it
+     * against. Admins want an on-demand, alternate rendering of exactly that
+     * voucher where the old head(s) show as normal main-column lines instead
+     * of the consolidated "ARREARS" line + 4th-column history sidebar. The
+     * Rs. 1,000 late-payment surcharge already renders unconditionally in the
+     * main columns regardless of any head's arrear flag, so it needs no
+     * change here.
+     *
+     * This method changes nothing about the split, deposits, or any other
+     * voucher's PDF — it is read-only (no DB writes), regenerable any number
+     * of times, and safe to call concurrently (deterministic storage key, see
+     * the `-main-receipt` suffix in prepareVoucherPdfData).
+     *
+     * Eligibility is intentionally narrow so this can never be used to mask a
+     * genuine arrears situation: the voucher must be PAID, must be a product
+     * of a split (`split_parent_id` set), and every real (non-discount) head
+     * on it must already be a genuine arrear by the unmodified rule. Any
+     * voucher with a real *current* head is rejected outright.
+     *
+     * REMOVAL: delete this method, its controller route
+     * (`POST :id/generate-main-column-receipt`), the `forceHeadsAsCurrent`
+     * parameter + override line and the `paidSuffix` change in
+     * prepareVoucherPdfData, and the one frontend button + handler on each
+     * voucher list page. `headIsArrear()` can stay as a harmless extracted
+     * helper or be re-inlined. Nothing else depends on any of this.
+     * ───────────────────────────────────────────────────────────────────────
+     */
+    async generateMainColumnReceipt(voucherId: number, changedBy: string = 'system') {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: VOUCHER_INCLUDE,
+        });
+        if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
+
+        if (voucher.status !== 'PAID') {
+            throw new BadRequestException('Only a fully PAID voucher can use the main-column receipt format.');
+        }
+        if ((voucher as any).split_parent_id == null) {
+            throw new BadRequestException(
+                'This receipt format only applies to a PAID voucher produced by splitting a partially-paid voucher.',
+            );
+        }
+
+        // Eligibility guard: every real (non-discount) head must already be a
+        // genuine arrear by the unmodified rule. Checked directly against the
+        // raw voucher_heads already loaded above — never against
+        // prepareVoucherPdfData's synthetic missedArrearFeeItems rows (those
+        // represent unrelated overdue installment plans and must keep
+        // showing as real arrears) — so a voucher with any real *current*
+        // head is rejected outright instead of silently hiding it.
+        const realHeads = (voucher.voucher_heads as any[]).filter((h) => h.student_fees?.is_discount !== true);
+        if (realHeads.length === 0) {
+            throw new BadRequestException('This voucher has no fee heads to render.');
+        }
+        if (!realHeads.every((h) => this.headIsArrear(h, voucher))) {
+            throw new BadRequestException(
+                'This voucher still has a current-period head — the main-column receipt is only for paid vouchers made up entirely of old (arrear) heads.',
+            );
+        }
+
+        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, /* paidStamp */ true, /* forceHeadsAsCurrent */ true);
+        voucherData.showDiscount = true; // match the existing "PAID PDF" download convention
+
+        const buffer = await this.pdfService.generateVoucherPdf(voucherData);
+        const url = await this.storage.upload(key, buffer);
+
+        // Deliberately NOT persisted to vouchers.pdf_url or any other column —
+        // this is a stateless, on-demand alternate render of an existing PAID
+        // voucher, not a new canonical artifact. Known accepted trade-off: if
+        // the underlying deposit is later reversed via clearDeposit (which
+        // hard-deletes a PAID split voucher), a previously generated receipt
+        // becomes a harmless orphaned object in storage.
+        this.logger.log(
+            `generateMainColumnReceipt: ${changedBy} generated a main-column receipt for voucher #${voucherId} (key=${key}).`,
+        );
+
+        return { pdf_url: url };
     }
 
     /**

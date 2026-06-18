@@ -187,6 +187,33 @@ export class VouchersController {
         };
     }
 
+    /**
+     * SPECIAL ADMIN WORKFLOW — see VouchersService.generateMainColumnReceipt()
+     * for full context and the removal checklist. Only valid for a PAID
+     * voucher produced by splitPartiallyPaid() whose heads are all old
+     * (arrear) heads; everything else 400s with a specific reason.
+     */
+    @Post(':id/generate-main-column-receipt')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async generateMainColumnReceipt(
+        @Param('id', ParseIntPipe) id: number,
+        @Req() req: any,
+    ) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.generateMainColumnReceipt(id, changedBy);
+        return {
+            success: true,
+            message: 'Main-column receipt generated successfully.',
+            data: result,
+        };
+    }
+
     @Post(':id/deposit')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
