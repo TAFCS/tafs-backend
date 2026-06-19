@@ -399,11 +399,11 @@ export class ZkAttendanceProcessorService {
       minute: '2-digit',
       timeZone: 'UTC',
     });
-    const title = direction === ScanDirection.IN ? 'Clocked In' : 'Clocked Out';
+    const title = direction === ScanDirection.IN ? 'Arrived at School' : 'Left School';
     const body =
       direction === ScanDirection.IN
-        ? `${student.full_name} has clocked into TAFS at ${time}`
-        : `${student.full_name} has clocked out of TAFS at ${time}`;
+        ? `${student.full_name} has arrived at TAFS at ${time}`
+        : `${student.full_name} has left TAFS at ${time}`;
 
     await this.prisma.attendance_notifications.create({
       data: {
