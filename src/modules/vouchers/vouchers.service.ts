@@ -16,6 +16,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
+import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
@@ -2671,9 +2672,12 @@ export class VouchersService {
                             where: { id },
                             select: { student_id: true, academic_year: true, month: true, fee_date: true, students: { select: { gr_number: true } } }
                         });
-                        const feeDateStr = voucher?.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : 'UNKNOWN';
-                        const grNumber = voucher?.students?.gr_number || `CC${voucher?.student_id}`;
-                        const filename = `${feeDateStr}-${grNumber}.pdf`;
+                        const filename = buildVoucherFilename({
+                            grNumber: voucher?.students?.gr_number,
+                            studentId: voucher?.student_id,
+                            feeDate: voucher?.fee_date,
+                            voucherId: id,
+                        });
                         archive.append(buffer, { name: filename });
                     } catch (err) {
                         this.logger.error(`Failed to add voucher ${id} to zip: ${err.message}`);
