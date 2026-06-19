@@ -83,10 +83,10 @@ function cleanDob(raw: string, employeeCode: string): string {
   let month = parseInt(b, 10);
 
   if (day > 12 && month <= 12) {
-    // Unambiguous MM/DD as submitted -> swap to DD/MM
-    [day, month] = [month, day];
+    // First token can't be a month -> already DD/MM, keep as-is.
   } else if (month > 12 && day <= 12) {
-    // Already DD/MM (second part > 12 can't be a month) -> keep as-is
+    // Second token can't be a month -> source was MM/DD, swap to DD/MM.
+    [day, month] = [month, day];
   } else if (day > 31 || month > 12 || day === 0 || month === 0) {
     reviewNotes.push(`[DOB] ${employeeCode}: "${value}" is not a valid date — left unchanged, needs HR correction.`);
     return value;
@@ -96,7 +96,7 @@ function cleanDob(raw: string, employeeCode: string): string {
   return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
 }
 
-/** Normalizes phone numbers to 0XXX-XXXXXXX, handles multi-number cells, strips placeholder junk. */
+/** Normalizes phone numbers to +92XXXXXXXXXX, handles multi-number cells, strips placeholder junk. */
 function cleanPhone(raw: string, employeeCode: string): string {
   const value = trim(raw);
   if (!value) return '';
@@ -107,12 +107,15 @@ function cleanPhone(raw: string, employeeCode: string): string {
   }
 
   const numbers = value.split(/\s+/).map((part) => {
-    let digits = part.replace(/\D/g, '');
+    const digits = part.replace(/\D/g, '');
     if (digits.length === 10 && digits.startsWith('3')) {
-      digits = '0' + digits; // dropped leading 0
+      return `+92${digits}`; // dropped leading 0
     }
     if (digits.length === 11 && digits.startsWith('0')) {
-      return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+      return `+92${digits.slice(1)}`;
+    }
+    if (digits.length === 12 && digits.startsWith('92')) {
+      return `+${digits}`;
     }
     reviewNotes.push(`[Phone] ${employeeCode}: segment "${part}" has ${digits.length} digits (expected 11) — left unchanged, needs HR correction.`);
     return part;

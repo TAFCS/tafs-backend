@@ -846,10 +846,10 @@ model departments {
 
 model designations {
   id                Int                 @id @default(autoincrement())
-  department_id     Int
+  department_id     Int?
   title             String              @db.VarChar(100)
   description       String?             @db.VarChar(255)
-  departments       departments         @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  departments       departments?        @relation(fields: [department_id], references: [id], onDelete: SetNull)
   employee_profiles employee_profiles[]
 }
 
@@ -868,7 +868,7 @@ model employee_profiles {
   mother_name                        String?                              @db.VarChar(100)
   date_of_birth                      DateTime?                            @db.Date
   address                            String?
-  personal_phone                     String?                              @db.VarChar(20)
+  personal_phone                     String?                              @db.VarChar(60)
   personal_email                     String?                              @db.VarChar(100)
   job_title                          String?                              @db.VarChar(100)
   job_description                    String?
