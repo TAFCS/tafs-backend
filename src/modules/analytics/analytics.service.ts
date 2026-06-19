@@ -205,37 +205,57 @@ export class AnalyticsService {
     // have data — not what an admin wants when checking "how are we doing
     // month to month". A trailing window is always centered on "now" and
     // fills in with real figures as time passes; it never ages out.
-    //   • due      = regular fee heads BILLED FOR that calendar month
-    //                (matched on target_month/academic_year — this is what
-    //                keeps an arrear correctly attributed to the month it
-    //                was originally for, e.g. September's unpaid tuition
-    //                still counts as "due for September" even though it
-    //                physically rides on October's voucher) plus arrear
-    //                surcharges newly billed on vouchers issued for that
-    //                period. A stable, accrual figure — once a period's
-    //                billing closes, it doesn't move.
-    //   • received = actual cash that arrived during that calendar month,
-    //                straight from the deposits ledger (deposit_date). This
-    //                is necessarily a blend of current dues + arrears +
-    //                surcharges + late fees — exactly what really happened
-    //                that month, with no attempt to attribute it back to
-    //                whichever bill it settled.
-    // These two are intentionally different lenses (billing vs. cash flow),
-    // not the same measurement at two points in time — that conflation was
-    // the original bug. Note: because this window can straddle an academic-
-    // year boundary (e.g. a window spanning Jun-Nov would cross from
-    // 2025-2026 into 2026-2027), each month resolves its OWN academic_year
-    // string via academicYearFor() rather than assuming `currentYear` — so
-    // "due" stays correct for that specific month no matter where the
-    // window sits. (As a consequence, these monthly figures are no longer
-    // guaranteed to sum to the yearly `expected`/`collected` headline
-    // figures above — that's expected, not a bug, since the windows differ
-    // on purpose.)
+    //
+    // Two independent stats here, on two deliberately different bases:
+    //
+    // (1) trends — BILLED, grouped by the voucher's issue_date (the day the
+    //     chit was actually generated/printed):
+    //       due = SUM(vouchers.total_payable_before_due) for every voucher
+    //             issued that calendar month, PLUS voucher_arrear_surcharges
+    //             on those same vouchers.
+    //     total_payable_before_due already sums every head on the voucher —
+    //     current-period heads AND any prior-period arrears carried forward
+    //     — so a month's "billed" figure automatically includes past arrears
+    //     the moment they're re-issued, and the surcharge sum adds their
+    //     late-payment penalty on top. VOID vouchers (superseded by
+    //     splitPartiallyPaid) are excluded so a replacement voucher doesn't
+    //     get double-counted alongside the one it replaced.
+    //       received = SUM(student_fees.amount_paid) for every head riding on
+    //                  those SAME vouchers (joined via voucher_heads — this
+    //                  covers regular fees, bundle members, and installment
+    //                  slices alike, since they're all just student_fees rows)
+    //                  PLUS amount_paid on those vouchers' arrear surcharges.
+    //     Deliberately NOT deposits.total_amount: a single deposit can pay
+    //     off heads from several different vouchers/months at once, so
+    //     keying off deposit_date mixes unrelated billing periods together.
+    //     Summing amount_paid on the exact same heads/surcharges counted in
+    //     `due` means received <= due by construction (a row's amount_paid
+    //     can't exceed its amount) — a coherent numerator/denominator pair,
+    //     not two independently-timed ledgers.
+    //     KNOWN CAVEAT: vouchers are sometimes generated ahead of the period
+    //     they're for (e.g. June 2026's vouchers might be issued in May
+    //     2026). This stat counts strictly by issue_date, so that June
+    //     voucher is "billed in May", full stop — regardless of which month
+    //     it's actually for. This can shift amounts a month earlier than a
+    //     reader might expect; that's a known, accepted simplification for
+    //     now, not a bug.
+    //     Separately, of the vouchers issued that month, however many have
+    //     since flipped to status='OVERDUE' (unpaid, past due_date — see
+    //     VouchersSchedulerService) now owe their late fee on top of the
+    //     original bill. That Rs. amount and the exceeded/total voucher
+    //     count are reported alongside due/received for that month.
+    //
+    // (2) feedate_trends — RECEIVABLE, grouped by student_fees.fee_date (the
+    //     period a head is actually FOR — a row with fee_date=2026-06-01 is
+    //     a June 2026 head, however many times it's been re-issued since):
+    //       due       = SUM(amount)       for every head with that fee_date
+    //       collected = SUM(amount_paid)  for the same heads
+    //     This deliberately EXCLUDES voucher_arrear_surcharges and ignores
+    //     due_date/overdue status entirely — it is a pure fee-ledger view
+    //     (what's receivable, what's been received against it), not a
+    //     billing-instrument view. Late fees and arrear surcharges never
+    //     appear here; see stat (1) for those.
     const MONTHS_TO_SHOW = 6;
-    const academicYearFor = (calYear: number, monthNum: number) => {
-      const ayStartYear = monthNum >= 8 ? calYear : calYear - 1;
-      return `${ayStartYear}-${ayStartYear + 1}`;
-    };
 
     const trends: any[] = [];
     const feedate_trends: any[] = [];
@@ -243,43 +263,64 @@ export class AnalyticsService {
       const ref = new Date(today.getFullYear(), today.getMonth() - offset, 1);
       const calYear = ref.getFullYear();
       const jsMonth = ref.getMonth();
-      const monthNum = jsMonth + 1;
       const label = ref.toLocaleString('en-US', { month: 'short', year: '2-digit' });
-      const ay = academicYearFor(calYear, monthNum);
 
       const startDate = new Date(calYear, jsMonth, 1);
       const endDate = new Date(calYear, jsMonth + 1, 0, 23, 59, 59, 999);
 
-      const [dueFeeAgg, dueSurchargeAgg, receivedAgg, feeDateAgg] = await Promise.all([
+      // Vouchers actually issued (printed) in this calendar month — this is
+      // the billing-instrument lens, deliberately distinct from fee_date.
+      const issuedVoucherWhere = {
+        issue_date: { gte: startDate, lte: endDate },
+        status: { not: 'VOID' },
+        students: studentFilter,
+      };
+
+      const [voucherAgg, voucherSurchargeAgg, totalIssuedCount, overdueAgg, overdueCount, paidFeeAgg, feeDateAgg, feeDateIssuedAgg] = await Promise.all([
+        this.prisma.vouchers.aggregate({
+          where: issuedVoucherWhere,
+          _sum: { total_payable_before_due: true },
+        }),
+        // amount = billed (surcharge side of `due`); amount_paid = collected
+        // (surcharge side of `received`) — same surcharge rows, both sums.
+        this.prisma.voucher_arrear_surcharges.aggregate({
+          where: { waived: false, vouchers: issuedVoucherWhere },
+          _sum: { amount: true, amount_paid: true },
+        }),
+        this.prisma.vouchers.count({ where: issuedVoucherWhere }),
+        // Of THIS month's issued vouchers, the ones that have since gone
+        // OVERDUE (unpaid, past due_date) now owe their late fee too.
+        this.prisma.vouchers.aggregate({
+          where: { ...issuedVoucherWhere, status: 'OVERDUE', late_fee_charge: true },
+          _sum: { total_payable_after_due: true, total_payable_before_due: true, late_fee_deposited: true },
+        }),
+        this.prisma.vouchers.count({ where: { ...issuedVoucherWhere, status: 'OVERDUE' } }),
+        // Collected = amount_paid on every student_fees head riding on THESE
+        // SAME vouchers (joined via voucher_heads) — regular fees, bundle
+        // members, and installment slices are all just student_fees rows, so
+        // this one aggregate naturally covers all of them. Deliberately NOT
+        // deposits.total_amount: a deposit can pay off heads from several
+        // different vouchers/months in one transaction, so keying off
+        // deposit_date mixes unrelated billing periods together and can make
+        // "received" exceed "billed" for reasons that have nothing to do
+        // with this month's vouchers. Summing amount_paid on the exact heads
+        // counted in `due` guarantees received <= due by construction
+        // (amount_paid can't exceed amount on a row), so this is the
+        // accurate "how much of what we billed this month has come in" figure.
         this.prisma.student_fees.aggregate({
           where: {
-            target_month: monthNum,
-            academic_year: ay,
             is_discount: false,
             is_arrear_surcharge: false,
+            voucher_heads: { some: { vouchers: issuedVoucherWhere } },
             ...feeFilter,
           },
-          _sum: { amount: true, amount_paid: true },
+          _sum: { amount_paid: true },
         }),
-        // Surcharges on vouchers issued this calendar month — reused for both
-        // trends.due and feedate_trends.due since both group by the voucher's fee_date.
-        this.prisma.voucher_arrear_surcharges.aggregate({
-          where: {
-            waived: false,
-            vouchers: { status: { not: 'VOID' }, fee_date: { gte: startDate, lte: endDate }, students: studentFilter },
-          },
-          _sum: { amount: true, amount_paid: true },
-        }),
-        this.prisma.deposits.aggregate({
-          where: {
-            deposit_date: { gte: startDate, lte: endDate },
-            students: studentFilter,
-          },
-          _sum: { total_amount: true },
-        }),
-        // fee_date-based view: all heads whose fee_date falls in this calendar
-        // month, regardless of which target_month they were originally for.
-        // amount_paid tracks how much of that voucher cycle has since been settled.
+        // fee_date-based view: every head whose fee_date falls in this
+        // calendar month, regardless of which voucher it currently rides on.
+        // No surcharges, no due_date — see comment block above. Includes
+        // NOT_ISSUED rows — template heads that exist in the ledger but were
+        // never actually put on a voucher.
         this.prisma.student_fees.aggregate({
           where: {
             fee_date: { gte: startDate, lte: endDate },
@@ -289,22 +330,26 @@ export class AnalyticsService {
           },
           _sum: { amount: true, amount_paid: true },
         }),
+        // Same, but excluding NOT_ISSUED rows — only heads that were actually
+        // billed to the student at some point (ISSUED/PARTIALLY_PAID/PAID).
+        this.prisma.student_fees.aggregate({
+          where: {
+            fee_date: { gte: startDate, lte: endDate },
+            is_discount: false,
+            is_arrear_surcharge: false,
+            status: { not: 'NOT_ISSUED' },
+            ...feeFilter,
+          },
+          _sum: { amount: true, amount_paid: true },
+        }),
       ]);
 
-      const due = Number(dueFeeAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
-      const received = Number(receivedAgg._sum?.total_amount || 0);
-      // Accrual outstanding for this target_month bucket — amount billed for
-      // this month minus amount paid against it to date, regardless of which
-      // voucher those heads currently ride on. Deliberately NOT due_date-based:
-      // due_date reflects whichever voucher a head is CURRENTLY on (it gets
-      // overwritten every time an arrear is carried forward — see
-      // vouchers.service.ts), so a per-month "is it overdue" filter would mix
-      // an old billing period with a brand-new voucher's deadline and produce
-      // numbers that don't track the original month at all. "Overdue, ever"
-      // is only meaningful as the single institution-wide snapshot already
-      // returned in financials.arrears.
-      const outstanding_target = Math.max(0,
-        due - (Number(dueFeeAgg._sum?.amount_paid || 0) + Number(dueSurchargeAgg._sum?.amount_paid || 0)),
+      const due = Number(voucherAgg._sum?.total_payable_before_due || 0) + Number(voucherSurchargeAgg._sum?.amount || 0);
+      const received = Number(paidFeeAgg._sum?.amount_paid || 0) + Number(voucherSurchargeAgg._sum?.amount_paid || 0);
+      const lateFeeAdded = Math.max(0,
+        Number(overdueAgg._sum?.total_payable_after_due || 0) -
+        Number(overdueAgg._sum?.total_payable_before_due || 0) -
+        Number(overdueAgg._sum?.late_fee_deposited || 0),
       );
 
       trends.push({
@@ -312,18 +357,25 @@ export class AnalyticsService {
         due,
         received,
         gap: due - received,
-        outstanding: outstanding_target,
+        totalIssuedCount,
+        overdueCount,
+        lateFeeAdded,
       });
 
-      // feedate due includes surcharges on vouchers issued this month (same dueSurchargeAgg)
-      const fd_due = Number(feeDateAgg._sum?.amount || 0) + Number(dueSurchargeAgg._sum?.amount || 0);
-      const fd_collected = Number(feeDateAgg._sum?.amount_paid || 0) + Number(dueSurchargeAgg._sum?.amount_paid || 0);
+      const fdDue = Number(feeDateAgg._sum?.amount || 0);
+      const fdCollected = Number(feeDateAgg._sum?.amount_paid || 0);
+      const fdDueIssued = Number(feeDateIssuedAgg._sum?.amount || 0);
+      const fdCollectedIssued = Number(feeDateIssuedAgg._sum?.amount_paid || 0);
 
       feedate_trends.push({
         month: label,
-        due: fd_due,
-        collected: fd_collected,
-        gap: fd_due - fd_collected,
+        due: fdDue,
+        collected: fdCollected,
+        gap: fdDue - fdCollected,
+        // Same fee_date grouping, excluding NOT_ISSUED template rows.
+        dueIssuedOnly: fdDueIssued,
+        collectedIssuedOnly: fdCollectedIssued,
+        gapIssuedOnly: fdDueIssued - fdCollectedIssued,
       });
     }
 
