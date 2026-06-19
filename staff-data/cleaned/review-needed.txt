@@ -1,0 +1,47 @@
+[Phone] 02-0861: "PERSONAL CELL #" looks like placeholder text, not a number — cleared.
+[Email] 02-001291: "NO" is not an email — cleared.
+[CNIC] 02-001355: "42101-394444-6" has 12 digits (expected 13) — left unchanged, needs HR correction.
+[Phone] 02-001365: segment "0342-201385" has 10 digits (expected 11) — left unchanged, needs HR correction.
+[DOB] 02-001337: "07-0-1997" is not a valid date — left unchanged, needs HR correction.
+[Phone] 02-001475: segment "0333-26663999" has 12 digits (expected 11) — left unchanged, needs HR correction.
+[CNIC] 02-001339: "42201-0451886" has 12 digits (expected 13) — left unchanged, needs HR correction.
+[Phone] 02-001214: segment "0336-860360274" has 13 digits (expected 11) — left unchanged, needs HR correction.
+[CNIC] 03-00603: "42201-281465-0" has 12 digits (expected 13) — left unchanged, needs HR correction.
+[Date of Joining] 05-2011 (M. SOHAIL KHAN): no employee-code match in the teacher-profile sheet; matched by name instead. Please confirm employee code "05-2011" is correct (teacher-profile sheet may have a different code on file).
+[Date of Joining] 02-001197 (MRS. SHABANA ASHFAQ): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00557 (SYEDA SARA NAQVI): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00608 (MS. SANA ZAKA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 02-001413 (MS. JASMINE NUSRAT): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00451 (MRS. AMBREEN FATIMA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-1937 (MR. ALI ASGHAR MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00639 (MS. HIRA KHADIM): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-00018 (MRS. SUKAINA KIZILBASH): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00325 (MRS. SULTANA AMIR): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 02-00836 (MR. MIRZA TAHIR ABBAS): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 02-001231 (MS. LAIRULLANA MASOOD): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 02-0924 (MS. BUSHRA WASIM): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 02-001214 (SYEDA ANITA HAIDER): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-2000 (MUHAMMAD HUSSAIN MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-00019 (ASAD HUSSAIN MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-2006 (MRS. FOZIA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-00017 (MRS. NIMLA ASAD MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-2009 (MRS. ASIFA OWAIS): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00174 (MR. OWAIS AHMED SHAH): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00125 (MRS. SAJIDA RUBAB ADIL): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00489 (SYEDA MAHEEN ZEHRA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00331 (MR. IMTIAZ HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00190 (MR. ALI SAJJAD): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00237 (MR. AMIR ALI): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00591 (MR. MURTAZA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00612 (S. JOHN HASSAN RIZVI): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00318 (MR. MARTIN IMAMDIN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00636 (MS. BINISH FATIMA): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00643 (MS. HAFSA MUSHTAQ): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00644 (MS. UMAMA SHAFIQ): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 01-2005 (MRS. FATIMA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00556 (MRS. SHAKERA SHAKEEL): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00486 (SYED KOMAIL HASSAN ZAIDI): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00580 (MS. MISHAL REHAN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00547 (MS. SAJEELA SALMAN): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00603 (MS. ASIA MUJEEB): not found in teacher-profile sheet — left blank, needs HR input.
+[Date of Joining] 03-00615 (MS. AMNA MASROOR): not found in teacher-profile sheet — left blank, needs HR input.
