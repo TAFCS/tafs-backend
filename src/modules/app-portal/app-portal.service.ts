@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { resolveStudentCalendarDay } from '../hr/calendar/student-calendar-day.util';
 
 @Injectable()
 export class AppPortalService {
@@ -224,12 +225,17 @@ export class AppPortalService {
         });
       }
 
+      const { holiday_type, holiday_description } = resolveStudentCalendarDay(
+        new Date(d),
+        calDay,
+      );
+
       days.push({
         date: key,
         status: record?.status ?? null, // e.g. PRESENT, ABSENT, etc.
         sessions,
-        holiday_type: calDay?.day_type ?? null,        // 'HOLIDAY' | 'WEEKEND' | 'WORKDAY' | null
-        holiday_description: calDay?.description ?? null,
+        holiday_type,
+        holiday_description,
       });
     }
 

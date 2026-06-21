@@ -212,7 +212,7 @@ async function main() {
 
   const designationIdByTitle = new Map<string, number>();
   for (const title of uniqueDesignations) {
-    const created = await prisma.designations.create({ data: { title, department_id: null } });
+    const created = await prisma.designations.create({ data: { title } });
     designationIdByTitle.set(title, created.id);
   }
 
