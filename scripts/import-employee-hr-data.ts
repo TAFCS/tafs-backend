@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse } from 'csv-parse/sync';
 import { PrismaClient } from '@prisma/client';
+import { getCleanTitleAndCategory } from './migrate-and-clean-data';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const OUT_DIR = path.join(__dirname, '..', 'staff-data', 'cleaned');
@@ -235,6 +236,8 @@ async function main() {
 
     const apRow = apByCode.get(employeeCode.trim().toUpperCase());
 
+    const { cleanedTitle, category } = getCleanTitleAndCategory(jobTitle, designation);
+
     const data = {
       employee_code: employeeCode || null,
       full_name: fullName || null,
@@ -246,7 +249,8 @@ async function main() {
       address: address || null,
       personal_phone: phone || null,
       personal_email: email || null,
-      job_title: jobTitle || null,
+      job_title: cleanedTitle,
+      teacher_category: category,
       job_description: jobDescription || null,
       notes: notes || null,
       designation_id: designation ? designationIdByTitle.get(designation) ?? null : null,
