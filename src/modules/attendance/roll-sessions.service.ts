@@ -15,6 +15,7 @@ import {
   UpdateRollSessionDto,
 } from './dto/roll-sessions.dto';
 import { RollCallAnnouncementsService } from './roll-call-announcements.service';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 
 /** Fallback IDs used only when no class_attendance_modes rows exist yet. */
 const DEFAULT_ROLL_CALL_CLASS_IDS = [21, 22];
@@ -25,6 +26,7 @@ export class RollSessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly announcements: RollCallAnnouncementsService,
+    private readonly calendarResolver: CalendarDayResolverService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -200,6 +202,13 @@ export class RollSessionsService {
     const sessionDate = this.parseDate(dto.session_date);
     const period = dto.period ?? 1;
 
+    const dayResolved = await this.calendarResolver.resolveStudentDay(
+      dto.campus_id,
+      dto.class_id,
+      dto.section_id,
+      sessionDate,
+    );
+
     const existing = await this.prisma.attendance_roll_sessions.findUnique({
       where: {
         campus_id_class_id_section_id_session_date_period: {
@@ -215,6 +224,27 @@ export class RollSessionsService {
 
     if (existing) {
       return this.enrichWithRoster(existing);
+    }
+
+    if (!dayResolved.isWorkingDay) {
+      const skipReason = `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`;
+      const session = await this.prisma.attendance_roll_sessions.create({
+        data: {
+          campus_id: dto.campus_id,
+          class_id: dto.class_id,
+          section_id: dto.section_id,
+          session_date: sessionDate,
+          period,
+          status: 'SKIPPED',
+          skip_reason: skipReason,
+          created_by_id: user.sub,
+          submitted_by_id: user.sub,
+          submitted_at: new Date(),
+        },
+        include: this.sessionInclude(),
+      });
+      await this.announcements.announceSessionSkipped(session.id);
+      return this.enrichWithRoster(session);
     }
 
     const session = await this.prisma.attendance_roll_sessions.create({
@@ -255,6 +285,18 @@ export class RollSessionsService {
     if (session.status === 'SUBMITTED' && !canEditLocked) {
       throw new ForbiddenException(
         'This roll session is locked. You need attendance.student.edit_locked permission to edit.',
+      );
+    }
+
+    const dayResolved = await this.calendarResolver.resolveStudentDay(
+      session.campus_id,
+      session.class_id,
+      session.section_id,
+      session.session_date,
+    );
+    if (!dayResolved.isWorkingDay && dto.records?.length) {
+      throw new BadRequestException(
+        `Cannot mark attendance on a holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`,
       );
     }
 
@@ -382,7 +424,16 @@ export class RollSessionsService {
       });
 
       for (const session of draftSessions) {
-        const reason = `Auto-skipped: roll call not submitted by ${cutoffTime}`;
+        const dayResolved = await this.calendarResolver.resolveStudentDay(
+          campus.id,
+          session.class_id,
+          session.section_id,
+          today,
+        );
+        const reason = !dayResolved.isWorkingDay
+          ? `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`
+          : `Auto-skipped: roll call not submitted by ${cutoffTime}`;
+
         await this.prisma.attendance_roll_sessions.update({
           where: { id: session.id },
           data: {

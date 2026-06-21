@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus } from '@nestjs/common';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateWorkScheduleDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -40,6 +40,30 @@ export class EmployeesController {
   async searchSimple(@Query('q') q: string) {
     const data = await this.employeesService.searchSimple(q || '');
     return createApiResponse(data, HttpStatus.OK, 'Search results retrieved successfully');
+  }
+
+  @Get(':id/work-schedule')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async getWorkSchedule(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.employeesService.getWorkSchedule(id);
+    return createApiResponse(data, HttpStatus.OK, 'Employee work schedule retrieved successfully');
+  }
+
+  @Patch(':id/work-schedule')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateWorkSchedule(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateWorkScheduleDto,
+  ) {
+    const data = await this.employeesService.updateWorkSchedule(id, dto);
+    return createApiResponse(data, HttpStatus.OK, 'Employee work schedule updated successfully');
+  }
+
+  @Delete(':id/work-schedule')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async clearWorkSchedule(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.employeesService.clearWorkSchedule(id);
+    return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
   }
 
   @Get(':id')

@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { attendance_staff_daily, AttendanceSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import {
   BulkMarkStaffAttendanceDto,
   GetStaffAttendanceQueryDto,
@@ -10,7 +12,11 @@ import {
 
 @Injectable()
 export class StaffAttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly calendarResolver: CalendarDayResolverService,
+    private readonly holidaySync: HolidayAttendanceSyncService,
+  ) {}
 
   private parseDate(dateStr: string): Date {
     const d = new Date(dateStr);
@@ -32,6 +38,8 @@ export class StaffAttendanceService {
     const campusId = query.campus_id ?? user.campusId ?? undefined;
     if (!campusId) throw new BadRequestException('campus_id is required');
     this.assertCampusAccess(user, campusId);
+
+    await this.holidaySync.syncCampusForDate(campusId, date);
 
     // Fetch employees whose linked user belongs to this campus
     const employees = await this.prisma.employee_profiles.findMany({
@@ -57,10 +65,20 @@ export class StaffAttendanceService {
 
     const recordMap = new Map(records.map((r) => [r.employee_id, r]));
 
-    return employees.map((emp) => ({
-      employee: emp,
-      record: recordMap.get(emp.id) ?? null,
-    }));
+    const rows = await Promise.all(
+      employees.map(async (emp) => {
+        const resolved = await this.calendarResolver.resolveStaffDay(emp.id, campusId, date);
+        return {
+          employee: emp,
+          record: recordMap.get(emp.id) ?? null,
+          is_working_day: resolved.isWorkingDay,
+          day_type: resolved.dayType,
+          day_description: resolved.description,
+        };
+      }),
+    );
+
+    return rows;
   }
 
   // Shared employee scope lookup for the summary/dashboard endpoints — same
@@ -103,6 +121,7 @@ export class StaffAttendanceService {
   private computeDailyCounts(
     employees: { id: number; reporting_time: Date | null; late_relaxation_minutes: number | null }[],
     records: Map<number, attendance_staff_daily>,
+    offDayIds: Set<number>,
   ) {
     let onTime = 0;
     let late = 0;
@@ -110,8 +129,14 @@ export class StaffAttendanceService {
     let absent = 0;
     let noClockIn = 0;
     let noClockOut = 0;
+    let dayOff = 0;
 
     for (const emp of employees) {
+      if (offDayIds.has(emp.id)) {
+        dayOff++;
+        continue;
+      }
+
       const record = records.get(emp.id);
       if (!record) {
         noClockIn++;
@@ -119,6 +144,10 @@ export class StaffAttendanceService {
       }
       if (record.status === StaffAttendanceStatus.ABSENT) {
         absent++;
+        continue;
+      }
+      if (record.status === StaffAttendanceStatus.EXCUSED) {
+        dayOff++;
         continue;
       }
       if (!record.check_in_at) {
@@ -132,21 +161,37 @@ export class StaffAttendanceService {
       if (!record.check_out_at) noClockOut++;
     }
 
-    return { onTime, late, early, absent, noClockIn, noClockOut };
+    return { onTime, late, early, absent, noClockIn, noClockOut, dayOff };
+  }
+
+  private async getOffDayEmployeeIds(
+    campusId: number,
+    employees: { id: number }[],
+    date: Date,
+  ): Promise<Set<number>> {
+    const offDayIds = new Set<number>();
+    await Promise.all(
+      employees.map(async (emp) => {
+        const resolved = await this.calendarResolver.resolveStaffDay(emp.id, campusId, date);
+        if (!resolved.isWorkingDay) offDayIds.add(emp.id);
+      }),
+    );
+    return offDayIds;
   }
 
   private async getCountsForDate(campusId: number, departmentId: number | undefined, date: Date) {
     const employees = await this.getEmployeesInScope(campusId, departmentId);
     if (employees.length === 0) {
-      return { onTime: 0, late: 0, early: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
+      return { onTime: 0, late: 0, early: 0, absent: 0, noClockIn: 0, noClockOut: 0, dayOff: 0 };
     }
 
     const records = await this.prisma.attendance_staff_daily.findMany({
       where: { date, employee_id: { in: employees.map((e) => e.id) } },
     });
     const recordMap = new Map(records.map((r) => [r.employee_id, r]));
+    const offDayIds = await this.getOffDayEmployeeIds(campusId, employees, date);
 
-    return this.computeDailyCounts(employees, recordMap);
+    return this.computeDailyCounts(employees, recordMap, offDayIds);
   }
 
   async getSummary(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
@@ -178,7 +223,7 @@ export class StaffAttendanceService {
         invalid: { count: 0, delta: 0 },
       },
       away_summary: {
-        day_off: { count: 0, delta: 0 },
+        day_off: card('dayOff'),
         time_off: { count: 0, delta: 0 },
       },
     };
@@ -239,6 +284,11 @@ export class StaffAttendanceService {
     const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
 
     if (record?.status === StaffAttendanceStatus.EXCUSED) {
+      segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
+      return segments;
+    }
+
+    if (record && !record.check_in_at && record.status !== StaffAttendanceStatus.ABSENT) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;
     }
@@ -313,14 +363,34 @@ export class StaffAttendanceService {
     }
     const recordMap = new Map(records.map((r) => [r.date.toISOString(), r]));
 
-    const days: { date: string; status: StaffAttendanceStatus | null; segments: ReturnType<StaffAttendanceService['buildDaySegments']> }[] = [];
+    const days: {
+      date: string;
+      status: StaffAttendanceStatus | null;
+      is_working_day: boolean;
+      day_type: string | null;
+      day_description: string | null;
+      segments: ReturnType<StaffAttendanceService['buildDaySegments']>;
+    }[] = [];
     for (let d = new Date(dateFrom); d <= dateTo; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))) {
       const key = d.toISOString();
       const record = recordMap.get(key) ?? null;
+      const campusId = employee.campus_id ?? 0;
+      const resolved = campusId
+        ? await this.calendarResolver.resolveStaffDay(employeeId, campusId, new Date(d))
+        : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
+
+      let segments = this.buildDaySegments(scansByDate.get(key) ?? [], employee.leaving_time, record);
+      if (!resolved.isWorkingDay && segments.length === 0) {
+        segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
+      }
+
       days.push({
         date: key.slice(0, 10),
-        status: record?.status ?? null,
-        segments: this.buildDaySegments(scansByDate.get(key) ?? [], employee.leaving_time, record),
+        status: record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
+        is_working_day: resolved.isWorkingDay,
+        day_type: resolved.dayType,
+        day_description: resolved.description,
+        segments,
       });
     }
 
@@ -342,7 +412,7 @@ export class StaffAttendanceService {
         id: { in: employeeIds },
         users: { campus_id: dto.campus_id },
       },
-      select: { id: true },
+      select: { id: true, campus_id: true },
     });
 
     const validIds = new Set(employees.map((e) => e.id));
@@ -351,6 +421,17 @@ export class StaffAttendanceService {
       throw new BadRequestException(
         `Employee IDs not found on this campus: ${invalid.join(', ')}`,
       );
+    }
+
+    for (const mark of dto.records) {
+      const emp = employees.find((e) => e.id === mark.employee_id);
+      if (!emp?.campus_id) continue;
+      const resolved = await this.calendarResolver.resolveStaffDay(mark.employee_id, dto.campus_id, date);
+      if (!resolved.isWorkingDay) {
+        throw new BadRequestException(
+          `Cannot mark attendance on a day off: ${resolved.description ?? resolved.dayType ?? 'Holiday'}`,
+        );
+      }
     }
 
     // Upsert all records in a transaction

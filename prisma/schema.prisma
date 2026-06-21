@@ -138,6 +138,7 @@ model classes {
   class_code                         String                               @db.VarChar(10)
   academic_system                    String                               @db.VarChar(20)
   term_start_month                   Int                                  @default(8)
+  academic_calendar_days             academic_calendar_days[]
   attendance_roll_sessions           attendance_roll_sessions[]
   campus_classes                     campus_classes[]
   campus_sections                    campus_sections[]
@@ -303,6 +304,7 @@ model relatives_attending_tafs {
 model sections {
   id                                 Int                                  @id @default(autoincrement())
   description                        String                               @db.VarChar(255)
+  academic_calendar_days             academic_calendar_days[]
   attendance_roll_sessions           attendance_roll_sessions[]
   campus_sections                    campus_sections[]
   employee_class_section_assignments employee_class_section_assignments[]
@@ -837,11 +839,12 @@ model complaints {
 }
 
 model departments {
-  id                Int                 @id @default(autoincrement())
-  name              String              @db.VarChar(100)
-  description       String?             @db.VarChar(255)
-  designations      designations[]
-  employee_profiles employee_profiles[]
+  id                     Int                      @id @default(autoincrement())
+  name                   String                   @db.VarChar(100)
+  description            String?                  @db.VarChar(255)
+  academic_calendar_days academic_calendar_days[]
+  designations           designations[]
+  employee_profiles      employee_profiles[]
 }
 
 model designations {
@@ -849,7 +852,7 @@ model designations {
   department_id     Int?
   title             String              @db.VarChar(100)
   description       String?             @db.VarChar(255)
-  departments       departments?        @relation(fields: [department_id], references: [id], onDelete: SetNull)
+  departments       departments?        @relation(fields: [department_id], references: [id])
   employee_profiles employee_profiles[]
 }
 
@@ -881,6 +884,7 @@ model employee_profiles {
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
+  academic_calendar_days             academic_calendar_days[]
   attendance_staff_daily             attendance_staff_daily[]
   device_user_mappings               device_user_mappings[]
   employee_class_section_assignments employee_class_section_assignments[]
@@ -891,6 +895,7 @@ model employee_profiles {
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
+  employee_work_schedules            employee_work_schedules[]
   zk_attendance_scans                zk_attendance_scans[]
 }
 
@@ -916,15 +921,36 @@ model employee_class_section_assignments {
 }
 
 model academic_calendar_days {
-  id          Int      @id @default(autoincrement())
-  campus_id   Int
-  date        DateTime @db.Date
-  day_type    String   @db.VarChar(20)
-  description String?  @db.VarChar(255)
-  applies_to  String   @default("STUDENT") @db.VarChar(20)
-  campuses    campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  id            Int                @id @default(autoincrement())
+  campus_id     Int
+  date          DateTime           @db.Date
+  day_type      String             @db.VarChar(20)
+  description   String?            @db.VarChar(255)
+  applies_to    String             @default("STUDENT") @db.VarChar(20)
+  class_id      Int?
+  section_id    Int?
+  department_id Int?
+  employee_id   Int?
+  created_by    String?
+  campuses      campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes       classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  departments   departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  employee      employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  sections      sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, date, applies_to])
+  @@index([campus_id, date, applies_to])
+  @@index([class_id, section_id])
+}
+
+model employee_work_schedules {
+  id          Int               @id @default(autoincrement())
+  employee_id Int
+  day_of_week Int
+  is_working  Boolean           @default(true)
+  employee    employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, day_of_week])
 }
 
 model class_attendance_modes {
@@ -1317,6 +1343,7 @@ enum MessageStatus {
 enum RollRecordStatus {
   PRESENT
   ABSENT
+  EXCUSED
 }
 
 enum RollSessionStatus {
@@ -1346,6 +1373,7 @@ enum ScanDirection {
 enum AttendanceSource {
   MANUAL
   BIOMETRIC
+  SYSTEM
 }
 
 enum PostdatedChequeStatus {

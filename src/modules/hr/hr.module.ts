@@ -7,6 +7,9 @@ import { PoliciesController } from './policies/policies.controller';
 import { PoliciesService } from './policies/policies.service';
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
+import { CalendarDayResolverService } from './calendar/calendar-day-resolver.service';
+import { HolidayAttendanceSyncService } from './calendar/holiday-attendance-sync.service';
+import { HolidayAttendanceSchedulerService } from './calendar/holiday-attendance-scheduler.service';
 import { ClassAttendanceModesController } from './class-attendance-modes/class-attendance-modes.controller';
 import { ClassAttendanceModesService } from './class-attendance-modes/class-attendance-modes.service';
 import { StaffTypesController } from './staff-types/staff-types.controller';
@@ -28,6 +31,9 @@ import { AuthModule } from '../auth/auth.module';
     DepartmentsService,
     PoliciesService,
     CalendarService,
+    CalendarDayResolverService,
+    HolidayAttendanceSyncService,
+    HolidayAttendanceSchedulerService,
     ClassAttendanceModesService,
     StaffTypesService,
   ],
@@ -36,6 +42,8 @@ import { AuthModule } from '../auth/auth.module';
     DepartmentsService,
     PoliciesService,
     CalendarService,
+    CalendarDayResolverService,
+    HolidayAttendanceSyncService,
     ClassAttendanceModesService,
     StaffTypesService,
   ],

@@ -1,11 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
-import { resolveStudentCalendarDay } from '../hr/calendar/student-calendar-day.util';
+import { Prisma, RollRecordStatus } from '@prisma/client';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 
 @Injectable()
 export class AppPortalService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly calendarResolver: CalendarDayResolverService,
+  ) {}
 
   async getStudentLedger(studentCc: number) {
     const student = await this.prisma.students.findUnique({
@@ -162,13 +165,12 @@ export class AppPortalService {
     const dateFrom = new Date(Date.UTC(year, month - 1, 1));
     const dateTo = new Date(Date.UTC(year, month, 0)); // last day of month
 
-    // Get the student's campus_id
     const student = await this.prisma.students.findUnique({
       where: { cc: studentCc },
-      select: { campus_id: true },
+      select: { campus_id: true, class_id: true, section_id: true },
     });
 
-    const [scans, records, calendarDays] = await Promise.all([
+    const [scans, records] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
           student_cc: studentCc,
@@ -181,16 +183,18 @@ export class AppPortalService {
       this.prisma.attendance_student_daily.findMany({
         where: { student_cc: studentCc, date: { gte: dateFrom, lte: dateTo } },
       }),
-      student?.campus_id
-        ? this.prisma.academic_calendar_days.findMany({
-            where: {
-              campus_id: student.campus_id,
-              date: { gte: dateFrom, lte: dateTo },
-              applies_to: 'STUDENT',
-            },
-          })
-        : Promise.resolve([]),
     ]);
+
+    const calendarMap =
+      student?.campus_id != null
+        ? await this.calendarResolver.loadStudentCalendarMap(
+            student.campus_id,
+            student.class_id,
+            student.section_id,
+            dateFrom,
+            dateTo,
+          )
+        : new Map();
 
     const scansByDate = new Map<string, any[]>();
     for (const scan of scans) {
@@ -200,16 +204,18 @@ export class AppPortalService {
       else scansByDate.set(key, [scan]);
     }
     const recordMap = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
-    const holidayMap = new Map<string, any>(
-      (calendarDays as any[]).map((c) => [c.date.toISOString().slice(0, 10), c]),
-    );
 
     const days: any[] = [];
     for (let d = new Date(dateFrom); d <= dateTo; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = d.toISOString().slice(0, 10);
       const record = recordMap.get(key) ?? null;
       const dayScans = scansByDate.get(key) ?? [];
-      const calDay = holidayMap.get(key) ?? null;
+      const resolved = calendarMap.get(key) ?? {
+        isWorkingDay: true,
+        dayType: null,
+        description: null,
+        source: 'DEFAULT',
+      };
 
       const sessions: any[] = [];
       for (let i = 0; i + 1 < dayScans.length; i += 2) {
@@ -225,17 +231,18 @@ export class AppPortalService {
         });
       }
 
-      const { holiday_type, holiday_description } = resolveStudentCalendarDay(
-        new Date(d),
-        calDay,
-      );
+      const { holiday_type, holiday_description } = this.calendarResolver.toHolidayDisplay(resolved);
+      let status = record?.status ?? null;
+      if (status === RollRecordStatus.EXCUSED || !resolved.isWorkingDay) {
+        status = RollRecordStatus.EXCUSED;
+      }
 
       days.push({
         date: key,
-        status: record?.status ?? null, // e.g. PRESENT, ABSENT, etc.
+        status,
         sessions,
-        holiday_type,
-        holiday_description,
+        holiday_type: holiday_type ?? (status === RollRecordStatus.EXCUSED ? resolved.dayType ?? 'HOLIDAY' : null),
+        holiday_description: holiday_description ?? resolved.description,
       });
     }
 

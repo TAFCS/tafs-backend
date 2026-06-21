@@ -3,6 +3,8 @@ import { Prisma, RollRecordStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
@@ -10,7 +12,11 @@ import {
 
 @Injectable()
 export class StudentAttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly calendarResolver: CalendarDayResolverService,
+    private readonly holidaySync: HolidayAttendanceSyncService,
+  ) {}
 
   private parseDate(dateStr: string): Date {
     const d = new Date(dateStr);
@@ -73,18 +79,19 @@ export class StudentAttendanceService {
   ) {
     const students = await this.getStudentsInScope(campusId, classId, sectionId, user);
     if (students.length === 0) {
-      return { present: 0, noClockIn: 0, noClockOut: 0 };
+      return { present: 0, excused: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
     }
 
     const records = await this.prisma.attendance_student_daily.findMany({
       where: { date, student_cc: { in: students.map((s) => s.cc) } },
     });
 
-    const present = records.length;
+    const present = records.filter((r) => r.status === RollRecordStatus.PRESENT).length;
+    const excused = records.filter((r) => r.status === RollRecordStatus.EXCUSED).length;
+    const absent = records.filter((r) => r.status === RollRecordStatus.ABSENT).length;
     const noClockIn = students.length - records.length;
-    const noClockOut = records.filter((r) => r.check_in_at && !r.check_out_at).length;
 
-    return { present, noClockIn, noClockOut };
+    return { present, excused, absent, noClockIn, noClockOut: records.filter((r) => r.check_in_at && !r.check_out_at).length };
   }
 
   async getSummary(query: GetStudentAttendanceQueryDto, user: IJwtStaffPayload) {
@@ -108,6 +115,8 @@ export class StudentAttendanceService {
         present: card('present'),
       },
       not_present_summary: {
+        absent: card('absent'),
+        excused: card('excused'),
         no_clock_in: card('noClockIn'),
         no_clock_out: card('noClockOut'),
       },
@@ -120,6 +129,8 @@ export class StudentAttendanceService {
     if (!campusId) throw new BadRequestException('campus_id is required');
     this.assertCampusAccess(user, campusId);
 
+    await this.holidaySync.syncCampusForDate(campusId, date);
+
     const students = await this.getStudentsInScope(campusId, query.class_id, query.section_id, user);
     if (students.length === 0) return [];
 
@@ -128,22 +139,35 @@ export class StudentAttendanceService {
     });
     const recordMap = new Map(records.map((r) => [r.student_cc, r]));
 
-    return students.map((student) => {
-      const record = recordMap.get(student.cc) ?? null;
-      return {
-        student: {
-          cc: student.cc,
-          full_name: student.full_name,
-          gr_number: student.gr_number,
-          photo_url: student.photograph_url,
-          class: student.classes?.description ?? null,
-          section: student.sections?.description ?? null,
-        },
-        check_in_at: record?.check_in_at ?? null,
-        check_out_at: record?.check_out_at ?? null,
-        status: record?.status ?? null,
-      };
-    });
+    const rows = await Promise.all(
+      students.map(async (student) => {
+        const resolved = await this.calendarResolver.resolveStudentDay(
+          campusId,
+          student.class_id,
+          student.section_id,
+          date,
+        );
+        const record = recordMap.get(student.cc) ?? null;
+        return {
+          student: {
+            cc: student.cc,
+            full_name: student.full_name,
+            gr_number: student.gr_number,
+            photo_url: student.photograph_url,
+            class: student.classes?.description ?? null,
+            section: student.sections?.description ?? null,
+          },
+          check_in_at: record?.check_in_at ?? null,
+          check_out_at: record?.check_out_at ?? null,
+          status: record?.status ?? null,
+          is_working_day: resolved.isWorkingDay,
+          day_type: resolved.dayType,
+          day_description: resolved.description,
+        };
+      }),
+    );
+
+    return rows;
   }
 
   // Derives Working time (IN->OUT) and Break (OUT->IN gaps) segments from the
@@ -168,7 +192,7 @@ export class StudentAttendanceService {
   async getTimeline(studentCc: number, query: GetStudentTimelineQueryDto, user: IJwtStaffPayload) {
     const student = await this.prisma.students.findUnique({
       where: { cc: studentCc },
-      select: { cc: true, full_name: true, campus_id: true },
+      select: { cc: true, full_name: true, campus_id: true, class_id: true, section_id: true },
     });
     if (!student) throw new NotFoundException('Student not found');
     if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
@@ -201,13 +225,38 @@ export class StudentAttendanceService {
     }
     const recordMap = new Map(records.map((r) => [r.date.toISOString(), r]));
 
-    const days: { date: string; status: RollRecordStatus | null; segments: ReturnType<StudentAttendanceService['buildDaySegments']> }[] = [];
+    const days: {
+      date: string;
+      status: RollRecordStatus | null;
+      is_working_day: boolean;
+      day_type: string | null;
+      day_description: string | null;
+      holiday_type: string | null;
+      holiday_description: string | null;
+      segments: ReturnType<StudentAttendanceService['buildDaySegments']>;
+    }[] = [];
     for (let d = new Date(dateFrom); d <= dateTo; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))) {
       const key = d.toISOString();
       const record = recordMap.get(key) ?? null;
+      const resolved =
+        student.campus_id != null
+          ? await this.calendarResolver.resolveStudentDay(
+              student.campus_id,
+              student.class_id,
+              student.section_id,
+              new Date(d),
+            )
+          : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
+      const holidayDisplay = this.calendarResolver.toHolidayDisplay(resolved);
+
       days.push({
         date: key.slice(0, 10),
-        status: record?.status ?? null,
+        status: record?.status ?? (resolved.isWorkingDay ? null : RollRecordStatus.EXCUSED),
+        is_working_day: resolved.isWorkingDay,
+        day_type: resolved.dayType,
+        day_description: resolved.description,
+        holiday_type: holidayDisplay.holiday_type,
+        holiday_description: holidayDisplay.holiday_description,
         segments: this.buildDaySegments(scansByDate.get(key) ?? []),
       });
     }

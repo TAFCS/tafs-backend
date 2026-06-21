@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
-  IsOptional, IsString, IsNumber, IsInt, IsArray,
+  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean,
   ValidateNested, Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -98,6 +98,22 @@ export class CreateEmployeeDto {
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
+
+export class WorkScheduleDayDto {
+  @IsInt()
+  day_of_week: number;
+
+  @IsOptional()
+  @IsBoolean()
+  is_working?: boolean;
+}
+
+export class UpdateWorkScheduleDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkScheduleDayDto)
+  days: WorkScheduleDayDto[];
+}
 
 
 const includeRelations = {
@@ -332,5 +348,54 @@ export class EmployeesService {
     const nextNum = maxNum + 1;
     const code = `EMP-${String(nextNum).padStart(4, '0')}`;
     return { code };
+  }
+
+  async getWorkSchedule(employeeId: number) {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { id: true, days_per_week: true, employee_work_schedules: true },
+    });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    return {
+      employee_id: employee.id,
+      days_per_week: employee.days_per_week,
+      has_custom_schedule: employee.employee_work_schedules.length > 0,
+      days: employee.employee_work_schedules.sort((a, b) => a.day_of_week - b.day_of_week),
+    };
+  }
+
+  async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto) {
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    for (const day of dto.days) {
+      if (day.day_of_week < 0 || day.day_of_week > 6) {
+        throw new BadRequestException('day_of_week must be between 0 (Sunday) and 6 (Saturday)');
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } }),
+      ...dto.days.map((day) =>
+        this.prisma.employee_work_schedules.create({
+          data: {
+            employee_id: employeeId,
+            day_of_week: day.day_of_week,
+            is_working: day.is_working ?? true,
+          },
+        }),
+      ),
+    ]);
+
+    return this.getWorkSchedule(employeeId);
+  }
+
+  async clearWorkSchedule(employeeId: number) {
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    await this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } });
+    return this.getWorkSchedule(employeeId);
   }
 }

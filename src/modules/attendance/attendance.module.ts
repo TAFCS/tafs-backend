@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { HrModule } from '../hr/hr.module';
 import { ChatModule } from '../chat/chat.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { AttendanceNotificationsController } from './attendance-notifications.controller';
@@ -19,7 +20,7 @@ import { ZkDeviceController, ZkLogsController } from './zk-push.controller';
 import { ZkPushService } from './zk-push.service';
 
 @Module({
-  imports: [AuthModule, ChatModule, FcmModule],
+  imports: [AuthModule, HrModule, ChatModule, FcmModule],
   controllers: [
     RollSessionsController,
     StaffAttendanceController,

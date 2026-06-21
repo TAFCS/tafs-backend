@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -44,6 +45,7 @@ export class ZkAttendanceProcessorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
+    private readonly calendarResolver: CalendarDayResolverService,
   ) {}
 
   async processPush(payload: {
@@ -302,10 +304,13 @@ export class ZkAttendanceProcessorService {
     });
     if (!employee?.campus_id) return;
 
+    const resolved = await this.calendarResolver.resolveStaffDay(employeeId, employee.campus_id, date);
+    if (!resolved.isWorkingDay) return;
+
     const existing = await this.prisma.attendance_staff_daily.findUnique({
       where: { employee_id_date: { employee_id: employeeId, date } },
     });
-    if (existing?.source === AttendanceSource.MANUAL) return;
+    if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return;
 
     const status = this.computeStaffStatus(seg.checkInAt, employee.reporting_time, employee.late_relaxation_minutes);
 
@@ -350,14 +355,22 @@ export class ZkAttendanceProcessorService {
 
     const student = await this.prisma.students.findUnique({
       where: { cc: studentCc },
-      select: { campus_id: true },
+      select: { campus_id: true, class_id: true, section_id: true },
     });
     if (!student?.campus_id) return null;
+
+    const resolved = await this.calendarResolver.resolveStudentDay(
+      student.campus_id,
+      student.class_id,
+      student.section_id,
+      date,
+    );
+    if (!resolved.isWorkingDay) return null;
 
     const existing = await this.prisma.attendance_student_daily.findUnique({
       where: { student_cc_date: { student_cc: studentCc, date } },
     });
-    if (existing?.source === AttendanceSource.MANUAL) return null;
+    if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return null;
 
     await this.prisma.attendance_student_daily.upsert({
       where: { student_cc_date: { student_cc: studentCc, date } },
