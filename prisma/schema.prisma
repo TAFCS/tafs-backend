@@ -768,6 +768,8 @@ model support_tickets {
   closed_at             DateTime?
   last_message_at       DateTime          @default(now())
   last_message_snippet  String?           @db.VarChar(255)
+  last_family_snippet   String?           @db.VarChar(255)
+  last_staff_snippet    String?           @db.VarChar(255)
   unread_by_staff       Int               @default(0)
   unread_by_parent      Int               @default(0)
   staff_last_read_at    DateTime?
