@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingHorizontal: 7,
         borderRightWidth: 1,
-        borderRightColor: '#e4e4e4',
+        borderRightColor: '#999999',
         borderRightStyle: 'dashed',
     },
     lastSection: {
@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         marginBottom: 4,
         borderWidth: 0.5,
-        borderColor: '#efefef',
+        borderColor: '#999999',
         gap: 2,
     },
     studentCol: {
@@ -366,7 +366,7 @@ const styles = StyleSheet.create({
     historyTableHeader: {
         flexDirection: 'row',
         borderBottomWidth: 0.5,
-        borderBottomColor: '#cbd5e1',
+        borderBottomColor: '#64748b',
         paddingBottom: 1,
         marginBottom: 1,
         gap: 2,
@@ -374,7 +374,7 @@ const styles = StyleSheet.create({
     historyTableRow: {
         flexDirection: 'row',
         borderBottomWidth: 0.2,
-        borderBottomColor: '#e2e8f0',
+        borderBottomColor: '#94a3b8',
         paddingVertical: 1,
         gap: 2,
     },
@@ -592,8 +592,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 return (
                     <>
                         <View style={styles.tableHeader}>
-                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
-                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
+                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>DESCRIPTION</Text>
+                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>AMOUNT</Text>
                         </View>
 
                         {(() => {
