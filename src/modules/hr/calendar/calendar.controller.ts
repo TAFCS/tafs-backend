@@ -13,7 +13,7 @@ import {
   ForbiddenException,
   Req,
 } from '@nestjs/common';
-import { CalendarService, CreateCalendarDayDto, SyncCalendarAttendanceDto } from './calendar.service';
+import { CalendarService, CreateCalendarDayDto, CreateBulkCalendarDayDto, SyncCalendarAttendanceDto } from './calendar.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -52,6 +52,17 @@ export class CalendarController {
     this.assertSuperAdmin(req.user);
     const data = await this.calendarService.syncAttendance(dto);
     return createApiResponse(data, HttpStatus.OK, 'Holiday attendance synced successfully');
+  }
+
+  @Post('bulk')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
+  async createBulk(
+    @Body() dto: CreateBulkCalendarDayDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    this.assertSuperAdmin(req.user);
+    const data = await this.calendarService.createBulk(dto, req.user.sub);
+    return createApiResponse(data, HttpStatus.CREATED, 'Calendar days created for all campuses');
   }
 
   @Get(':id')

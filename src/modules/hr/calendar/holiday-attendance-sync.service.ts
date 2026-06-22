@@ -167,12 +167,27 @@ export class HolidayAttendanceSyncService {
     };
   }
 
-  async syncAllCampusesForDate(date: Date): Promise<void> {
+  async syncAllCampusesForDate(
+    date: Date,
+    options?: { force?: boolean },
+  ): Promise<HolidaySyncResult> {
     const campuses = await this.prisma.campuses.findMany({ select: { id: true } });
+    const totals: HolidaySyncResult = {
+      students: 0,
+      staff: 0,
+      cleared_students: 0,
+      cleared_staff: 0,
+      skipped_manual: 0,
+    };
 
     for (const campus of campuses) {
       try {
-        const result = await this.syncCampusForDate(campus.id, date);
+        const result = await this.syncCampusForDate(campus.id, date, options);
+        totals.students += result.students;
+        totals.staff += result.staff;
+        totals.cleared_students += result.cleared_students;
+        totals.cleared_staff += result.cleared_staff;
+        totals.skipped_manual += result.skipped_manual;
         if (result.students > 0 || result.staff > 0) {
           this.logger.log(
             `Campus ${campus.id}: auto-EXCUSED ${result.students} students, ${result.staff} staff for ${date.toISOString().slice(0, 10)}`,
@@ -185,6 +200,8 @@ export class HolidayAttendanceSyncService {
         );
       }
     }
+
+    return totals;
   }
 
   async syncAllCampusesForToday(): Promise<void> {

@@ -110,13 +110,13 @@ model campuses {
   attendance_student_daily attendance_student_daily[]
   campus_classes           campus_classes[]
   campus_sections          campus_sections[]
+  class_check_in_schedules class_check_in_schedules[]
   class_fee_schedule       class_fee_schedule[]
   employee_profiles        employee_profiles[]
   hr_policy_sets           hr_policy_sets[]
   students                 students[]
   users                    users[]
   vouchers                 vouchers[]
-  class_check_in_schedules class_check_in_schedules[]
 }
 
 model class_fee_schedule {
@@ -144,12 +144,12 @@ model classes {
   campus_classes                     campus_classes[]
   campus_sections                    campus_sections[]
   class_attendance_modes             class_attendance_modes?
+  class_check_in_schedules           class_check_in_schedules[]
   class_fee_schedule                 class_fee_schedule[]
   employee_class_section_assignments employee_class_section_assignments[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   vouchers                           vouchers[]
-  class_check_in_schedules           class_check_in_schedules[]
 }
 
 model deposit_allocations {
@@ -502,10 +502,10 @@ model students {
   cnic                       String?                    @unique @db.VarChar(15)
   not_pursuing               Boolean                    @default(false)
   attendance_notifications   attendance_notifications[]
-  calendar_notifications     calendar_notifications[]
   attendance_roll_records    attendance_roll_records[]
   attendance_student_daily   attendance_student_daily[]
   audit_logs                 audit_logs[]
+  calendar_notifications     calendar_notifications[]
   deposits                   deposits[]
   device_user_mappings       device_user_mappings[]
   postdated_cheques          postdated_cheques[]
@@ -1165,17 +1165,17 @@ model attendance_notifications {
 }
 
 model calendar_notifications {
-  id          Int       @id @default(autoincrement())
-  family_id   Int
-  student_cc  Int
-  date        DateTime  @db.Date
-  alert_type  String    @db.VarChar(20)  // HOLIDAY | DAY_OFF | SCHOOL_OPEN
-  title       String    @db.VarChar(255)
-  body        String
-  read_at     DateTime? @db.Timestamp(6)
-  created_at  DateTime  @default(now()) @db.Timestamp(6)
-  families    families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
-  students    students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+  id         Int       @id @default(autoincrement())
+  family_id  Int
+  student_cc Int
+  date       DateTime  @db.Date
+  alert_type String    @db.VarChar(20)
+  title      String    @db.VarChar(255)
+  body       String
+  read_at    DateTime? @db.Timestamp(6)
+  created_at DateTime  @default(now()) @db.Timestamp(6)
+  families   families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
+  students   students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
 
   @@unique([family_id, student_cc, date, alert_type])
   @@index([family_id, created_at(sort: Desc)])
@@ -1275,6 +1275,22 @@ model audit_logs {
   @@index([changed_at(sort: Desc)])
   @@index([entity_type, entity_id])
   @@index([student_id])
+}
+
+model class_check_in_schedules {
+  id                 Int      @id @default(autoincrement())
+  class_id           Int
+  campus_id          Int
+  expected_check_in  DateTime @db.Time(0)
+  late_grace_minutes Int      @default(0)
+  effective_from     DateTime @db.Date
+  created_by         String?
+  created_at         DateTime @default(now()) @db.Timestamp(6)
+  campuses           campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes            classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+
+  @@unique([class_id, effective_from])
+  @@index([campus_id, effective_from])
 }
 
 enum BulkJobStatus {
@@ -1420,21 +1436,4 @@ enum TeacherCategory {
   ADMIN_SUPPORT
   MANAGEMENT
   DOMESTIC_STAFF
-}
-
-model class_check_in_schedules {
-  id                 Int      @id @default(autoincrement())
-  class_id           Int
-  campus_id          Int
-  expected_check_in  DateTime @db.Time(0)
-  late_grace_minutes Int      @default(0)
-  effective_from     DateTime @db.Date
-  created_by         String?
-  created_at         DateTime @default(now()) @db.Timestamp(6)
-
-  classes  classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  campuses campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-
-  @@unique([class_id, effective_from])
-  @@index([campus_id, effective_from])
 }

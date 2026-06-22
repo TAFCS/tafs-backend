@@ -48,16 +48,45 @@ export class CreateCalendarDayDto {
   employee_id?: number;
 }
 
+export class CreateBulkCalendarDayDto {
+  @IsDateString()
+  date: string;
+
+  @IsString()
+  @IsIn(['WORKDAY', 'HOLIDAY', 'WEEKEND'])
+  day_type: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsString()
+  @IsIn(['STUDENT', 'STAFF'])
+  applies_to: string;
+}
+
 export class SyncCalendarAttendanceDto {
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
-  campus_id: number;
+  campus_id?: number;
 
   @IsDateString()
   date: string;
 
   @IsOptional()
   force?: boolean;
+
+  @IsOptional()
+  all_campuses?: boolean;
+}
+
+export interface BulkCalendarCreateResult {
+  campuses_total: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  errors: { campus_id: number; message: string }[];
 }
 
 @Injectable()
@@ -102,7 +131,17 @@ export class CalendarService {
 
   async syncAttendance(dto: SyncCalendarAttendanceDto) {
     const date = this.holidaySync.parseDateKey(dto.date);
-    return this.holidaySync.syncCampusForDate(dto.campus_id, date, { force: dto.force ?? false });
+    const force = dto.force ?? false;
+
+    if (dto.all_campuses) {
+      return this.holidaySync.syncAllCampusesForDate(date, { force });
+    }
+
+    if (dto.campus_id == null) {
+      throw new BadRequestException('campus_id is required unless all_campuses is true');
+    }
+
+    return this.holidaySync.syncCampusForDate(dto.campus_id, date, { force });
   }
 
   private validateScope(dto: CreateCalendarDayDto) {
@@ -188,6 +227,48 @@ export class CalendarService {
     }
 
     return day;
+  }
+
+  async createBulk(dto: CreateBulkCalendarDayDto, createdBy?: string): Promise<BulkCalendarCreateResult> {
+    const template: Omit<CreateCalendarDayDto, 'campus_id'> = {
+      date: dto.date,
+      day_type: dto.day_type,
+      description: dto.description,
+      applies_to: dto.applies_to,
+    };
+    this.validateStudentDayType({ ...template, campus_id: 0 });
+
+    const campuses = await this.prisma.campuses.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
+    const result: BulkCalendarCreateResult = {
+      campuses_total: campuses.length,
+      created: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const campus of campuses) {
+      try {
+        await this.create({ ...template, campus_id: campus.id }, createdBy);
+        result.created++;
+      } catch (err) {
+        const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
+        if (message.includes('same scope already exists')) {
+          result.skipped++;
+        } else {
+          result.failed++;
+          result.errors.push({ campus_id: campus.id, message });
+        }
+      }
+    }
+
+    if (result.created === 0 && result.failed > 0) {
+      throw new BadRequestException(
+        `Failed to create calendar entry on all campuses (${result.failed} failed, ${result.skipped} skipped).`,
+      );
+    }
+
+    return result;
   }
 
   async update(id: number, dto: Partial<CreateCalendarDayDto>) {
