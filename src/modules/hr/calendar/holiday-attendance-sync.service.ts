@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { AttendanceSource, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
+import { CalendarNotificationService } from './calendar-notification.service';
 
 export interface HolidaySyncResult {
   students: number;
@@ -16,6 +17,7 @@ export class HolidayAttendanceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly notificationService: CalendarNotificationService,
   ) {}
 
   parseDateKey(dateStr: string): Date {
@@ -130,6 +132,9 @@ export class HolidayAttendanceSyncService {
       });
       staff++;
     }
+
+    // Trigger alerts to families for this campus and date
+    await this.notificationService.notifyDayOffForCampusDate(campusId, date);
 
     return { students, staff, skipped_manual: skippedManual };
   }

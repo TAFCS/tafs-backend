@@ -191,6 +191,7 @@ model families {
   email                    String?                    @db.VarChar(100)
   home_phone               String?                    @db.VarChar(20)
   attendance_notifications attendance_notifications[]
+  calendar_notifications   calendar_notifications[]
   chat_conversations       chat_conversations?
   family_refresh_tokens    family_refresh_tokens[]
   fcm_device_tokens        fcm_device_tokens[]
@@ -498,6 +499,7 @@ model students {
   cnic                       String?                    @unique @db.VarChar(15)
   not_pursuing               Boolean                    @default(false)
   attendance_notifications   attendance_notifications[]
+  calendar_notifications     calendar_notifications[]
   attendance_roll_records    attendance_roll_records[]
   attendance_student_daily   attendance_student_daily[]
   audit_logs                 audit_logs[]
@@ -1157,6 +1159,23 @@ model attendance_notifications {
 
   @@index([family_id, created_at(sort: Desc)])
   @@index([student_cc])
+}
+
+model calendar_notifications {
+  id          Int       @id @default(autoincrement())
+  family_id   Int
+  student_cc  Int
+  date        DateTime  @db.Date
+  alert_type  String    @db.VarChar(20)  // HOLIDAY | DAY_OFF | SCHOOL_OPEN
+  title       String    @db.VarChar(255)
+  body        String
+  read_at     DateTime? @db.Timestamp(6)
+  created_at  DateTime  @default(now()) @db.Timestamp(6)
+  families    families  @relation(fields: [family_id], references: [id], onDelete: Cascade)
+  students    students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@unique([family_id, student_cc, date, alert_type])
+  @@index([family_id, created_at(sort: Desc)])
 }
 
 model postdated_cheques {

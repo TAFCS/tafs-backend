@@ -15,9 +15,12 @@ import { ClassAttendanceModesService } from './class-attendance-modes/class-atte
 import { StaffTypesController } from './staff-types/staff-types.controller';
 import { StaffTypesService } from './staff-types/staff-types.service';
 import { AuthModule } from '../auth/auth.module';
+import { FcmModule } from '../../common/fcm/fcm.module';
+import { CalendarNotificationService } from './calendar/calendar-notification.service';
+import { CalendarNotificationsController } from './calendar/calendar-notifications.controller';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, FcmModule],
   controllers: [
     EmployeesController,
     DepartmentsController,
@@ -25,6 +28,7 @@ import { AuthModule } from '../auth/auth.module';
     CalendarController,
     ClassAttendanceModesController,
     StaffTypesController,
+    CalendarNotificationsController,
   ],
   providers: [
     EmployeesService,
@@ -36,6 +40,7 @@ import { AuthModule } from '../auth/auth.module';
     HolidayAttendanceSchedulerService,
     ClassAttendanceModesService,
     StaffTypesService,
+    CalendarNotificationService,
   ],
   exports: [
     EmployeesService,
@@ -46,6 +51,7 @@ import { AuthModule } from '../auth/auth.module';
     HolidayAttendanceSyncService,
     ClassAttendanceModesService,
     StaffTypesService,
+    CalendarNotificationService,
   ],
 })
 export class HrModule {}

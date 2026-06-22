@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { isWeekendDate, parseCalendarDateKey } from './student-calendar-day.util';
 import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service';
+import { CalendarNotificationService } from './calendar-notification.service';
 
 import { IsInt, IsDateString, IsString, IsOptional, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -64,6 +65,7 @@ export class CalendarService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly holidaySync: HolidayAttendanceSyncService,
+    private readonly notificationService: CalendarNotificationService,
   ) {}
 
   async findAll(campusId: number, appliesTo?: string) {
@@ -176,6 +178,15 @@ export class CalendarService {
     });
 
     await this.holidaySync.syncAfterCalendarChange(day.campus_id, dto.date);
+
+    if (day.applies_to === 'STUDENT') {
+      if (day.day_type === 'HOLIDAY') {
+        await this.notificationService.notifyFamiliesForCalendarDay(day);
+      } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
+        await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      }
+    }
+
     return day;
   }
 
@@ -225,6 +236,15 @@ export class CalendarService {
     });
 
     await this.holidaySync.syncAfterCalendarChange(day.campus_id, merged.date);
+
+    if (day.applies_to === 'STUDENT') {
+      if (day.day_type === 'HOLIDAY') {
+        await this.notificationService.notifyFamiliesForCalendarDay(day);
+      } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
+        await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      }
+    }
+
     return day;
   }
 
