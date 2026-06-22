@@ -278,6 +278,17 @@ export class StaffEditingService {
       }
     }
 
+    const transferLog = await this.prisma.audit_logs.findFirst({
+      where: {
+        OR: [
+          { student_id: cc, entity_type: 'TRANSFER' },
+          { entity_id: String(cc), entity_type: 'TRANSFER' },
+        ],
+      },
+      select: { id: true },
+    });
+    s.has_transfer = !!transferLog || (s.student_admissions && s.student_admissions.length > 1);
+
     return this.flattenStudentFull(s);
   }
 
@@ -1264,6 +1275,7 @@ export class StaffEditingService {
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
       // All sub-tables
+      has_transfer: !!s.has_transfer,
       admissions: s.student_admissions ?? [],
       activities: s.student_activities ?? [],
       languages: s.student_languages ?? [],

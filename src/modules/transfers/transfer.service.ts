@@ -265,6 +265,9 @@ export class TransferService {
     discipline?: string;
     remarks?: string;
     date_of_transfer?: string;
+    class_name?: string;
+    section_name?: string;
+    academic_year?: string;
   }) {
     const data = await this.getTransferOrderData(cc);
 
@@ -286,6 +289,18 @@ export class TransferService {
     const months = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
     const days = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
 
+    let orderDay = data.day;
+    let orderDate = data.date;
+    if (opts.date_of_transfer) {
+      try {
+        const d = new Date(opts.date_of_transfer);
+        if (!isNaN(d.getTime())) {
+          orderDay = days[d.getDay()];
+          orderDate = `${months[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}, ${d.getFullYear()}`;
+        }
+      } catch {}
+    }
+
     const pdfData = {
       ...data,
       photograph_url: photographUrl,
@@ -295,8 +310,12 @@ export class TransferService {
       date_of_transfer: opts.date_of_transfer ||
         `${String(now.getDate()).padStart(2,'0')} ${months[now.getMonth()]} ${now.getFullYear()}`,
       remarks_footer: opts.remarks || '',
-      day: data.day,
-      date: data.date,
+      class_name: opts.class_name || data.class_name,
+      section_name: opts.section_name !== undefined ? opts.section_name : data.section_name,
+      scholastic_year: opts.academic_year || data.scholastic_year,
+      academic_year: opts.academic_year || data.academic_year,
+      day: orderDay,
+      date: orderDate,
     };
 
     try {
@@ -306,6 +325,27 @@ export class TransferService {
       const key = `transfers/${cc}/transfer-order-${Date.now()}.pdf`;
       const url = await this.storage.upload(key, buffer, 'application/pdf');
       this.logger.log(`Transfer PDF uploaded for CC ${cc}: ${url}`);
+
+      // Save PDF URL to matching student_admissions record if possible
+      const targetGrade = opts.class_name || opts.transfer_to || data.class_name;
+      const targetYear = opts.academic_year || data.academic_year;
+      if (targetGrade) {
+        const matchingAdmission = await this.prisma.student_admissions.findFirst({
+          where: {
+            student_id: cc,
+            requested_grade: targetGrade,
+            academic_year: targetYear || undefined,
+          },
+          orderBy: { application_date: 'desc' },
+        });
+        if (matchingAdmission) {
+          await this.prisma.student_admissions.update({
+            where: { id: matchingAdmission.id },
+            data: { transfer_order_url: url },
+          });
+        }
+      }
+
       return { url };
     } catch (err: any) {
       this.logger.error(`Failed to generate/upload Transfer PDF for CC ${cc}`, err?.stack || err);
