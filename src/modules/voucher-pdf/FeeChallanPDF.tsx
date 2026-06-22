@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingHorizontal: 7,
         borderRightWidth: 1,
-        borderRightColor: '#999999',
+        borderRightColor: '#555555',
         borderRightStyle: 'dashed',
     },
     lastSection: {
@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         marginBottom: 4,
         borderWidth: 0.5,
-        borderColor: '#999999',
+        borderColor: '#555555',
         gap: 2,
     },
     studentCol: {
@@ -362,11 +362,14 @@ const styles = StyleSheet.create({
     },
     historyTable: {
         width: '100%',
+        borderWidth: 0.5,
+        borderColor: '#475569',
+        padding: 2,
     },
     historyTableHeader: {
         flexDirection: 'row',
         borderBottomWidth: 0.5,
-        borderBottomColor: '#64748b',
+        borderBottomColor: '#475569',
         paddingBottom: 1,
         marginBottom: 1,
         gap: 2,
@@ -374,7 +377,7 @@ const styles = StyleSheet.create({
     historyTableRow: {
         flexDirection: 'row',
         borderBottomWidth: 0.2,
-        borderBottomColor: '#94a3b8',
+        borderBottomColor: '#64748b',
         paddingVertical: 1,
         gap: 2,
     },
@@ -649,8 +652,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
             {details.applyLateFee && (
                 <View style={[styles.tableRow, { borderBottomWidth: 0, marginTop: 2 }]}>
-                    <Text style={styles.colDesc}>Late Payment Surcharge</Text>
-                    <Text style={styles.colAmount}>{Number(details.lateFeeAmount || 1000).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</Text>
+                    <Text style={styles.colDesc}>LATE PAYMENT SURCHARGE</Text>
+                    <Text style={styles.colAmount}>{Math.round(details.lateFeeAmount || 1000).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</Text>
                 </View>
             )}
 
