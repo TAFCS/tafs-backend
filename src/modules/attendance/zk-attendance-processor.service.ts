@@ -11,6 +11,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -64,6 +65,7 @@ export class ZkAttendanceProcessorService {
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly policyResolver: AttendancePolicyResolverService,
   ) {}
 
   async processPush(
@@ -363,7 +365,7 @@ export class ZkAttendanceProcessorService {
 
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { campus_id: true, reporting_time: true, late_relaxation_minutes: true },
+      select: { campus_id: true },
     });
     if (!employee?.campus_id) return;
 
@@ -375,7 +377,12 @@ export class ZkAttendanceProcessorService {
     });
     if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return;
 
-    const status = this.computeStaffStatus(seg.checkInAt, employee.reporting_time, employee.late_relaxation_minutes);
+    const policy = await this.policyResolver.resolveStaffCheckInPolicy(
+      employeeId,
+      employee.campus_id,
+      date,
+    );
+    const status = this.computeStaffStatus(seg.checkInAt, policy.expectedCheckIn, policy.graceMinutes);
 
     await this.prisma.attendance_staff_daily.upsert({
       where: { employee_id_date: { employee_id: employeeId, date } },
@@ -435,20 +442,27 @@ export class ZkAttendanceProcessorService {
     });
     if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return null;
 
+    const policy = await this.policyResolver.resolveStudentCheckInPolicy(
+      student.class_id,
+      student.campus_id,
+      date,
+    );
+    const status = this.computeStudentStatus(seg.checkInAt!, policy.expectedCheckIn, policy.graceMinutes);
+
     await this.prisma.attendance_student_daily.upsert({
       where: { student_cc_date: { student_cc: studentCc, date } },
       create: {
         student_cc: studentCc,
         campus_id: student.campus_id,
         date,
-        status: RollRecordStatus.PRESENT,
+        status,
         source: AttendanceSource.BIOMETRIC,
         check_in_at: seg.checkInAt,
         check_out_at: seg.checkOutAt,
         last_scan_at: seg.lastScanAt,
       },
       update: {
-        status: RollRecordStatus.PRESENT,
+        status,
         source: AttendanceSource.BIOMETRIC,
         check_in_at: seg.checkInAt,
         check_out_at: seg.checkOutAt,
@@ -457,6 +471,17 @@ export class ZkAttendanceProcessorService {
     });
 
     return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;
+  }
+
+  private computeStudentStatus(
+    checkInAt: Date,
+    expectedCheckIn: Date | null,
+    graceMinutes: number,
+  ): RollRecordStatus {
+    if (!expectedCheckIn) return RollRecordStatus.PRESENT;
+    const expectedMinutes = expectedCheckIn.getUTCHours() * 60 + expectedCheckIn.getUTCMinutes();
+    const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
+    return checkInMinutes > expectedMinutes + graceMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;
   }
 
   private async sendScanNotification(

@@ -18,6 +18,10 @@ import { ZkAttendanceMappingService } from './zk-attendance-mapping.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkDeviceController, ZkLogsController } from './zk-push.controller';
 import { ZkPushService } from './zk-push.service';
+import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
+import { ClassCheckInScheduleService } from './class-check-in-schedule.service';
+import { ClassCheckInScheduleController } from './class-check-in-schedule.controller';
+import { RecomputeLateController } from './recompute-late.controller';
 
 @Module({
   imports: [AuthModule, HrModule, ChatModule, FcmModule],
@@ -29,6 +33,8 @@ import { ZkPushService } from './zk-push.service';
     ZkLogsController,
     ZkAttendanceMappingController,
     AttendanceNotificationsController,
+    ClassCheckInScheduleController,
+    RecomputeLateController,
   ],
   providers: [
     RollSessionsService,
@@ -40,6 +46,8 @@ import { ZkPushService } from './zk-push.service';
     ZkAttendanceProcessorService,
     ZkAttendanceMappingService,
     AttendanceNotificationsService,
+    AttendancePolicyResolverService,
+    ClassCheckInScheduleService,
   ],
   exports: [RollSessionsService, StaffAttendanceService, StudentAttendanceService],
 })

@@ -1,17 +1,36 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 
+import { IsInt, IsOptional, IsString, IsObject } from 'class-validator';
+
 export class CreatePolicySetDto {
+  @IsInt()
   campus_id: number;
+
+  @IsString()
   academic_year: string;
+
+  @IsString()
   effective_from: string;
+
+  @IsOptional()
+  @IsString()
   description?: string;
 }
 
 export class CreatePolicyRuleDto {
+  @IsString()
   rule_type: string;
+
+  @IsObject()
   value_json: any;
+
+  @IsOptional()
+  @IsString()
   applies_to?: string;
+
+  @IsOptional()
+  @IsString()
   description?: string;
 }
 
@@ -22,7 +41,8 @@ export class PoliciesService {
   async findAllSets(campusId: number) {
     return this.prisma.hr_policy_sets.findMany({
       where: { campus_id: campusId },
-      include: { hr_policy_rules: true }
+      include: { hr_policy_rules: true },
+      orderBy: { effective_from: 'desc' },
     });
   }
 

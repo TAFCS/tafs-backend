@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, RollRecordStatus, zk_attendance_scans } from '@prisma/client';
+import { Prisma, RollRecordStatus, zk_attendance_scans, AttendanceSource } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
@@ -79,19 +79,20 @@ export class StudentAttendanceService {
   ) {
     const students = await this.getStudentsInScope(campusId, classId, sectionId, user);
     if (students.length === 0) {
-      return { present: 0, excused: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
+      return { present: 0, late: 0, excused: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
     }
 
     const records = await this.prisma.attendance_student_daily.findMany({
       where: { date, student_cc: { in: students.map((s) => s.cc) } },
     });
 
-    const present = records.filter((r) => r.status === RollRecordStatus.PRESENT).length;
+    const present = records.filter((r) => r.status === RollRecordStatus.PRESENT || r.status === RollRecordStatus.LATE).length;
+    const late = records.filter((r) => r.status === RollRecordStatus.LATE).length;
     const excused = records.filter((r) => r.status === RollRecordStatus.EXCUSED).length;
     const absent = records.filter((r) => r.status === RollRecordStatus.ABSENT).length;
     const noClockIn = students.length - records.length;
 
-    return { present, excused, absent, noClockIn, noClockOut: records.filter((r) => r.check_in_at && !r.check_out_at).length };
+    return { present, late, excused, absent, noClockIn, noClockOut: records.filter((r) => r.check_in_at && !r.check_out_at).length };
   }
 
   async getSummary(query: GetStudentAttendanceQueryDto, user: IJwtStaffPayload) {
@@ -113,6 +114,7 @@ export class StudentAttendanceService {
     return {
       present_summary: {
         present: card('present'),
+        late: card('late'),
       },
       not_present_summary: {
         absent: card('absent'),
@@ -248,10 +250,14 @@ export class StudentAttendanceService {
             )
           : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
       const holidayDisplay = this.calendarResolver.toHolidayDisplay(resolved);
+      let status = record?.status ?? (resolved.isWorkingDay ? null : RollRecordStatus.EXCUSED);
+      if (resolved.isWorkingDay && record?.source === AttendanceSource.SYSTEM) {
+        status = null;
+      }
 
       days.push({
         date: key.slice(0, 10),
-        status: record?.status ?? (resolved.isWorkingDay ? null : RollRecordStatus.EXCUSED),
+        status,
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
         day_description: resolved.description,

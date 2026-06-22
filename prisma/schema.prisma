@@ -116,6 +116,7 @@ model campuses {
   students                 students[]
   users                    users[]
   vouchers                 vouchers[]
+  class_check_in_schedules class_check_in_schedules[]
 }
 
 model class_fee_schedule {
@@ -148,6 +149,7 @@ model classes {
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   vouchers                           vouchers[]
+  class_check_in_schedules           class_check_in_schedules[]
 }
 
 model deposit_allocations {
@@ -1364,6 +1366,7 @@ enum RollRecordStatus {
   PRESENT
   ABSENT
   EXCUSED
+  LATE
 }
 
 enum RollSessionStatus {
@@ -1416,4 +1419,21 @@ enum TeacherCategory {
   ADMIN_SUPPORT
   MANAGEMENT
   DOMESTIC_STAFF
+}
+
+model class_check_in_schedules {
+  id                 Int      @id @default(autoincrement())
+  class_id           Int
+  campus_id          Int
+  expected_check_in  DateTime @db.Time(0)
+  late_grace_minutes Int      @default(0)
+  effective_from     DateTime @db.Date
+  created_by         String?
+  created_at         DateTime @default(now()) @db.Timestamp(6)
+
+  classes  classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  campuses campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+
+  @@unique([class_id, effective_from])
+  @@index([campus_id, effective_from])
 }

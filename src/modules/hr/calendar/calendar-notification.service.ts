@@ -105,6 +105,44 @@ export class CalendarNotificationService {
     }
   }
 
+  /** Remove day-off alerts when the calendar no longer marks the date as closed. */
+  async clearStaleDayOffAlerts(campusId: number, date: Date) {
+    const students = await this.prisma.students.findMany({
+      where: {
+        campus_id: campusId,
+        status: student_status.ENROLLED,
+        deleted_at: null,
+      },
+      select: {
+        cc: true,
+        family_id: true,
+        class_id: true,
+        section_id: true,
+      },
+    });
+
+    for (const student of students) {
+      if (!student.family_id) continue;
+
+      const resolved = await this.calendarResolver.resolveStudentDay(
+        campusId,
+        student.class_id,
+        student.section_id,
+        date,
+      );
+      if (!resolved.isWorkingDay) continue;
+
+      await this.prisma.calendar_notifications.deleteMany({
+        where: {
+          family_id: student.family_id,
+          student_cc: student.cc,
+          date,
+          alert_type: { in: ['HOLIDAY', 'DAY_OFF'] },
+        },
+      });
+    }
+  }
+
   async notifyDayOffForCampusDate(campusId: number, date: Date) {
     const students = await this.prisma.students.findMany({
       where: {

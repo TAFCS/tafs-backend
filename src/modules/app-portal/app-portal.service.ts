@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { Prisma, RollRecordStatus } from '@prisma/client';
+import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 
 @Injectable()
@@ -233,16 +233,23 @@ export class AppPortalService {
 
       const { holiday_type, holiday_description } = this.calendarResolver.toHolidayDisplay(resolved);
       let status = record?.status ?? null;
-      if (status === RollRecordStatus.EXCUSED || !resolved.isWorkingDay) {
+      if (!resolved.isWorkingDay) {
         status = RollRecordStatus.EXCUSED;
+      } else if (
+        status === RollRecordStatus.EXCUSED &&
+        record?.source === AttendanceSource.SYSTEM
+      ) {
+        status = null;
       }
 
       days.push({
         date: key,
         status,
         sessions,
-        holiday_type: holiday_type ?? (status === RollRecordStatus.EXCUSED ? resolved.dayType ?? 'HOLIDAY' : null),
-        holiday_description: holiday_description ?? resolved.description,
+        holiday_type: resolved.isWorkingDay
+          ? null
+          : holiday_type ?? (status === RollRecordStatus.EXCUSED ? resolved.dayType ?? 'HOLIDAY' : null),
+        holiday_description: resolved.isWorkingDay ? null : holiday_description ?? resolved.description,
       });
     }
 

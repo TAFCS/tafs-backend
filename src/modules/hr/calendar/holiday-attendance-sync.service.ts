@@ -7,6 +7,8 @@ import { CalendarNotificationService } from './calendar-notification.service';
 export interface HolidaySyncResult {
   students: number;
   staff: number;
+  cleared_students: number;
+  cleared_staff: number;
   skipped_manual: number;
 }
 
@@ -39,6 +41,8 @@ export class HolidayAttendanceSyncService {
   ): Promise<HolidaySyncResult> {
     let students = 0;
     let staff = 0;
+    let clearedStudents = 0;
+    let clearedStaff = 0;
     let skippedManual = 0;
     const force = options?.force ?? false;
 
@@ -59,11 +63,20 @@ export class HolidayAttendanceSyncService {
         student.section_id,
         date,
       );
-      if (resolved.isWorkingDay) continue;
 
       const existing = await this.prisma.attendance_student_daily.findUnique({
         where: { student_cc_date: { student_cc: student.cc, date } },
       });
+
+      if (resolved.isWorkingDay) {
+        if (existing?.source === AttendanceSource.SYSTEM) {
+          await this.prisma.attendance_student_daily.delete({
+            where: { student_cc_date: { student_cc: student.cc, date } },
+          });
+          clearedStudents++;
+        }
+        continue;
+      }
       if (existing?.source === AttendanceSource.MANUAL && !force) {
         skippedManual++;
         continue;
@@ -103,11 +116,20 @@ export class HolidayAttendanceSyncService {
     for (const employee of employees) {
       if (!employee.campus_id) continue;
       const resolved = await this.calendarResolver.resolveStaffDay(employee.id, employee.campus_id, date);
-      if (resolved.isWorkingDay) continue;
 
       const existing = await this.prisma.attendance_staff_daily.findUnique({
         where: { employee_id_date: { employee_id: employee.id, date } },
       });
+
+      if (resolved.isWorkingDay) {
+        if (existing?.source === AttendanceSource.SYSTEM) {
+          await this.prisma.attendance_staff_daily.delete({
+            where: { employee_id_date: { employee_id: employee.id, date } },
+          });
+          clearedStaff++;
+        }
+        continue;
+      }
       if (existing?.source === AttendanceSource.MANUAL && !force) {
         skippedManual++;
         continue;
@@ -133,10 +155,16 @@ export class HolidayAttendanceSyncService {
       staff++;
     }
 
-    // Trigger alerts to families for this campus and date
+    await this.notificationService.clearStaleDayOffAlerts(campusId, date);
     await this.notificationService.notifyDayOffForCampusDate(campusId, date);
 
-    return { students, staff, skipped_manual: skippedManual };
+    return {
+      students,
+      staff,
+      cleared_students: clearedStudents,
+      cleared_staff: clearedStaff,
+      skipped_manual: skippedManual,
+    };
   }
 
   async syncAllCampusesForDate(date: Date): Promise<void> {
@@ -168,9 +196,14 @@ export class HolidayAttendanceSyncService {
     try {
       const date = this.parseDateKey(dateStr);
       const result = await this.syncCampusForDate(campusId, date);
-      if (result.students > 0 || result.staff > 0) {
+      if (
+        result.students > 0 ||
+        result.staff > 0 ||
+        result.cleared_students > 0 ||
+        result.cleared_staff > 0
+      ) {
         this.logger.log(
-          `Calendar change → campus ${campusId} ${dateStr}: EXCUSED ${result.students} students, ${result.staff} staff`,
+          `Calendar change → campus ${campusId} ${dateStr}: EXCUSED ${result.students} students, ${result.staff} staff; cleared ${result.cleared_students} students, ${result.cleared_staff} staff`,
         );
       }
       return result;
@@ -191,11 +224,21 @@ export class HolidayAttendanceSyncService {
     date: Date,
   ): Promise<boolean> {
     const resolved = await this.calendarResolver.resolveStudentDay(campusId, classId, sectionId, date);
-    if (resolved.isWorkingDay) return false;
 
     const existing = await this.prisma.attendance_student_daily.findUnique({
       where: { student_cc_date: { student_cc: studentCc, date } },
     });
+
+    if (resolved.isWorkingDay) {
+      if (existing?.source === AttendanceSource.SYSTEM) {
+        await this.prisma.attendance_student_daily.delete({
+          where: { student_cc_date: { student_cc: studentCc, date } },
+        });
+        return true;
+      }
+      return false;
+    }
+
     if (existing?.source === AttendanceSource.MANUAL) return false;
     if (existing?.source === AttendanceSource.BIOMETRIC) return false;
 
