@@ -66,6 +66,9 @@ export class HolidayAttendanceSyncService {
         skippedManual++;
         continue;
       }
+      if (existing?.source === AttendanceSource.BIOMETRIC && !force) {
+        continue;
+      }
 
       const description = resolved.description ?? 'Holiday';
       await this.prisma.attendance_student_daily.upsert({
@@ -189,6 +192,7 @@ export class HolidayAttendanceSyncService {
       where: { student_cc_date: { student_cc: studentCc, date } },
     });
     if (existing?.source === AttendanceSource.MANUAL) return false;
+    if (existing?.source === AttendanceSource.BIOMETRIC) return false;
 
     await this.prisma.attendance_student_daily.upsert({
       where: { student_cc_date: { student_cc: studentCc, date } },

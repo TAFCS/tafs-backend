@@ -116,12 +116,15 @@ export class ZkAttendanceMappingService {
     const scanTime = dto.scan_time ? new Date(dto.scan_time) : new Date();
     const line = `${dto.device_pin}\t${this.formatDeviceDateTime(scanTime)}\t1\t1\t0`;
 
-    await this.processor.processPush({
-      sn: dto.device_sn,
-      query: { table: 'ATTLOG' },
-      body: line,
-      pushLogId: null,
-    });
+    const processResults = await this.processor.processPush(
+      {
+        sn: dto.device_sn,
+        query: { table: 'ATTLOG' },
+        body: line,
+        pushLogId: null,
+      },
+      { forceNotify: true },
+    );
 
     const scan = await this.prisma.zk_attendance_scans.findFirst({
       where: { device_sn: dto.device_sn, device_pin: dto.device_pin },
@@ -139,7 +142,14 @@ export class ZkAttendanceMappingService {
       });
     }
 
-    return { scan, record };
+    const lastResult = processResults[processResults.length - 1];
+
+    return {
+      scan,
+      record,
+      notified: lastResult?.notified ?? false,
+      skip_reason: lastResult?.notified ? null : (lastResult?.skipReason ?? null),
+    };
   }
 
   // "YYYY-MM-DD HH:MM:SS" — same naive device wall-clock format ZkAttendanceProcessorService parses.

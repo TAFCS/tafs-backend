@@ -30,6 +30,24 @@ export interface DaySegment {
   scanCount: number;
 }
 
+export type NotificationSkipReason =
+  | 'unmapped_pin'
+  | 'duplicate_scan'
+  | 'not_live'
+  | 'no_direction'
+  | 'no_family_id';
+
+export interface ScanProcessResult {
+  scanId: number;
+  notified: boolean;
+  skipReason?: NotificationSkipReason;
+}
+
+export interface ProcessPushOptions {
+  /** Simulate-scan and other deliberate test paths — always notify when possible. */
+  forceNotify?: boolean;
+}
+
 /**
  * Turns raw ZKTeco ADMS pushes (already logged verbatim to zk_push_logs) into
  * attendance records. Staff don't select Check-In/Check-Out/Break on the device —
@@ -48,43 +66,60 @@ export class ZkAttendanceProcessorService {
     private readonly calendarResolver: CalendarDayResolverService,
   ) {}
 
-  async processPush(payload: {
-    sn: string;
-    query: Record<string, string>;
-    body: string;
-    pushLogId: number | null;
-  }): Promise<void> {
+  async processPush(
+    payload: {
+      sn: string;
+      query: Record<string, string>;
+      body: string;
+      pushLogId: number | null;
+    },
+    options?: ProcessPushOptions,
+  ): Promise<ScanProcessResult[]> {
     const table = (payload.query['table'] ?? payload.query['Table'] ?? '').toUpperCase();
 
     if (table === 'ATTLOG') {
-      await this.processAttLog(payload.sn, payload.body, payload.pushLogId);
-    } else if (table === 'OPERLOG') {
+      return this.processAttLog(payload.sn, payload.body, payload.pushLogId, options);
+    }
+    if (table === 'OPERLOG') {
       await this.processOperLog(payload.sn, payload.body);
     }
     // Other table types (USERINFO, BIOPHOTO, etc.) are already captured raw in
     // zk_push_logs by ZkPushService — no further action needed.
+    return [];
   }
 
-  private async processAttLog(sn: string, body: string, pushLogId: number | null): Promise<void> {
+  private async processAttLog(
+    sn: string,
+    body: string,
+    pushLogId: number | null,
+    options?: ProcessPushOptions,
+  ): Promise<ScanProcessResult[]> {
     const rows = this.parseAttLogLines(body);
     const now = new Date();
+    const results: ScanProcessResult[] = [];
 
     for (const row of rows) {
       try {
-        await this.processOneScan({
-          sn,
-          pin: row.pin,
-          scanTime: row.scanTime,
-          status: row.status,
-          verify: row.verify,
-          workCode: row.workCode,
-          pushLogId,
-          now,
-        });
+        const result = await this.processOneScan(
+          {
+            sn,
+            pin: row.pin,
+            scanTime: row.scanTime,
+            status: row.status,
+            verify: row.verify,
+            workCode: row.workCode,
+            pushLogId,
+            now,
+          },
+          options,
+        );
+        if (result) results.push(result);
       } catch (err: any) {
         this.logger.error(`Failed to process scan (pin=${row.pin}, sn=${sn}): ${err.message}`);
       }
     }
+
+    return results;
   }
 
   private parseAttLogLines(body: string): ParsedAttLogRow[] {
@@ -157,16 +192,24 @@ export class ZkAttendanceProcessorService {
     return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
   }
 
-  private async processOneScan(input: {
-    sn: string;
-    pin: string;
-    scanTime: Date;
-    status?: string;
-    verify?: string;
-    workCode?: string;
-    pushLogId: number | null;
-    now: Date;
-  }): Promise<void> {
+  private scanDirectionFromSegment(seg: DaySegment): ScanDirection | null {
+    if (seg.scanCount <= 0) return null;
+    return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;
+  }
+
+  private async processOneScan(
+    input: {
+      sn: string;
+      pin: string;
+      scanTime: Date;
+      status?: string;
+      verify?: string;
+      workCode?: string;
+      pushLogId: number | null;
+      now: Date;
+    },
+    options?: ProcessPushOptions,
+  ): Promise<ScanProcessResult | undefined> {
     const attendanceDate = this.startOfUTCDay(input.scanTime);
 
     const mapping = await this.prisma.device_user_mappings.findUnique({
@@ -230,16 +273,36 @@ export class ZkAttendanceProcessorService {
 
     if (personType === DevicePersonType.STAFF) {
       await this.upsertStaffDaily(employeeId!, attendanceDate, seg);
-    } else {
-      const direction = await this.upsertStudentDaily(studentCc!, attendanceDate, seg);
-      if (isLive && direction) {
-        await this.sendScanNotification(studentCc!, scanRow, direction);
-        await this.prisma.zk_attendance_scans.update({
-          where: { id: scanRow.id },
-          data: { notified_at: new Date() },
-        });
-      }
+      return undefined;
     }
+
+    const scanDirection = this.scanDirectionFromSegment(seg);
+    await this.upsertStudentDaily(studentCc!, attendanceDate, seg);
+
+    const shouldNotify = (isLive || options?.forceNotify) && scanDirection;
+    if (!shouldNotify) {
+      const skipReason: NotificationSkipReason = !scanDirection
+        ? 'no_direction'
+        : 'not_live';
+      this.logger.debug(
+        `Notification skipped for student ${studentCc} (scan ${scanRow.id}): ${skipReason}`,
+      );
+      return { scanId: scanRow.id, notified: false, skipReason };
+    }
+
+    const notified = await this.sendScanNotification(studentCc!, scanRow, scanDirection);
+    if (notified) {
+      await this.prisma.zk_attendance_scans.update({
+        where: { id: scanRow.id },
+        data: { notified_at: new Date() },
+      });
+      return { scanId: scanRow.id, notified: true };
+    }
+
+    this.logger.warn(
+      `Notification skipped for student ${studentCc} (scan ${scanRow.id}): no_family_id`,
+    );
+    return { scanId: scanRow.id, notified: false, skipReason: 'no_family_id' };
   }
 
   // Reassigns sequence_no/direction for every scan of this person+day, ordered by
@@ -400,12 +463,12 @@ export class ZkAttendanceProcessorService {
     studentCc: number,
     scanRow: { scan_time: Date },
     direction: ScanDirection,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const student = await this.prisma.students.findUnique({
       where: { cc: studentCc },
       select: { full_name: true, family_id: true },
     });
-    if (!student?.family_id) return;
+    if (!student?.family_id) return false;
 
     const time = scanRow.scan_time.toLocaleTimeString('en-US', {
       hour: '2-digit',
@@ -435,5 +498,7 @@ export class ZkAttendanceProcessorService {
       direction,
       scan_time: scanRow.scan_time.toISOString(),
     });
+
+    return true;
   }
 }
