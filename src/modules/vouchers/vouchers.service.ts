@@ -511,11 +511,15 @@ export class VouchersService {
                 }
 
                 if (multipleFeeHeads) {
+                    // Opposite of singleFeeDate: vouchers whose heads span more
+                    // than one distinct fee_date.
                     const rows = await this.prisma.$queryRaw<{ voucher_id: number }[]>`
-                        SELECT voucher_id
-                        FROM public.voucher_heads
-                        GROUP BY voucher_id
-                        HAVING COUNT(id) > 1
+                        SELECT vh.voucher_id
+                        FROM public.voucher_heads vh
+                        JOIN public.student_fees sf ON vh.student_fee_id = sf.id
+                        WHERE sf.fee_date IS NOT NULL
+                        GROUP BY vh.voucher_id
+                        HAVING COUNT(DISTINCT sf.fee_date) > 1
                     `;
                     ids2 = rows.map(r => Number(r.voucher_id));
                 }
