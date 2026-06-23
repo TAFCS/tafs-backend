@@ -2436,6 +2436,21 @@ export class VouchersService {
                 } as any,
             });
             mergedPaidToBalance.set(sf.id, balanceSf.id);
+
+            // The split's creation step re-points ANY other voucher's heads/allocations
+            // that referenced the old fee row onto this PARTIAL row (see splitPartiallyPaid,
+            // ~line 3038-3048) — e.g. an arrear/surcharge voucher sharing the same fee slot.
+            // Reverse that here: re-link anything still pointing at sf.id onto the restored
+            // balance row before sf.id is deleted below, otherwise the FK delete fails for
+            // any reference outside the two known split children.
+            await tx.voucher_heads.updateMany({
+                where: { student_fee_id: sf.id },
+                data: { student_fee_id: balanceSf.id },
+            });
+            await tx.deposit_allocations.updateMany({
+                where: { student_fee_id: sf.id },
+                data: { student_fee_id: balanceSf.id },
+            });
         }
 
         // 2. Restore every other paid fee row to ISSUED + unpaid (keep dates/amounts).
