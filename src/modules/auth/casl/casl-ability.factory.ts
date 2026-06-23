@@ -103,6 +103,7 @@ export class CaslAbilityFactory {
         case 'analytics': subjects = ['all']; break;
         case 'employees': subjects = ['Employee']; break;
         case 'policies': subjects = ['Policy', 'Calendar', 'ClassAttendanceMode']; break;
+        case 'payroll': subjects = ['Payroll']; break;
         case 'calendar': subjects = ['Calendar']; break;
         case 'support_tickets': subjects = ['SupportTicket']; break;
       }

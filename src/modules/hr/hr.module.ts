@@ -18,6 +18,8 @@ import { AuthModule } from '../auth/auth.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { CalendarNotificationService } from './calendar/calendar-notification.service';
 import { CalendarNotificationsController } from './calendar/calendar-notifications.controller';
+import { PayrollController } from './payroll/payroll.controller';
+import { PayrollService } from './payroll/payroll.service';
 
 @Module({
   imports: [AuthModule, FcmModule],
@@ -29,6 +31,7 @@ import { CalendarNotificationsController } from './calendar/calendar-notificatio
     ClassAttendanceModesController,
     StaffTypesController,
     CalendarNotificationsController,
+    PayrollController,
   ],
   providers: [
     EmployeesService,
@@ -41,6 +44,7 @@ import { CalendarNotificationsController } from './calendar/calendar-notificatio
     ClassAttendanceModesService,
     StaffTypesService,
     CalendarNotificationService,
+    PayrollService,
   ],
   exports: [
     EmployeesService,
@@ -52,6 +56,7 @@ import { CalendarNotificationsController } from './calendar/calendar-notificatio
     ClassAttendanceModesService,
     StaffTypesService,
     CalendarNotificationService,
+    PayrollService,
   ],
 })
 export class HrModule {}

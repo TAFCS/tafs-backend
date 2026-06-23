@@ -182,6 +182,59 @@ export class CalendarDayResolverService {
     return { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
   }
 
+  /**
+   * Batched equivalent of resolveStaffDay() for running it over many
+   * employees x many days (e.g. payroll generation) without one DB round
+   * trip per employee per day. Callers load `rows` once via
+   * loadStaffCalendarRows() and `workSchedules` once per employee, then call
+   * this synchronously per day.
+   */
+  resolveStaffDayFromRows(
+    rows: (CalendarRow & { date: Date })[],
+    date: Date,
+    employeeId: number,
+    departmentId: number | null,
+    daysPerWeek: number | null,
+    workSchedules: { day_of_week: number; is_working: boolean }[],
+  ): ResolvedCalendarDay {
+    const dayOfWeek = date.getUTCDay();
+    const scheduleWorking = workSchedules.length
+      ? workSchedules.find((s) => s.day_of_week === dayOfWeek)?.is_working ?? false
+      : this.isWorkingDayFromSchedule(dayOfWeek, daysPerWeek ?? 5);
+
+    const matching = rows.filter(
+      (row) => row.date.getTime() === date.getTime() && this.matchesStaffScope(row, employeeId, departmentId),
+    );
+    const best = this.pickBestCalendarRow(matching, 'STAFF');
+    if (best) return this.fromDayType(best.day_type, best.description);
+
+    if (!scheduleWorking) {
+      return {
+        isWorkingDay: false,
+        dayType: isWeekendDate(date) ? 'WEEKEND' : 'HOLIDAY',
+        description: isWeekendDate(date) ? 'Weekend' : 'Scheduled day off',
+        source: 'SCHEDULE',
+      };
+    }
+    return { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
+  }
+
+  /** Loads the raw STAFF calendar rows for a campus/date range once, for resolveStaffDayFromRows(). */
+  async loadStaffCalendarRows(campusId: number, dateFrom: Date, dateTo: Date): Promise<(CalendarRow & { date: Date })[]> {
+    return this.prisma.academic_calendar_days.findMany({
+      where: { campus_id: campusId, applies_to: 'STAFF', date: { gte: dateFrom, lte: dateTo } },
+      select: {
+        date: true,
+        day_type: true,
+        description: true,
+        class_id: true,
+        section_id: true,
+        department_id: true,
+        employee_id: true,
+      },
+    });
+  }
+
   /** Batch-load calendar rows for a campus/date range (student display). */
   async loadStudentCalendarMap(
     campusId: number,
