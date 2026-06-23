@@ -79,7 +79,7 @@ export class NoticeBoardService {
   // ── Admin-facing ─────────────────────────────────────────────────────────
 
   async getAllPosts(cursor?: number) {
-    return this.prisma.notice_board_posts.findMany({
+    const posts = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
         ...(cursor ? { id: { lt: cursor } } : {}),
@@ -91,6 +91,45 @@ export class NoticeBoardService {
       },
       take: 30,
     });
+
+    const holidays = await this.prisma.academic_calendar_days.findMany({
+      where: {
+        applies_to: 'STUDENT',
+        day_type: 'HOLIDAY',
+      },
+      orderBy: { date: 'desc' },
+      take: 30,
+    });
+
+    const holidayPosts = holidays.map((h) => {
+      const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
+      const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || 'Holiday');
+      return {
+        id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
+        posted_by: h.created_by || 'System',
+        title: 'School Closed',
+        body: `${cleanDesc} (on ${new Date(h.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })})`,
+        campus_ids: [h.campus_id],
+        class_ids: h.class_id ? [h.class_id] : [],
+        section_ids: h.section_id ? [h.section_id] : [],
+        media_urls: [],
+        media_types: [],
+        is_pinned: isPinned,
+        posted_at: h.date,
+        expires_at: null,
+        deleted_at: null,
+        users: { full_name: h.created_by || 'System' },
+        _count: { post_reads: 0 },
+      };
+    });
+
+    const merged = [...posts, ...holidayPosts];
+    merged.sort((a, b) => {
+      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+      return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
+    });
+
+    return merged;
   }
 
   async createPost(postedBy: string, dto: CreatePostDto) {
@@ -159,14 +198,43 @@ export class NoticeBoardService {
     );
   }
 
-  async updatePost(id: number, dto: UpdatePostDto) {
+  async updatePost(id: string | number, dto: UpdatePostDto) {
+    if (String(id).startsWith('holiday-')) {
+      const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
+      const h = await this.prisma.academic_calendar_days.findUnique({ where: { id: holidayId } });
+      if (!h) throw new NotFoundException('Holiday not found');
+
+      let newDesc = h.description || '';
+      if (dto.is_pinned !== undefined) {
+        const hasPin = newDesc.startsWith('[PINNED] ');
+        if (dto.is_pinned && !hasPin) {
+          newDesc = `[PINNED] ${newDesc}`;
+        } else if (!dto.is_pinned && hasPin) {
+          newDesc = newDesc.replace('[PINNED] ', '');
+        }
+      }
+
+      const updated = await this.prisma.academic_calendar_days.update({
+        where: { id: holidayId },
+        data: {
+          description: newDesc,
+        },
+      });
+
+      return {
+        id: `holiday-${updated.id}`,
+        is_pinned: dto.is_pinned,
+      };
+    }
+
+    const numericId = typeof id === 'number' ? id : parseInt(id, 10);
     const post = await this.prisma.notice_board_posts.findFirst({
-      where: { id, deleted_at: null },
+      where: { id: numericId, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Post not found');
 
     return this.prisma.notice_board_posts.update({
-      where: { id },
+      where: { id: numericId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.body !== undefined && { body: dto.body }),
@@ -178,21 +246,39 @@ export class NoticeBoardService {
     });
   }
 
-  async deletePost(id: number) {
+  async deletePost(id: string | number) {
+    if (String(id).startsWith('holiday-')) {
+      const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
+      const deleted = await this.prisma.academic_calendar_days.delete({
+        where: { id: holidayId },
+      });
+      return { id: `holiday-${deleted.id}` };
+    }
+
+    const numericId = typeof id === 'number' ? id : parseInt(id, 10);
     const post = await this.prisma.notice_board_posts.findFirst({
-      where: { id, deleted_at: null },
+      where: { id: numericId, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Post not found');
 
     return this.prisma.notice_board_posts.update({
-      where: { id },
+      where: { id: numericId },
       data: { deleted_at: new Date() },
     });
   }
 
-  async getReadStats(postId: number) {
+  async getReadStats(postId: string | number) {
+    if (String(postId).startsWith('holiday-')) {
+      return {
+        post_id: postId,
+        total_reached: 0,
+        total_read: 0,
+      };
+    }
+
+    const numericId = typeof postId === 'number' ? postId : parseInt(postId, 10);
     const post = await this.prisma.notice_board_posts.findFirst({
-      where: { id: postId, deleted_at: null },
+      where: { id: numericId, deleted_at: null },
       select: {
         campus_ids: true,
         class_ids: true,
@@ -225,7 +311,7 @@ export class NoticeBoardService {
     });
 
     return {
-      post_id: postId,
+      post_id: numericId,
       total_reached: scopedFamilies.length,
       total_read: post._count.post_reads,
     };

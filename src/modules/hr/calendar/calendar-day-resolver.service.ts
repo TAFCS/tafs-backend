@@ -60,21 +60,22 @@ export class CalendarDayResolverService {
   }
 
   private fromDayType(dayType: string, description: string | null): ResolvedCalendarDay {
+    const cleanDesc = description?.startsWith('[PINNED] ') ? description.replace('[PINNED] ', '') : description;
     if (dayType === 'WORKDAY') {
-      return { isWorkingDay: true, dayType: 'WORKDAY', description, source: 'CALENDAR' };
+      return { isWorkingDay: true, dayType: 'WORKDAY', description: cleanDesc, source: 'CALENDAR' };
     }
     if (dayType === 'HOLIDAY') {
       return {
         isWorkingDay: false,
         dayType: 'HOLIDAY',
-        description,
+        description: cleanDesc,
         source: 'CALENDAR',
       };
     }
     return {
       isWorkingDay: false,
       dayType: 'WEEKEND',
-      description: description ?? 'Day Off',
+      description: cleanDesc ?? 'Day Off',
       source: 'CALENDAR',
     };
   }

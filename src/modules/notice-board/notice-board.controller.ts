@@ -72,7 +72,7 @@ export class NoticeBoardController {
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: edit / pin / set expiry on a post' })
   update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id') id: string,
     @Body() dto: UpdatePostDto,
   ) {
     return this.service.updatePost(id, dto);
@@ -81,14 +81,14 @@ export class NoticeBoardController {
   @Delete('admin/notice-board/:id')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: soft-delete a post' })
-  remove(@Param('id', ParseIntPipe) id: number) {
+  remove(@Param('id') id: string) {
     return this.service.deletePost(id);
   }
 
   @Get('admin/notice-board/:id/reads')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: read analytics for a post' })
-  readStats(@Param('id', ParseIntPipe) id: number) {
+  readStats(@Param('id') id: string) {
     return this.service.getReadStats(id);
   }
 

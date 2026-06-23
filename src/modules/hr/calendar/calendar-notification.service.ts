@@ -88,12 +88,14 @@ export class CalendarNotificationService {
     });
 
     const formattedDate = formatDatePKT(calendarRow.date);
+    const rawDesc = calendarRow.description || 'Holiday';
+    const cleanDesc = rawDesc.startsWith('[PINNED] ') ? rawDesc.replace('[PINNED] ', '') : rawDesc;
 
     for (const student of students) {
       if (!student.family_id) continue;
       if (!this.matchesStudentScope(calendarRow, student.class_id, student.section_id)) continue;
 
-      const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${calendarRow.description || 'Holiday'}.`;
+      const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${cleanDesc}.`;
       await this.notifyStudentDay(
         student.family_id,
         student.cc,
@@ -174,7 +176,9 @@ export class CalendarNotificationService {
       if (resolved.isWorkingDay) continue;
 
       if (resolved.dayType === 'HOLIDAY') {
-        const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${resolved.description || 'Holiday'}.`;
+        const rawResolvedDesc = resolved.description || 'Holiday';
+        const cleanResolvedDesc = rawResolvedDesc.startsWith('[PINNED] ') ? rawResolvedDesc.replace('[PINNED] ', '') : rawResolvedDesc;
+        const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${cleanResolvedDesc}.`;
         await this.notifyStudentDay(
           student.family_id,
           student.cc,
@@ -234,16 +238,52 @@ export class CalendarNotificationService {
   }
 
   async getForFamily(familyId: number, cursor?: number) {
-    return this.prisma.calendar_notifications.findMany({
+    const notifications = await this.prisma.calendar_notifications.findMany({
       where: {
         family_id: familyId,
         ...(cursor ? { id: { lt: cursor } } : {}),
       },
       orderBy: { created_at: 'desc' },
       include: {
-        students: { select: { full_name: true } },
+        students: { select: { full_name: true, campus_id: true } },
       },
       take: 20,
+    });
+
+    const dates = [...new Set(notifications.map((n) => n.date.toISOString()))].map((d) => new Date(d));
+    const calendarDays = await this.prisma.academic_calendar_days.findMany({
+      where: {
+        date: { in: dates },
+        applies_to: 'STUDENT',
+      },
+      select: { date: true, campus_id: true, description: true },
+    });
+
+    const holidayKey = (date: Date, campusId: number) => `${date.toISOString().slice(0, 10)}-${campusId}`;
+    const pinnedHolidays = new Set(
+      calendarDays
+        .filter((c) => c.description?.startsWith('[PINNED] '))
+        .map((c) => holidayKey(c.date, c.campus_id)),
+    );
+
+    return notifications.map((n) => {
+      const isPinned = n.students?.campus_id
+        ? pinnedHolidays.has(holidayKey(n.date, n.students.campus_id))
+        : false;
+      const cleanBody = n.body.includes('[PINNED] ') ? n.body.replace('[PINNED] ', '') : n.body;
+      return {
+        id: n.id,
+        family_id: n.family_id,
+        student_cc: n.student_cc,
+        date: n.date,
+        alert_type: n.alert_type,
+        title: n.title,
+        body: cleanBody,
+        read_at: n.read_at,
+        created_at: n.created_at,
+        students: n.students,
+        is_pinned: isPinned,
+      };
     });
   }
 
