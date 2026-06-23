@@ -533,6 +533,7 @@ export class SupportTicketsService {
           data: {
             last_message_at: now,
             last_message_snippet: snippet,
+            last_staff_snippet: snippet,
             unread_by_parent: { increment: 1 },
           },
         });
@@ -632,6 +633,7 @@ export class SupportTicketsService {
         data: {
           last_message_at: new Date(),
           last_message_snippet: snippet,
+          last_family_snippet: snippet,
           unread_by_staff: { increment: 1 },
         },
         include: ticketInclude,
@@ -704,6 +706,7 @@ export class SupportTicketsService {
           data: {
             last_message_at: new Date(),
             last_message_snippet: snippet,
+            last_staff_snippet: snippet,
             unread_by_parent: { increment: 1 },
           },
         });

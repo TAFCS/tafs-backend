@@ -774,6 +774,8 @@ model support_tickets {
   parent_last_read_at   DateTime?
   created_at            DateTime          @default(now())
   updated_at            DateTime          @updatedAt
+  last_family_snippet   String?           @db.VarChar(255)
+  last_staff_snippet    String?           @db.VarChar(255)
   closed_by_guardian    guardians?        @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
   closed_by_user        users?            @relation("TicketClosedByUser", fields: [closed_by_user_id], references: [id])
   current_assignee      users?            @relation("TicketCurrentAssignee", fields: [current_assignee_id], references: [id])

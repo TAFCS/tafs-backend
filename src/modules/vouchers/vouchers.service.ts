@@ -430,7 +430,7 @@ export class VouchersService {
                     select: { gr_number: true },
                 });
                 const grOrCcCreate = studentRec?.gr_number || `CC${dto.student_id}`;
-                const key = `vouchers/${dto.student_id}/${feeDateStrCreate}-${grOrCcCreate}-${voucher.id}.pdf`;
+                const key = `vouchers/${dto.student_id}/${buildVoucherFilename({ grNumber: grOrCcCreate, feeDate: feeDateStrCreate, voucherId: voucher.id })}`;
                 const pdfUrl = await this.storage.upload(key, pdfBuffer);
 
                 const updatedVoucher = await this.prisma.vouchers.update({
@@ -1208,8 +1208,10 @@ export class VouchersService {
         // SPECIAL ADMIN WORKFLOW: distinct suffix when forceHeadsAsCurrent is on,
         // so this alternate receipt never collides with / overwrites the
         // canonical voucher PDF or its pdf_url. See generateMainColumnReceipt().
-        const paidSuffix = (paidStamp ? '-paid' : '') + (forceHeadsAsCurrent ? '-main-receipt' : '');
-        const key = `vouchers/${voucher.student_id}/${feeDateStr}-${grOrCc}-${voucher.id}${paidSuffix}.pdf`;
+        const paidSuffix = [paidStamp ? 'paid' : null, forceHeadsAsCurrent ? 'main-receipt' : null]
+            .filter(Boolean)
+            .join('-');
+        const key = `vouchers/${voucher.student_id}/${buildVoucherFilename({ grNumber: grOrCc, feeDate: feeDateStr, voucherId: voucher.id, suffix: paidSuffix || undefined })}`;
         const qrUrl = this.storage.getPublicUrl(key);
 
         return {
@@ -2436,6 +2438,21 @@ export class VouchersService {
                 } as any,
             });
             mergedPaidToBalance.set(sf.id, balanceSf.id);
+
+            // The split's creation step re-points ANY other voucher's heads/allocations
+            // that referenced the old fee row onto this PARTIAL row (see splitPartiallyPaid,
+            // ~line 3038-3048) — e.g. an arrear/surcharge voucher sharing the same fee slot.
+            // Reverse that here: re-link anything still pointing at sf.id onto the restored
+            // balance row before sf.id is deleted below, otherwise the FK delete fails for
+            // any reference outside the two known split children.
+            await tx.voucher_heads.updateMany({
+                where: { student_fee_id: sf.id },
+                data: { student_fee_id: balanceSf.id },
+            });
+            await tx.deposit_allocations.updateMany({
+                where: { student_fee_id: sf.id },
+                data: { student_fee_id: balanceSf.id },
+            });
         }
 
         // 2. Restore every other paid fee row to ISSUED + unpaid (keep dates/amounts).
