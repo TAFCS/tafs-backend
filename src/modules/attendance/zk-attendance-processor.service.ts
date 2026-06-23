@@ -500,10 +500,26 @@ export class ZkAttendanceProcessorService {
       minute: '2-digit',
       timeZone: 'UTC',
     });
-    const title = direction === ScanDirection.IN ? 'Arrived at School' : 'Left School';
+
+    const attendanceDate = new Date(scanRow.scan_time);
+    attendanceDate.setUTCHours(0, 0, 0, 0);
+
+    const dailyRow = await this.prisma.attendance_student_daily.findUnique({
+      where: {
+        student_cc_date: {
+          student_cc: studentCc,
+          date: attendanceDate,
+        },
+      },
+    });
+
+    const isLate = direction === ScanDirection.IN && dailyRow?.status === RollRecordStatus.LATE;
+    const title = isLate ? 'Arrived Late' : (direction === ScanDirection.IN ? 'Arrived at School' : 'Left School');
     const body =
       direction === ScanDirection.IN
-        ? `${student.full_name} has arrived at TAFS at ${time}`
+        ? (isLate
+            ? `${student.full_name} has arrived late at TAFS at ${time}`
+            : `${student.full_name} has arrived at TAFS at ${time}`)
         : `${student.full_name} has left TAFS at ${time}`;
 
     await this.prisma.attendance_notifications.create({
