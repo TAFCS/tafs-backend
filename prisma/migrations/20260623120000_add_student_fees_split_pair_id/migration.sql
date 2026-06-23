@@ -1,0 +1,12 @@
+-- Add split_pair_id to student_fees: when a head is split by splitPartiallyPaid,
+-- the new "PARTIAL PAYMENT OF" row stores the id of its "BALANCE PAYMENT OF"
+-- counterpart row here. NULL = not a split artifact, or a legacy split row
+-- created before this column existed.
+--
+-- Needed because the balance row's fee_date can now diverge from the paid row's
+-- fee_date (see use_nearest_future_fee_date in splitPartiallyPaid), so reversal
+-- in _destroyVoucherInTx can no longer rely solely on fee_date equality to find
+-- the matching balance row. No FK constraint — this is a soft pointer used only
+-- as a lookup optimization, with the legacy fee_date-matching query kept as a
+-- fallback for rows where it's NULL.
+ALTER TABLE "student_fees" ADD COLUMN IF NOT EXISTS "split_pair_id" INTEGER;

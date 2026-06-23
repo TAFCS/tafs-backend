@@ -2394,15 +2394,21 @@ export class VouchersService {
             if (!prefix.startsWith('PARTIAL PAYMENT OF')) continue;
             if (mergedPaidToBalance.has(sf.id)) continue;
 
-            const balanceSf = await tx.student_fees.findFirst({
-                where: {
-                    student_id: parent.student_id,
-                    fee_type_id: sf.fee_type_id,
-                    fee_date: sf.fee_date,
-                    id: { not: sf.id },
-                    description_prefix: { startsWith: 'BALANCE PAYMENT OF' },
-                } as any,
-            });
+            // Prefer the direct split_pair_id pointer (exact, and survives the balance
+            // row's fee_date having moved away from sf.fee_date — see
+            // use_nearest_future_fee_date in splitPartiallyPaid). Fall back to the
+            // legacy fee_date-based match for rows split before this column existed.
+            const balanceSf = (sf as any).split_pair_id
+                ? await tx.student_fees.findUnique({ where: { id: (sf as any).split_pair_id } })
+                : await tx.student_fees.findFirst({
+                    where: {
+                        student_id: parent.student_id,
+                        fee_type_id: sf.fee_type_id,
+                        fee_date: sf.fee_date,
+                        id: { not: sf.id },
+                        description_prefix: { startsWith: 'BALANCE PAYMENT OF' },
+                    } as any,
+                });
             if (!balanceSf) return false; // unexpected shape — bail (tx rolls back cleanly)
 
             // Restore balanceSf's prefix correctly for MULTI-LEVEL splits. If OTHER
@@ -2434,6 +2440,10 @@ export class VouchersService {
                         .add(new Prisma.Decimal(sf.amount_before_discount ?? 0)),
                     amount_paid: new Prisma.Decimal(0),
                     description_prefix: restoredPrefix,
+                    // Restore fee_date to the partial (paid) row's fee_date — undoes any
+                    // use_nearest_future_fee_date/balance_fee_date shift applied at split time
+                    // (see splitPartiallyPaid), so the merged row lands back on its original period.
+                    fee_date: sf.fee_date,
                     // issue/due/validity dates are retained from the original row.
                 } as any,
             });
@@ -3005,10 +3015,35 @@ export class VouchersService {
                 // ── Compute prefixes from student_fees source of truth
                 const { prefixPaid, prefixBalance } = this.buildSplitPrefixes((oldFee as any).description_prefix);
 
+                // ── Resolve the balance head's fee_date. Default is to preserve it exactly
+                //    (the only behavior before this option existed). dto.use_nearest_future_fee_date
+                //    takes precedence: it looks up the next student_fees row already on this
+                //    student's schedule for the same fee_type (e.g. next month's NOT_ISSUED/ISSUED
+                //    row) and rolls the balance onto that period instead — typical case: an arrear
+                //    deposit where a Rs.1000 late-payment surcharge is settled now and the
+                //    remaining balance should travel to the next voucher rather than sit on the
+                //    already-overdue original period. dto.balance_fee_date is a manual admin
+                //    override used when no future schedule row exists yet or a specific date is wanted.
+                let balanceFeeDate = oldFee.fee_date;
+                if (dto.use_nearest_future_fee_date && oldFee.fee_date) {
+                    const nextScheduled = await tx.student_fees.findFirst({
+                        where: {
+                            student_id: oldFee.student_id,
+                            fee_type_id: oldFee.fee_type_id,
+                            fee_date: { gt: oldFee.fee_date },
+                        },
+                        orderBy: { fee_date: 'asc' },
+                        select: { fee_date: true },
+                    });
+                    if (nextScheduled?.fee_date) balanceFeeDate = nextScheduled.fee_date;
+                } else if (dto.balance_fee_date) {
+                    balanceFeeDate = new Date(dto.balance_fee_date);
+                }
+
                 // ── Update the original row in-place to become the BALANCE (unpaid) row.
-                //    fee_date is preserved exactly. The migration that accompanies this change
-                //    relaxes the unique constraint so two rows with split prefixes can share
-                //    the same (student_id, fee_type_id, fee_date).
+                //    The migration that accompanies this change relaxes the unique constraint
+                //    so two rows with split prefixes can share the same
+                //    (student_id, fee_type_id, fee_date) when fee_date is left unchanged.
                 await tx.student_fees.update({
                     where: { id: oldFeeId },
                     data: {
@@ -3017,6 +3052,7 @@ export class VouchersService {
                         amount: unpaidNet,
                         amount_paid: new Prisma.Decimal(0),
                         description_prefix: prefixBalance,
+                        fee_date: balanceFeeDate,
                     },
                 });
 
@@ -3048,6 +3084,10 @@ export class VouchersService {
                         // it (e.g. calculateFeeSuggestions) keep adding up to the original
                         // total instead of double-counting across both halves.
                         installment_id: oldFee.installment_id,
+                        // Pointer back to the balance row (oldFeeId, updated in-place above),
+                        // so reversal in _destroyVoucherInTx can find it directly even when
+                        // balanceFeeDate above has moved it off oldFee.fee_date.
+                        split_pair_id: oldFeeId,
                     } as any,
                 });
 
@@ -4048,15 +4088,22 @@ export class VouchersService {
             const sfPaid = splitHead.student_fees;
             if (!sfPaid?.fee_type_id || !sfPaid?.fee_date) continue;
 
-            const balanceSf = await tx.student_fees.findFirst({
-                where: {
-                    student_id: voucher.student_id,
-                    fee_type_id: sfPaid.fee_type_id,
-                    fee_date: sfPaid.fee_date,
-                    id: { not: sfPaid.id },
-                    description_prefix: { startsWith: 'BALANCE PAYMENT OF' },
-                } as any,
-            });
+            // Prefer the direct split_pair_id pointer (set at split time) — it's exact
+            // and survives the balance row's fee_date having been moved away from
+            // sfPaid.fee_date (see use_nearest_future_fee_date in splitPartiallyPaid).
+            // Fall back to the legacy fee_date-based match for rows split before this
+            // column existed (split_pair_id is NULL on them).
+            const balanceSf = (sfPaid as any).split_pair_id
+                ? await tx.student_fees.findUnique({ where: { id: (sfPaid as any).split_pair_id } })
+                : await tx.student_fees.findFirst({
+                    where: {
+                        student_id: voucher.student_id,
+                        fee_type_id: sfPaid.fee_type_id,
+                        fee_date: sfPaid.fee_date,
+                        id: { not: sfPaid.id },
+                        description_prefix: { startsWith: 'BALANCE PAYMENT OF' },
+                    } as any,
+                });
 
             if (balanceSf) {
                 await tx.voucher_heads.updateMany({
@@ -4115,6 +4162,11 @@ export class VouchersService {
                         issue_date: null,
                         due_date: null,
                         validity_date: null,
+                        // Restore fee_date to the partial (paid) row's fee_date — undoes any
+                        // use_nearest_future_fee_date/balance_fee_date shift applied at split
+                        // time (see splitPartiallyPaid), so the merged row lands back on its
+                        // original period.
+                        fee_date: sfPaid.fee_date,
                     } as any,
                 });
             }
