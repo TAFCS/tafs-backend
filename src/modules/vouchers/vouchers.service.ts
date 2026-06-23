@@ -430,7 +430,7 @@ export class VouchersService {
                     select: { gr_number: true },
                 });
                 const grOrCcCreate = studentRec?.gr_number || `CC${dto.student_id}`;
-                const key = `vouchers/${dto.student_id}/${feeDateStrCreate}-${grOrCcCreate}-${voucher.id}.pdf`;
+                const key = `vouchers/${dto.student_id}/${buildVoucherFilename({ grNumber: grOrCcCreate, feeDate: feeDateStrCreate, voucherId: voucher.id })}`;
                 const pdfUrl = await this.storage.upload(key, pdfBuffer);
 
                 const updatedVoucher = await this.prisma.vouchers.update({
@@ -1208,8 +1208,10 @@ export class VouchersService {
         // SPECIAL ADMIN WORKFLOW: distinct suffix when forceHeadsAsCurrent is on,
         // so this alternate receipt never collides with / overwrites the
         // canonical voucher PDF or its pdf_url. See generateMainColumnReceipt().
-        const paidSuffix = (paidStamp ? '-paid' : '') + (forceHeadsAsCurrent ? '-main-receipt' : '');
-        const key = `vouchers/${voucher.student_id}/${feeDateStr}-${grOrCc}-${voucher.id}${paidSuffix}.pdf`;
+        const paidSuffix = [paidStamp ? 'paid' : null, forceHeadsAsCurrent ? 'main-receipt' : null]
+            .filter(Boolean)
+            .join('-');
+        const key = `vouchers/${voucher.student_id}/${buildVoucherFilename({ grNumber: grOrCc, feeDate: feeDateStr, voucherId: voucher.id, suffix: paidSuffix || undefined })}`;
         const qrUrl = this.storage.getPublicUrl(key);
 
         return {
