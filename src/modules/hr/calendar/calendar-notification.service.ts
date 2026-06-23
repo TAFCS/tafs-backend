@@ -256,7 +256,7 @@ export class CalendarNotificationService {
         date: { in: dates },
         applies_to: 'STUDENT',
       },
-      select: { date: true, campus_id: true, description: true },
+      select: { date: true, campus_id: true, description: true, day_type: true },
     });
 
     const holidayKey = (date: Date, campusId: number) => `${date.toISOString().slice(0, 10)}-${campusId}`;
@@ -266,7 +266,34 @@ export class CalendarNotificationService {
         .map((c) => holidayKey(c.date, c.campus_id)),
     );
 
-    return notifications.map((n) => {
+    const activeHolidayKeys = new Set(
+      calendarDays
+        .filter((c) => c.day_type === 'HOLIDAY')
+        .map((c) => holidayKey(c.date, c.campus_id)),
+    );
+
+    const validNotifications: typeof notifications = [];
+    const orphanedIds: number[] = [];
+
+    for (const n of notifications) {
+      if (n.alert_type === 'HOLIDAY') {
+        const campusId = n.students?.campus_id;
+        const hasActiveHoliday = campusId && activeHolidayKeys.has(holidayKey(n.date, campusId));
+        if (!hasActiveHoliday) {
+          orphanedIds.push(n.id);
+          continue;
+        }
+      }
+      validNotifications.push(n);
+    }
+
+    if (orphanedIds.length > 0) {
+      this.prisma.calendar_notifications.deleteMany({
+        where: { id: { in: orphanedIds } },
+      }).catch((err) => console.error('Failed to clean up orphaned notifications:', err));
+    }
+
+    return validNotifications.map((n) => {
       const isPinned = n.students?.campus_id
         ? pinnedHolidays.has(holidayKey(n.date, n.students.campus_id))
         : false;

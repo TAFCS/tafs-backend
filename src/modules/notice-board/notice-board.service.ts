@@ -262,6 +262,20 @@ export class NoticeBoardService {
       const deleted = await this.prisma.academic_calendar_days.delete({
         where: { id: holidayId },
       });
+
+      // Delete the generated calendar notifications for this holiday from the mobile app feed
+      await this.prisma.calendar_notifications.deleteMany({
+        where: {
+          date: deleted.date,
+          alert_type: 'HOLIDAY',
+          students: {
+            campus_id: deleted.campus_id,
+            ...(deleted.class_id ? { class_id: deleted.class_id } : {}),
+            ...(deleted.section_id ? { section_id: deleted.section_id } : {}),
+          },
+        },
+      });
+
       return { id: `holiday-${deleted.id}` };
     }
 
