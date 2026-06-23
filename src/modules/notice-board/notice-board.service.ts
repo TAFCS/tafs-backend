@@ -101,9 +101,19 @@ export class NoticeBoardService {
       take: 30,
     });
 
+    const userIds = holidays.map((h) => h.created_by).filter((cb): cb is string => !!cb);
+    const creators = userIds.length
+      ? await this.prisma.users.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, full_name: true },
+        })
+      : [];
+    const creatorMap = new Map(creators.map((u) => [u.id, u.full_name]));
+
     const holidayPosts = holidays.map((h) => {
       const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
       const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || 'Holiday');
+      const creatorName = h.created_by ? creatorMap.get(h.created_by) : null;
       return {
         id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
         posted_by: h.created_by || 'System',
@@ -118,7 +128,7 @@ export class NoticeBoardService {
         posted_at: h.date,
         expires_at: null,
         deleted_at: null,
-        users: { full_name: h.created_by || 'System' },
+        users: { full_name: creatorName || h.created_by || 'System' },
         _count: { post_reads: 0 },
       };
     });
