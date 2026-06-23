@@ -95,7 +95,7 @@ export class NoticeBoardService {
     const holidays = await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
-        day_type: 'HOLIDAY',
+        day_type: { in: ['HOLIDAY', 'WORKDAY'] },
       },
       orderBy: { date: 'desc' },
       take: 30,
@@ -112,12 +112,14 @@ export class NoticeBoardService {
 
     const holidayPosts = holidays.map((h) => {
       const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
-      const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || 'Holiday');
+      const defaultDesc = h.day_type === 'WORKDAY' ? 'School Open' : 'Holiday';
+      const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || defaultDesc);
       const creatorName = h.created_by ? creatorMap.get(h.created_by) : null;
+      const title = h.day_type === 'WORKDAY' ? 'School Open' : 'School Closed';
       return {
         id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
         posted_by: h.created_by || 'System',
-        title: 'School Closed',
+        title,
         body: `${cleanDesc} (on ${new Date(h.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })})`,
         campus_ids: [h.campus_id],
         class_ids: h.class_id ? [h.class_id] : [],
@@ -267,7 +269,7 @@ export class NoticeBoardService {
       await this.prisma.calendar_notifications.deleteMany({
         where: {
           date: deleted.date,
-          alert_type: 'HOLIDAY',
+          alert_type: deleted.day_type === 'WORKDAY' ? 'SCHOOL_OPEN' : 'HOLIDAY',
           students: {
             campus_id: deleted.campus_id,
             ...(deleted.class_id ? { class_id: deleted.class_id } : {}),
