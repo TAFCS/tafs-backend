@@ -49,6 +49,6 @@ import { RecomputeLateController } from './recompute-late.controller';
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
   ],
-  exports: [RollSessionsService, StaffAttendanceService, StudentAttendanceService],
+  exports: [RollSessionsService, StaffAttendanceService, StudentAttendanceService, AttendancePolicyResolverService],
 })
 export class AttendanceModule {}

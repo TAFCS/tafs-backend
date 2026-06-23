@@ -114,6 +114,30 @@ export class AttendancePolicyResolverService {
     return { expectedCheckIn: null, graceMinutes: 0 };
   }
 
+  resolveStudentCheckInPolicyFromCache(
+    classId: number | null,
+    date: Date,
+    schedules: Array<{ class_id: number; expected_check_in: Date; late_grace_minutes: number; effective_from: Date }>,
+    policySets: Array<{ effective_from: Date; hr_policy_rules: PolicyRuleRow[] }>,
+  ): { expectedCheckIn: Date | null; graceMinutes: number } {
+    if (classId != null) {
+      const schedule = schedules.find((s) => s.class_id === classId && s.effective_from <= date);
+      if (schedule) {
+        return {
+          expectedCheckIn: schedule.expected_check_in,
+          graceMinutes: schedule.late_grace_minutes,
+        };
+      }
+    }
+
+    const activePolicySets = policySets.filter((p) => p.effective_from <= date);
+    if (activePolicySets.length > 0) {
+      return this.resolveStudentRulesFromPolicySets(activePolicySets);
+    }
+
+    return { expectedCheckIn: null, graceMinutes: 0 };
+  }
+
   async resolveStudentCheckInPolicy(
     classId: number | null,
     campusId: number,

@@ -2,12 +2,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from '../attendance/student-attendance-status.util';
+import { AttendancePolicyResolverService } from '../attendance/attendance-policy-resolver.service';
 
 @Injectable()
 export class AppPortalService {
   constructor(
     private prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly policyResolver: AttendancePolicyResolverService,
   ) {}
 
   async getStudentLedger(studentCc: number) {
@@ -170,6 +173,27 @@ export class AppPortalService {
       select: { campus_id: true, class_id: true, section_id: true },
     });
 
+    const [schedules, policySets] = student?.campus_id != null
+      ? await Promise.all([
+          this.prisma.class_check_in_schedules.findMany({
+            where: {
+              class_id: student.class_id ?? undefined,
+              campus_id: student.campus_id,
+              effective_from: { lte: dateTo },
+            },
+            orderBy: { effective_from: 'desc' },
+          }),
+          this.prisma.hr_policy_sets.findMany({
+            where: {
+              campus_id: student.campus_id,
+              effective_from: { lte: dateTo },
+            },
+            orderBy: { effective_from: 'desc' },
+            include: { hr_policy_rules: true },
+          }),
+        ])
+      : [[], []];
+
     const [scans, records] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
@@ -205,14 +229,15 @@ export class AppPortalService {
     }
     const recordMap = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
 
+    const todayKey = getTodayKeyKarachi();
     const days: any[] = [];
     for (let d = new Date(dateFrom); d <= dateTo; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = d.toISOString().slice(0, 10);
       const record = recordMap.get(key) ?? null;
       const dayScans = scansByDate.get(key) ?? [];
       const resolved = calendarMap.get(key) ?? {
-        isWorkingDay: true,
-        dayType: null,
+        isWorkingDay: d.getUTCDay() !== 0 && d.getUTCDay() !== 6,
+        dayType: d.getUTCDay() === 0 || d.getUTCDay() === 6 ? 'WEEKEND' : null,
         description: null,
         source: 'DEFAULT',
       };
@@ -232,15 +257,27 @@ export class AppPortalService {
       }
 
       const { holiday_type, holiday_description } = this.calendarResolver.toHolidayDisplay(resolved);
-      let status = record?.status ?? null;
-      if (!resolved.isWorkingDay) {
-        status = RollRecordStatus.EXCUSED;
-      } else if (
-        status === RollRecordStatus.EXCUSED &&
-        record?.source === AttendanceSource.SYSTEM
-      ) {
-        status = null;
-      }
+
+      // Resolve check-in policy in memory
+      const { expectedCheckIn, graceMinutes } = this.policyResolver.resolveStudentCheckInPolicyFromCache(
+        student?.class_id ?? null,
+        d,
+        schedules,
+        policySets,
+      );
+
+      const hasCheckIn = !!record?.check_in_at || dayScans.length > 0;
+      const status = resolveStudentAttendanceStatus({
+        dateKey: key,
+        todayKey,
+        isWorkingDay: resolved.isWorkingDay,
+        recordStatus: record?.status ?? null,
+        recordSource: record?.source ?? null,
+        hasCheckIn,
+        checkInAt: record?.check_in_at ?? dayScans[0]?.scan_time ?? null,
+        expectedCheckIn,
+        graceMinutes,
+      });
 
       days.push({
         date: key,

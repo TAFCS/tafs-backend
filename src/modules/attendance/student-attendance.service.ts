@@ -5,10 +5,12 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { assertClassInScope } from '../../common/staff-scope';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
+import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
 } from './dto/student-attendance.dto';
+import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 
 @Injectable()
 export class StudentAttendanceService {
@@ -16,6 +18,7 @@ export class StudentAttendanceService {
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly holidaySync: HolidayAttendanceSyncService,
+    private readonly policyResolver: AttendancePolicyResolverService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -203,6 +206,37 @@ export class StudentAttendanceService {
     const dateTo = this.parseDate(query.date_to);
     if (dateFrom > dateTo) throw new BadRequestException('date_from must be before date_to');
 
+    const [schedules, policySets] = student.campus_id != null
+      ? await Promise.all([
+          this.prisma.class_check_in_schedules.findMany({
+            where: {
+              class_id: student.class_id ?? undefined,
+              campus_id: student.campus_id,
+              effective_from: { lte: dateTo },
+            },
+            orderBy: { effective_from: 'desc' },
+          }),
+          this.prisma.hr_policy_sets.findMany({
+            where: {
+              campus_id: student.campus_id,
+              effective_from: { lte: dateTo },
+            },
+            orderBy: { effective_from: 'desc' },
+            include: { hr_policy_rules: true },
+          }),
+        ])
+      : [[], []];
+
+    const calendarMap = student.campus_id != null
+      ? await this.calendarResolver.loadStudentCalendarMap(
+          student.campus_id,
+          student.class_id,
+          student.section_id,
+          dateFrom,
+          dateTo,
+        )
+      : new Map();
+
     const [scans, records] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
@@ -237,33 +271,50 @@ export class StudentAttendanceService {
       holiday_description: string | null;
       segments: ReturnType<StudentAttendanceService['buildDaySegments']>;
     }[] = [];
+    const todayKey = getTodayKeyKarachi();
     for (let d = new Date(dateFrom); d <= dateTo; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))) {
       const key = d.toISOString();
+      const dateKey = key.slice(0, 10);
       const record = recordMap.get(key) ?? null;
-      const resolved =
-        student.campus_id != null
-          ? await this.calendarResolver.resolveStudentDay(
-              student.campus_id,
-              student.class_id,
-              student.section_id,
-              new Date(d),
-            )
-          : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
+      const dayScans = scansByDate.get(key) ?? [];
+      const resolved = calendarMap.get(dateKey) ?? {
+        isWorkingDay: d.getUTCDay() !== 0 && d.getUTCDay() !== 6,
+        dayType: d.getUTCDay() === 0 || d.getUTCDay() === 6 ? ('WEEKEND' as const) : null,
+        description: null,
+        source: 'DEFAULT' as const,
+      };
       const holidayDisplay = this.calendarResolver.toHolidayDisplay(resolved);
-      let status = record?.status ?? (resolved.isWorkingDay ? null : RollRecordStatus.EXCUSED);
-      if (resolved.isWorkingDay && record?.source === AttendanceSource.SYSTEM) {
-        status = null;
-      }
+
+      // Resolve check-in policy in memory
+      const { expectedCheckIn, graceMinutes } = this.policyResolver.resolveStudentCheckInPolicyFromCache(
+        student.class_id,
+        d,
+        schedules,
+        policySets,
+      );
+
+      const hasCheckIn = !!record?.check_in_at || dayScans.length > 0;
+      const status = resolveStudentAttendanceStatus({
+        dateKey,
+        todayKey,
+        isWorkingDay: resolved.isWorkingDay,
+        recordStatus: record?.status ?? null,
+        recordSource: record?.source ?? null,
+        hasCheckIn,
+        checkInAt: record?.check_in_at ?? dayScans[0]?.scan_time ?? null,
+        expectedCheckIn,
+        graceMinutes,
+      });
 
       days.push({
-        date: key.slice(0, 10),
+        date: dateKey,
         status,
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
         day_description: resolved.description,
         holiday_type: holidayDisplay.holiday_type,
         holiday_description: holidayDisplay.holiday_description,
-        segments: this.buildDaySegments(scansByDate.get(key) ?? []),
+        segments: this.buildDaySegments(dayScans),
       });
     }
 
