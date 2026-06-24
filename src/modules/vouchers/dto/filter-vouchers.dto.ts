@@ -9,28 +9,25 @@ export class FilterVouchersDto {
     @IsInt()
     student_id?: number;
 
-    @ApiPropertyOptional({ description: 'Filter by Campus ID' })
+    @ApiPropertyOptional({ description: 'Filter by Campus ID(s), comma-separated for multiple' })
     @IsOptional()
-    @Type(() => Number)
-    @IsInt()
-    campus_id?: number;
+    @IsString()
+    campus_id?: string;
 
-    @ApiPropertyOptional({ description: 'Filter by Voucher Status (e.g. UNPAID, PAID, OVERDUE, VOID, EXPIRED)' })
+    @ApiPropertyOptional({ description: 'Filter by Voucher Status (e.g. UNPAID, PAID, OVERDUE, VOID, EXPIRED), comma-separated for multiple' })
     @IsOptional()
     @IsString()
     status?: string;
 
-    @ApiPropertyOptional({ description: 'Filter by Class ID' })
+    @ApiPropertyOptional({ description: 'Filter by Class ID(s), comma-separated for multiple' })
     @IsOptional()
-    @Type(() => Number)
-    @IsInt()
-    class_id?: number;
+    @IsString()
+    class_id?: string;
 
-    @ApiPropertyOptional({ description: 'Filter by Section ID' })
+    @ApiPropertyOptional({ description: 'Filter by Section ID(s), comma-separated for multiple' })
     @IsOptional()
-    @Type(() => Number)
-    @IsInt()
-    section_id?: number;
+    @IsString()
+    section_id?: string;
 
     @ApiPropertyOptional({ description: 'Filter by exact Student CC number' })
     @IsOptional()

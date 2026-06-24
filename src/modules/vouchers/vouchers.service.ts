@@ -474,10 +474,10 @@ export class VouchersService {
 
     async findAll(
         studentId?: number,
-        campusId?: number,
+        campusId?: string,
         status?: string,
-        classId?: number,
-        sectionId?: number,
+        classId?: string,
+        sectionId?: string,
         cc?: number,
         gr?: string,
         id?: number,
@@ -531,13 +531,22 @@ export class VouchersService {
                 }
             }
 
+            const toIdList = (value?: string): number[] | undefined =>
+                value
+                    ? value.split(',').map((v) => parseInt(v.trim(), 10)).filter((v) => !isNaN(v))
+                    : undefined;
+
+            const campusIds = toIdList(campusId);
+            const classIds = toIdList(classId);
+            const sectionIds = toIdList(sectionId);
+
             const where: Prisma.vouchersWhereInput = {
                 // student_id or cc both resolve to student_id (cc is the student PK)
                 ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
                 ...(id ? { id } : {}),
-                ...(campusId ? { campus_id: campusId } : {}),
-                ...(classId ? { class_id: classId } : {}),
-                ...(sectionId ? { section_id: sectionId } : {}),
+                ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
+                ...(classIds?.length ? { class_id: { in: classIds } } : {}),
+                ...(sectionIds?.length ? { section_id: { in: sectionIds } } : {}),
                 // If a specific status is requested show only that; otherwise show all.
                 ...(status
                     ? {
@@ -574,21 +583,8 @@ export class VouchersService {
                 select: { id: true, status: true, issue_date: true },
             });
 
-            // Custom sort: Unpaid -> Partially Paid -> Paid -> Void/Expired
-            const statusOrder: Record<string, number> = {
-                'ISSUED': 1,
-                'OVERDUE': 1,
-                'NOT_ISSUED': 1,
-                'PARTIALLY_PAID': 2,
-                'PAID': 3,
-                'VOID': 4,
-                'EXPIRED': 4
-            };
-
+            // Default sort: most recent first, regardless of status.
             allMatching.sort((a, b) => {
-                const orderA = statusOrder[a.status ?? ''] ?? 5;
-                const orderB = statusOrder[b.status ?? ''] ?? 5;
-                if (orderA !== orderB) return orderA - orderB;
                 const timeA = a.issue_date?.getTime() ?? 0;
                 const timeB = b.issue_date?.getTime() ?? 0;
                 if (timeA !== timeB) return timeB - timeA; // desc issue_date
