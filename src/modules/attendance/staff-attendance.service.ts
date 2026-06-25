@@ -283,6 +283,13 @@ export class StaffAttendanceService {
   ) {
     const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
 
+    if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
+      const start = record.check_in_at.toISOString();
+      const end = record.check_out_at ? record.check_out_at.toISOString() : start;
+      segments.push({ type: 'WORK', start, end });
+      return segments;
+    }
+
     if (record?.status === StaffAttendanceStatus.EXCUSED) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;
@@ -322,6 +329,12 @@ export class StaffAttendanceService {
       if (i + 2 < scans.length) {
         segments.push({ type: 'BREAK', start: outTime.toISOString(), end: scans[i + 2].scan_time.toISOString() });
       }
+    }
+
+    if (scans.length > 0 && scans.length % 2 !== 0) {
+      const lastInTime = scans[scans.length - 1].scan_time;
+      const end = new Date(lastInTime.getTime() + 10 * 60 * 1000);
+      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true } as any);
     }
 
     return segments;
@@ -410,7 +423,7 @@ export class StaffAttendanceService {
     const employees = await this.prisma.employee_profiles.findMany({
       where: {
         id: { in: employeeIds },
-        users: { campus_id: dto.campus_id },
+        campus_id: dto.campus_id,
       },
       select: { id: true, campus_id: true },
     });
@@ -435,8 +448,20 @@ export class StaffAttendanceService {
     }
 
     // Upsert all records in a transaction
-    const upserts = dto.records.map((mark) =>
-      this.prisma.attendance_staff_daily.upsert({
+    const upserts = dto.records.map((mark) => {
+      let checkInAt: Date | null | undefined = undefined;
+      let checkOutAt: Date | null | undefined = undefined;
+
+      if (mark.check_in_time) {
+        const [h, m] = mark.check_in_time.split(':').map(Number);
+        checkInAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+      }
+      if (mark.check_out_time) {
+        const [h, m] = mark.check_out_time.split(':').map(Number);
+        checkOutAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+      }
+
+      return this.prisma.attendance_staff_daily.upsert({
         where: { employee_id_date: { employee_id: mark.employee_id, date } },
         create: {
           employee_id: mark.employee_id,
@@ -446,15 +471,19 @@ export class StaffAttendanceService {
           notes: mark.notes ?? null,
           marked_by: user.sub,
           source: AttendanceSource.MANUAL,
+          ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
+          ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
         },
         update: {
           status: mark.status,
           notes: mark.notes ?? null,
           marked_by: user.sub,
           source: AttendanceSource.MANUAL,
+          ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
+          ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
         },
-      }),
-    );
+      });
+    });
 
     await this.prisma.$transaction(upserts);
 

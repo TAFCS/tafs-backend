@@ -191,6 +191,12 @@ export class StudentAttendanceService {
       }
     }
 
+    if (scans.length > 0 && scans.length % 2 !== 0) {
+      const lastInTime = scans[scans.length - 1].scan_time;
+      const end = new Date(lastInTime.getTime() + 10 * 60 * 1000);
+      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true } as any);
+    }
+
     return segments;
   }
 

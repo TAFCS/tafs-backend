@@ -28,6 +28,14 @@ export class StaffAttendanceMarkDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  check_in_time?: string;
+
+  @IsOptional()
+  @IsString()
+  check_out_time?: string;
 }
 
 export class BulkMarkStaffAttendanceDto {

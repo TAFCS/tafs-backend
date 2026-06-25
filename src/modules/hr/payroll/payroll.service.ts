@@ -30,6 +30,7 @@ export interface DayBreakdownEntry {
   check_out_at: string | null;
   break_minutes: number;
   source: AttendanceSource | null;
+  segments?: { type: string; start: string; end: string }[];
 }
 
 interface ComputedLine {
@@ -118,6 +119,70 @@ export class PayrollService {
     return minutes;
   }
 
+  private buildDaySegments(
+    scans: zk_attendance_scans[],
+    leavingTime: Date | null,
+    record: AttendanceStaffDailyRow | null,
+  ) {
+    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
+
+    if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
+      const start = record.check_in_at.toISOString();
+      const end = record.check_out_at ? record.check_out_at.toISOString() : start;
+      segments.push({ type: 'WORK', start, end });
+      return segments;
+    }
+
+    if (record?.status === StaffAttendanceStatus.EXCUSED) {
+      segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
+      return segments;
+    }
+
+    if (record && !record.check_in_at && record.status !== StaffAttendanceStatus.ABSENT) {
+      segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
+      return segments;
+    }
+
+    for (let i = 0; i + 1 < scans.length; i += 2) {
+      const inTime = scans[i].scan_time;
+      const outTime = scans[i + 1].scan_time;
+      const isLastPair = i + 2 >= scans.length;
+
+      if (isLastPair && leavingTime) {
+        const leavingMinutes = leavingTime.getUTCHours() * 60 + leavingTime.getUTCMinutes();
+        const outMinutes = outTime.getUTCHours() * 60 + outTime.getUTCMinutes();
+        const inMinutes = inTime.getUTCHours() * 60 + inTime.getUTCMinutes();
+
+        if (outMinutes > leavingMinutes && leavingMinutes > inMinutes) {
+          const overtimeStart = new Date(outTime);
+          overtimeStart.setUTCHours(leavingTime.getUTCHours(), leavingTime.getUTCMinutes(), 0, 0);
+          segments.push({ type: 'WORK', start: inTime.toISOString(), end: overtimeStart.toISOString() });
+          segments.push({ type: 'OVERTIME', start: overtimeStart.toISOString(), end: outTime.toISOString() });
+          continue;
+        }
+
+        if (outMinutes > leavingMinutes) {
+          segments.push({ type: 'OVERTIME', start: inTime.toISOString(), end: outTime.toISOString() });
+          continue;
+        }
+      }
+
+      segments.push({ type: 'WORK', start: inTime.toISOString(), end: outTime.toISOString() });
+
+      if (i + 2 < scans.length) {
+        segments.push({ type: 'BREAK', start: outTime.toISOString(), end: scans[i + 2].scan_time.toISOString() });
+      }
+    }
+
+    if (scans.length > 0 && scans.length % 2 !== 0) {
+      const lastInTime = scans[scans.length - 1].scan_time;
+      const end = new Date(lastInTime.getTime() + 10 * 60 * 1000);
+      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true } as any);
+    }
+
+    return segments;
+  }
+
   private groupScansByDate(scans: zk_attendance_scans[]): Map<string, zk_attendance_scans[]> {
     const byDate = new Map<string, zk_attendance_scans[]>();
     for (const scan of scans) {
@@ -183,20 +248,28 @@ export class PayrollService {
         classification = 'PRESENT';
       }
 
+      let segments = this.buildDaySegments(dayScans, employee.leaving_time, record ?? null);
+      if (!resolved.isWorkingDay && segments.length === 0) {
+        segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
+      }
+
       dailyBreakdown.push({
         date: key,
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
         day_description: resolved.description,
         classification,
-        check_in_at: (dayScans[0]?.scan_time ?? record?.check_in_at ?? null)?.toISOString() ?? null,
+        check_in_at: (record?.source === AttendanceSource.MANUAL ? record.check_in_at : (dayScans[0]?.scan_time ?? record?.check_in_at ?? null))?.toISOString() ?? null,
         check_out_at:
-          (dayScans.length > 0 && dayScans.length % 2 === 0
-            ? dayScans[dayScans.length - 1].scan_time
-            : record?.check_out_at ?? null
+          (record?.source === AttendanceSource.MANUAL
+            ? record.check_out_at
+            : (dayScans.length > 0 && dayScans.length % 2 === 0
+                ? dayScans[dayScans.length - 1].scan_time
+                : record?.check_out_at ?? null)
           )?.toISOString() ?? null,
         break_minutes: breakMinutes,
         source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
+        segments,
       });
     }
 
