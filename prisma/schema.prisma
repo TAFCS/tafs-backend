@@ -960,6 +960,7 @@ model academic_calendar_days {
   employee       employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   sections       sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
+  @@unique([campus_id, date, applies_to, class_id, section_id, department_id, staff_category, employee_id], map: "academic_calendar_days_scope_key")
   @@index([campus_id, date, applies_to])
   @@index([class_id, section_id])
   @@index([staff_category])
@@ -1053,6 +1054,8 @@ model payroll_run_lines {
   disbursed_at           DateTime?         @db.Timestamp(0)
   disbursed_by           String?
   disbursement_notes     String?           @db.VarChar(300)
+  total_late_minutes     Int               @default(0)
+  late_deduction         Decimal           @default(0) @db.Decimal(12, 2)
   disbursed_by_user      users?            @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles      employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs           payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)

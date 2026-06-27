@@ -15,6 +15,7 @@ interface EmployeeLineInput {
   monthly_pay: Prisma.Decimal | null;
   reporting_time: Date | null;
   leaving_time: Date | null;
+  late_relaxation_minutes: number | null;
   department_id: number | null;
   staff_category: StaffCategory | null;
   days_per_week: number | null;
@@ -32,6 +33,7 @@ export interface DayBreakdownEntry {
   check_in_at: string | null;
   check_out_at: string | null;
   break_minutes: number;
+  late_minutes: number;
   source: AttendanceSource | null;
   segments?: { type: string; start: string; end: string; isMissingOut?: boolean }[];
 }
@@ -45,11 +47,13 @@ interface ComputedLine {
   excused_days: number;
   unresolved_days: number;
   total_break_minutes: number;
+  total_late_minutes: number;
   monthly_pay: Prisma.Decimal;
   daily_rate: Prisma.Decimal;
   per_minute_rate: Prisma.Decimal;
   absence_deduction: Prisma.Decimal;
   half_day_deduction: Prisma.Decimal;
+  late_deduction: Prisma.Decimal;
   break_deduction: Prisma.Decimal;
   total_deductions: Prisma.Decimal;
   net_pay: Prisma.Decimal;
@@ -278,6 +282,16 @@ export class PayrollService {
         segments = [];
       }
 
+      // Minutes late = how far the check-in exceeded reporting_time + relaxation.
+      // Only meaningful for LATE days with a known check-in time.
+      let lateMinutes = 0;
+      if (classification === 'LATE' && checkInAt && employee.reporting_time) {
+        const reportingMinutes = employee.reporting_time.getUTCHours() * 60 + employee.reporting_time.getUTCMinutes();
+        const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
+        const relaxation = employee.late_relaxation_minutes ?? 0;
+        lateMinutes = Math.max(0, checkInMinutes - (reportingMinutes + relaxation));
+      }
+
       dailyBreakdown.push({
         date: key,
         is_working_day: resolved.isWorkingDay,
@@ -287,6 +301,7 @@ export class PayrollService {
         check_in_at: checkInAt?.toISOString() ?? null,
         check_out_at: checkOutAt?.toISOString() ?? null,
         break_minutes: manualClearsPunches ? 0 : breakMinutes,
+        late_minutes: lateMinutes,
         source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
         segments,
       });
@@ -300,6 +315,7 @@ export class PayrollService {
     const excusedDays = dailyBreakdown.filter((d) => d.classification === 'EXCUSED').length;
     const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
     const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);
+    const totalLateMinutes = dailyBreakdown.reduce((sum, d) => sum + d.late_minutes, 0);
 
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
     const dailyRate = scheduledWorkingDays > 0 ? monthlyPay.dividedBy(scheduledWorkingDays) : new Prisma.Decimal(0);
@@ -309,8 +325,9 @@ export class PayrollService {
 
     const absenceDeduction = dailyRate.times(absentDays);
     const halfDayDeduction = dailyRate.dividedBy(2).times(halfDays);
+    const lateDeduction = perMinuteRate.times(totalLateMinutes);
     const breakDeduction = perMinuteRate.times(totalBreakMinutes);
-    const totalDeductions = absenceDeduction.plus(halfDayDeduction).plus(breakDeduction);
+    const totalDeductions = absenceDeduction.plus(halfDayDeduction).plus(lateDeduction).plus(breakDeduction);
     const netPay = monthlyPay.minus(totalDeductions);
 
     return {
@@ -322,11 +339,13 @@ export class PayrollService {
       excused_days: excusedDays,
       unresolved_days: unresolvedDays,
       total_break_minutes: totalBreakMinutes,
+      total_late_minutes: totalLateMinutes,
       monthly_pay: monthlyPay.toDecimalPlaces(2),
       daily_rate: dailyRate.toDecimalPlaces(2),
       per_minute_rate: perMinuteRate.toDecimalPlaces(4),
       absence_deduction: absenceDeduction.toDecimalPlaces(2),
       half_day_deduction: halfDayDeduction.toDecimalPlaces(2),
+      late_deduction: lateDeduction.toDecimalPlaces(2),
       break_deduction: breakDeduction.toDecimalPlaces(2),
       total_deductions: totalDeductions.toDecimalPlaces(2),
       net_pay: netPay.toDecimalPlaces(2),
@@ -346,6 +365,7 @@ export class PayrollService {
         monthly_pay: true,
         reporting_time: true,
         leaving_time: true,
+        late_relaxation_minutes: true,
         department_id: true,
         staff_category: true,
         days_per_week: true,
@@ -578,6 +598,7 @@ export class PayrollService {
       per_minute_rate: Number(line.per_minute_rate),
       absence_deduction: Number(line.absence_deduction),
       half_day_deduction: Number(line.half_day_deduction),
+      late_deduction: Number(line.late_deduction),
       break_deduction: Number(line.break_deduction),
       total_deductions: Number(line.total_deductions),
       net_pay: Number(line.net_pay),
