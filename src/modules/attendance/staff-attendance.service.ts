@@ -358,8 +358,9 @@ export class StaffAttendanceService {
 
     const { year, month } = parsePayrollPeriod(query.period);
     const { periodStart, periodEnd } = computePayrollWindow(year, month);
+    const campusId = employee.campus_id ?? 0;
 
-    const [scans, records, objections, payrollLine] = await Promise.all([
+    const [scans, records, objections, payrollLine, scheduleCtx, calendarRows] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
           employee_id: employee.id,
@@ -382,6 +383,18 @@ export class StaffAttendanceService {
         },
         include: { payroll_runs: { select: { status: true } } },
       }),
+      this.prisma.employee_profiles.findUnique({
+        where: { id: employee.id },
+        select: {
+          department_id: true,
+          staff_category: true,
+          days_per_week: true,
+          employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+        },
+      }),
+      campusId
+        ? this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd)
+        : Promise.resolve([]),
     ]);
 
     const scansByDate = new Map<string, typeof scans>();
@@ -418,9 +431,16 @@ export class StaffAttendanceService {
     ) {
       const key = d.toISOString().slice(0, 10);
       const record = recordMap.get(key) ?? null;
-      const campusId = employee.campus_id ?? 0;
       const resolved = campusId
-        ? await this.calendarResolver.resolveStaffDay(employee.id, campusId, new Date(d))
+        ? this.calendarResolver.resolveStaffDayFromRows(
+            calendarRows,
+            new Date(d),
+            employee.id,
+            scheduleCtx?.department_id ?? null,
+            scheduleCtx?.staff_category ?? null,
+            scheduleCtx?.days_per_week ?? null,
+            scheduleCtx?.employee_work_schedules ?? [],
+          )
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 
       const dayScans = scansByDate.get(key) ?? [];
