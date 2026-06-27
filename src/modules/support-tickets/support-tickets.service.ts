@@ -534,6 +534,8 @@ export class SupportTicketsService {
             last_message_at: now,
             last_message_snippet: snippet,
             last_staff_snippet: snippet,
+            last_staff_sender_id: staff.sub,
+            last_staff_sender_name: created.sender_user?.full_name ?? null,
             unread_by_parent: { increment: 1 },
           },
         });
@@ -634,6 +636,7 @@ export class SupportTicketsService {
           last_message_at: new Date(),
           last_message_snippet: snippet,
           last_family_snippet: snippet,
+          last_family_sender_name: guardian?.full_name ?? null,
           unread_by_staff: { increment: 1 },
         },
         include: ticketInclude,
@@ -707,6 +710,8 @@ export class SupportTicketsService {
             last_message_at: new Date(),
             last_message_snippet: snippet,
             last_staff_snippet: snippet,
+            last_staff_sender_id: message.sender_user_id,
+            last_staff_sender_name: message.sender_user?.full_name ?? null,
             unread_by_parent: { increment: 1 },
           },
         });

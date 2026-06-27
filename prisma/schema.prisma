@@ -783,8 +783,8 @@ model support_tickets {
   created_at              DateTime          @default(now())
   updated_at              DateTime          @updatedAt
   last_family_snippet     String?           @db.VarChar(255)
-  last_staff_snippet      String?           @db.VarChar(255)
   last_family_sender_name String?           @db.VarChar(100)
+  last_staff_snippet      String?           @db.VarChar(255)
   last_staff_sender_id    String?           @db.VarChar(36)
   last_staff_sender_name  String?           @db.VarChar(100)
   closed_by_guardian      guardians?        @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
