@@ -617,17 +617,18 @@ export class StaffAttendanceService {
         mark.status === StaffAttendanceStatus.ABSENT ||
         mark.status === StaffAttendanceStatus.EXCUSED;
 
-      if (mark.check_in_time) {
-        const [h, m] = mark.check_in_time.split(':').map(Number);
-        checkInAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
-      } else if (clearsPunches) {
+      if (clearsPunches) {
         checkInAt = null;
-      }
-      if (mark.check_out_time) {
-        const [h, m] = mark.check_out_time.split(':').map(Number);
-        checkOutAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
-      } else if (clearsPunches) {
         checkOutAt = null;
+      } else {
+        if (mark.check_in_time) {
+          const [h, m] = mark.check_in_time.split(':').map(Number);
+          checkInAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+        }
+        if (mark.check_out_time) {
+          const [h, m] = mark.check_out_time.split(':').map(Number);
+          checkOutAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+        }
       }
 
       return this.prisma.attendance_staff_daily.upsert({

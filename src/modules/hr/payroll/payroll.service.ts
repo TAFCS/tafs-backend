@@ -254,21 +254,39 @@ export class PayrollService {
         segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
       }
 
+      const manualClearsPunches =
+        record?.source === AttendanceSource.MANUAL &&
+        (record.status === StaffAttendanceStatus.ABSENT ||
+          record.status === StaffAttendanceStatus.EXCUSED);
+
+      const checkInAt =
+        manualClearsPunches
+          ? null
+          : record?.source === AttendanceSource.MANUAL
+            ? record.check_in_at
+            : dayScans[0]?.scan_time ?? record?.check_in_at ?? null;
+      const checkOutAt =
+        manualClearsPunches
+          ? null
+          : record?.source === AttendanceSource.MANUAL
+            ? record.check_out_at
+            : dayScans.length > 0 && dayScans.length % 2 === 0
+              ? dayScans[dayScans.length - 1].scan_time
+              : record?.check_out_at ?? null;
+
+      if (manualClearsPunches) {
+        segments = [];
+      }
+
       dailyBreakdown.push({
         date: key,
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
         day_description: resolved.description,
         classification,
-        check_in_at: (record?.source === AttendanceSource.MANUAL ? record.check_in_at : (dayScans[0]?.scan_time ?? record?.check_in_at ?? null))?.toISOString() ?? null,
-        check_out_at:
-          (record?.source === AttendanceSource.MANUAL
-            ? record.check_out_at
-            : (dayScans.length > 0 && dayScans.length % 2 === 0
-                ? dayScans[dayScans.length - 1].scan_time
-                : record?.check_out_at ?? null)
-          )?.toISOString() ?? null,
-        break_minutes: breakMinutes,
+        check_in_at: checkInAt?.toISOString() ?? null,
+        check_out_at: checkOutAt?.toISOString() ?? null,
+        break_minutes: manualClearsPunches ? 0 : breakMinutes,
         source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
         segments,
       });
