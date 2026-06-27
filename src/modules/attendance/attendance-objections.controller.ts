@@ -18,6 +18,7 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
+import { assertStaffSelfPermission, ATTENDANCE_SELF_VIEW } from '../../common/staff-self-service.util';
 import { AttendanceObjectionsService } from './attendance-objections.service';
 import {
   CreateAttendanceObjectionDto,
@@ -37,12 +38,14 @@ export class AttendanceObjectionsController {
     @CurrentUser() user: IJwtStaffPayload,
     @Body() dto: CreateAttendanceObjectionDto,
   ) {
+    assertStaffSelfPermission(user, ATTENDANCE_SELF_VIEW);
     const data = await this.objectionsService.create(user.sub, dto);
     return createApiResponse(data, HttpStatus.CREATED, 'Objection submitted successfully');
   }
 
   @Get('me')
   async listMine(@CurrentUser() user: IJwtStaffPayload) {
+    assertStaffSelfPermission(user, ATTENDANCE_SELF_VIEW);
     const data = await this.objectionsService.listMine(user.sub);
     return createApiResponse(data, HttpStatus.OK, 'Objections retrieved successfully');
   }

@@ -7,6 +7,7 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
+import { assertStaffSelfPermission, ATTENDANCE_SELF_VIEW } from '../../common/staff-self-service.util';
 import { StaffAttendanceService } from './staff-attendance.service';
 import {
   BulkMarkStaffAttendanceDto,
@@ -71,6 +72,7 @@ export class StaffAttendanceController {
     @Query() query: GetMyStaffAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    assertStaffSelfPermission(user, ATTENDANCE_SELF_VIEW);
     const data = await this.staffAttendanceService.getMyAttendance(user.sub, query);
     return createApiResponse(data, HttpStatus.OK, 'My attendance retrieved');
   }

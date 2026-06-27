@@ -4,6 +4,7 @@ import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
+import { assertStaffSelfPermission, PAYROLL_SELF_VIEW } from '../../../common/staff-self-service.util';
 import { PayrollService } from './payroll.service';
 
 @ApiTags('HR Payroll Self')
@@ -15,6 +16,7 @@ export class PayrollSelfController {
 
   @Get('me')
   async listMine(@CurrentUser() user: IJwtStaffPayload) {
+    assertStaffSelfPermission(user, PAYROLL_SELF_VIEW);
     const data = await this.payrollService.listMyPayrollLines(user.sub);
     return createApiResponse(data, HttpStatus.OK, 'Payroll lines retrieved successfully');
   }
@@ -24,6 +26,7 @@ export class PayrollSelfController {
     @CurrentUser() user: IJwtStaffPayload,
     @Param('payrollRunId', ParseIntPipe) payrollRunId: number,
   ) {
+    assertStaffSelfPermission(user, PAYROLL_SELF_VIEW);
     const data = await this.payrollService.getMyPayrollDetail(user.sub, payrollRunId);
     return createApiResponse(data, HttpStatus.OK, 'Payroll line detail retrieved successfully');
   }

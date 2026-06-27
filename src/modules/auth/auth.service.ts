@@ -45,6 +45,11 @@ export class AuthService {
 
     const allowedClassIds = user.allowed_class_ids ?? [];
 
+    const employeeProfile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: user.id },
+      select: { id: true },
+    });
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
@@ -71,6 +76,7 @@ export class AuthService {
         campusName: user.campuses?.campus_name ?? null,
         allowedClassIds,
         permissions,
+        hasEmployeeProfile: !!employeeProfile,
       },
     };
   }
@@ -107,6 +113,11 @@ export class AuthService {
 
     const allowedClassIds = user.allowed_class_ids ?? [];
 
+    const employeeProfile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: user.id },
+      select: { id: true },
+    });
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
@@ -133,6 +144,7 @@ export class AuthService {
         campusName: user.campuses?.campus_name ?? null,
         allowedClassIds,
         permissions,
+        hasEmployeeProfile: !!employeeProfile,
       },
     };
   }

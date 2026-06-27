@@ -4,6 +4,11 @@
  *
  * Usage: npx ts-node scripts/seed-staff-roster.ts
  * Prerequisite: npx ts-node scripts/seed-permissions.ts
+ *
+ * Dual-hat staff (e.g. principal on payroll): link employee_profiles.user_id to
+ * their operational login, then grant:
+ *   grant_permissions: ['attendance.self.view', 'payroll.self.view']
+ * Run scripts/audit-employee-self-service.ts to list who still needs setup.
  */
 import { PrismaClient, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
@@ -46,7 +51,7 @@ const ROSTER: RosterEntry[] = [
   { username: 'lana.principal', full_name: 'Lana', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.JR_12 },
   { username: 'anita.principal', full_name: 'Anita', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.JR_35 },
   { username: 'sara.naqvi', full_name: 'Sara Naqvi', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.SR_13 },
-  { username: 'hira.khadim', full_name: 'Hira Khadim', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.VI_X },
+  { username: 'hira.khadim', full_name: 'Hira Khadim', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.VI_X, grant_permissions: ['attendance.self.view', 'payroll.self.view'] },
   { username: 'syed.komail.hassan', full_name: 'Syed Komail Hassan', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.OA },
 
   // SUPER_ADMIN — Fozia Hussain (all campuses)
