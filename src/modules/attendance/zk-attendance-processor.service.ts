@@ -292,7 +292,7 @@ export class ZkAttendanceProcessorService {
       return { scanId: scanRow.id, notified: false, skipReason };
     }
 
-    const notified = await this.sendScanNotification(studentCc!, scanRow, scanDirection);
+    const notified = await this.sendScanNotification(studentCc!, scanRow, scanDirection, seg.scanCount);
     if (notified) {
       await this.prisma.zk_attendance_scans.update({
         where: { id: scanRow.id },
@@ -488,6 +488,7 @@ export class ZkAttendanceProcessorService {
     studentCc: number,
     scanRow: { scan_time: Date },
     direction: ScanDirection,
+    scanCount: number,
   ): Promise<boolean> {
     const student = await this.prisma.students.findUnique({
       where: { cc: studentCc },
@@ -513,7 +514,11 @@ export class ZkAttendanceProcessorService {
       },
     });
 
-    const isLate = direction === ScanDirection.IN && dailyRow?.status === RollRecordStatus.LATE;
+    // Only the very first clock-in of the day (scanCount === 1) should be evaluated
+    // as late. Subsequent IN scans are field-trip returns or re-entries — the student
+    // already checked in on time earlier, so we must not send a late notification.
+    const isFirstCheckIn = direction === ScanDirection.IN && scanCount === 1;
+    const isLate = isFirstCheckIn && dailyRow?.status === RollRecordStatus.LATE;
     const title = isLate ? 'Arrived Late' : (direction === ScanDirection.IN ? 'Arrived at School' : 'Left School');
     const body =
       direction === ScanDirection.IN
