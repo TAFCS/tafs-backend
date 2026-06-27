@@ -613,14 +613,21 @@ export class StaffAttendanceService {
     const upserts = dto.records.map((mark) => {
       let checkInAt: Date | null | undefined = undefined;
       let checkOutAt: Date | null | undefined = undefined;
+      const clearsPunches =
+        mark.status === StaffAttendanceStatus.ABSENT ||
+        mark.status === StaffAttendanceStatus.EXCUSED;
 
       if (mark.check_in_time) {
         const [h, m] = mark.check_in_time.split(':').map(Number);
         checkInAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+      } else if (clearsPunches) {
+        checkInAt = null;
       }
       if (mark.check_out_time) {
         const [h, m] = mark.check_out_time.split(':').map(Number);
         checkOutAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+      } else if (clearsPunches) {
+        checkOutAt = null;
       }
 
       return this.prisma.attendance_staff_daily.upsert({
