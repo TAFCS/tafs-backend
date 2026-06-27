@@ -64,7 +64,7 @@ export class CreateEmployeeDto {
   job_title?: string;
 
   @IsOptional() @IsString()
-  teacher_category?: string;
+  staff_category?: string;
 
   @IsOptional() @IsString()
   job_description?: string;
@@ -200,7 +200,7 @@ export class EmployeesService {
         personal_phone: rest.personal_phone || null,
         personal_email: rest.personal_email || null,
         job_title: rest.job_title || null,
-        teacher_category: (rest.teacher_category as any) || null,
+        staff_category: (rest.staff_category as any) || null,
         job_description: rest.job_description || null,
         notes: rest.notes || null,
         reporting_time: toTime(rest.reporting_time),
@@ -266,7 +266,7 @@ export class EmployeesService {
           personal_phone: rest.personal_phone !== undefined ? rest.personal_phone : undefined,
           personal_email: rest.personal_email !== undefined ? rest.personal_email : undefined,
           job_title: rest.job_title !== undefined ? rest.job_title : undefined,
-          teacher_category: rest.teacher_category !== undefined ? (rest.teacher_category as any) : undefined,
+          staff_category: rest.staff_category !== undefined ? (rest.staff_category as any) : undefined,
           job_description: rest.job_description !== undefined ? rest.job_description : undefined,
           notes: rest.notes !== undefined ? rest.notes : undefined,
           reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time) : undefined,

@@ -2,43 +2,53 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("Applying DDL migration to DigitalOcean PostgreSQL database...");
+  console.log("Applying DDL migration to PostgreSQL database...");
 
-  // 1. Create the enum type if it does not exist
   const typeExists = await prisma.$queryRaw`
-    SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'TeacherCategory');
+    SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'StaffCategory');
   `;
   const exists = typeExists[0]?.exists;
-  
+
   if (!exists) {
-    console.log("Creating enum type 'TeacherCategory'...");
+    console.log("Creating enum type 'StaffCategory'...");
     await prisma.$executeRawUnsafe(`
-      CREATE TYPE "TeacherCategory" AS ENUM (
-        'HOMEROOM_PRE_PRIMARY',
-        'LANGUAGES',
-        'MATHEMATICS',
-        'SCIENCES',
-        'HUMANITIES_SOCIAL_SCIENCES',
-        'ARTS_CO_CURRICULAR',
-        'SPORTS_PHYSICAL_EDUCATION',
-        'IT_COMPUTERS',
-        'ADMIN_SUPPORT',
-        'MANAGEMENT',
-        'DOMESTIC_STAFF'
+      CREATE TYPE "StaffCategory" AS ENUM (
+        'TEACHER',
+        'ASSISTANT_TEACHER',
+        'SPORTS_COACH',
+        'SCOUT_LEADER',
+        'ACADEMIC_COORDINATOR',
+        'ACADEMIC_ADMINISTRATOR',
+        'SENIOR_LEADERSHIP',
+        'ADMINISTRATIVE_STAFF',
+        'IT_STAFF',
+        'CREATIVE_STAFF',
+        'FINANCE_STAFF'
       );
     `);
-    console.log("Enum type 'TeacherCategory' created successfully.");
+    console.log("Enum type 'StaffCategory' created successfully.");
   } else {
-    console.log("Enum type 'TeacherCategory' already exists.");
+    console.log("Enum type 'StaffCategory' already exists.");
   }
 
-  // 2. Add column teacher_category if it does not exist
-  console.log("Adding column 'teacher_category' to 'employee_profiles' if it doesn't exist...");
+  console.log("Migrating employee_profiles category column...");
   await prisma.$executeRawUnsafe(`
-    ALTER TABLE "employee_profiles" 
-    ADD COLUMN IF NOT EXISTS "teacher_category" "TeacherCategory";
+    ALTER TABLE "employee_profiles" DROP COLUMN IF EXISTS "teacher_category";
   `);
-  console.log("Column 'teacher_category' verified/added successfully.");
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "employee_profiles"
+    ADD COLUMN IF NOT EXISTS "staff_category" "StaffCategory";
+  `);
+  await prisma.$executeRawUnsafe(`
+    DROP TYPE IF EXISTS "TeacherCategory";
+  `);
+
+  console.log("Adding EMPLOYEES to StaffRole if missing...");
+  await prisma.$executeRawUnsafe(`
+    ALTER TYPE "StaffRole" ADD VALUE IF NOT EXISTS 'EMPLOYEES';
+  `);
+
+  console.log("DDL migration completed successfully.");
 }
 
 main()

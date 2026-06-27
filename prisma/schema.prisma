@@ -893,7 +893,7 @@ model employee_profiles {
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
-  teacher_category                   TeacherCategory?
+  staff_category                     StaffCategory?
   academic_calendar_days             academic_calendar_days[]
   attendance_staff_daily             attendance_staff_daily[]
   device_user_mappings               device_user_mappings[]
@@ -1360,6 +1360,7 @@ enum StaffRole {
   TEACHER
   STAFF_EDITOR
   GENERAL_RESPONDENT
+  EMPLOYEES
 }
 
 enum TicketCategory {
@@ -1479,16 +1480,16 @@ enum PostdatedChequeStatus {
   CANCELLED
 }
 
-enum TeacherCategory {
-  HOMEROOM_PRE_PRIMARY
-  LANGUAGES
-  MATHEMATICS
-  SCIENCES
-  HUMANITIES_SOCIAL_SCIENCES
-  ARTS_CO_CURRICULAR
-  SPORTS_PHYSICAL_EDUCATION
-  IT_COMPUTERS
-  ADMIN_SUPPORT
-  MANAGEMENT
-  DOMESTIC_STAFF
+enum StaffCategory {
+  TEACHER
+  ASSISTANT_TEACHER
+  SPORTS_COACH
+  SCOUT_LEADER
+  ACADEMIC_COORDINATOR
+  ACADEMIC_ADMINISTRATOR
+  SENIOR_LEADERSHIP
+  ADMINISTRATIVE_STAFF
+  IT_STAFF
+  CREATIVE_STAFF
+  FINANCE_STAFF
 }

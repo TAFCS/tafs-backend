@@ -40,6 +40,7 @@ lerna-debug.log*
 
 # Staff seed output (contains plaintext passwords)
 scripts/seed-staff-roster-credentials.csv
+staff-data/cleaned/employee-credentials.csv
 
 # dotenv environment variable files
 .env

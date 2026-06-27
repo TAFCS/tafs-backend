@@ -128,6 +128,9 @@ async function main() {
         GENERAL_RESPONDENT: [
             'communication.support_tickets.view',
         ],
+        EMPLOYEES: [
+            'hr.leave.apply',
+        ],
     };
 
     for (const [role, keys] of Object.entries(roleMappings)) {

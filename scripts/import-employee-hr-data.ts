@@ -1,48 +1,38 @@
 /**
  * import-employee-hr-data.ts
  *
- * Loads the cleaned HR intake sheets into the live database:
- *   1. Refreshes `designations` — clears it and inserts the unique
- *      "Designation" values from EmployeeData.cleaned.csv (department_id
- *      left null; departments table is empty right now).
- *   2. Refreshes `staff_types` — clears the 4 placeholder rows
- *      (domestic/old_admin/new_admin/teacher) and inserts the unique
- *      "Staff Type" values from Attendance&Pay.cleaned.csv (which HR
- *      actually filled with role/subject text, not the original enum).
- *   3. Upserts `employee_profiles` for all 85 employees (matched by
- *      employee_code across both sheets), wiring up designation_id,
- *      staff_type_id, campus_id (Johar C-II/III/IV and TAFSAL all map to
- *      campus_id 1 per instruction), and every other clean field.
- *   4. Parses the "Class–Section Assignment" column into
- *      employee_class_section_assignments rows, but ONLY where a class and
- *      an explicit section letter (A-D) are both unambiguous (e.g. "KG A",
- *      "NUR-B", "NUR A,B & C"). Anything without an explicit section,
- *      anything that's just a duplicate of the Staff Type/Designation text,
- *      or anything garbled is left unassigned and logged instead of guessed.
+ * Loads cleaned HR intake sheets into the database:
+ *   1. Seeds 5 reference departments (ALL CAPS) from message.txt
+ *   2. Upserts employee_profiles for all employees (matched by employee_code)
+ *   3. Maps role / staff_category / department via staff-org-mapping.ts
+ *   4. Parses class-section assignments where unambiguous
+ *   5. Creates users accounts (role EMPLOYEES) and writes credentials CSV
  *
  * DRY_RUN=true by default — prints what would change without writing.
  * Set DRY_RUN=false to actually commit.
  *
  * Usage:
- *   npx ts-node scripts/import-employee-hr-data.ts          (dry run)
+ *   npx ts-node scripts/import-employee-hr-data.ts
  *   DRY_RUN=false npx ts-node scripts/import-employee-hr-data.ts
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse } from 'csv-parse/sync';
-import { PrismaClient } from '@prisma/client';
-import { getCleanTitleAndCategory } from './migrate-and-clean-data';
+import { PrismaClient, StaffRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { DEPARTMENT_SEED, resolveStaffOrg } from './staff-org-mapping';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const OUT_DIR = path.join(__dirname, '..', 'staff-data', 'cleaned');
+const CREDENTIALS_PATH = path.join(OUT_DIR, 'employee-credentials.csv');
 
 const prisma = new PrismaClient();
 
 const SECTION_IDS: Record<string, number> = { A: 1, B: 2, C: 3, D: 4 };
 
-// Matches the `classes` table exactly (id -> class_code), used for parsing
-// "Class–Section Assignment" text into class_id + section_id pairs.
 const CLASS_CODES: { id: number; code: string }[] = [
   { id: 1, code: 'PN' },
   { id: 2, code: 'NUR' },
@@ -65,14 +55,13 @@ const CLASS_CODES: { id: number; code: string }[] = [
   { id: 19, code: 'X' },
   { id: 21, code: 'AS' },
   { id: 22, code: 'A2' },
-].sort((a, b) => b.code.length - a.code.length); // longest code first to avoid prefix collisions
+].sort((a, b) => b.code.length - a.code.length);
 
 interface ParsedAssignment {
   classId: number;
   sectionIds: number[];
 }
 
-/** Parses a Class–Section Assignment cell into confident class+section pairs only. Returns null if ambiguous/unparseable. */
 function parseClassSection(raw: string): ParsedAssignment | null {
   const compact = raw.toUpperCase().replace(/[^A-Z0-9,&]/g, '');
   if (!compact) return null;
@@ -80,15 +69,15 @@ function parseClassSection(raw: string): ParsedAssignment | null {
   for (const cls of CLASS_CODES) {
     if (!compact.startsWith(cls.code)) continue;
     const rest = compact.slice(cls.code.length).replace(/[,&]/g, '');
-    if (!rest) return null; // class mentioned but no section letter given -> ambiguous
+    if (!rest) return null;
     const letters = rest.split('');
     if (letters.every((l) => l in SECTION_IDS)) {
       const sectionIds = [...new Set(letters.map((l) => SECTION_IDS[l]))];
       return { classId: cls.id, sectionIds };
     }
-    return null; // suffix isn't clean section letters -> ambiguous/garbled
+    return null;
   }
-  return null; // doesn't start with any known class code
+  return null;
 }
 
 function toTime(value: string): Date | null {
@@ -107,28 +96,70 @@ function isValidCnic(value: string): boolean {
   return /^\d{5}-\d{7}-\d$/.test(value);
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 50);
+function generatePassword(): string {
+  return randomBytes(9).toString('base64url').slice(0, 12);
+}
+
+const HONORIFIC_PREFIX = /^(MR\.?|MRS\.?|MS\.?|M\.)\s*/i;
+
+function buildUsername(fullName: string, employeeCode: string, taken: Set<string>): string {
+  let name = fullName.trim().replace(HONORIFIC_PREFIX, '').trim();
+  name = name.replace(/\s*-\s*/g, ' ');
+  const tokens = name.split(/\s+/).filter(Boolean);
+
+  let base: string;
+  if (tokens.length >= 2) {
+    const first = tokens[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+    const last = tokens[tokens.length - 1].toLowerCase().replace(/[^a-z0-9]/g, '');
+    base = `${first}.${last}`;
+  } else if (tokens.length === 1) {
+    base = tokens[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  } else {
+    base = 'employee';
+  }
+
+  if (!taken.has(base)) {
+    taken.add(base);
+    return base;
+  }
+
+  const suffix = employeeCode.replace(/\D/g, '').slice(-4) || String(taken.size);
+  const withSuffix = `${base}.${suffix}`;
+  taken.add(withSuffix);
+  return withSuffix;
+}
+
+async function seedDepartments(): Promise<Map<string, number>> {
+  const idByName = new Map<string, number>();
+  for (const dept of DEPARTMENT_SEED) {
+    const existing = await prisma.departments.findFirst({ where: { name: dept.name } });
+    const row = existing
+      ? await prisma.departments.update({
+          where: { id: existing.id },
+          data: { description: dept.description },
+        })
+      : await prisma.departments.create({
+          data: { name: dept.name, description: dept.description },
+        });
+    idByName.set(dept.name, row.id);
+  }
+  return idByName;
 }
 
 async function main() {
-  const employeeRows = parse(fs.readFileSync(path.join(OUT_DIR, 'EmployeeData.cleaned.csv'), 'utf8'), {
-    skip_empty_lines: false,
-  }).slice(2).filter((r: string[]) => r[0]?.trim());
+  const employeeRows = parse(
+    fs.readFileSync(path.join(OUT_DIR, 'EmployeeData.cleaned.csv'), 'utf8'),
+    { skip_empty_lines: false },
+  ).slice(2).filter((r: string[]) => r[0]?.trim()) as string[][];
 
-  const attendancePayRows = parse(fs.readFileSync(path.join(OUT_DIR, 'Attendance&Pay.cleaned.csv'), 'utf8'), {
-    skip_empty_lines: false,
-  }).slice(2).filter((r: string[]) => r[0]?.trim());
+  const attendancePayRows = parse(
+    fs.readFileSync(path.join(OUT_DIR, 'Attendance&Pay.cleaned.csv'), 'utf8'),
+    { skip_empty_lines: false },
+  ).slice(2).filter((r: string[]) => r[0]?.trim()) as string[][];
 
   const apByCode = new Map<string, string[]>();
   for (const row of attendancePayRows) apByCode.set(row[0].trim().toUpperCase(), row);
 
-  // ---- 0. Detect CNICs shared by more than one employee (data error, not --
-  // ---- something we can resolve by guessing) -------------------------------
   const cnicCounts = new Map<string, string[]>();
   for (const row of employeeRows) {
     const cnic = row[6]?.trim();
@@ -136,97 +167,101 @@ async function main() {
     cnicCounts.set(cnic, [...(cnicCounts.get(cnic) ?? []), row[0].trim()]);
   }
   const duplicateCnics = new Set(
-    [...cnicCounts.entries()].filter(([, codes]) => codes.length > 1).map(([cnic]) => cnic)
+    [...cnicCounts.entries()].filter(([, codes]) => codes.length > 1).map(([cnic]) => cnic),
   );
 
-  // ---- 1. Designations ----------------------------------------------------
-  const uniqueDesignations = [...new Set(employeeRows.map((r: string[]) => r[1].trim()).filter(Boolean))];
-  console.log(`Designations: ${uniqueDesignations.length} unique values to load.`);
-
-  // ---- 2. Staff types -------------------------------------------------------
-  const uniqueStaffTypes = [...new Set(attendancePayRows.map((r: string[]) => r[6].trim()).filter(Boolean))];
-  console.log(`Staff types: ${uniqueStaffTypes.length} unique values to load.`);
-
-  // ---- 3. Parse class-section assignments + collect review notes ----------
   const reviewNotes: string[] = [];
   const assignmentsByCode = new Map<string, ParsedAssignment[]>();
+  const orgPreview: { code: string; name: string; role: string | null; category: string | null; dept: string | null }[] = [];
 
   for (const row of employeeRows) {
     const code = row[0].trim();
     const apRow = apByCode.get(code.toUpperCase());
-    if (!apRow) continue;
-    const staffTypeText = apRow[6].trim();
-    const classSectionText = apRow[8].trim();
-    if (!classSectionText) continue;
-
-    if (classSectionText === staffTypeText) {
-      reviewNotes.push(`[Class-Section] ${code}: value is identical to Staff Type ("${staffTypeText}") — not a real class assignment, left unassigned.`);
+    if (!apRow) {
+      reviewNotes.push(`[Attendance] ${code}: no matching Attendance&Pay row.`);
       continue;
     }
 
-    const segments = classSectionText.split(/\s*[;]\s*/); // support "6:A,B;7:A,C"-style separators too
-    const parsed: ParsedAssignment[] = [];
-    let allOk = true;
-    for (const segment of segments) {
-      const result = parseClassSection(segment);
-      if (!result) {
-        allOk = false;
-        break;
+    const staffTypeText = apRow[6]?.trim() ?? '';
+    const classSectionText = apRow[8]?.trim() ?? '';
+    if (classSectionText) {
+      if (classSectionText === staffTypeText) {
+        reviewNotes.push(
+          `[Class-Section] ${code}: value is identical to Staff Type ("${staffTypeText}") — left unassigned.`,
+        );
+      } else {
+        const segments = classSectionText.split(/\s*[;]\s*/);
+        const parsed: ParsedAssignment[] = [];
+        let allOk = true;
+        for (const segment of segments) {
+          const result = parseClassSection(segment);
+          if (!result) {
+            allOk = false;
+            break;
+          }
+          parsed.push(result);
+        }
+        if (allOk && parsed.length) {
+          assignmentsByCode.set(code.toUpperCase(), parsed);
+        } else {
+          reviewNotes.push(
+            `[Class-Section] ${code}: "${classSectionText}" could not be parsed — left unassigned.`,
+          );
+        }
       }
-      parsed.push(result);
     }
 
-    if (allOk && parsed.length) {
-      assignmentsByCode.set(code.toUpperCase(), parsed);
-    } else {
-      reviewNotes.push(`[Class-Section] ${code}: "${classSectionText}" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.`);
+    const { role, staffCategory, departmentName } = resolveStaffOrg(row[11]?.trim() || null, row[1]?.trim() || null);
+    orgPreview.push({
+      code,
+      name: row[2]?.trim() ?? '',
+      role,
+      category: staffCategory,
+      dept: departmentName,
+    });
+    if (!role) {
+      reviewNotes.push(`[Org] ${code} (${row[2]?.trim()}): could not resolve role from job title/designation.`);
     }
   }
 
   for (const [cnic, codes] of cnicCounts) {
     if (codes.length > 1) {
-      reviewNotes.push(`[CNIC] ${codes.join(' & ')}: share the same CNIC "${cnic}" — cannot belong to both, cleared on both records, needs HR correction.`);
+      reviewNotes.push(
+        `[CNIC] ${codes.join(' & ')}: share CNIC "${cnic}" — cleared on both records.`,
+      );
     }
   }
 
-  console.log(`Class-section assignments confidently parsed for ${assignmentsByCode.size} employees.`);
-  console.log(`${reviewNotes.length} class-section entries flagged for review.`);
-  if (duplicateCnics.size) console.log(`${duplicateCnics.size} duplicate CNIC(s) found and cleared — see review notes.`);
+  console.log(`Employees to import: ${employeeRows.length}`);
+  console.log(`Class-section assignments parsed: ${assignmentsByCode.size}`);
+  console.log(`Review notes: ${reviewNotes.length}`);
 
   if (DRY_RUN) {
-    console.log('\n--- DRY RUN: no changes written. Sample of what would happen: ---');
-    console.log('Designations:', uniqueDesignations.slice(0, 5), '...');
-    console.log('Staff types:', uniqueStaffTypes.slice(0, 5), '...');
-    console.log('Sample parsed assignments:', [...assignmentsByCode.entries()].slice(0, 5));
-    console.log('\nReview notes:');
-    reviewNotes.forEach((n) => console.log(' -', n));
+    console.log('\n--- DRY RUN: no changes written ---');
+    console.log('Sample org mapping:');
+    orgPreview.slice(0, 8).forEach((p) =>
+      console.log(`  ${p.code} | ${p.role ?? '?'} | ${p.category ?? '?'} | ${p.dept ?? '?'}`),
+    );
+    console.log('\nUsernames preview:');
+    const taken = new Set<string>();
+    employeeRows.slice(0, 8).forEach((row) => {
+      console.log(`  ${buildUsername(row[2] ?? '', row[0] ?? '', taken)} <- ${row[2]}`);
+    });
+    if (reviewNotes.length) {
+      console.log('\nReview notes:');
+      reviewNotes.forEach((n) => console.log(' -', n));
+    }
     await prisma.$disconnect();
     return;
   }
 
-  // ---- Write phase ----------------------------------------------------------
-
-  // Detach the FK before clearing old lookup rows.
-  await prisma.employee_profiles.updateMany({ data: { staff_type_id: null }, where: {} });
-  await prisma.staff_types.deleteMany({});
-  await prisma.designations.deleteMany({});
-
-  const designationIdByTitle = new Map<string, number>();
-  for (const title of uniqueDesignations) {
-    const created = await prisma.designations.create({ data: { title } });
-    designationIdByTitle.set(title, created.id);
-  }
-
-  const staffTypeIdByName = new Map<string, number>();
-  for (const name of uniqueStaffTypes) {
-    const created = await prisma.staff_types.create({
-      data: { code: slugify(name) || `staff_type_${staffTypeIdByName.size + 1}`, name },
-    });
-    staffTypeIdByName.set(name, created.id);
-  }
+  const departmentIdByName = await seedDepartments();
+  console.log(`Departments seeded: ${departmentIdByName.size}`);
 
   let created = 0;
   let updated = 0;
+  const takenUsernames = new Set<string>();
+  const credentials: { employee_code: string; full_name: string; username: string; password: string; role: string }[] = [];
 
   for (const row of employeeRows) {
     const [
@@ -235,10 +270,11 @@ async function main() {
     ] = row;
 
     const apRow = apByCode.get(employeeCode.trim().toUpperCase());
+    if (!apRow) continue;
 
-    const { cleanedTitle, category } = getCleanTitleAndCategory(jobTitle, designation);
+    const { role, staffCategory, departmentName } = resolveStaffOrg(jobTitle?.trim() || null, designation?.trim() || null);
 
-    const data = {
+    const profileData = {
       employee_code: employeeCode || null,
       full_name: fullName || null,
       father_name: fatherName || null,
@@ -249,24 +285,27 @@ async function main() {
       address: address || null,
       personal_phone: phone || null,
       personal_email: email || null,
-      job_title: cleanedTitle,
-      teacher_category: category,
+      job_title: role,
+      staff_category: staffCategory,
       job_description: jobDescription || null,
       notes: notes || null,
-      designation_id: designation ? designationIdByTitle.get(designation) ?? null : null,
-      campus_id: apRow ? 1 : null, // Johar C-II/III/IV and TAFSAL all map to campus_id 1
-      staff_type_id: apRow ? staffTypeIdByName.get(apRow[6].trim()) ?? null : null,
-      reporting_time: apRow ? toTime(apRow[2]) : null,
-      leaving_time: apRow ? toTime(apRow[3]) : null,
-      late_relaxation_minutes: apRow && apRow[4] ? parseInt(apRow[4], 10) : null,
-      monthly_pay: apRow && apRow[5] ? apRow[5] : null,
-      days_per_week: apRow && apRow[9] ? parseInt(apRow[9], 10) : null,
+      designation_id: null,
+      staff_type_id: null,
+      employment_type: null,
+      reporting_manager_id: null,
+      department_id: departmentName ? departmentIdByName.get(departmentName) ?? null : null,
+      campus_id: 1,
+      reporting_time: toTime(apRow[2]),
+      leaving_time: toTime(apRow[3]),
+      late_relaxation_minutes: apRow[4] ? parseInt(apRow[4], 10) : null,
+      monthly_pay: apRow[5] ? apRow[5] : null,
+      days_per_week: apRow[9] ? parseInt(apRow[9], 10) : null,
     };
 
     const existing = await prisma.employee_profiles.findFirst({ where: { employee_code: employeeCode } });
     const employee = existing
-      ? await prisma.employee_profiles.update({ where: { id: existing.id }, data })
-      : await prisma.employee_profiles.create({ data });
+      ? await prisma.employee_profiles.update({ where: { id: existing.id }, data: profileData })
+      : await prisma.employee_profiles.create({ data: profileData });
 
     if (existing) updated++;
     else created++;
@@ -282,17 +321,70 @@ async function main() {
         }
       }
     }
+
+    // --- User account (EMPLOYEES role) ---
+    const username = buildUsername(fullName ?? '', employeeCode ?? '', takenUsernames);
+    let userId = employee.user_id;
+    let password = '';
+
+    const existingUser = await prisma.users.findUnique({ where: { username } });
+    if (existingUser) {
+      userId = existingUser.id;
+      if (!employee.user_id) {
+        await prisma.employee_profiles.update({
+          where: { id: employee.id },
+          data: { user_id: userId },
+        });
+      }
+      credentials.push({
+        employee_code: employeeCode,
+        full_name: fullName ?? '',
+        username,
+        password: '(existing — not regenerated)',
+        role: StaffRole.EMPLOYEES,
+      });
+    } else {
+      password = generatePassword();
+      const hash = await bcrypt.hash(password, 10);
+      userId = uuidv4();
+      await prisma.users.create({
+        data: {
+          id: userId,
+          username,
+          full_name: fullName ?? username,
+          password_hash: hash,
+          role: StaffRole.EMPLOYEES,
+          campus_id: 1,
+          is_active: true,
+        },
+      });
+      await prisma.employee_profiles.update({
+        where: { id: employee.id },
+        data: { user_id: userId },
+      });
+      credentials.push({
+        employee_code: employeeCode,
+        full_name: fullName ?? '',
+        username,
+        password,
+        role: StaffRole.EMPLOYEES,
+      });
+    }
   }
 
-  console.log(`\nDesignations loaded: ${designationIdByTitle.size}`);
-  console.log(`Staff types loaded: ${staffTypeIdByName.size}`);
-  console.log(`Employee profiles created: ${created}, updated: ${updated}`);
+  const credHeader = 'employee_code,full_name,username,password,role\n';
+  const credRows = credentials
+    .map((c) => `${c.employee_code},"${c.full_name.replace(/"/g, '""')}",${c.username},${c.password},${c.role}`)
+    .join('\n');
+  fs.writeFileSync(CREDENTIALS_PATH, credHeader + credRows + '\n', 'utf8');
 
   const reportPath = path.join(OUT_DIR, 'review-needed.txt');
-  const existingNotes = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8').trimEnd() : '';
-  const baseNotes = existingNotes && existingNotes !== 'No format issues required manual review.' ? existingNotes.split('\n') : [];
-  fs.writeFileSync(reportPath, [...baseNotes, ...reviewNotes].join('\n') + '\n', 'utf8');
-  console.log(`${reviewNotes.length} class-section review notes appended -> ${reportPath}`);
+  fs.writeFileSync(reportPath, reviewNotes.join('\n') + (reviewNotes.length ? '\n' : ''), 'utf8');
+
+  console.log(`\nEmployee profiles created: ${created}, updated: ${updated}`);
+  console.log(`User accounts processed: ${credentials.length}`);
+  console.log(`Credentials written -> ${CREDENTIALS_PATH}`);
+  console.log(`Review notes written -> ${reportPath}`);
 
   await prisma.$disconnect();
 }

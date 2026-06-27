@@ -1,100 +1,53 @@
-[Phone] 02-0861: "PERSONAL CELL #" looks like placeholder text, not a number — cleared.
-[Email] 02-001291: "NO" is not an email — cleared.
-[CNIC] 02-001355: "42101-394444-6" has 12 digits (expected 13) — left unchanged, needs HR correction.
-[Phone] 02-001365: segment "0342-201385" has 10 digits (expected 11) — left unchanged, needs HR correction.
-[DOB] 02-001337: "07-0-1997" is not a valid date — left unchanged, needs HR correction.
-[Phone] 02-001475: segment "0333-26663999" has 12 digits (expected 11) — left unchanged, needs HR correction.
-[CNIC] 02-001339: "42201-0451886" has 12 digits (expected 13) — left unchanged, needs HR correction.
-[Phone] 02-001214: segment "0336-860360274" has 13 digits (expected 11) — left unchanged, needs HR correction.
-[CNIC] 03-00603: "42201-281465-0" has 12 digits (expected 13) — left unchanged, needs HR correction.
-[Date of Joining] 05-2011 (M. SOHAIL KHAN): no employee-code match in the teacher-profile sheet; matched by name instead. Please confirm employee code "05-2011" is correct (teacher-profile sheet may have a different code on file).
-[Date of Joining] 02-001197 (MRS. SHABANA ASHFAQ): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00557 (SYEDA SARA NAQVI): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00608 (MS. SANA ZAKA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 02-001413 (MS. JASMINE NUSRAT): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00451 (MRS. AMBREEN FATIMA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-1937 (MR. ALI ASGHAR MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00639 (MS. HIRA KHADIM): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-00018 (MRS. SUKAINA KIZILBASH): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00325 (MRS. SULTANA AMIR): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 02-00836 (MR. MIRZA TAHIR ABBAS): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 02-001231 (MS. LAIRULLANA MASOOD): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 02-0924 (MS. BUSHRA WASIM): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 02-001214 (SYEDA ANITA HAIDER): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-2000 (MUHAMMAD HUSSAIN MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-00019 (ASAD HUSSAIN MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-2006 (MRS. FOZIA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-00017 (MRS. NIMLA ASAD MIRZA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-2009 (MRS. ASIFA OWAIS): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00174 (MR. OWAIS AHMED SHAH): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00125 (MRS. SAJIDA RUBAB ADIL): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00489 (SYEDA MAHEEN ZEHRA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00331 (MR. IMTIAZ HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00190 (MR. ALI SAJJAD): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00237 (MR. AMIR ALI): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00591 (MR. MURTAZA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00612 (S. JOHN HASSAN RIZVI): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00318 (MR. MARTIN IMAMDIN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00636 (MS. BINISH FATIMA): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00643 (MS. HAFSA MUSHTAQ): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00644 (MS. UMAMA SHAFIQ): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 01-2005 (MRS. FATIMA HUSSAIN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00556 (MRS. SHAKERA SHAKEEL): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00486 (SYED KOMAIL HASSAN ZAIDI): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00580 (MS. MISHAL REHAN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00547 (MS. SAJEELA SALMAN): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00603 (MS. ASIA MUJEEB): not found in teacher-profile sheet — left blank, needs HR input.
-[Date of Joining] 03-00615 (MS. AMNA MASROOR): not found in teacher-profile sheet — left blank, needs HR input.
-[Class-Section] 02-0861: "P.N - KG" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-0635: "SR-III, O-I & O-II" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-0593: value is identical to Staff Type ("URDU SR.II A, C & SR. III") — not a real class assignment, left unassigned.
-[Class-Section] 02-001271: value is identical to Staff Type ("HIS & GEO SR. I ISLAMIYAT SR. I, II") — not a real class assignment, left unassigned.
-[Class-Section] 02-001273: value is identical to Staff Type ("SENIOR'S URDU TEACHER SR. I & SR. II B") — not a real class assignment, left unassigned.
-[Class-Section] 02-001338: "SR-III, O-I & O-II" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001435: "SR-II & SR-III" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001348: "SR-I -SR-III OI & O-II" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001427: "SR-I & SR-II" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001468: "SR-I -SR-III" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001475: "SR-I -SR-III" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-00644: "VI-VIII" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001138: "VI-VIII V-II VIII-X" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001339: value is identical to Staff Type ("ENG V-II X ISL VII,VIII") — not a real class assignment, left unassigned.
-[Class-Section] 02-001359: "VI-X" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 02-001388: "IX-X" could not be parsed into class:section pairs (no explicit section letter, or garbled) — left unassigned, needs HR clarification.
-[Class-Section] 03-00557: value is identical to Staff Type ("DEPUTY SEGMENT HEAD SENIOR'S") — not a real class assignment, left unassigned.
-[Class-Section] 03-00608: value is identical to Staff Type ("ACADEMIC CO-ORDINATOR SENIOR'S") — not a real class assignment, left unassigned.
-[Class-Section] 02-001413: value is identical to Staff Type ("ACADEMIC ASSISTANT SENIOR'S") — not a real class assignment, left unassigned.
-[Class-Section] 03-00451: value is identical to Staff Type ("HEADMISTRESS SECONDARY") — not a real class assignment, left unassigned.
-[Class-Section] 03-1937: value is identical to Staff Type ("ADMINISTRATOR SECONDARY") — not a real class assignment, left unassigned.
-[Class-Section] 03-00639: value is identical to Staff Type ("COORDINATOR SECONDARY") — not a real class assignment, left unassigned.
-[Class-Section] 01-00018: value is identical to Staff Type ("DIRECTRESS") — not a real class assignment, left unassigned.
-[Class-Section] 03-00325: value is identical to Staff Type ("ADMINISTRATIVE ASSISTANT PRE-PRIMARY") — not a real class assignment, left unassigned.
-[Class-Section] 02-00836: value is identical to Staff Type ("MANAGER SPORTS") — not a real class assignment, left unassigned.
-[Class-Section] 02-001231: value is identical to Staff Type ("ACADEMIC ASSISTANTJRI & II") — not a real class assignment, left unassigned.
-[Class-Section] 02-0924: value is identical to Staff Type ("AADMINISTRATIVE ASSISTANT JR III- V") — not a real class assignment, left unassigned.
-[Class-Section] 02-001214: value is identical to Staff Type ("ACADEMIC CORDINATOR JR- III - V") — not a real class assignment, left unassigned.
-[Class-Section] 01-2000: value is identical to Staff Type ("C.E.O") — not a real class assignment, left unassigned.
-[Class-Section] 01-00019: value is identical to Staff Type ("MANAGING DIRECTOR") — not a real class assignment, left unassigned.
-[Class-Section] 01-2006: value is identical to Staff Type ("DIRECTRESS ADMIN & P. - G.") — not a real class assignment, left unassigned.
-[Class-Section] 01-00017: value is identical to Staff Type ("DIRECTRESS") — not a real class assignment, left unassigned.
-[Class-Section] 01-2009: value is identical to Staff Type ("DEPUTY DIRECTRESS I.T, ADMIN & P-G") — not a real class assignment, left unassigned.
-[Class-Section] 03-00174: value is identical to Staff Type ("GRAPHIC DESIGNER") — not a real class assignment, left unassigned.
-[Class-Section] 03-00125: value is identical to Staff Type ("VAN CO-ORDINATOR / ACCOUNTS ASSISTANT") — not a real class assignment, left unassigned.
-[Class-Section] 03-00489: value is identical to Staff Type ("COMPUTER OPERATOR") — not a real class assignment, left unassigned.
-[Class-Section] 03-00331: value is identical to Staff Type ("GRAPHIC DESIGNER") — not a real class assignment, left unassigned.
-[Class-Section] 03-00190: value is identical to Staff Type ("MANAGER OF IT & MAINTENANCE COMPLIANCE") — not a real class assignment, left unassigned.
-[Class-Section] 03-00237: value is identical to Staff Type ("OUT DOOR RIDER") — not a real class assignment, left unassigned.
-[Class-Section] 03-00591: value is identical to Staff Type ("GRAPHIC DESIGNER") — not a real class assignment, left unassigned.
-[Class-Section] 03-00612: value is identical to Staff Type ("GRAPHIC DESIGNER") — not a real class assignment, left unassigned.
-[Class-Section] 03-00318: value is identical to Staff Type ("OFFICE ASSISTANT") — not a real class assignment, left unassigned.
-[Class-Section] 03-00636: value is identical to Staff Type ("COMPUTER OPERATOR") — not a real class assignment, left unassigned.
-[Class-Section] 03-00643: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — not a real class assignment, left unassigned.
-[Class-Section] 03-00644: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — not a real class assignment, left unassigned.
-[Class-Section] 01-2005: value is identical to Staff Type ("DIRECTRESS FINANCE") — not a real class assignment, left unassigned.
-[Class-Section] 03-00556: value is identical to Staff Type ("PRINCIPAL") — not a real class assignment, left unassigned.
-[Class-Section] 03-00486: value is identical to Staff Type ("MANAGER A LEVEL") — not a real class assignment, left unassigned.
-[Class-Section] 03-00580: value is identical to Staff Type ("SUBJECT HEAD & CO-ORDINATOR") — not a real class assignment, left unassigned.
-[Class-Section] 03-00547: value is identical to Staff Type ("ADMIN. ASST") — not a real class assignment, left unassigned.
-[Class-Section] 03-00603: value is identical to Staff Type ("OFFICE ASSISTANT & COMPUTER OPERATOR") — not a real class assignment, left unassigned.
-[Class-Section] 03-00615: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — not a real class assignment, left unassigned.
-[CNIC] 03-00451 & 02-00836: share the same CNIC "42101-4867696-7" — cannot belong to both, cleared on both records, needs HR correction.
+[Class-Section] 02-0861: "P.N - KG" could not be parsed — left unassigned.
+[Class-Section] 02-0635: "SR-III, O-I & O-II" could not be parsed — left unassigned.
+[Class-Section] 02-0593: value is identical to Staff Type ("URDU SR.II A, C & SR. III") — left unassigned.
+[Class-Section] 02-001271: value is identical to Staff Type ("HIS & GEO SR. I ISLAMIYAT SR. I, II") — left unassigned.
+[Class-Section] 02-001273: value is identical to Staff Type ("SENIOR'S URDU TEACHER SR. I & SR. II B") — left unassigned.
+[Class-Section] 02-001338: "SR-III, O-I & O-II" could not be parsed — left unassigned.
+[Class-Section] 02-001435: "SR-II & SR-III" could not be parsed — left unassigned.
+[Class-Section] 02-001348: "SR-I -SR-III OI & O-II" could not be parsed — left unassigned.
+[Class-Section] 02-001427: "SR-I & SR-II" could not be parsed — left unassigned.
+[Class-Section] 02-001468: "SR-I -SR-III" could not be parsed — left unassigned.
+[Class-Section] 02-001475: "SR-I -SR-III" could not be parsed — left unassigned.
+[Class-Section] 02-00644: "VI-VIII" could not be parsed — left unassigned.
+[Class-Section] 02-001138: "VI-VIII V-II VIII-X" could not be parsed — left unassigned.
+[Class-Section] 02-001339: value is identical to Staff Type ("ENG V-II X ISL VII,VIII") — left unassigned.
+[Class-Section] 02-001359: "VI-X" could not be parsed — left unassigned.
+[Class-Section] 02-001388: "IX-X" could not be parsed — left unassigned.
+[Class-Section] 03-00557: value is identical to Staff Type ("DEPUTY SEGMENT HEAD SENIOR'S") — left unassigned.
+[Class-Section] 03-00608: value is identical to Staff Type ("ACADEMIC CO-ORDINATOR SENIOR'S") — left unassigned.
+[Class-Section] 02-001413: value is identical to Staff Type ("ACADEMIC ASSISTANT SENIOR'S") — left unassigned.
+[Class-Section] 03-00451: value is identical to Staff Type ("HEADMISTRESS SECONDARY") — left unassigned.
+[Class-Section] 03-1937: value is identical to Staff Type ("ADMINISTRATOR SECONDARY") — left unassigned.
+[Class-Section] 03-00639: value is identical to Staff Type ("COORDINATOR SECONDARY") — left unassigned.
+[Class-Section] 01-00018: value is identical to Staff Type ("DIRECTRESS") — left unassigned.
+[Class-Section] 03-00325: value is identical to Staff Type ("ADMINISTRATIVE ASSISTANT PRE-PRIMARY") — left unassigned.
+[Class-Section] 02-00836: value is identical to Staff Type ("MANAGER SPORTS") — left unassigned.
+[Class-Section] 02-001231: value is identical to Staff Type ("ACADEMIC ASSISTANTJRI & II") — left unassigned.
+[Class-Section] 02-0924: value is identical to Staff Type ("AADMINISTRATIVE ASSISTANT JR III- V") — left unassigned.
+[Class-Section] 02-001214: value is identical to Staff Type ("ACADEMIC CORDINATOR JR- III - V") — left unassigned.
+[Class-Section] 01-2000: value is identical to Staff Type ("C.E.O") — left unassigned.
+[Class-Section] 01-00019: value is identical to Staff Type ("MANAGING DIRECTOR") — left unassigned.
+[Class-Section] 01-2006: value is identical to Staff Type ("DIRECTRESS ADMIN & P. - G.") — left unassigned.
+[Class-Section] 01-00017: value is identical to Staff Type ("DIRECTRESS") — left unassigned.
+[Class-Section] 01-2009: value is identical to Staff Type ("DEPUTY DIRECTRESS I.T, ADMIN & P-G") — left unassigned.
+[Class-Section] 03-00174: value is identical to Staff Type ("GRAPHIC DESIGNER") — left unassigned.
+[Class-Section] 03-00125: value is identical to Staff Type ("VAN CO-ORDINATOR / ACCOUNTS ASSISTANT") — left unassigned.
+[Class-Section] 03-00489: value is identical to Staff Type ("COMPUTER OPERATOR") — left unassigned.
+[Class-Section] 03-00331: value is identical to Staff Type ("GRAPHIC DESIGNER") — left unassigned.
+[Class-Section] 03-00190: value is identical to Staff Type ("MANAGER OF IT & MAINTENANCE COMPLIANCE") — left unassigned.
+[Class-Section] 03-00237: value is identical to Staff Type ("OUT DOOR RIDER") — left unassigned.
+[Class-Section] 03-00591: value is identical to Staff Type ("GRAPHIC DESIGNER") — left unassigned.
+[Class-Section] 03-00612: value is identical to Staff Type ("GRAPHIC DESIGNER") — left unassigned.
+[Class-Section] 03-00318: value is identical to Staff Type ("OFFICE ASSISTANT") — left unassigned.
+[Class-Section] 03-00636: value is identical to Staff Type ("COMPUTER OPERATOR") — left unassigned.
+[Class-Section] 03-00643: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — left unassigned.
+[Class-Section] 03-00644: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — left unassigned.
+[Class-Section] 01-2005: value is identical to Staff Type ("DIRECTRESS FINANCE") — left unassigned.
+[Class-Section] 03-00556: value is identical to Staff Type ("PRINCIPAL") — left unassigned.
+[Class-Section] 03-00486: value is identical to Staff Type ("MANAGER A LEVEL") — left unassigned.
+[Class-Section] 03-00580: value is identical to Staff Type ("SUBJECT HEAD & CO-ORDINATOR") — left unassigned.
+[Class-Section] 03-00547: value is identical to Staff Type ("ADMIN. ASST") — left unassigned.
+[Class-Section] 03-00603: value is identical to Staff Type ("OFFICE ASSISTANT & COMPUTER OPERATOR") — left unassigned.
+[Class-Section] 03-00615: value is identical to Staff Type ("F.D.O / OFFICE ASSISTANT") — left unassigned.
+[CNIC] 03-00451 & 02-00836: share CNIC "42101-4867696-7" — cleared on both records.
