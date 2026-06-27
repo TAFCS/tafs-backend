@@ -1,4 +1,4 @@
-import { IsDateString, IsInt, IsOptional } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetStudentAttendanceQueryDto {
@@ -27,4 +27,20 @@ export class GetStudentTimelineQueryDto {
 
   @IsDateString()
   date_to: string;
+}
+
+export class ResolveStudentAttendanceDto {
+  @IsDateString()
+  date: string;
+
+  @Type(() => Number)
+  @IsInt()
+  campus_id: number;
+
+  @IsOptional()
+  @IsString()
+  check_in_time?: string;
+
+  @IsString()
+  check_out_time: string;
 }

@@ -9,6 +9,7 @@ import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-at
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
+  ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 
@@ -178,8 +179,8 @@ export class StudentAttendanceService {
   // Derives Working time (IN->OUT) and Break (OUT->IN gaps) segments from the
   // persisted scan sequence. Students don't have reporting/leaving times like
   // staff, so there's no OVERTIME/DAY_OFF distinction here.
-  private buildDaySegments(scans: zk_attendance_scans[]) {
-    const segments: { type: 'WORK' | 'BREAK'; start: string; end: string }[] = [];
+  private buildDaySegments(scans: zk_attendance_scans[]): { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean }[] {
+    const segments: { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean }[] = [];
 
     for (let i = 0; i + 1 < scans.length; i += 2) {
       const inTime = scans[i].scan_time;
@@ -193,8 +194,8 @@ export class StudentAttendanceService {
 
     if (scans.length > 0 && scans.length % 2 !== 0) {
       const lastInTime = scans[scans.length - 1].scan_time;
-      const end = new Date(lastInTime.getTime() + 10 * 60 * 1000);
-      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true } as any);
+      const syntheticEnd = new Date(lastInTime.getTime() + 10 * 60 * 1000);
+      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: syntheticEnd.toISOString(), isMissingOut: true });
     }
 
     return segments;
@@ -320,7 +321,18 @@ export class StudentAttendanceService {
         day_description: resolved.description,
         holiday_type: holidayDisplay.holiday_type,
         holiday_description: holidayDisplay.holiday_description,
-        segments: this.buildDaySegments(dayScans),
+        segments: (() => {
+          // If a MANUAL record with check_in_at was set by an admin, use it for segments instead of raw scans.
+          if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
+            const inISO = record.check_in_at.toISOString();
+            if (record.check_out_at) {
+              return [{ type: 'WORK' as const, start: inISO, end: record.check_out_at.toISOString() }];
+            }
+            const syntheticEnd = new Date(record.check_in_at.getTime() + 10 * 60 * 1000);
+            return [{ type: 'WORK' as const, start: inISO, end: syntheticEnd.toISOString(), isMissingOut: true }];
+          }
+          return this.buildDaySegments(dayScans);
+        })(),
       });
     }
 
@@ -328,5 +340,60 @@ export class StudentAttendanceService {
       student: { cc: student.cc, full_name: student.full_name },
       days,
     };
+  }
+
+  async resolveAttendance(studentCc: number, dto: ResolveStudentAttendanceDto, user: IJwtStaffPayload) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: { cc: true, campus_id: true, class_id: true, section_id: true },
+    });
+    if (!student) throw new NotFoundException('Student not found');
+    if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
+
+    const date = this.parseDate(dto.date);
+    const resolved = await this.calendarResolver.resolveStudentDay(
+      dto.campus_id,
+      student.class_id,
+      student.section_id,
+      date,
+    );
+    if (!resolved.isWorkingDay) {
+      throw new BadRequestException(
+        `Cannot set manual attendance on a non-working day: ${resolved.description ?? resolved.dayType ?? 'Holiday'}`,
+      );
+    }
+
+    let checkInAt: Date | undefined;
+    let checkOutAt: Date | undefined;
+
+    if (dto.check_in_time) {
+      const [h, m] = dto.check_in_time.split(':').map(Number);
+      checkInAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+    }
+    const [oh, om] = dto.check_out_time.split(':').map(Number);
+    checkOutAt = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), oh, om, 0));
+
+    await this.prisma.attendance_student_daily.upsert({
+      where: { student_cc_date: { student_cc: studentCc, date } },
+      create: {
+        student_cc: studentCc,
+        campus_id: dto.campus_id,
+        date,
+        status: RollRecordStatus.PRESENT,
+        source: AttendanceSource.MANUAL,
+        marked_by: user.sub,
+        ...(checkInAt ? { check_in_at: checkInAt } : {}),
+        check_out_at: checkOutAt,
+      },
+      update: {
+        status: RollRecordStatus.PRESENT,
+        source: AttendanceSource.MANUAL,
+        marked_by: user.sub,
+        ...(checkInAt ? { check_in_at: checkInAt } : {}),
+        check_out_at: checkOutAt,
+      },
+    });
+
+    return { resolved: true, student_cc: studentCc, date: dto.date };
   }
 }

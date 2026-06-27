@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -11,6 +11,7 @@ import { StudentAttendanceService } from './student-attendance.service';
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
+  ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 
 @ApiTags('Attendance Students')
@@ -49,5 +50,16 @@ export class StudentAttendanceController {
   ) {
     const data = await this.studentAttendanceService.getTimeline(studentCc, query, user);
     return createApiResponse(data, HttpStatus.OK, 'Student attendance timeline retrieved');
+  }
+
+  @Put(':studentCc/resolve')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  async resolveAttendance(
+    @Param('studentCc', ParseIntPipe) studentCc: number,
+    @Body() dto: ResolveStudentAttendanceDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.studentAttendanceService.resolveAttendance(studentCc, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Student attendance resolved');
   }
 }

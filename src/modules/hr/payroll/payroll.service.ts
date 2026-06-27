@@ -30,7 +30,7 @@ export interface DayBreakdownEntry {
   check_out_at: string | null;
   break_minutes: number;
   source: AttendanceSource | null;
-  segments?: { type: string; start: string; end: string }[];
+  segments?: { type: string; start: string; end: string; isMissingOut?: boolean }[];
 }
 
 interface ComputedLine {
@@ -124,7 +124,7 @@ export class PayrollService {
     leavingTime: Date | null,
     record: AttendanceStaffDailyRow | null,
   ) {
-    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
+    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string; isMissingOut?: boolean }[] = [];
 
     if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
       const start = record.check_in_at.toISOString();
@@ -177,7 +177,7 @@ export class PayrollService {
     if (scans.length > 0 && scans.length % 2 !== 0) {
       const lastInTime = scans[scans.length - 1].scan_time;
       const end = new Date(lastInTime.getTime() + 10 * 60 * 1000);
-      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true } as any);
+      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: end.toISOString(), isMissingOut: true });
     }
 
     return segments;
