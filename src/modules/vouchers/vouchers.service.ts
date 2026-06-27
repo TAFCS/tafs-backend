@@ -1793,11 +1793,19 @@ export class VouchersService {
 
                 // ── Step C: Update student_fees (amount_paid + status) ─────────
                 if (affectedStudentFeeIds.length > 0) {
-                    const totalDeposits = await tx.voucher_heads.groupBy({
-                        by: ['student_fee_id'],
-                        where: { student_fee_id: { in: affectedStudentFeeIds } },
-                        _sum: { amount_deposited: true },
-                    });
+                    // Compute per-student-fee increment from parsedDistributions directly
+                    // (avoids a groupBy on voucher_heads that can read a stale
+                    // amount_deposited before Step A's increments are visible in the
+                    // same Prisma transaction, and also prevents cross-voucher
+                    // contamination when the same student_fee has heads in multiple vouchers).
+                    const feeIncrementMap = new Map<number, Prisma.Decimal>();
+                    for (const { headId, amount } of parsedDistributions) {
+                        if (amount.eq(0)) continue;
+                        const head = txHeadMap.get(headId)!;
+                        if (!head.student_fee_id) continue;
+                        const curr = feeIncrementMap.get(head.student_fee_id) ?? new Prisma.Decimal(0);
+                        feeIncrementMap.set(head.student_fee_id, curr.add(amount));
+                    }
 
                     const studentFees = await tx.student_fees.findMany({
                         where: { id: { in: affectedStudentFeeIds } },
@@ -1805,12 +1813,11 @@ export class VouchersService {
 
                     await Promise.all(
                         studentFees.map((fee) => {
-                            const deposit = totalDeposits.find(
-                                (d) => d.student_fee_id === fee.id,
-                            );
-                            const totalDeposited = new Prisma.Decimal(
-                                deposit?._sum.amount_deposited ?? 0,
-                            );
+                            const increment = feeIncrementMap.get(fee.id) ?? new Prisma.Decimal(0);
+                            if (increment.eq(0)) return Promise.resolve();
+
+                            // Add this deposit's increment to whatever was already paid
+                            const totalDeposited = new Prisma.Decimal(fee.amount_paid ?? 0).add(increment);
                             // student_fees.amount is the canonical net amount (source of truth)
                             const canonicalAmount = new Prisma.Decimal(
                                 fee.amount ?? fee.amount_before_discount ?? 0,
