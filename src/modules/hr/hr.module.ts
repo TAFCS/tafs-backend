@@ -19,7 +19,9 @@ import { FcmModule } from '../../common/fcm/fcm.module';
 import { CalendarNotificationService } from './calendar/calendar-notification.service';
 import { CalendarNotificationsController } from './calendar/calendar-notifications.controller';
 import { PayrollController } from './payroll/payroll.controller';
+import { PayrollSelfController } from './payroll/payroll-self.controller';
 import { PayrollService } from './payroll/payroll.service';
+import { EmployeeProfileResolverService } from './employee-profile-resolver.service';
 
 @Module({
   imports: [AuthModule, FcmModule],
@@ -32,6 +34,7 @@ import { PayrollService } from './payroll/payroll.service';
     StaffTypesController,
     CalendarNotificationsController,
     PayrollController,
+    PayrollSelfController,
   ],
   providers: [
     EmployeesService,
@@ -45,6 +48,7 @@ import { PayrollService } from './payroll/payroll.service';
     StaffTypesService,
     CalendarNotificationService,
     PayrollService,
+    EmployeeProfileResolverService,
   ],
   exports: [
     EmployeesService,
@@ -57,6 +61,7 @@ import { PayrollService } from './payroll/payroll.service';
     StaffTypesService,
     CalendarNotificationService,
     PayrollService,
+    EmployeeProfileResolverService,
   ],
 })
 export class HrModule {}

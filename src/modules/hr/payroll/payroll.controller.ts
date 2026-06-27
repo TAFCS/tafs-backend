@@ -9,6 +9,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
+import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -50,5 +51,28 @@ export class PayrollController {
   async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.deleteRun(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll run deleted successfully');
+  }
+
+  @Post(':runId/lines/:employeeId/disburse')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async disburseLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: DisbursePayrollLineDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.disburseLine(runId, employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll line marked as disbursed');
+  }
+
+  @Post(':runId/disburse-all')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async disburseAll(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Body() dto: DisbursePayrollLineDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.disburseAll(runId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'All undisbursed payroll lines marked as disbursed');
   }
 }

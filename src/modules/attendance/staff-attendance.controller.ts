@@ -12,16 +12,18 @@ import {
   BulkMarkStaffAttendanceDto,
   GetStaffAttendanceQueryDto,
   GetStaffTimelineQueryDto,
+  GetMyStaffAttendanceQueryDto,
 } from './dto/staff-attendance.dto';
 
 @ApiTags('Attendance Staff')
 @ApiBearerAuth()
 @Controller('attendance/staff')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard)
 export class StaffAttendanceController {
   constructor(private readonly staffAttendanceService: StaffAttendanceService) {}
 
   @Get()
+  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getRegister(
     @Query() query: GetStaffAttendanceQueryDto,
@@ -32,6 +34,7 @@ export class StaffAttendanceController {
   }
 
   @Put()
+  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   async bulkMark(
     @Body() dto: BulkMarkStaffAttendanceDto,
@@ -42,6 +45,7 @@ export class StaffAttendanceController {
   }
 
   @Get('summary')
+  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getSummary(
     @Query() query: GetStaffAttendanceQueryDto,
@@ -52,6 +56,7 @@ export class StaffAttendanceController {
   }
 
   @Get('dashboard')
+  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getDashboard(
     @Query() query: GetStaffAttendanceQueryDto,
@@ -61,7 +66,17 @@ export class StaffAttendanceController {
     return createApiResponse(data, HttpStatus.OK, 'Staff attendance dashboard retrieved');
   }
 
+  @Get('me')
+  async getMyAttendance(
+    @Query() query: GetMyStaffAttendanceQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.staffAttendanceService.getMyAttendance(user.sub, query);
+    return createApiResponse(data, HttpStatus.OK, 'My attendance retrieved');
+  }
+
   @Get(':employeeId/timeline')
+  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getTimeline(
     @Param('employeeId', ParseIntPipe) employeeId: number,

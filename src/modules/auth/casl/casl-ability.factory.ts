@@ -57,6 +57,21 @@ export class CaslAbilityFactory {
         return;
       }
 
+      if (perm === 'attendance.self.view') {
+        can(Action.Read, 'StaffAttendance');
+        return;
+      }
+
+      if (perm === 'payroll.self.view') {
+        can(Action.Read, 'Payroll');
+        return;
+      }
+
+      if (perm === 'hr.objections.review') {
+        can(Action.Manage, 'StaffAttendance');
+        return;
+      }
+
       // attendance.student.rollcall.mark / .view / .edit_locked
       if (parts[0] === 'attendance' && parts[1] === 'student') {
         const subAction = parts.slice(2).join('.');

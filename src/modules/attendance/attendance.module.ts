@@ -11,6 +11,8 @@ import { RollCallAnnouncementsService } from './roll-call-announcements.service'
 import { RollSessionsSchedulerService } from './roll-sessions-scheduler.service';
 import { StaffAttendanceController } from './staff-attendance.controller';
 import { StaffAttendanceService } from './staff-attendance.service';
+import { AttendanceObjectionsController } from './attendance-objections.controller';
+import { AttendanceObjectionsService } from './attendance-objections.service';
 import { StudentAttendanceController } from './student-attendance.controller';
 import { StudentAttendanceService } from './student-attendance.service';
 import { ZkAttendanceMappingController } from './zk-attendance-mapping.controller';
@@ -28,6 +30,7 @@ import { RecomputeLateController } from './recompute-late.controller';
   controllers: [
     RollSessionsController,
     StaffAttendanceController,
+    AttendanceObjectionsController,
     StudentAttendanceController,
     ZkDeviceController,
     ZkLogsController,
@@ -41,6 +44,7 @@ import { RecomputeLateController } from './recompute-late.controller';
     RollCallAnnouncementsService,
     RollSessionsSchedulerService,
     StaffAttendanceService,
+    AttendanceObjectionsService,
     StudentAttendanceService,
     ZkPushService,
     ZkAttendanceProcessorService,

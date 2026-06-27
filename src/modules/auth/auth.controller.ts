@@ -183,6 +183,28 @@ export class AuthController {
     return createApiResponse({}, HttpStatus.OK, 'FCM token registered');
   }
 
+  @Post('staff/fcm-token')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtStaffGuard)
+  async registerStaffFcmToken(
+    @CurrentUser() user: IJwtStaffPayload,
+    @Body() dto: RegisterFcmTokenDto,
+  ) {
+    await this.fcmService.registerStaffToken(user.sub, dto.fcmToken, dto.deviceType);
+    return createApiResponse({}, HttpStatus.OK, 'Staff FCM token registered');
+  }
+
+  @Post('staff/mobile/fcm-token')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtStaffGuard)
+  async registerStaffMobileFcmToken(
+    @CurrentUser() user: IJwtStaffPayload,
+    @Body() dto: RegisterFcmTokenDto,
+  ) {
+    await this.fcmService.registerStaffToken(user.sub, dto.fcmToken, dto.deviceType);
+    return createApiResponse({}, HttpStatus.OK, 'Staff FCM token registered');
+  }
+
   // ─── Parent Signup (Flutter mobile app) ───────────────────────────────────
 
   @Get('parent/profile')

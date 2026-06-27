@@ -55,6 +55,7 @@ const ROSTER: RosterEntry[] = [
     full_name: 'Fozia Hussain',
     role: 'SUPER_ADMIN',
     campus_id: null,
+    grant_permissions: ['hr.objections.review'],
   },
   // FINANCE_CLERK — institution-wide + editor overrides for Nimla
   {
@@ -62,7 +63,7 @@ const ROSTER: RosterEntry[] = [
     full_name: 'Nimla Asad',
     role: 'FINANCE_CLERK',
     campus_id: null,
-    grant_permissions: ['students.directory.edit', 'students.registration.view'],
+    grant_permissions: ['students.directory.edit', 'students.registration.view', 'hr.objections.review'],
   },
   {
     username: 'mrs.adil',

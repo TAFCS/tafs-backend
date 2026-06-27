@@ -1,4 +1,4 @@
-import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { StaffAttendanceStatus } from '@prisma/client';
 
@@ -58,4 +58,10 @@ export class GetStaffTimelineQueryDto {
 
   @IsDateString()
   date_to: string;
+}
+
+export class GetMyStaffAttendanceQueryDto {
+  @IsString()
+  @Matches(/^\d{4}-\d{2}$/, { message: 'period must be YYYY-MM' })
+  period: string;
 }

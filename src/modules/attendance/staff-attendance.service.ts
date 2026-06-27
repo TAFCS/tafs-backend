@@ -6,9 +6,17 @@ import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import {
   BulkMarkStaffAttendanceDto,
+  GetMyStaffAttendanceQueryDto,
   GetStaffAttendanceQueryDto,
   GetStaffTimelineQueryDto,
 } from './dto/staff-attendance.dto';
+import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
+import {
+  computePayrollWindow,
+  currentPayrollPeriodLabel,
+  parsePayrollPeriod,
+} from '../hr/payroll/payroll-period.util';
+import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 
 @Injectable()
 export class StaffAttendanceService {
@@ -16,6 +24,7 @@ export class StaffAttendanceService {
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly holidaySync: HolidayAttendanceSyncService,
+    private readonly employeeResolver: EmployeeProfileResolverService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -338,6 +347,136 @@ export class StaffAttendanceService {
     }
 
     return segments;
+  }
+
+  async getMyAttendance(userId: string, query: GetMyStaffAttendanceQueryDto) {
+    const employee = await this.employeeResolver.requireByUserId(userId);
+    const maxPeriod = currentPayrollPeriodLabel();
+    if (query.period > maxPeriod) {
+      throw new BadRequestException('Cannot view attendance for a future payroll period');
+    }
+
+    const { year, month } = parsePayrollPeriod(query.period);
+    const { periodStart, periodEnd } = computePayrollWindow(year, month);
+
+    const [scans, records, objections, payrollLine] = await Promise.all([
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          employee_id: employee.id,
+          person_type: 'STAFF',
+          is_duplicate: false,
+          attendance_date: { gte: periodStart, lte: periodEnd },
+        },
+        orderBy: { scan_time: 'asc' },
+      }),
+      this.prisma.attendance_staff_daily.findMany({
+        where: { employee_id: employee.id, date: { gte: periodStart, lte: periodEnd } },
+      }),
+      this.prisma.attendance_objections.findMany({
+        where: { employee_id: employee.id, attendance_date: { gte: periodStart, lte: periodEnd } },
+      }),
+      this.prisma.payroll_run_lines.findFirst({
+        where: {
+          employee_id: employee.id,
+          payroll_runs: { period_start: periodStart, period_end: periodEnd },
+        },
+        include: { payroll_runs: { select: { status: true } } },
+      }),
+    ]);
+
+    const scansByDate = new Map<string, typeof scans>();
+    for (const scan of scans) {
+      const key = scan.attendance_date.toISOString().slice(0, 10);
+      const bucket = scansByDate.get(key);
+      if (bucket) bucket.push(scan);
+      else scansByDate.set(key, [scan]);
+    }
+    const recordMap = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
+    const objectionsByDate = new Map<string, typeof objections>();
+    for (const obj of objections) {
+      const key = obj.attendance_date.toISOString().slice(0, 10);
+      const bucket = objectionsByDate.get(key);
+      if (bucket) bucket.push(obj);
+      else objectionsByDate.set(key, [obj]);
+    }
+
+    const days: {
+      date: string;
+      status: StaffAttendanceStatus | null;
+      check_in_at: string | null;
+      check_out_at: string | null;
+      scans: { id: number; scan_time: string; direction: string | null }[];
+      is_working_day: boolean;
+      day_type: string | null;
+      objections: { id: number; scan_id: number | null; claimed_time: string; status: string }[];
+    }[] = [];
+
+    for (
+      let d = new Date(periodStart);
+      d <= periodEnd;
+      d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
+    ) {
+      const key = d.toISOString().slice(0, 10);
+      const record = recordMap.get(key) ?? null;
+      const campusId = employee.campus_id ?? 0;
+      const resolved = campusId
+        ? await this.calendarResolver.resolveStaffDay(employee.id, campusId, new Date(d))
+        : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
+
+      const dayScans = scansByDate.get(key) ?? [];
+      days.push({
+        date: key,
+        status: record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
+        check_in_at: record?.check_in_at?.toISOString() ?? dayScans[0]?.scan_time.toISOString() ?? null,
+        check_out_at:
+          record?.check_out_at?.toISOString() ??
+          (dayScans.length > 0 && dayScans.length % 2 === 0
+            ? dayScans[dayScans.length - 1].scan_time.toISOString()
+            : null),
+        scans: dayScans.map((s) => ({
+          id: s.id,
+          scan_time: s.scan_time.toISOString(),
+          direction: s.direction,
+        })),
+        is_working_day: resolved.isWorkingDay,
+        day_type: resolved.dayType,
+        objections: (objectionsByDate.get(key) ?? []).map((o) => ({
+          id: o.id,
+          scan_id: o.scan_id,
+          claimed_time: o.claimed_time.toISOString(),
+          status: o.status,
+        })),
+      });
+    }
+
+    let payroll_snapshot: {
+      status: string;
+      disbursed_at: string | null;
+      disbursement_notes: string | null;
+      daily_rate: number;
+      per_minute_rate: number;
+      daily_breakdown: DayBreakdownEntry[];
+    } | null = null;
+
+    if (payrollLine) {
+      const breakdown = payrollLine.daily_breakdown as unknown as DayBreakdownEntry[];
+      payroll_snapshot = {
+        status: payrollLine.payroll_runs.status,
+        disbursed_at: payrollLine.disbursed_at?.toISOString() ?? null,
+        disbursement_notes: payrollLine.disbursement_notes,
+        daily_rate: Number(payrollLine.daily_rate),
+        per_minute_rate: Number(payrollLine.per_minute_rate),
+        daily_breakdown: breakdown,
+      };
+    }
+
+    return {
+      period: query.period,
+      period_start: periodStart.toISOString().slice(0, 10),
+      period_end: periodEnd.toISOString().slice(0, 10),
+      days,
+      payroll_snapshot,
+    };
   }
 
   async getTimeline(employeeId: number, query: GetStaffTimelineQueryDto, user: IJwtStaffPayload) {

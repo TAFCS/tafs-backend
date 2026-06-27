@@ -4,6 +4,8 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
+import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
+import { computePayrollWindow } from './payroll-period.util';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -86,12 +88,9 @@ export class PayrollService {
     private readonly calendarResolver: CalendarDayResolverService,
   ) {}
 
-  // Fixed school payroll cycle: 26th of the previous month through the 25th
-  // of `month`. e.g. month=7,year=2026 -> [2026-06-26, 2026-07-25].
-  private computePayrollWindow(year: number, month: number): { periodStart: Date; periodEnd: Date } {
-    const periodEnd = new Date(Date.UTC(year, month - 1, 25));
-    const periodStart = new Date(Date.UTC(year, month - 2, 26));
-    return { periodStart, periodEnd };
+  // Fixed school payroll cycle — see payroll-period.util.ts
+  private computePayrollWindow(year: number, month: number) {
+    return computePayrollWindow(year, month);
   }
 
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
@@ -490,5 +489,130 @@ export class PayrollService {
     }
     await this.prisma.payroll_runs.delete({ where: { id } });
     return { id };
+  }
+
+  async listMyPayrollLines(userId: string) {
+    const profile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!profile) {
+      throw new ForbiddenException('No employee profile is linked to this account');
+    }
+
+    const lines = await this.prisma.payroll_run_lines.findMany({
+      where: { employee_id: profile.id },
+      include: {
+        payroll_runs: {
+          select: {
+            id: true,
+            period_start: true,
+            period_end: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { payroll_runs: { period_start: 'desc' } },
+    });
+
+    return lines.map((line) => ({
+      payroll_run_id: line.payroll_run_id,
+      period_start: line.payroll_runs.period_start.toISOString().slice(0, 10),
+      period_end: line.payroll_runs.period_end.toISOString().slice(0, 10),
+      run_status: line.payroll_runs.status,
+      disbursed_at: line.disbursed_at?.toISOString() ?? null,
+      disbursement_notes: line.disbursement_notes,
+      monthly_pay: Number(line.monthly_pay),
+      total_deductions: Number(line.total_deductions),
+      net_pay: Number(line.net_pay),
+    }));
+  }
+
+  async getMyPayrollDetail(userId: string, payrollRunId: number) {
+    const profile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!profile) {
+      throw new ForbiddenException('No employee profile is linked to this account');
+    }
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: payrollRunId, employee_id: profile.id } },
+      include: {
+        payroll_runs: {
+          select: {
+            id: true,
+            period_start: true,
+            period_end: true,
+            status: true,
+            campuses: { select: { id: true, campus_name: true } },
+          },
+        },
+      },
+    });
+    if (!line) throw new NotFoundException('Payroll line not found for this period');
+
+    return {
+      ...line,
+      monthly_pay: Number(line.monthly_pay),
+      daily_rate: Number(line.daily_rate),
+      per_minute_rate: Number(line.per_minute_rate),
+      absence_deduction: Number(line.absence_deduction),
+      half_day_deduction: Number(line.half_day_deduction),
+      break_deduction: Number(line.break_deduction),
+      total_deductions: Number(line.total_deductions),
+      net_pay: Number(line.net_pay),
+      disbursed_at: line.disbursed_at?.toISOString() ?? null,
+      run: line.payroll_runs,
+    };
+  }
+
+  async disburseLine(runId: number, employeeId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.status !== PayrollRunStatus.FINALIZED) {
+      throw new BadRequestException('Disbursement is only allowed on finalized payroll runs');
+    }
+
+    const disbursedAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
+    if (Number.isNaN(disbursedAt.getTime())) {
+      throw new BadRequestException('Invalid disbursed_at');
+    }
+
+    const line = await this.prisma.payroll_run_lines.update({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      data: {
+        disbursed_at: disbursedAt,
+        disbursed_by: user.sub,
+        disbursement_notes: dto.notes ?? null,
+      },
+    });
+    return line;
+  }
+
+  async disburseAll(runId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.status !== PayrollRunStatus.FINALIZED) {
+      throw new BadRequestException('Disbursement is only allowed on finalized payroll runs');
+    }
+
+    const disbursedAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
+    if (Number.isNaN(disbursedAt.getTime())) {
+      throw new BadRequestException('Invalid disbursed_at');
+    }
+
+    await this.prisma.payroll_run_lines.updateMany({
+      where: { payroll_run_id: runId, disbursed_at: null },
+      data: {
+        disbursed_at: disbursedAt,
+        disbursed_by: user.sub,
+        disbursement_notes: dto.notes ?? null,
+      },
+    });
+    return this.getRun(runId, user);
   }
 }

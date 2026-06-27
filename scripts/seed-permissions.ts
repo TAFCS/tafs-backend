@@ -58,6 +58,11 @@ const permissionsList = [
     { key: 'hr.policies.manage', module: 'HR & Attendance', description: 'Manage HR policies and calendar' },
     { key: 'hr.leave.apply', module: 'HR & Attendance', description: 'Apply for leave' },
     { key: 'hr.leave.approve', module: 'HR & Attendance', description: 'Approve leave requests' },
+    { key: 'hr.payroll.view', module: 'HR & Attendance', description: 'View payroll runs' },
+    { key: 'hr.payroll.manage', module: 'HR & Attendance', description: 'Generate and finalize payroll runs' },
+    { key: 'attendance.self.view', module: 'HR & Attendance', description: 'View own attendance records' },
+    { key: 'payroll.self.view', module: 'HR & Attendance', description: 'View own payroll run lines' },
+    { key: 'hr.objections.review', module: 'HR & Attendance', description: 'Review attendance objections' },
     { key: 'attendance.staff.mark', module: 'HR & Attendance', description: 'Mark staff daily attendance' },
     { key: 'attendance.reports.view', module: 'HR & Attendance', description: 'View attendance reports' },
     { key: 'attendance.events.import', module: 'HR & Attendance', description: 'Import attendance events' },
@@ -111,7 +116,7 @@ async function main() {
             'finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 
             'finance.vouchers.view', 'finance.vouchers.download', 'finance.vouchers.split_partial',
             'finance.deposits.record', 'finance.deposits.view', 'finance.banks.view',
-            'hr.leave.apply',
+            'hr.leave.apply', 'hr.payroll.view', 'hr.payroll.manage',
             'communication.support_tickets.view',
         ],
         RECEPTIONIST: [
@@ -129,6 +134,8 @@ async function main() {
             'communication.support_tickets.view',
         ],
         EMPLOYEES: [
+            'attendance.self.view',
+            'payroll.self.view',
             'hr.leave.apply',
         ],
     };

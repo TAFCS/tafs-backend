@@ -135,6 +135,7 @@ export class FcmService implements OnModuleInit {
       where: { device_token: token },
       update: {
         family_id: familyId,
+        user_id: null,
         device_os: deviceType,
         last_active_at: new Date(),
       },
@@ -148,5 +149,63 @@ export class FcmService implements OnModuleInit {
       `[FCM] Registered token for family ${familyId} (${deviceType ?? 'unknown'}, id=${row.id})`,
     );
     return row;
+  }
+
+  async registerStaffToken(userId: string, token: string, deviceType?: string) {
+    const row = await this.prisma.fcm_device_tokens.upsert({
+      where: { device_token: token },
+      update: {
+        user_id: userId,
+        family_id: null,
+        device_os: deviceType,
+        last_active_at: new Date(),
+      },
+      create: {
+        user_id: userId,
+        device_token: token,
+        device_os: deviceType,
+      },
+    });
+    console.log(
+      `[FCM] Registered token for staff user ${userId} (${deviceType ?? 'unknown'}, id=${row.id})`,
+    );
+    return row;
+  }
+
+  async sendToUsers(
+    userIds: string[],
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+  ) {
+    if (admin.apps.length === 0 || userIds.length === 0) return;
+
+    const tokens = await this.prisma.fcm_device_tokens.findMany({
+      where: { user_id: { in: userIds } },
+    });
+    if (tokens.length === 0) {
+      console.warn(`[FCM] No device tokens for users [${userIds.join(', ')}] — push skipped`);
+      return;
+    }
+
+    const stringData = this.stringifyData(data);
+    const messages = tokens.map((t) => ({
+      token: t.device_token,
+      notification: { title, body },
+      data: stringData,
+      apns: { payload: { aps: { badge: 1, sound: 'default' } } },
+      android: {
+        priority: 'high' as const,
+        notification: { channelId: 'high_importance_channel' },
+      },
+    }));
+
+    try {
+      const result = await admin.messaging().sendEach(messages);
+      const successCount = result.responses.filter((r) => r.success).length;
+      console.log(`[FCM] sendToUsers: ${successCount}/${messages.length} ok`);
+    } catch (error) {
+      console.error('[FCM] sendToUsers failed:', error.message);
+    }
   }
 }
