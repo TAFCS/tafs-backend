@@ -649,10 +649,10 @@ export class StaffAttendanceService {
 
     await this.prisma.$transaction(upserts);
 
-    // Return refreshed register
-    return this.getRegister(
-      { date: dto.date, campus_id: dto.campus_id },
-      user,
-    );
+    // Avoid reloading the full campus register here — getRegister() runs holiday
+    // sync for every enrolled student plus per-employee calendar resolution and
+    // can take minutes, causing PUT timeouts from payroll/staff UIs that only
+    // need confirmation that the save succeeded.
+    return { saved_count: dto.records.length };
   }
 }
