@@ -142,8 +142,22 @@ export class BulkVoucherLogicService {
             for (const dateStr of expectedFeeDates) {
                 const voucherKey = `${cc}|${dateStr}`;
                 const alreadyIssued = existingVoucherKeys.has(voucherKey);
+                const feesInThisMonth = dateMap.get(dateStr) || [];
 
-                if (alreadyIssued && skipAlreadyIssued) {
+                if (feesInThisMonth.length > 0) {
+                    // NOT_ISSUED heads exist — generate regardless of whether a prior voucher
+                    // already exists for this period (handles the case where a previous voucher
+                    // only captured some heads and new heads were added/reset afterward).
+                    const itemAcademicYear = params.academic_year_override || deriveAcademicYear(dateStr, student.class_id ?? undefined);
+                    workItems.push({
+                        cc,
+                        dateStr,
+                        fees: feesInThisMonth,
+                        student,
+                        academicYear: itemAcademicYear,
+                        alreadyIssued,
+                    });
+                } else if (alreadyIssued && skipAlreadyIssued) {
                     skips.push({
                         cc,
                         student_name: student.full_name,
@@ -152,26 +166,13 @@ export class BulkVoucherLogicService {
                         dateStr,
                     });
                 } else {
-                    const feesInThisMonth = dateMap.get(dateStr) || [];
-                    if (feesInThisMonth.length === 0) {
-                        skips.push({
-                            cc,
-                            student_name: student.full_name,
-                            status: 'SKIPPED',
-                            reason: `No unpaid fee heads found for period starting ${dateStr}`,
-                            dateStr,
-                        });
-                    } else {
-                        const itemAcademicYear = params.academic_year_override || deriveAcademicYear(dateStr, student.class_id ?? undefined);
-                        workItems.push({ 
-                            cc, 
-                            dateStr, 
-                            fees: feesInThisMonth, 
-                            student, 
-                            academicYear: itemAcademicYear,
-                            alreadyIssued, // useful for preview
-                        });
-                    }
+                    skips.push({
+                        cc,
+                        student_name: student.full_name,
+                        status: 'SKIPPED',
+                        reason: `No unpaid fee heads found for period starting ${dateStr}`,
+                        dateStr,
+                    });
                 }
             }
         }

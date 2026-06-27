@@ -126,9 +126,9 @@ export class BulkVoucherJobsService {
             const hasAnyFees = hasAnyFeesSet.has(s.cc);
             const hasNotIssuedFees = hasNotIssuedSet.has(s.cc);
             
-            // A student is "Ready" if they have fees and NO voucher exists yet
-            // or if they have explicitly "NOT_ISSUED" fees.
-            const isReady = hasAnyFees && !isAlreadyIssued;
+            // A student is "Ready" if they have NOT_ISSUED fee heads — even if a prior
+            // voucher exists for the period (prior voucher may not have captured all heads).
+            const isReady = hasNotIssuedFees;
 
             return {
                 cc: s.cc,
