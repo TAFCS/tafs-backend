@@ -364,33 +364,35 @@ const styles = StyleSheet.create({
         width: '100%',
         borderWidth: 0.5,
         borderColor: '#475569',
-        padding: 2,
     },
     historyTableHeader: {
         flexDirection: 'row',
         borderBottomWidth: 0.5,
         borderBottomColor: '#475569',
-        paddingBottom: 1,
-        marginBottom: 1,
-        gap: 2,
+        paddingVertical: 1,
     },
     historyTableRow: {
         flexDirection: 'row',
-        borderBottomWidth: 0.2,
+        borderBottomWidth: 0.3,
         borderBottomColor: '#64748b',
         paddingVertical: 1,
-        gap: 2,
     },
     historyTableCell: {
         fontSize: 4,
         color: '#1e293b',
         flex: 1,
+        borderRightWidth: 0.3,
+        borderRightColor: '#475569',
+        paddingHorizontal: 2,
     },
     historyTableHeaderCell: {
         fontSize: 4,
         fontWeight: 'bold',
         color: '#1e293b',
         flex: 1,
+        borderRightWidth: 0.3,
+        borderRightColor: '#475569',
+        paddingHorizontal: 2,
     },
 });
 
@@ -720,7 +722,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         <View style={styles.historyTableHeader}>
                             <Text style={styles.historyTableHeaderCell}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMT</Text>
+                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
                         </View>
                         {arrearsHistory && arrearsHistory.length > 0 ? (() => {
                             const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
