@@ -45,7 +45,11 @@ async function main() {
   for (const emp of employees) {
     const rawTitle = emp.job_title;
     const designation = emp.designations?.title ?? null;
-    const { role, staffCategory, departmentName } = resolveStaffOrg(rawTitle, designation);
+    const { role, staffCategory, departmentName } = resolveStaffOrg(
+      rawTitle,
+      designation,
+      emp.employee_code,
+    );
 
     await prisma.employee_profiles.update({
       where: { id: emp.id },

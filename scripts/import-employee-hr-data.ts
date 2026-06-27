@@ -24,6 +24,10 @@ import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { DEPARTMENT_SEED, resolveStaffOrg } from './staff-org-mapping';
+import {
+  getManualClassSectionOverride,
+  isNoClassAssignmentExpected,
+} from './staff-class-section-overrides';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const OUT_DIR = path.join(__dirname, '..', 'staff-data', 'cleaned');
@@ -60,6 +64,47 @@ const CLASS_CODES: { id: number; code: string }[] = [
 interface ParsedAssignment {
   classId: number;
   sectionIds: number[];
+}
+
+function resolveClassSectionAssignments(
+  code: string,
+  staffTypeText: string,
+  classSectionText: string,
+): { assignments: ParsedAssignment[] | null; reviewNote: string | null } {
+  const manual = getManualClassSectionOverride(code);
+  if (manual) {
+    return { assignments: manual, reviewNote: null };
+  }
+
+  if (!classSectionText) {
+    return { assignments: null, reviewNote: null };
+  }
+
+  if (isNoClassAssignmentExpected(code)) {
+    return { assignments: null, reviewNote: null };
+  }
+
+  if (classSectionText === staffTypeText) {
+    return {
+      assignments: null,
+      reviewNote: `[Class-Section] ${code}: value is identical to Staff Type ("${staffTypeText}") — left unassigned.`,
+    };
+  }
+
+  const segments = classSectionText.split(/\s*[;]\s*/);
+  const parsed: ParsedAssignment[] = [];
+  for (const segment of segments) {
+    const result = parseClassSection(segment);
+    if (!result) {
+      return {
+        assignments: null,
+        reviewNote: `[Class-Section] ${code}: "${classSectionText}" could not be parsed — left unassigned.`,
+      };
+    }
+    parsed.push(result);
+  }
+
+  return { assignments: parsed.length ? parsed : null, reviewNote: null };
 }
 
 function parseClassSection(raw: string): ParsedAssignment | null {
@@ -184,34 +229,19 @@ async function main() {
 
     const staffTypeText = apRow[6]?.trim() ?? '';
     const classSectionText = apRow[8]?.trim() ?? '';
-    if (classSectionText) {
-      if (classSectionText === staffTypeText) {
-        reviewNotes.push(
-          `[Class-Section] ${code}: value is identical to Staff Type ("${staffTypeText}") — left unassigned.`,
-        );
-      } else {
-        const segments = classSectionText.split(/\s*[;]\s*/);
-        const parsed: ParsedAssignment[] = [];
-        let allOk = true;
-        for (const segment of segments) {
-          const result = parseClassSection(segment);
-          if (!result) {
-            allOk = false;
-            break;
-          }
-          parsed.push(result);
-        }
-        if (allOk && parsed.length) {
-          assignmentsByCode.set(code.toUpperCase(), parsed);
-        } else {
-          reviewNotes.push(
-            `[Class-Section] ${code}: "${classSectionText}" could not be parsed — left unassigned.`,
-          );
-        }
-      }
+    const { assignments, reviewNote } = resolveClassSectionAssignments(code, staffTypeText, classSectionText);
+    if (assignments?.length) {
+      assignmentsByCode.set(code.toUpperCase(), assignments);
+    }
+    if (reviewNote) {
+      reviewNotes.push(reviewNote);
     }
 
-    const { role, staffCategory, departmentName } = resolveStaffOrg(row[11]?.trim() || null, row[1]?.trim() || null);
+    const { role, staffCategory, departmentName } = resolveStaffOrg(
+      row[11]?.trim() || null,
+      row[1]?.trim() || null,
+      code,
+    );
     orgPreview.push({
       code,
       name: row[2]?.trim() ?? '',
@@ -227,7 +257,7 @@ async function main() {
   for (const [cnic, codes] of cnicCounts) {
     if (codes.length > 1) {
       reviewNotes.push(
-        `[CNIC] ${codes.join(' & ')}: share CNIC "${cnic}" — cleared on both records.`,
+        `[CNIC] ${codes.join(' & ')}: share CNIC "${cnic}" — cleared on both records. Confirm correct CNIC from each employee before updating.`,
       );
     }
   }
@@ -272,7 +302,11 @@ async function main() {
     const apRow = apByCode.get(employeeCode.trim().toUpperCase());
     if (!apRow) continue;
 
-    const { role, staffCategory, departmentName } = resolveStaffOrg(jobTitle?.trim() || null, designation?.trim() || null);
+    const { role, staffCategory, departmentName } = resolveStaffOrg(
+      jobTitle?.trim() || null,
+      designation?.trim() || null,
+      employeeCode,
+    );
 
     const profileData = {
       employee_code: employeeCode || null,

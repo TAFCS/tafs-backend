@@ -199,10 +199,26 @@ function resolveDepartment(category: StaffCategory | null, role: string | null):
   return null;
 }
 
+/** Per-employee org overrides from staff_mapping_review.txt. */
+const EMPLOYEE_ORG_OVERRIDES: Record<string, StaffOrgResult> = {
+  // Group-level directress (Johar C-IV) — distinct from campus directress 01-00018.
+  '01-00017': {
+    role: 'DIRECTRESS',
+    staffCategory: 'SENIOR_LEADERSHIP',
+    departmentName: 'SENIOR MANAGEMENT',
+  },
+};
+
 export function resolveStaffOrg(
   jobTitle: string | null,
   designation: string | null,
+  employeeCode?: string | null,
 ): StaffOrgResult {
+  const code = employeeCode?.trim().toUpperCase();
+  if (code && EMPLOYEE_ORG_OVERRIDES[code]) {
+    return EMPLOYEE_ORG_OVERRIDES[code];
+  }
+
   const role = resolveRole(jobTitle, designation);
   const staffCategory = resolveCategory(role, designation);
   const departmentName = resolveDepartment(staffCategory, role);
