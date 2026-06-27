@@ -28,7 +28,7 @@ const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
 
 // Set to false before going to production.
-const DEV_ALLOW_VOID_DEPOSITS = true;
+const DEV_ALLOW_VOID_DEPOSITS = false;
 
 
 
