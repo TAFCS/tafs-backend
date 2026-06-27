@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, StaffCategory, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
@@ -14,6 +14,7 @@ interface EmployeeLineInput {
   reporting_time: Date | null;
   leaving_time: Date | null;
   department_id: number | null;
+  staff_category: StaffCategory | null;
   days_per_week: number | null;
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
 }
@@ -226,6 +227,7 @@ export class PayrollService {
         new Date(d),
         employee.id,
         employee.department_id,
+        employee.staff_category,
         employee.days_per_week,
         employee.employee_work_schedules,
       );
@@ -328,6 +330,7 @@ export class PayrollService {
         reporting_time: true,
         leaving_time: true,
         department_id: true,
+        staff_category: true,
         days_per_week: true,
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
       },

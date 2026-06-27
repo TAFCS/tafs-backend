@@ -4,8 +4,9 @@ import { isWeekendDate, parseCalendarDateKey } from './student-calendar-day.util
 import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service';
 import { CalendarNotificationService } from './calendar-notification.service';
 
-import { IsInt, IsDateString, IsString, IsOptional, IsIn } from 'class-validator';
+import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
+import { StaffCategory } from '@prisma/client';
 
 export class CreateCalendarDayDto {
   @Type(() => Number)
@@ -46,6 +47,10 @@ export class CreateCalendarDayDto {
   @Type(() => Number)
   @IsInt()
   employee_id?: number;
+
+  @IsOptional()
+  @IsEnum(StaffCategory)
+  staff_category?: StaffCategory;
 }
 
 export class CreateBulkCalendarDayDto {
@@ -148,8 +153,8 @@ export class CalendarService {
     if (dto.section_id != null && dto.class_id == null) {
       throw new BadRequestException('section_id requires class_id');
     }
-    if (dto.applies_to === 'STUDENT' && (dto.department_id != null || dto.employee_id != null)) {
-      throw new BadRequestException('department_id and employee_id are only valid for STAFF calendar entries');
+    if (dto.applies_to === 'STUDENT' && (dto.department_id != null || dto.employee_id != null || dto.staff_category != null)) {
+      throw new BadRequestException('department_id, staff_category, and employee_id are only valid for STAFF calendar entries');
     }
     if (dto.applies_to === 'STAFF' && (dto.class_id != null || dto.section_id != null)) {
       throw new BadRequestException('class_id and section_id are only valid for STUDENT calendar entries');
@@ -182,6 +187,7 @@ export class CalendarService {
       class_id: dto.class_id ?? null,
       section_id: dto.section_id ?? null,
       department_id: dto.department_id ?? null,
+      staff_category: dto.staff_category ?? null,
       employee_id: dto.employee_id ?? null,
     };
   }
@@ -284,6 +290,8 @@ export class CalendarService {
       department_id:
         dto.department_id !== undefined ? dto.department_id : existing.department_id ?? undefined,
       employee_id: dto.employee_id !== undefined ? dto.employee_id : existing.employee_id ?? undefined,
+      staff_category:
+        dto.staff_category !== undefined ? dto.staff_category : existing.staff_category ?? undefined,
     };
     this.validateScope(merged);
     this.validateStudentDayType(merged);
@@ -306,6 +314,7 @@ export class CalendarService {
         class_id: dto.class_id !== undefined ? dto.class_id : undefined,
         section_id: dto.section_id !== undefined ? dto.section_id : undefined,
         department_id: dto.department_id !== undefined ? dto.department_id : undefined,
+        staff_category: dto.staff_category !== undefined ? dto.staff_category : undefined,
         employee_id: dto.employee_id !== undefined ? dto.employee_id : undefined,
       },
       include: {

@@ -48,6 +48,32 @@ async function main() {
     ALTER TYPE "StaffRole" ADD VALUE IF NOT EXISTS 'EMPLOYEES';
   `);
 
+  console.log("Adding staff_category to academic_calendar_days...");
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "academic_calendar_days"
+    ADD COLUMN IF NOT EXISTS "staff_category" "StaffCategory";
+  `);
+  await prisma.$executeRawUnsafe(`
+    DROP INDEX IF EXISTS "academic_calendar_days_campus_id_date_applies_to_key";
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "academic_calendar_days_staff_category_idx"
+      ON "academic_calendar_days"("staff_category");
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "academic_calendar_days_scope_key"
+      ON "academic_calendar_days"(
+        "campus_id",
+        "date",
+        "applies_to",
+        "class_id",
+        "section_id",
+        "department_id",
+        "staff_category",
+        "employee_id"
+      );
+  `);
+
   console.log("DDL migration completed successfully.");
 }
 
