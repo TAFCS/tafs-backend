@@ -49,10 +49,31 @@ const ROSTER: RosterEntry[] = [
   { username: 'ferwa.sabir', full_name: 'Ferwa Sabir', role: 'PRINCIPAL', campus_id: 3, allowed_class_ids: [] },
   { username: 'sukaina.osama', full_name: 'Sukaina Osama', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.PN_KG },
   { username: 'lana.principal', full_name: 'Lana', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.JR_12 },
-  { username: 'anita.principal', full_name: 'Anita', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.JR_35 },
-  { username: 'sara.naqvi', full_name: 'Sara Naqvi', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.SR_13 },
+  {
+    username: 'anita.principal',
+    full_name: 'Anita',
+    role: 'PRINCIPAL',
+    campus_id: 1,
+    allowed_class_ids: CLASS.JR_35,
+    grant_permissions: ['attendance.self.view', 'payroll.self.view'],
+  },
+  {
+    username: 'sara.naqvi',
+    full_name: 'Sara Naqvi',
+    role: 'PRINCIPAL',
+    campus_id: 1,
+    allowed_class_ids: CLASS.SR_13,
+    grant_permissions: ['attendance.self.view', 'payroll.self.view'],
+  },
   { username: 'hira.khadim', full_name: 'Hira Khadim', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.VI_X, grant_permissions: ['attendance.self.view', 'payroll.self.view'] },
-  { username: 'syed.komail.hassan', full_name: 'Syed Komail Hassan', role: 'PRINCIPAL', campus_id: 1, allowed_class_ids: CLASS.OA },
+  {
+    username: 'syed.komail.hassan',
+    full_name: 'Syed Komail Hassan',
+    role: 'PRINCIPAL',
+    campus_id: 1,
+    allowed_class_ids: CLASS.OA,
+    grant_permissions: ['attendance.self.view', 'payroll.self.view'],
+  },
 
   // SUPER_ADMIN — Fozia Hussain (all campuses)
   {
@@ -75,6 +96,7 @@ const ROSTER: RosterEntry[] = [
     full_name: 'Mrs. Adil',
     role: 'FINANCE_CLERK',
     campus_id: null,
+    grant_permissions: ['attendance.self.view', 'payroll.self.view'],
     revoke_permissions: [
       'finance.vouchers.generate_single',
       'finance.vouchers.generate_bulk',
