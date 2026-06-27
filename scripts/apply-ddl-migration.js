@@ -43,9 +43,21 @@ async function main() {
     DROP TYPE IF EXISTS "TeacherCategory";
   `);
 
-  console.log("Adding EMPLOYEES to StaffRole if missing...");
+  console.log("Ensuring EMPLOYEE StaffRole value...");
   await prisma.$executeRawUnsafe(`
-    ALTER TYPE "StaffRole" ADD VALUE IF NOT EXISTS 'EMPLOYEES';
+    ALTER TYPE "StaffRole" ADD VALUE IF NOT EXISTS 'EMPLOYEE';
+  `);
+  await prisma.$executeRawUnsafe(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_enum e
+        JOIN pg_type t ON e.enumtypid = t.oid
+        WHERE t.typname = 'StaffRole' AND e.enumlabel = 'EMPLOYEES'
+      ) THEN
+        ALTER TYPE "StaffRole" RENAME VALUE 'EMPLOYEES' TO 'EMPLOYEE';
+      END IF;
+    END$$;
   `);
 
   console.log("Adding staff_category to academic_calendar_days...");

@@ -1,6 +1,6 @@
 /**
  * Links an employee profile to an operational login, grants self-service
- * permissions, and deactivates the duplicate EMPLOYEES login.
+ * permissions, and deactivates the duplicate EMPLOYEE login.
  *
  * Usage:
  *   npx ts-node scripts/merge-dual-hat-employee.ts
@@ -98,15 +98,15 @@ async function mergeOne(entry: MergeEntry): Promise<void> {
   if (!operational) {
     throw new Error(`Operational user not found: ${entry.operationalUsername}`);
   }
-  if (operational.role === 'EMPLOYEES') {
-    throw new Error(`${entry.operationalUsername} is EMPLOYEES role — expected operational account`);
+  if (operational.role === 'EMPLOYEE') {
+    throw new Error(`${entry.operationalUsername} is EMPLOYEE role — expected operational account`);
   }
 
   const employeesLogin = await prisma.users.findUnique({
     where: { username: entry.employeesUsername },
   });
   if (!employeesLogin) {
-    throw new Error(`EMPLOYEES login not found: ${entry.employeesUsername}`);
+    throw new Error(`EMPLOYEE login not found: ${entry.employeesUsername}`);
   }
 
   const profile = await prisma.employee_profiles.findFirst({
@@ -146,9 +146,9 @@ async function mergeOne(entry: MergeEntry): Promise<void> {
       where: { id: employeesLogin.id },
       data: { is_active: false, updated_at: new Date() },
     });
-    console.log(`  Deactivated EMPLOYEES login: ${entry.employeesUsername}`);
+    console.log(`  Deactivated EMPLOYEE login: ${entry.employeesUsername}`);
   } else {
-    console.log(`  EMPLOYEES login already inactive: ${entry.employeesUsername}`);
+    console.log(`  EMPLOYEE login already inactive: ${entry.employeesUsername}`);
   }
 }
 

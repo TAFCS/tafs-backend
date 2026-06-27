@@ -6,7 +6,7 @@
  *   2. Upserts employee_profiles for all employees (matched by employee_code)
  *   3. Maps role / staff_category / department via staff-org-mapping.ts
  *   4. Parses class-section assignments where unambiguous
- *   5. Creates users accounts (role EMPLOYEES) and writes credentials CSV
+ *   5. Creates users accounts (role EMPLOYEE) and writes credentials CSV
  *
  * DRY_RUN=true by default — prints what would change without writing.
  * Set DRY_RUN=false to actually commit.
@@ -356,7 +356,7 @@ async function main() {
       }
     }
 
-    // --- User account (EMPLOYEES role) ---
+    // --- User account (EMPLOYEE role) ---
     const username = buildUsername(fullName ?? '', employeeCode ?? '', takenUsernames);
     let userId = employee.user_id;
     let password = '';
@@ -375,7 +375,7 @@ async function main() {
         full_name: fullName ?? '',
         username,
         password: '(existing — not regenerated)',
-        role: StaffRole.EMPLOYEES,
+        role: StaffRole.EMPLOYEE,
       });
     } else {
       password = generatePassword();
@@ -387,7 +387,7 @@ async function main() {
           username,
           full_name: fullName ?? username,
           password_hash: hash,
-          role: StaffRole.EMPLOYEES,
+          role: StaffRole.EMPLOYEE,
           campus_id: 1,
           is_active: true,
         },
@@ -401,7 +401,7 @@ async function main() {
         full_name: fullName ?? '',
         username,
         password,
-        role: StaffRole.EMPLOYEES,
+        role: StaffRole.EMPLOYEE,
       });
     }
   }

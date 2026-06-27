@@ -133,7 +133,7 @@ async function main() {
         GENERAL_RESPONDENT: [
             'communication.support_tickets.view',
         ],
-        EMPLOYEES: [
+        EMPLOYEE: [
             'attendance.self.view',
             'payroll.self.view',
             'hr.leave.apply',

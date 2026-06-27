@@ -46,7 +46,7 @@ async function main() {
       needsLink.push(emp);
       continue;
     }
-    if (emp.users.role === 'EMPLOYEES') {
+    if (emp.users.role === 'EMPLOYEE') {
       duplicateEmployeesLogin.push(emp);
       continue;
     }
@@ -91,7 +91,7 @@ async function main() {
     );
   }
 
-  console.log('\n=== Linked to EMPLOYEES-only login (works today; merge when convenient) ===');
+  console.log('\n=== Linked to EMPLOYEE-only login (works today; merge when convenient) ===');
   console.log(`Count: ${duplicateEmployeesLogin.length}`);
   for (const e of duplicateEmployeesLogin.slice(0, 5)) {
     console.log(`- ${e.employee_code ?? e.id} ${e.full_name} -> ${e.users?.username}`);

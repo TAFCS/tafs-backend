@@ -1397,7 +1397,7 @@ enum StaffRole {
   TEACHER
   STAFF_EDITOR
   GENERAL_RESPONDENT
-  EMPLOYEES
+  EMPLOYEE
 }
 
 enum TicketCategory {

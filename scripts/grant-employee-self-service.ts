@@ -80,7 +80,7 @@ async function main() {
       user_id: { not: null },
       users: filterUsername
         ? { username: filterUsername, is_active: true }
-        : { is_active: true, role: { not: 'EMPLOYEES' } },
+        : { is_active: true, role: { not: 'EMPLOYEE' } },
     },
     select: {
       employee_code: true,
