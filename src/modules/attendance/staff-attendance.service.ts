@@ -577,14 +577,19 @@ export class StaffAttendanceService {
 
     const date = this.parseDate(dto.date);
 
-    // Validate all employee IDs belong to this campus
+    // Validate all employee IDs belong to this campus.
+    // Accept either employee_profiles.campus_id (dummy/direct employees) or
+    // users.campus_id (normal accounts), since payroll generation uses the latter.
     const employeeIds = dto.records.map((r) => r.employee_id);
     const employees = await this.prisma.employee_profiles.findMany({
       where: {
         id: { in: employeeIds },
-        campus_id: dto.campus_id,
+        OR: [
+          { campus_id: dto.campus_id },
+          { users: { campus_id: dto.campus_id } },
+        ],
       },
-      select: { id: true, campus_id: true },
+      select: { id: true },
     });
 
     const validIds = new Set(employees.map((e) => e.id));
@@ -596,8 +601,6 @@ export class StaffAttendanceService {
     }
 
     for (const mark of dto.records) {
-      const emp = employees.find((e) => e.id === mark.employee_id);
-      if (!emp?.campus_id) continue;
       const resolved = await this.calendarResolver.resolveStaffDay(mark.employee_id, dto.campus_id, date);
       if (!resolved.isWorkingDay) {
         throw new BadRequestException(
