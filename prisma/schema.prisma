@@ -614,6 +614,8 @@ model users {
   employee_profile                                                         employee_profiles?
   fcm_device_tokens                                                        fcm_device_tokens[]
   notice_board_posts                                                       notice_board_posts[]
+  employee_notice_posts                                                     employee_notice_posts[]
+  employee_notice_post_reads                                                employee_notice_post_reads[]
   processed_change_requests                                                parent_change_requests[]
   payroll_run_lines_disbursed                                              payroll_run_lines[]        @relation("PayrollLineDisbursedBy")
   postdated_cheques_cashed                                                 postdated_cheques[]        @relation("ChequeCashedBy")
@@ -1381,6 +1383,38 @@ model class_check_in_schedules {
 
   @@unique([class_id, effective_from])
   @@index([campus_id, effective_from])
+}
+
+model employee_notice_posts {
+  id           Int                          @id @default(autoincrement())
+  posted_by    String                       @db.VarChar(255)
+  title        String?                      @db.VarChar(255)
+  body         String
+  target_roles StaffRole[]                  @default([])
+  campus_ids   Int[]                        @default([])
+  media_urls   Json?                        @default("[]")
+  media_types  Json?                        @default("[]")
+  is_pinned    Boolean                      @default(false)
+  posted_at    DateTime                     @default(now()) @db.Timestamp(6)
+  expires_at   DateTime?                    @db.Timestamp(6)
+  deleted_at   DateTime?                    @db.Timestamp(6)
+  users        users                        @relation(fields: [posted_by], references: [id])
+  post_reads   employee_notice_post_reads[]
+
+  @@index([posted_at(sort: Desc)])
+  @@index([target_roles], type: Gin)
+  @@index([campus_ids], type: Gin)
+}
+
+model employee_notice_post_reads {
+  id      Int                   @id @default(autoincrement())
+  post_id Int
+  user_id String                @db.VarChar(255)
+  read_at DateTime              @default(now()) @db.Timestamp(6)
+  users   users                 @relation(fields: [user_id], references: [id])
+  posts   employee_notice_posts @relation(fields: [post_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
 }
 
 enum BulkJobStatus {

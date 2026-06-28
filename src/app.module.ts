@@ -37,6 +37,7 @@ import { BackupsModule } from './modules/backups/backups.module';
 import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
+import { EmployeeNoticeBoardModule } from './modules/employee-notice-board/employee-notice-board.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 
@@ -78,6 +79,7 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
     HrModule,
     AttendanceModule,
     NoticeBoardModule,
+    EmployeeNoticeBoardModule,
     AppConfigModule,
     AuditLogsModule,
   ],
