@@ -1,12 +1,13 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
-  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum,
-  ValidateNested, Min,
+  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail,
+  ValidateNested, Min, MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -139,7 +140,7 @@ export class UpdateWorkScheduleDto {
 }
 
 export class UpdateEmployeeAccountDto {
-  @IsOptional() @IsString()
+  @IsOptional() @IsEmail()
   email?: string;
 
   @IsOptional()
@@ -161,9 +162,16 @@ export class UpdateEmployeeAccountDto {
 
 export class ResetEmployeePasswordDto {
   @IsString()
+  @MinLength(8)
   password: string;
 }
 
+const nullIfEmpty = (value?: string | null) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+};
 
 const includeRelations = {
   users: {
@@ -316,33 +324,33 @@ export class EmployeesService {
           department_id: rest.department_id !== undefined ? rest.department_id : undefined,
           designation_id: rest.designation_id !== undefined ? rest.designation_id : undefined,
           reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
-          employee_code: rest.employee_code !== undefined ? rest.employee_code : undefined,
-          full_name: rest.full_name !== undefined ? rest.full_name : undefined,
-          father_name: rest.father_name !== undefined ? rest.father_name : undefined,
-          mother_name: rest.mother_name !== undefined ? rest.mother_name : undefined,
+          employee_code: rest.employee_code !== undefined ? nullIfEmpty(rest.employee_code) : undefined,
+          full_name: rest.full_name !== undefined ? nullIfEmpty(rest.full_name) : undefined,
+          father_name: rest.father_name !== undefined ? nullIfEmpty(rest.father_name) : undefined,
+          mother_name: rest.mother_name !== undefined ? nullIfEmpty(rest.mother_name) : undefined,
           date_of_birth:
             rest.date_of_birth !== undefined ? (rest.date_of_birth ? new Date(rest.date_of_birth) : null) : undefined,
-          address: rest.address !== undefined ? rest.address : undefined,
-          personal_phone: rest.personal_phone !== undefined ? rest.personal_phone : undefined,
-          personal_email: rest.personal_email !== undefined ? rest.personal_email : undefined,
-          job_title: rest.job_title !== undefined ? rest.job_title : undefined,
+          address: rest.address !== undefined ? nullIfEmpty(rest.address) : undefined,
+          personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
+          personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
+          job_title: rest.job_title !== undefined ? nullIfEmpty(rest.job_title) : undefined,
           staff_category: rest.staff_category !== undefined ? (rest.staff_category as any) : undefined,
-          job_description: rest.job_description !== undefined ? rest.job_description : undefined,
-          notes: rest.notes !== undefined ? rest.notes : undefined,
-          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time) : undefined,
-          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time) : undefined,
+          job_description: rest.job_description !== undefined ? nullIfEmpty(rest.job_description) : undefined,
+          notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
+          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
+          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined) : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
           staff_type_id: rest.staff_type_id !== undefined ? rest.staff_type_id : undefined,
           campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
           days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
           photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
-          account_number: rest.account_number !== undefined ? rest.account_number : undefined,
-          bank_name: rest.bank_name !== undefined ? rest.bank_name : undefined,
-          emergency_contact_name: rest.emergency_contact_name !== undefined ? rest.emergency_contact_name : undefined,
-          emergency_contact_phone: rest.emergency_contact_phone !== undefined ? rest.emergency_contact_phone : undefined,
+          account_number: rest.account_number !== undefined ? nullIfEmpty(rest.account_number) : undefined,
+          bank_name: rest.bank_name !== undefined ? nullIfEmpty(rest.bank_name) : undefined,
+          emergency_contact_name: rest.emergency_contact_name !== undefined ? nullIfEmpty(rest.emergency_contact_name) : undefined,
+          emergency_contact_phone: rest.emergency_contact_phone !== undefined ? nullIfEmpty(rest.emergency_contact_phone) : undefined,
           emergency_contact_relationship:
-            rest.emergency_contact_relationship !== undefined ? rest.emergency_contact_relationship : undefined,
+            rest.emergency_contact_relationship !== undefined ? nullIfEmpty(rest.emergency_contact_relationship) : undefined,
         },
         include: includeRelations
       });
@@ -471,16 +479,32 @@ export class EmployeesService {
     return this.getWorkSchedule(employeeId);
   }
 
-  async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto) {
+  async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto, caller: IJwtStaffPayload) {
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
     }
 
+    if (dto.role === StaffRole.SUPER_ADMIN && caller.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    }
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim();
+      if (email) {
+        const existing = await this.prisma.users.findFirst({
+          where: { email, NOT: { id: employee.user_id } },
+        });
+        if (existing) {
+          throw new ConflictException('Email is already in use by another account.');
+        }
+      }
+    }
+
     return this.prisma.users.update({
       where: { id: employee.user_id },
       data: {
-        email: dto.email !== undefined ? dto.email : undefined,
+        email: dto.email !== undefined ? (dto.email.trim() || null) : undefined,
         role: dto.role !== undefined ? dto.role : undefined,
         campus_id: dto.campus_id !== undefined ? dto.campus_id : undefined,
         is_active: dto.is_active !== undefined ? dto.is_active : undefined,

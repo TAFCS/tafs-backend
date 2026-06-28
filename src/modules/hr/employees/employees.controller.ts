@@ -3,7 +3,9 @@ import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateWorkSched
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
+import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
 
@@ -71,8 +73,9 @@ export class EmployeesController {
   async updateAccount(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmployeeAccountDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.employeesService.updateAccount(id, dto);
+    const data = await this.employeesService.updateAccount(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee portal account updated successfully');
   }
 
