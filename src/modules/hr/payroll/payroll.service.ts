@@ -282,13 +282,16 @@ export class PayrollService {
         segments = [];
       }
 
-      // Minutes late = how far the check-in exceeded reporting_time.
-      // Only meaningful for LATE days with a known check-in time.
+      // Grace window is a gate, not a subsidy: if the employee arrives within
+      // late_relaxation_minutes they pay nothing; if they exceed it they pay
+      // for ALL late minutes (e.g. 6 min late with 5 min grace → 6 min deducted).
       let lateMinutes = 0;
       if (classification === 'LATE' && checkInAt && employee.reporting_time) {
         const reportingMinutes = employee.reporting_time.getUTCHours() * 60 + employee.reporting_time.getUTCMinutes();
         const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
-        lateMinutes = Math.max(0, checkInMinutes - reportingMinutes);
+        const rawLate = checkInMinutes - reportingMinutes;
+        const relaxation = employee.late_relaxation_minutes ?? 0;
+        lateMinutes = rawLate > relaxation ? rawLate : 0;
       }
 
       dailyBreakdown.push({
