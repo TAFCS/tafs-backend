@@ -282,14 +282,13 @@ export class PayrollService {
         segments = [];
       }
 
-      // Minutes late = how far the check-in exceeded reporting_time + relaxation.
+      // Minutes late = how far the check-in exceeded reporting_time.
       // Only meaningful for LATE days with a known check-in time.
       let lateMinutes = 0;
       if (classification === 'LATE' && checkInAt && employee.reporting_time) {
         const reportingMinutes = employee.reporting_time.getUTCHours() * 60 + employee.reporting_time.getUTCMinutes();
         const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
-        const relaxation = employee.late_relaxation_minutes ?? 0;
-        lateMinutes = Math.max(0, checkInMinutes - (reportingMinutes + relaxation));
+        lateMinutes = Math.max(0, checkInMinutes - reportingMinutes);
       }
 
       dailyBreakdown.push({
