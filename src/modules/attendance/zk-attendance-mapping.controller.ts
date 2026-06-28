@@ -19,9 +19,13 @@ export class ZkAttendanceMappingController {
   constructor(private readonly mappingService: ZkAttendanceMappingService) {}
 
   @Get()
-  async getMappings(@CurrentUser() user: IJwtStaffPayload) {
+  async getMappings(
+    @Query('employee_id') employeeId: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
     this.assertSuperAdmin(user);
-    return this.mappingService.getMappings();
+    const parsed = employeeId ? parseInt(employeeId, 10) : undefined;
+    return this.mappingService.getMappings(parsed);
   }
 
   @Get('unmapped')

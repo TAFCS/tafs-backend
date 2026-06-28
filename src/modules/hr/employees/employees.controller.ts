@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus } from '@nestjs/common';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateWorkScheduleDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -64,6 +64,26 @@ export class EmployeesController {
   async clearWorkSchedule(@Param('id', ParseIntPipe) id: number) {
     const data = await this.employeesService.clearWorkSchedule(id);
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
+  }
+
+  @Patch(':id/account')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateAccount(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateEmployeeAccountDto,
+  ) {
+    const data = await this.employeesService.updateAccount(id, dto);
+    return createApiResponse(data, HttpStatus.OK, 'Employee portal account updated successfully');
+  }
+
+  @Post(':id/account/reset-password')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async resetAccountPassword(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ResetEmployeePasswordDto,
+  ) {
+    const data = await this.employeesService.resetAccountPassword(id, dto);
+    return createApiResponse(data, HttpStatus.OK, 'Employee password reset successfully');
   }
 
   @Get(':id')

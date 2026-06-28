@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { StaffRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
-  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean,
+  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum,
   ValidateNested, Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -93,6 +95,24 @@ export class CreateEmployeeDto {
   @IsOptional() @IsInt()
   days_per_week?: number;
 
+  @IsOptional() @IsString()
+  photo_url?: string | null;
+
+  @IsOptional() @IsString()
+  account_number?: string;
+
+  @IsOptional() @IsString()
+  bank_name?: string;
+
+  @IsOptional() @IsString()
+  emergency_contact_name?: string;
+
+  @IsOptional() @IsString()
+  emergency_contact_phone?: string;
+
+  @IsOptional() @IsString()
+  emergency_contact_relationship?: string;
+
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
@@ -118,10 +138,45 @@ export class UpdateWorkScheduleDto {
   days: WorkScheduleDayDto[];
 }
 
+export class UpdateEmployeeAccountDto {
+  @IsOptional() @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsEnum(StaffRole)
+  role?: StaffRole;
+
+  @IsOptional() @IsInt()
+  campus_id?: number | null;
+
+  @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  allowed_class_ids?: number[];
+}
+
+export class ResetEmployeePasswordDto {
+  @IsString()
+  password: string;
+}
+
 
 const includeRelations = {
   users: {
-    select: { id: true, full_name: true, role: true, email: true, is_active: true }
+    select: {
+      id: true,
+      username: true,
+      full_name: true,
+      role: true,
+      email: true,
+      is_active: true,
+      campus_id: true,
+      allowed_class_ids: true,
+    },
   },
   departments: true,
   designations: true,
@@ -210,6 +265,11 @@ export class EmployeesService {
         staff_type_id: rest.staff_type_id || null,
         campus_id: rest.campus_id || null,
         days_per_week: rest.days_per_week ?? null,
+        account_number: rest.account_number || null,
+        bank_name: rest.bank_name || null,
+        emergency_contact_name: rest.emergency_contact_name || null,
+        emergency_contact_phone: rest.emergency_contact_phone || null,
+        emergency_contact_relationship: rest.emergency_contact_relationship || null,
         employee_class_section_assignments: class_section_assignments?.length
           ? {
               create: class_section_assignments.map((a) => ({
@@ -275,7 +335,14 @@ export class EmployeesService {
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
           staff_type_id: rest.staff_type_id !== undefined ? rest.staff_type_id : undefined,
           campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
-          days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined
+          days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
+          photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
+          account_number: rest.account_number !== undefined ? rest.account_number : undefined,
+          bank_name: rest.bank_name !== undefined ? rest.bank_name : undefined,
+          emergency_contact_name: rest.emergency_contact_name !== undefined ? rest.emergency_contact_name : undefined,
+          emergency_contact_phone: rest.emergency_contact_phone !== undefined ? rest.emergency_contact_phone : undefined,
+          emergency_contact_relationship:
+            rest.emergency_contact_relationship !== undefined ? rest.emergency_contact_relationship : undefined,
         },
         include: includeRelations
       });
@@ -402,5 +469,50 @@ export class EmployeesService {
 
     await this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } });
     return this.getWorkSchedule(employeeId);
+  }
+
+  async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto) {
+    const employee = await this.findOne(employeeId);
+    if (!employee.user_id) {
+      throw new BadRequestException('This employee has no linked portal account.');
+    }
+
+    return this.prisma.users.update({
+      where: { id: employee.user_id },
+      data: {
+        email: dto.email !== undefined ? dto.email : undefined,
+        role: dto.role !== undefined ? dto.role : undefined,
+        campus_id: dto.campus_id !== undefined ? dto.campus_id : undefined,
+        is_active: dto.is_active !== undefined ? dto.is_active : undefined,
+        allowed_class_ids: dto.allowed_class_ids !== undefined ? dto.allowed_class_ids : undefined,
+      },
+      select: {
+        id: true,
+        username: true,
+        full_name: true,
+        role: true,
+        email: true,
+        is_active: true,
+        campus_id: true,
+        allowed_class_ids: true,
+      },
+    });
+  }
+
+  async resetAccountPassword(employeeId: number, dto: ResetEmployeePasswordDto) {
+    const employee = await this.findOne(employeeId);
+    if (!employee.user_id) {
+      throw new BadRequestException('This employee has no linked portal account.');
+    }
+    if (!dto.password || dto.password.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters.');
+    }
+
+    const password_hash = await bcrypt.hash(dto.password, 10);
+    await this.prisma.users.update({
+      where: { id: employee.user_id },
+      data: { password_hash },
+    });
+    return { success: true };
   }
 }

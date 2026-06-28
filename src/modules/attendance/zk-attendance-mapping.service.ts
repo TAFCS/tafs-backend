@@ -11,8 +11,9 @@ export class ZkAttendanceMappingService {
     private readonly processor: ZkAttendanceProcessorService,
   ) {}
 
-  async getMappings() {
+  async getMappings(employeeId?: number) {
     return this.prisma.device_user_mappings.findMany({
+      where: employeeId != null ? { employee_id: employeeId } : undefined,
       orderBy: [{ device_sn: 'asc' }, { device_pin: 'asc' }],
       include: {
         employee_profiles: { select: { id: true, full_name: true, employee_code: true } },
