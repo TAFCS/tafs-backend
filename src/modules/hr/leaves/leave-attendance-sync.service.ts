@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { AttendanceSource, StaffAttendanceStatus } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
@@ -24,10 +24,20 @@ export class LeaveAttendanceSyncService {
         employee_profiles: { select: { id: true, campus_id: true } },
       },
     });
-    if (!request?.employee_profiles.campus_id) return 0;
+    if (!request) {
+      throw new BadRequestException(`Leave request ${requestId} not found`);
+    }
+    if (!request.employee_profiles.campus_id) {
+      throw new BadRequestException('Employee has no campus assigned — cannot sync attendance');
+    }
+
+    const leaveCode = request.leave_types.code;
+    if (!leaveCode) {
+      throw new BadRequestException('Leave type is not configured');
+    }
 
     const status =
-      request.leave_types.code === 'UNPAID'
+      leaveCode === 'UNPAID'
         ? StaffAttendanceStatus.UNPAID_LEAVE
         : StaffAttendanceStatus.EXCUSED;
     const notes = this.leaveNote(requestId);

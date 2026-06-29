@@ -375,7 +375,11 @@ export class ZkAttendanceProcessorService {
     const existing = await this.prisma.attendance_staff_daily.findUnique({
       where: { employee_id_date: { employee_id: employeeId, date } },
     });
-    if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return;
+    if (
+      existing?.source === AttendanceSource.MANUAL ||
+      existing?.source === AttendanceSource.SYSTEM ||
+      existing?.source === AttendanceSource.LEAVE
+    ) return;
 
     const policy = await this.policyResolver.resolveStaffCheckInPolicy(
       employeeId,

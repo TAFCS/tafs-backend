@@ -48,6 +48,13 @@ export class SaturdaySchedulesService {
     });
     if (!campus) throw new NotFoundException('Campus not found');
 
+    const duplicate = await this.prisma.teacher_saturday_schedules.findUnique({
+      where: { campus_id_date: { campus_id: dto.campusId, date } },
+    });
+    if (duplicate) {
+      throw new BadRequestException('This Saturday is already scheduled for this campus');
+    }
+
     const schedule = await this.prisma.teacher_saturday_schedules.create({
       data: {
         campus_id: dto.campusId,

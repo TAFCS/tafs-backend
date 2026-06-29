@@ -127,6 +127,9 @@ async function main() {
     CREATE UNIQUE INDEX IF NOT EXISTS "leave_types_code_key" ON "leave_types"("code");
   `);
   await prisma.$executeRawUnsafe(`
+    ALTER TABLE "leave_types" ALTER COLUMN "code" SET NOT NULL;
+  `);
+  await prisma.$executeRawUnsafe(`
     ALTER TABLE "employee_profiles"
     ADD COLUMN IF NOT EXISTS "is_permanent_employee" BOOLEAN NOT NULL DEFAULT false;
   `);

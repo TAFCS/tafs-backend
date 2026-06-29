@@ -14,7 +14,7 @@ import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { createApiResponse } from '../../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
-import { ListLeaveRequestsQueryDto, ReviewLeaveRequestDto } from './dto/leave-requests.dto';
+import { ListLeaveRequestsQueryDto, ReviewLeaveRequestDto, RevokeLeaveRequestDto } from './dto/leave-requests.dto';
 import { LeaveRequestsService } from './leave-requests.service';
 
 @ApiTags('Leave Requests (Admin)')
@@ -50,5 +50,15 @@ export class LeaveRequestsController {
   ) {
     const data = await this.leaveService.review(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Leave request reviewed successfully');
+  }
+
+  @Patch(':id/revoke')
+  async revoke(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RevokeLeaveRequestDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.leaveService.revoke(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Leave request revoked successfully');
   }
 }

@@ -304,6 +304,10 @@ export class StaffAttendanceService {
       return segments;
     }
 
+    if (record?.status === StaffAttendanceStatus.UNPAID_LEAVE) {
+      return segments;
+    }
+
     if (record && !record.check_in_at && record.status !== StaffAttendanceStatus.ABSENT) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;

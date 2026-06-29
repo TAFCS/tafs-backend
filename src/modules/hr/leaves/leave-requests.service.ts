@@ -13,6 +13,7 @@ import {
   CreateLeaveRequestDto,
   ListLeaveRequestsQueryDto,
   ReviewLeaveRequestDto,
+  RevokeLeaveRequestDto,
 } from './dto/leave-requests.dto';
 import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
 
@@ -25,6 +26,7 @@ const LEAVE_INCLUDE = {
       employee_code: true,
       campus_id: true,
       is_permanent_employee: true,
+      join_date: true,
       campuses: { select: { id: true, campus_name: true } },
     },
   },
@@ -43,7 +45,13 @@ export class LeaveRequestsService {
   async create(userId: string, dto: CreateLeaveRequestDto) {
     const profile = await this.prisma.employee_profiles.findUnique({
       where: { user_id: userId },
-      select: { id: true, full_name: true, campus_id: true, is_permanent_employee: true },
+      select: {
+        id: true,
+        full_name: true,
+        campus_id: true,
+        is_permanent_employee: true,
+        join_date: true,
+      },
     });
     if (!profile) {
       throw new ForbiddenException('No employee profile is linked to this account');
@@ -55,7 +63,8 @@ export class LeaveRequestsService {
     if (!leaveType) throw new BadRequestException('Invalid leave type');
     if (!leaveType.code) throw new BadRequestException('Leave type is not configured');
 
-    this.validateTypeRules(leaveType.code, dto, profile.is_permanent_employee);
+    this.validateTypeRules(leaveType.code, dto, profile);
+    this.validateAttachmentUrl(dto.attachmentUrl, profile.id);
 
     const startDate = this.parseDate(dto.startDate);
     const endDate = this.parseDate(dto.endDate);
@@ -94,7 +103,7 @@ export class LeaveRequestsService {
   async getSelfContext(userId: string) {
     const profile = await this.prisma.employee_profiles.findUnique({
       where: { user_id: userId },
-      select: { id: true, is_permanent_employee: true, full_name: true },
+      select: { id: true, is_permanent_employee: true, join_date: true, full_name: true },
     });
     if (!profile) {
       throw new ForbiddenException('No employee profile is linked to this account');
@@ -105,7 +114,7 @@ export class LeaveRequestsService {
     });
     return {
       employeeId: profile.id,
-      isPermanentEmployee: profile.is_permanent_employee,
+      isPermanentEmployee: this.isPermanentEmployee(profile),
       leaveTypes,
     };
   }
@@ -127,7 +136,7 @@ export class LeaveRequestsService {
   async listForReview(query: ListLeaveRequestsQueryDto, user: IJwtStaffPayload) {
     this.assertApprovePermission(user);
 
-    const campusId = query.campusId ?? (user.role === StaffRole.CAMPUS_ADMIN ? user.campusId ?? undefined : undefined);
+    const campusId = this.resolveCampusFilter(query.campusId, user);
     if (user.campusId && campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
@@ -162,11 +171,7 @@ export class LeaveRequestsService {
       include: LEAVE_INCLUDE,
     });
     if (!request) throw new NotFoundException('Leave request not found');
-    if (user.role === StaffRole.CAMPUS_ADMIN && user.campusId) {
-      if (request.employee_profiles.campus_id !== user.campusId) {
-        throw new ForbiddenException('You do not have access to this leave request');
-      }
-    }
+    this.assertCampusAccess(user, request.employee_profiles.campus_id);
     return request;
   }
 
@@ -185,6 +190,18 @@ export class LeaveRequestsService {
       throw new BadRequestException('Only pending requests can be reviewed');
     }
 
+    if (dto.status === LeaveRequestStatus.APPROVED) {
+      if (!existing.employee_profiles.campus_id) {
+        throw new BadRequestException('Employee has no campus assigned — cannot sync attendance');
+      }
+      await this.assertNoOverlap(
+        existing.employee_id,
+        existing.start_date,
+        existing.end_date,
+        id,
+      );
+    }
+
     const updated = await this.prisma.leave_requests.update({
       where: { id },
       data: {
@@ -197,34 +214,64 @@ export class LeaveRequestsService {
     });
 
     if (dto.status === LeaveRequestStatus.APPROVED) {
-      await this.attendanceSync.syncApprovedLeaveToAttendance(id);
+      try {
+        await this.attendanceSync.syncApprovedLeaveToAttendance(id);
+      } catch (err) {
+        await this.prisma.leave_requests.update({
+          where: { id },
+          data: {
+            status: LeaveRequestStatus.PENDING,
+            review_reason: null,
+            reviewed_by: null,
+            reviewed_at: null,
+          },
+        });
+        throw err;
+      }
     }
 
-    const employeeUser = await this.prisma.employee_profiles.findUnique({
-      where: { id: existing.employee_id },
-      select: { user_id: true },
+    void this.notifyEmployeeReview(existing, dto.status, id);
+    return updated;
+  }
+
+  async revoke(id: number, dto: RevokeLeaveRequestDto, user: IJwtStaffPayload) {
+    this.assertApprovePermission(user);
+
+    const reason = dto.reviewReason?.trim();
+    if (!reason) {
+      throw new BadRequestException('Revocation reason is required');
+    }
+
+    const existing = await this.getById(id, user);
+    if (existing.status !== LeaveRequestStatus.APPROVED) {
+      throw new BadRequestException('Only approved requests can be revoked');
+    }
+
+    await this.attendanceSync.revertLeaveAttendance(id);
+
+    const updated = await this.prisma.leave_requests.update({
+      where: { id },
+      data: {
+        status: LeaveRequestStatus.REJECTED,
+        review_reason: reason,
+        reviewed_by: user.sub,
+        reviewed_at: new Date(),
+      },
+      include: LEAVE_INCLUDE,
     });
-    if (employeeUser?.user_id) {
-      const label = dto.status === LeaveRequestStatus.APPROVED ? 'approved' : 'rejected';
-      void this.fcmService.sendToUsers(
-        [employeeUser.user_id],
-        `Leave request ${label}`,
-        `Your ${existing.leave_types.name} request was ${label}.`,
-        { type: 'leave_request', leave_request_id: String(id), status: dto.status },
-      );
-    }
 
+    void this.notifyEmployeeReview(existing, LeaveRequestStatus.REJECTED, id, 'revoked');
     return updated;
   }
 
   private validateTypeRules(
     code: string,
     dto: CreateLeaveRequestDto,
-    isPermanent: boolean,
+    profile: { is_permanent_employee: boolean; join_date: Date | null },
   ) {
     switch (code) {
       case 'CASUAL':
-        if (!isPermanent) {
+        if (!this.isPermanentEmployee(profile)) {
           throw new BadRequestException(
             'Casual leave is only available after 14 months of service',
           );
@@ -233,6 +280,9 @@ export class LeaveRequestsService {
       case 'SICK':
         if (!dto.attachmentUrl?.trim() || !dto.attachmentType?.trim()) {
           throw new BadRequestException('Sick leave requires an attachment');
+        }
+        if (dto.attachmentType !== 'image' && dto.attachmentType !== 'document') {
+          throw new BadRequestException('Attachment type must be image or document');
         }
         break;
       case 'ANNUAL':
@@ -246,13 +296,40 @@ export class LeaveRequestsService {
     }
   }
 
-  private async assertNoOverlap(employeeId: number, start: Date, end: Date) {
+  private validateAttachmentUrl(url: string | undefined, employeeId: number) {
+    if (!url?.trim()) return;
+    const normalized = url.trim();
+    const expectedSegment = `/employees/${employeeId}/leave-`;
+    if (!normalized.includes(expectedSegment)) {
+      throw new BadRequestException('Attachment must be uploaded for this employee');
+    }
+  }
+
+  private isPermanentEmployee(profile: {
+    is_permanent_employee: boolean;
+    join_date: Date | null;
+  }): boolean {
+    if (profile.is_permanent_employee) return true;
+    if (!profile.join_date) return false;
+    const cutoff = new Date();
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - 14);
+    cutoff.setUTCHours(0, 0, 0, 0);
+    return profile.join_date <= cutoff;
+  }
+
+  private async assertNoOverlap(
+    employeeId: number,
+    start: Date,
+    end: Date,
+    excludeId?: number,
+  ) {
     const overlap = await this.prisma.leave_requests.findFirst({
       where: {
         employee_id: employeeId,
         status: { in: [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED] },
         start_date: { lte: end },
         end_date: { gte: start },
+        ...(excludeId != null ? { id: { not: excludeId } } : {}),
       },
       select: { id: true },
     });
@@ -268,10 +345,53 @@ export class LeaveRequestsService {
     return d;
   }
 
+  private resolveCampusFilter(
+    queryCampusId: number | undefined,
+    user: IJwtStaffPayload,
+  ): number | undefined {
+    if (user.role === StaffRole.SUPER_ADMIN) {
+      return queryCampusId;
+    }
+    if (user.campusId) {
+      return queryCampusId ?? user.campusId;
+    }
+    return queryCampusId;
+  }
+
+  private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
+    if (user.role === StaffRole.SUPER_ADMIN) return;
+    if (user.campusId && employeeCampusId && user.campusId !== employeeCampusId) {
+      throw new ForbiddenException('You do not have access to this leave request');
+    }
+  }
+
   private assertApprovePermission(user: IJwtStaffPayload) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (user.permissions?.includes('hr.leave.approve')) return;
     throw new ForbiddenException('Your account does not have permission: hr.leave.approve');
+  }
+
+  private async notifyEmployeeReview(
+    existing: Prisma.leave_requestsGetPayload<{ include: typeof LEAVE_INCLUDE }>,
+    status: LeaveRequestStatus,
+    id: number,
+    labelOverride?: string,
+  ) {
+    const employeeUser = await this.prisma.employee_profiles.findUnique({
+      where: { id: existing.employee_id },
+      select: { user_id: true },
+    });
+    if (!employeeUser?.user_id) return;
+
+    const label =
+      labelOverride ??
+      (status === LeaveRequestStatus.APPROVED ? 'approved' : 'rejected');
+    void this.fcmService.sendToUsers(
+      [employeeUser.user_id],
+      `Leave request ${label}`,
+      `Your ${existing.leave_types.name} request was ${label}.`,
+      { type: 'leave_request', leave_request_id: String(id), status },
+    );
   }
 
   private async notifyApprovers(

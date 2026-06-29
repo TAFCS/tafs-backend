@@ -120,7 +120,9 @@ export class MediaController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
   async uploadLeaveAttachment(
     @Param('id', ParseIntPipe) id: number,
     @UploadedFile() file: Express.Multer.File,

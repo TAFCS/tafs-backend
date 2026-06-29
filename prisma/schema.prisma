@@ -1022,7 +1022,7 @@ model leave_types {
   name           String           @db.VarChar(100)
   description    String?          @db.VarChar(255)
   is_paid        Boolean          @default(true)
-  code           String?          @unique @db.VarChar(20)
+  code           String           @unique @db.VarChar(20)
   leave_requests leave_requests[]
 }
 

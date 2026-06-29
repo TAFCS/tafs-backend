@@ -76,3 +76,10 @@ export class ReviewLeaveRequestDto {
   @MaxLength(500)
   reviewReason?: string;
 }
+
+export class RevokeLeaveRequestDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(500)
+  reviewReason: string;
+}

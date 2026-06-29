@@ -134,6 +134,10 @@ export class HolidayAttendanceSyncService {
         skippedManual++;
         continue;
       }
+      if (existing?.source === AttendanceSource.LEAVE && !force) {
+        skippedManual++;
+        continue;
+      }
 
       const description = resolved.description ?? 'Day off';
       await this.prisma.attendance_staff_daily.upsert({
