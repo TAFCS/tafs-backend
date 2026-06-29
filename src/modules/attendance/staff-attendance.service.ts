@@ -360,7 +360,7 @@ export class StaffAttendanceService {
     const { periodStart, periodEnd } = computePayrollWindow(year, month);
     const campusId = employee.campus_id ?? 0;
 
-    const [scans, records, objections, payrollLine, scheduleCtx, calendarRows] = await Promise.all([
+    const [scans, records, objections, payrollLine, scheduleCtx, calendarRows, mandatorySaturdayDates] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
           employee_id: employee.id,
@@ -395,6 +395,9 @@ export class StaffAttendanceService {
       campusId
         ? this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd)
         : Promise.resolve([]),
+      campusId
+        ? this.calendarResolver.loadMandatorySaturdayDates(campusId, periodStart, periodEnd)
+        : Promise.resolve(new Set<string>()),
     ]);
 
     const scansByDate = new Map<string, typeof scans>();
@@ -440,6 +443,7 @@ export class StaffAttendanceService {
             scheduleCtx?.staff_category ?? null,
             scheduleCtx?.days_per_week ?? null,
             scheduleCtx?.employee_work_schedules ?? [],
+            mandatorySaturdayDates,
           )
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 

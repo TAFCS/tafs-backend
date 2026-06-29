@@ -98,26 +98,27 @@ model campus_sections {
 }
 
 model campuses {
-  id                       Int                        @id @default(autoincrement())
-  campus_code              String                     @unique @db.VarChar(10)
-  campus_name              String                     @db.VarChar(100)
-  address                  String?
-  campus_prefix            String?                    @db.VarChar(10)
-  is_active                Boolean                    @default(true)
-  academic_calendar_days   academic_calendar_days[]
-  attendance_roll_sessions attendance_roll_sessions[]
-  attendance_staff_daily   attendance_staff_daily[]
-  attendance_student_daily attendance_student_daily[]
-  campus_classes           campus_classes[]
-  campus_sections          campus_sections[]
-  class_check_in_schedules class_check_in_schedules[]
-  class_fee_schedule       class_fee_schedule[]
-  employee_profiles        employee_profiles[]
-  hr_policy_sets           hr_policy_sets[]
-  payroll_runs             payroll_runs[]
-  students                 students[]
-  users                    users[]
-  vouchers                 vouchers[]
+  id                         Int                          @id @default(autoincrement())
+  campus_code                String                       @unique @db.VarChar(10)
+  campus_name                String                       @db.VarChar(100)
+  address                    String?
+  campus_prefix              String?                      @db.VarChar(10)
+  is_active                  Boolean                      @default(true)
+  academic_calendar_days     academic_calendar_days[]
+  attendance_roll_sessions   attendance_roll_sessions[]
+  attendance_staff_daily     attendance_staff_daily[]
+  attendance_student_daily   attendance_student_daily[]
+  campus_classes             campus_classes[]
+  campus_sections            campus_sections[]
+  class_check_in_schedules   class_check_in_schedules[]
+  class_fee_schedule         class_fee_schedule[]
+  employee_profiles          employee_profiles[]
+  hr_policy_sets             hr_policy_sets[]
+  payroll_runs               payroll_runs[]
+  students                   students[]
+  teacher_saturday_schedules teacher_saturday_schedules[]
+  users                      users[]
+  vouchers                   vouchers[]
 }
 
 model class_fee_schedule {
@@ -615,6 +616,7 @@ model users {
   employee_notice_posts                                                    employee_notice_posts[]
   employee_profile                                                         employee_profiles?
   fcm_device_tokens                                                        fcm_device_tokens[]
+  leave_requests_reviewed                                                  leave_requests[]             @relation("LeaveRequestReviewedBy")
   notice_board_posts                                                       notice_board_posts[]
   processed_change_requests                                                parent_change_requests[]
   payroll_run_lines_disbursed                                              payroll_run_lines[]          @relation("PayrollLineDisbursedBy")
@@ -622,6 +624,7 @@ model users {
   postdated_cheques_received                                               postdated_cheques[]          @relation("ChequeReceivedBy")
   tickets_closed                                                           support_tickets[]            @relation("TicketClosedByUser")
   tickets_assigned                                                         support_tickets[]            @relation("TicketCurrentAssignee")
+  teacher_saturday_schedules_marked                                        teacher_saturday_schedules[] @relation("SaturdayScheduleMarkedBy")
   ticket_events_actor                                                      ticket_events[]              @relation("TicketEventActorUser")
   ticket_events_from                                                       ticket_events[]              @relation("TicketEventFromUser")
   ticket_events_to                                                         ticket_events[]              @relation("TicketEventToUser")
@@ -910,6 +913,7 @@ model employee_profiles {
   emergency_contact_name             String?                              @db.VarChar(100)
   emergency_contact_phone            String?                              @db.VarChar(60)
   emergency_contact_relationship     String?                              @db.VarChar(50)
+  is_permanent_employee              Boolean                              @default(false)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_staff_daily             attendance_staff_daily[]
@@ -923,6 +927,7 @@ model employee_profiles {
   staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
   employee_work_schedules            employee_work_schedules[]
+  leave_requests                     leave_requests[]
   payroll_run_lines                  payroll_run_lines[]
   zk_attendance_scans                zk_attendance_scans[]
 }
@@ -1013,10 +1018,49 @@ model hr_policy_rules {
 }
 
 model leave_types {
-  id          Int     @id @default(autoincrement())
-  name        String  @db.VarChar(100)
-  description String? @db.VarChar(255)
-  is_paid     Boolean @default(true)
+  id             Int              @id @default(autoincrement())
+  name           String           @db.VarChar(100)
+  description    String?          @db.VarChar(255)
+  is_paid        Boolean          @default(true)
+  code           String?          @unique @db.VarChar(20)
+  leave_requests leave_requests[]
+}
+
+model leave_requests {
+  id                Int                @id @default(autoincrement())
+  employee_id       Int
+  leave_type_id     Int
+  start_date        DateTime           @db.Date
+  end_date          DateTime           @db.Date
+  reason            String?            @db.VarChar(1000)
+  attachment_url    String?            @db.VarChar(500)
+  attachment_type   String?            @db.VarChar(20)
+  status            LeaveRequestStatus @default(PENDING)
+  reviewed_by       String?            @db.VarChar(255)
+  review_reason     String?            @db.VarChar(500)
+  reviewed_at       DateTime?          @db.Timestamp(6)
+  created_at        DateTime           @default(now()) @db.Timestamp(6)
+  updated_at        DateTime           @default(now()) @updatedAt @db.Timestamp(6)
+  employee_profiles employee_profiles  @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  leave_types       leave_types        @relation(fields: [leave_type_id], references: [id])
+  reviewer          users?             @relation("LeaveRequestReviewedBy", fields: [reviewed_by], references: [id])
+
+  @@index([employee_id])
+  @@index([status])
+  @@index([start_date, end_date])
+}
+
+model teacher_saturday_schedules {
+  id        Int      @id @default(autoincrement())
+  campus_id Int
+  date      DateTime @db.Date
+  marked_by String   @db.VarChar(255)
+  marked_at DateTime @default(now()) @db.Timestamp(6)
+  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  users     users    @relation("SaturdayScheduleMarkedBy", fields: [marked_by], references: [id])
+
+  @@unique([campus_id, date])
+  @@index([campus_id, date])
 }
 
 model payroll_runs {
@@ -1063,6 +1107,7 @@ model payroll_run_lines {
   disbursement_notes     String?           @db.VarChar(300)
   total_late_minutes     Int               @default(0)
   late_deduction         Decimal           @default(0) @db.Decimal(12, 2)
+  unpaid_leave_days      Int               @default(0)
   disbursed_by_user      users?            @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles      employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs           payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
@@ -1528,6 +1573,13 @@ enum StaffAttendanceStatus {
   LATE
   HALF_DAY
   EXCUSED
+  UNPAID_LEAVE
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum PayrollRunStatus {
@@ -1555,6 +1607,7 @@ enum AttendanceSource {
   MANUAL
   BIOMETRIC
   SYSTEM
+  LEAVE
 }
 
 enum PostdatedChequeStatus {

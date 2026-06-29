@@ -1,0 +1,332 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { LeaveRequestStatus, Prisma, StaffRole } from '@prisma/client';
+import { PrismaService } from '../../../../prisma/prisma.service';
+import { FcmService } from '../../../common/fcm/fcm.service';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { EmployeeProfileResolverService } from '../employee-profile-resolver.service';
+import {
+  CreateLeaveRequestDto,
+  ListLeaveRequestsQueryDto,
+  ReviewLeaveRequestDto,
+} from './dto/leave-requests.dto';
+import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
+
+const LEAVE_INCLUDE = {
+  leave_types: { select: { id: true, code: true, name: true, is_paid: true } },
+  employee_profiles: {
+    select: {
+      id: true,
+      full_name: true,
+      employee_code: true,
+      campus_id: true,
+      is_permanent_employee: true,
+      campuses: { select: { id: true, campus_name: true } },
+    },
+  },
+  reviewer: { select: { id: true, full_name: true } },
+} satisfies Prisma.leave_requestsInclude;
+
+@Injectable()
+export class LeaveRequestsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly profileResolver: EmployeeProfileResolverService,
+    private readonly attendanceSync: LeaveAttendanceSyncService,
+    private readonly fcmService: FcmService,
+  ) {}
+
+  async create(userId: string, dto: CreateLeaveRequestDto) {
+    const profile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: userId },
+      select: { id: true, full_name: true, campus_id: true, is_permanent_employee: true },
+    });
+    if (!profile) {
+      throw new ForbiddenException('No employee profile is linked to this account');
+    }
+
+    const leaveType = await this.prisma.leave_types.findUnique({
+      where: { code: dto.leaveTypeCode.toUpperCase() },
+    });
+    if (!leaveType) throw new BadRequestException('Invalid leave type');
+    if (!leaveType.code) throw new BadRequestException('Leave type is not configured');
+
+    this.validateTypeRules(leaveType.code, dto, profile.is_permanent_employee);
+
+    const startDate = this.parseDate(dto.startDate);
+    const endDate = this.parseDate(dto.endDate);
+    if (endDate < startDate) {
+      throw new BadRequestException('End date must be on or after start date');
+    }
+
+    await this.assertNoOverlap(profile.id, startDate, endDate);
+
+    const request = await this.prisma.leave_requests.create({
+      data: {
+        employee_id: profile.id,
+        leave_type_id: leaveType.id,
+        start_date: startDate,
+        end_date: endDate,
+        reason: dto.reason?.trim() || null,
+        attachment_url: dto.attachmentUrl?.trim() || null,
+        attachment_type: dto.attachmentType?.trim() || null,
+      },
+      include: LEAVE_INCLUDE,
+    });
+
+    void this.notifyApprovers(profile.full_name ?? 'Employee', leaveType.name, startDate, profile.campus_id);
+    return request;
+  }
+
+  async listMine(userId: string) {
+    const profile = await this.profileResolver.requireByUserId(userId);
+    return this.prisma.leave_requests.findMany({
+      where: { employee_id: profile.id },
+      include: LEAVE_INCLUDE,
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
+  async getSelfContext(userId: string) {
+    const profile = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: userId },
+      select: { id: true, is_permanent_employee: true, full_name: true },
+    });
+    if (!profile) {
+      throw new ForbiddenException('No employee profile is linked to this account');
+    }
+    const leaveTypes = await this.prisma.leave_types.findMany({
+      orderBy: { id: 'asc' },
+      select: { id: true, code: true, name: true, is_paid: true },
+    });
+    return {
+      employeeId: profile.id,
+      isPermanentEmployee: profile.is_permanent_employee,
+      leaveTypes,
+    };
+  }
+
+  async cancelMine(userId: string, id: number) {
+    const profile = await this.profileResolver.requireByUserId(userId);
+    const request = await this.prisma.leave_requests.findFirst({
+      where: { id, employee_id: profile.id },
+    });
+    if (!request) throw new NotFoundException('Leave request not found');
+    if (request.status !== LeaveRequestStatus.PENDING) {
+      throw new BadRequestException('Only pending requests can be cancelled');
+    }
+
+    await this.prisma.leave_requests.delete({ where: { id } });
+    return { id };
+  }
+
+  async listForReview(query: ListLeaveRequestsQueryDto, user: IJwtStaffPayload) {
+    this.assertApprovePermission(user);
+
+    const campusId = query.campusId ?? (user.role === StaffRole.CAMPUS_ADMIN ? user.campusId ?? undefined : undefined);
+    if (user.campusId && campusId && user.campusId !== campusId) {
+      throw new ForbiddenException('You do not have access to this campus');
+    }
+
+    const where: Prisma.leave_requestsWhereInput = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.leaveTypeCode
+        ? { leave_types: { code: query.leaveTypeCode.toUpperCase() } }
+        : {}),
+      ...(campusId ? { employee_profiles: { campus_id: campusId } } : {}),
+      ...(query.fromDate || query.toDate
+        ? {
+            AND: [
+              query.toDate ? { start_date: { lte: this.parseDate(query.toDate) } } : {},
+              query.fromDate ? { end_date: { gte: this.parseDate(query.fromDate) } } : {},
+            ],
+          }
+        : {}),
+    };
+
+    return this.prisma.leave_requests.findMany({
+      where,
+      include: LEAVE_INCLUDE,
+      orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
+    });
+  }
+
+  async getById(id: number, user: IJwtStaffPayload) {
+    this.assertApprovePermission(user);
+    const request = await this.prisma.leave_requests.findUnique({
+      where: { id },
+      include: LEAVE_INCLUDE,
+    });
+    if (!request) throw new NotFoundException('Leave request not found');
+    if (user.role === StaffRole.CAMPUS_ADMIN && user.campusId) {
+      if (request.employee_profiles.campus_id !== user.campusId) {
+        throw new ForbiddenException('You do not have access to this leave request');
+      }
+    }
+    return request;
+  }
+
+  async review(id: number, dto: ReviewLeaveRequestDto, user: IJwtStaffPayload) {
+    this.assertApprovePermission(user);
+
+    if (dto.status !== LeaveRequestStatus.APPROVED && dto.status !== LeaveRequestStatus.REJECTED) {
+      throw new BadRequestException('Review status must be APPROVED or REJECTED');
+    }
+    if (dto.status === LeaveRequestStatus.REJECTED && !dto.reviewReason?.trim()) {
+      throw new BadRequestException('Rejection reason is required');
+    }
+
+    const existing = await this.getById(id, user);
+    if (existing.status !== LeaveRequestStatus.PENDING) {
+      throw new BadRequestException('Only pending requests can be reviewed');
+    }
+
+    const updated = await this.prisma.leave_requests.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        review_reason: dto.reviewReason?.trim() || null,
+        reviewed_by: user.sub,
+        reviewed_at: new Date(),
+      },
+      include: LEAVE_INCLUDE,
+    });
+
+    if (dto.status === LeaveRequestStatus.APPROVED) {
+      await this.attendanceSync.syncApprovedLeaveToAttendance(id);
+    }
+
+    const employeeUser = await this.prisma.employee_profiles.findUnique({
+      where: { id: existing.employee_id },
+      select: { user_id: true },
+    });
+    if (employeeUser?.user_id) {
+      const label = dto.status === LeaveRequestStatus.APPROVED ? 'approved' : 'rejected';
+      void this.fcmService.sendToUsers(
+        [employeeUser.user_id],
+        `Leave request ${label}`,
+        `Your ${existing.leave_types.name} request was ${label}.`,
+        { type: 'leave_request', leave_request_id: String(id), status: dto.status },
+      );
+    }
+
+    return updated;
+  }
+
+  private validateTypeRules(
+    code: string,
+    dto: CreateLeaveRequestDto,
+    isPermanent: boolean,
+  ) {
+    switch (code) {
+      case 'CASUAL':
+        if (!isPermanent) {
+          throw new BadRequestException(
+            'Casual leave is only available after 14 months of service',
+          );
+        }
+        break;
+      case 'SICK':
+        if (!dto.attachmentUrl?.trim() || !dto.attachmentType?.trim()) {
+          throw new BadRequestException('Sick leave requires an attachment');
+        }
+        break;
+      case 'ANNUAL':
+      case 'UNPAID':
+        if (!dto.reason?.trim()) {
+          throw new BadRequestException('Reason is required for this leave type');
+        }
+        break;
+      default:
+        throw new BadRequestException('Unsupported leave type');
+    }
+  }
+
+  private async assertNoOverlap(employeeId: number, start: Date, end: Date) {
+    const overlap = await this.prisma.leave_requests.findFirst({
+      where: {
+        employee_id: employeeId,
+        status: { in: [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED] },
+        start_date: { lte: end },
+        end_date: { gte: start },
+      },
+      select: { id: true },
+    });
+    if (overlap) {
+      throw new BadRequestException('Leave dates overlap an existing pending or approved request');
+    }
+  }
+
+  private parseDate(dateStr: string): Date {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) throw new BadRequestException('Invalid date');
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private assertApprovePermission(user: IJwtStaffPayload) {
+    if (user.role === StaffRole.SUPER_ADMIN) return;
+    if (user.permissions?.includes('hr.leave.approve')) return;
+    throw new ForbiddenException('Your account does not have permission: hr.leave.approve');
+  }
+
+  private async notifyApprovers(
+    employeeName: string,
+    leaveTypeName: string,
+    startDate: Date,
+    campusId: number | null,
+  ) {
+    const perm = await this.prisma.permissions.findUnique({
+      where: { key: 'hr.leave.approve' },
+    });
+    if (!perm) return;
+
+    const roleRows = await this.prisma.role_permissions.findMany({
+      where: { permission_id: perm.id },
+      select: { role: true },
+    });
+    const rolesWithPerm = roleRows.map((r) => r.role);
+
+    const users = await this.prisma.users.findMany({
+      where: {
+        is_active: true,
+        deleted_at: null,
+        AND: [
+          {
+            OR: [
+              { role: StaffRole.SUPER_ADMIN },
+              ...(rolesWithPerm.length > 0 ? [{ role: { in: rolesWithPerm } }] : []),
+              { user_permissions: { some: { permission_id: perm.id } } },
+            ],
+          },
+          ...(campusId != null
+            ? [
+                {
+                  OR: [
+                    { role: StaffRole.SUPER_ADMIN },
+                    { campus_id: campusId },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      },
+      select: { id: true },
+    });
+
+    const userIds = [...new Set(users.map((u) => u.id))];
+    if (userIds.length === 0) return;
+
+    const dateLabel = startDate.toISOString().slice(0, 10);
+    await this.fcmService.sendToUsers(
+      userIds,
+      'New leave request',
+      `${employeeName} submitted ${leaveTypeName} starting ${dateLabel}`,
+      { type: 'leave_request', date: dateLabel },
+    );
+  }
+}

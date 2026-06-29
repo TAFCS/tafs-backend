@@ -188,18 +188,82 @@ export class CalendarDayResolverService {
       ),
     );
     const best = this.pickBestCalendarRow(matching, 'STAFF');
-    if (best) return this.fromDayType(best.day_type, best.description);
-
-    if (!scheduleWorking) {
-      return {
+    let resolved: ResolvedCalendarDay;
+    if (best) {
+      resolved = this.fromDayType(best.day_type, best.description);
+    } else if (!scheduleWorking) {
+      resolved = {
         isWorkingDay: false,
         dayType: isWeekendDate(date) ? 'WEEKEND' : 'HOLIDAY',
         description: isWeekendDate(date) ? 'Weekend' : 'Scheduled day off',
         source: 'SCHEDULE',
       };
+    } else {
+      resolved = { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
     }
 
-    return { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
+    return this.applyMandatorySaturday(resolved, campusId, date, employee?.staff_category ?? null);
+  }
+
+  private isTeacherCategory(staffCategory: StaffCategory | null): boolean {
+    return (
+      staffCategory === StaffCategory.TEACHER ||
+      staffCategory === StaffCategory.ASSISTANT_TEACHER
+    );
+  }
+
+  private applyMandatorySaturdayFromSet(
+    resolved: ResolvedCalendarDay,
+    date: Date,
+    staffCategory: StaffCategory | null,
+    saturdayDates: Set<string>,
+  ): ResolvedCalendarDay {
+    if (resolved.isWorkingDay) return resolved;
+    if (date.getUTCDay() !== 6) return resolved;
+    if (!this.isTeacherCategory(staffCategory)) return resolved;
+    const key = date.toISOString().slice(0, 10);
+    if (!saturdayDates.has(key)) return resolved;
+    return {
+      isWorkingDay: true,
+      dayType: null,
+      description: 'Mandatory Saturday',
+      source: 'SCHEDULE',
+    };
+  }
+
+  private async applyMandatorySaturday(
+    resolved: ResolvedCalendarDay,
+    campusId: number,
+    date: Date,
+    staffCategory: StaffCategory | null,
+  ): Promise<ResolvedCalendarDay> {
+    if (resolved.isWorkingDay) return resolved;
+    if (date.getUTCDay() !== 6) return resolved;
+    if (!this.isTeacherCategory(staffCategory)) return resolved;
+
+    const row = await this.prisma.teacher_saturday_schedules.findUnique({
+      where: { campus_id_date: { campus_id: campusId, date } },
+    });
+    if (!row) return resolved;
+
+    return {
+      isWorkingDay: true,
+      dayType: null,
+      description: 'Mandatory Saturday',
+      source: 'SCHEDULE',
+    };
+  }
+
+  async loadMandatorySaturdayDates(
+    campusId: number,
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<Set<string>> {
+    const rows = await this.prisma.teacher_saturday_schedules.findMany({
+      where: { campus_id: campusId, date: { gte: dateFrom, lte: dateTo } },
+      select: { date: true },
+    });
+    return new Set(rows.map((r) => r.date.toISOString().slice(0, 10)));
   }
 
   /**
@@ -217,6 +281,7 @@ export class CalendarDayResolverService {
     staffCategory: StaffCategory | null,
     daysPerWeek: number | null,
     workSchedules: { day_of_week: number; is_working: boolean }[],
+    mandatorySaturdayDates?: Set<string>,
   ): ResolvedCalendarDay {
     const dayOfWeek = date.getUTCDay();
     const scheduleWorking = workSchedules.length
@@ -229,17 +294,24 @@ export class CalendarDayResolverService {
         this.matchesStaffScope(row, employeeId, departmentId, staffCategory),
     );
     const best = this.pickBestCalendarRow(matching, 'STAFF');
-    if (best) return this.fromDayType(best.day_type, best.description);
-
-    if (!scheduleWorking) {
-      return {
+    let resolved: ResolvedCalendarDay;
+    if (best) {
+      resolved = this.fromDayType(best.day_type, best.description);
+    } else if (!scheduleWorking) {
+      resolved = {
         isWorkingDay: false,
         dayType: isWeekendDate(date) ? 'WEEKEND' : 'HOLIDAY',
         description: isWeekendDate(date) ? 'Weekend' : 'Scheduled day off',
         source: 'SCHEDULE',
       };
+    } else {
+      resolved = { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
     }
-    return { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
+
+    if (mandatorySaturdayDates) {
+      return this.applyMandatorySaturdayFromSet(resolved, date, staffCategory, mandatorySaturdayDates);
+    }
+    return resolved;
   }
 
   /** Loads the raw STAFF calendar rows for a campus/date range once, for resolveStaffDayFromRows(). */

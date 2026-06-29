@@ -7,15 +7,15 @@ async function main() {
 
   // 1. Seed Leave Types
   const leaveTypes = [
-    { name: 'Sick Leave', description: 'Paid sick leave', is_paid: true },
-    { name: 'Casual Leave', description: 'Paid casual leave', is_paid: true },
-    { name: 'Annual Leave', description: 'Paid annual leave', is_paid: true },
-    { name: 'Unpaid Leave', description: 'Unpaid leave of absence', is_paid: false },
+    { code: 'SICK', name: 'Sick Leave', description: 'Paid sick leave', is_paid: true },
+    { code: 'CASUAL', name: 'Casual Leave', description: 'Paid casual leave', is_paid: true },
+    { code: 'ANNUAL', name: 'Annual Leave', description: 'Paid annual leave', is_paid: true },
+    { code: 'UNPAID', name: 'Unpaid Leave', description: 'Unpaid leave of absence', is_paid: false },
   ];
 
   for (const lt of leaveTypes) {
     const existing = await prisma.leave_types.findFirst({
-      where: { name: lt.name },
+      where: { OR: [{ code: lt.code }, { name: lt.name }] },
     });
     if (existing) {
       await prisma.leave_types.update({

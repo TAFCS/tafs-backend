@@ -22,7 +22,7 @@ interface EmployeeLineInput {
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
 }
 
-type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'UNRESOLVED' | 'DAY_OFF';
+type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
 
 export interface DayBreakdownEntry {
   date: string;
@@ -45,6 +45,7 @@ interface ComputedLine {
   half_days: number;
   absent_days: number;
   excused_days: number;
+  unpaid_leave_days: number;
   unresolved_days: number;
   total_break_minutes: number;
   total_late_minutes: number;
@@ -142,6 +143,10 @@ export class PayrollService {
       return segments;
     }
 
+    if (record?.status === StaffAttendanceStatus.UNPAID_LEAVE) {
+      return segments;
+    }
+
     if (record && !record.check_in_at && record.status !== StaffAttendanceStatus.ABSENT) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;
@@ -205,6 +210,7 @@ export class PayrollService {
     calendarRows: StaffCalendarRows,
     attendanceRecords: AttendanceStaffDailyRow[],
     scans: zk_attendance_scans[],
+    mandatorySaturdayDates?: Set<string>,
   ): ComputedLine {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -233,6 +239,7 @@ export class PayrollService {
         employee.staff_category,
         employee.days_per_week,
         employee.employee_work_schedules,
+        mandatorySaturdayDates,
       );
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
@@ -241,7 +248,10 @@ export class PayrollService {
       let classification: DayClassification;
       if (!resolved.isWorkingDay) {
         classification = 'DAY_OFF';
-      } else if (record?.source === AttendanceSource.MANUAL) {
+      } else if (
+        record?.source === AttendanceSource.MANUAL ||
+        record?.source === AttendanceSource.LEAVE
+      ) {
         classification = record.status as DayClassification;
       } else if (dayScans.length === 0) {
         classification = 'ABSENT';
@@ -259,9 +269,12 @@ export class PayrollService {
       }
 
       const manualClearsPunches =
-        record?.source === AttendanceSource.MANUAL &&
-        (record.status === StaffAttendanceStatus.ABSENT ||
-          record.status === StaffAttendanceStatus.EXCUSED);
+        record?.source === AttendanceSource.MANUAL ||
+        record?.source === AttendanceSource.LEAVE
+          ? record.status === StaffAttendanceStatus.ABSENT ||
+            record.status === StaffAttendanceStatus.EXCUSED ||
+            record.status === StaffAttendanceStatus.UNPAID_LEAVE
+          : false;
 
       const checkInAt =
         manualClearsPunches
@@ -315,6 +328,7 @@ export class PayrollService {
     const halfDays = dailyBreakdown.filter((d) => d.classification === 'HALF_DAY').length;
     const absentDays = dailyBreakdown.filter((d) => d.classification === 'ABSENT').length;
     const excusedDays = dailyBreakdown.filter((d) => d.classification === 'EXCUSED').length;
+    const unpaidLeaveDays = dailyBreakdown.filter((d) => d.classification === 'UNPAID_LEAVE').length;
     const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
     const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);
     const totalLateMinutes = dailyBreakdown.reduce((sum, d) => sum + d.late_minutes, 0);
@@ -325,7 +339,7 @@ export class PayrollService {
     const scheduledMinutes = this.scheduledMinutesPerDay(employee.reporting_time, employee.leaving_time);
     const perMinuteRate = scheduledMinutes > 0 ? dailyRate.dividedBy(scheduledMinutes) : new Prisma.Decimal(0);
 
-    const absenceDeduction = dailyRate.times(absentDays);
+    const absenceDeduction = dailyRate.times(absentDays + unpaidLeaveDays);
     const halfDayDeduction = dailyRate.dividedBy(2).times(halfDays);
     const lateDeduction = perMinuteRate.times(totalLateMinutes);
     const breakDeduction = perMinuteRate.times(totalBreakMinutes);
@@ -339,6 +353,7 @@ export class PayrollService {
       half_days: halfDays,
       absent_days: absentDays,
       excused_days: excusedDays,
+      unpaid_leave_days: unpaidLeaveDays,
       unresolved_days: unresolvedDays,
       total_break_minutes: totalBreakMinutes,
       total_late_minutes: totalLateMinutes,
@@ -383,8 +398,9 @@ export class PayrollService {
     // a single employee-by-employee query loop here took minutes over the
     // network round-trip cost to the remote DB.
     const employeeIds = employees.map((e) => e.id);
-    const [calendarRows, allAttendanceRecords, allScans] = await Promise.all([
+    const [calendarRows, mandatorySaturdayDates, allAttendanceRecords, allScans] = await Promise.all([
       this.calendarResolver.loadStaffCalendarRows(dto.campus_id, periodStart, periodEnd),
+      this.calendarResolver.loadMandatorySaturdayDates(dto.campus_id, periodStart, periodEnd),
       this.prisma.attendance_staff_daily.findMany({
         where: { employee_id: { in: employeeIds }, date: { gte: periodStart, lte: periodEnd } },
       }),
@@ -455,6 +471,7 @@ export class PayrollService {
         calendarRows,
         attendanceByEmployee.get(employee.id) ?? [],
         scansByEmployee.get(employee.id) ?? [],
+        mandatorySaturdayDates,
       ),
     }));
     await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });

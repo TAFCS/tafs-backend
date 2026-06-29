@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 
@@ -60,6 +60,27 @@ export class MediaService {
     });
 
     return { url };
+  }
+
+  async uploadLeaveAttachment(id: number, file: Express.Multer.File) {
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
+
+    const mime = file.mimetype.toLowerCase();
+    const isImage = mime.startsWith('image/');
+    const isPdf = mime === 'application/pdf';
+    if (!isImage && !isPdf) {
+      throw new BadRequestException('Only image or PDF attachments are allowed');
+    }
+
+    const extension = file.originalname.split('.').pop() || (isPdf ? 'pdf' : 'jpg');
+    const key = `media/employees/${id}/leave-${Date.now()}.${extension}`;
+    const url = await this.storage.upload(key, file.buffer, file.mimetype);
+
+    return {
+      url,
+      type: isImage ? 'image' : 'document',
+    };
   }
 
   async getPhotoBuffer(url: string) {

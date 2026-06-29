@@ -9,5 +9,6 @@ import { FcmModule } from '../../common/fcm/fcm.module';
   imports: [PrismaModule, AuthModule, FcmModule],
   providers: [EmployeeNoticeBoardService],
   controllers: [EmployeeNoticeBoardController],
+  exports: [EmployeeNoticeBoardService],
 })
 export class EmployeeNoticeBoardModule {}
