@@ -22,7 +22,7 @@ interface EmployeeLineInput {
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
 }
 
-type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
+type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'SICK_LEAVE' | 'CASUAL_LEAVE' | 'ANNUAL_LEAVE' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
 
 export interface DayBreakdownEntry {
   date: string;
@@ -138,7 +138,12 @@ export class PayrollService {
       return segments;
     }
 
-    if (record?.status === StaffAttendanceStatus.EXCUSED) {
+    if (
+      record?.status === StaffAttendanceStatus.EXCUSED ||
+      record?.status === StaffAttendanceStatus.SICK_LEAVE ||
+      record?.status === StaffAttendanceStatus.CASUAL_LEAVE ||
+      record?.status === StaffAttendanceStatus.ANNUAL_LEAVE
+    ) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;
     }
@@ -273,6 +278,9 @@ export class PayrollService {
         record?.source === AttendanceSource.LEAVE
           ? record.status === StaffAttendanceStatus.ABSENT ||
             record.status === StaffAttendanceStatus.EXCUSED ||
+            record.status === StaffAttendanceStatus.SICK_LEAVE ||
+            record.status === StaffAttendanceStatus.CASUAL_LEAVE ||
+            record.status === StaffAttendanceStatus.ANNUAL_LEAVE ||
             record.status === StaffAttendanceStatus.UNPAID_LEAVE
           : false;
 
@@ -327,7 +335,12 @@ export class PayrollService {
     const lateDays = dailyBreakdown.filter((d) => d.classification === 'LATE').length;
     const halfDays = dailyBreakdown.filter((d) => d.classification === 'HALF_DAY').length;
     const absentDays = dailyBreakdown.filter((d) => d.classification === 'ABSENT').length;
-    const excusedDays = dailyBreakdown.filter((d) => d.classification === 'EXCUSED').length;
+    const excusedDays = dailyBreakdown.filter((d) =>
+      d.classification === 'EXCUSED' ||
+      d.classification === 'SICK_LEAVE' ||
+      d.classification === 'CASUAL_LEAVE' ||
+      d.classification === 'ANNUAL_LEAVE',
+    ).length;
     const unpaidLeaveDays = dailyBreakdown.filter((d) => d.classification === 'UNPAID_LEAVE').length;
     const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
     const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);

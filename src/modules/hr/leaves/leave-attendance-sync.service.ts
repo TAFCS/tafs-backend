@@ -36,10 +36,7 @@ export class LeaveAttendanceSyncService {
       throw new BadRequestException('Leave type is not configured');
     }
 
-    const status =
-      leaveCode === 'UNPAID'
-        ? StaffAttendanceStatus.UNPAID_LEAVE
-        : StaffAttendanceStatus.EXCUSED;
+    const status = this.leaveCodeToStatus(leaveCode);
     const notes = this.leaveNote(requestId);
     const campusId = request.employee_profiles.campus_id;
     let synced = 0;
@@ -92,6 +89,16 @@ export class LeaveAttendanceSyncService {
       this.logger.log(`Reverted ${deleted.count} attendance rows for leave request ${requestId}`);
     }
     return deleted.count;
+  }
+
+  private leaveCodeToStatus(code: string): StaffAttendanceStatus {
+    switch (code) {
+      case 'SICK':    return StaffAttendanceStatus.SICK_LEAVE;
+      case 'CASUAL':  return StaffAttendanceStatus.CASUAL_LEAVE;
+      case 'ANNUAL':  return StaffAttendanceStatus.ANNUAL_LEAVE;
+      case 'UNPAID':  return StaffAttendanceStatus.UNPAID_LEAVE;
+      default:        return StaffAttendanceStatus.EXCUSED;
+    }
   }
 
   private expandDateRange(start: Date, end: Date): Date[] {

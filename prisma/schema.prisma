@@ -1574,6 +1574,9 @@ enum StaffAttendanceStatus {
   HALF_DAY
   EXCUSED
   UNPAID_LEAVE
+  SICK_LEAVE
+  CASUAL_LEAVE
+  ANNUAL_LEAVE
 }
 
 enum LeaveRequestStatus {

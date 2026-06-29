@@ -155,7 +155,7 @@ export class StaffAttendanceService {
         absent++;
         continue;
       }
-      if (record.status === StaffAttendanceStatus.EXCUSED) {
+      if (StaffAttendanceService.PAID_LEAVE_STATUSES.has(record.status)) {
         dayOff++;
         continue;
       }
@@ -281,10 +281,16 @@ export class StaffAttendanceService {
     });
   }
 
-  // Derives Working time (IN->OUT), Break (OUT->IN gaps), and Over time
+  private static readonly PAID_LEAVE_STATUSES = new Set<StaffAttendanceStatus>([
+    StaffAttendanceStatus.EXCUSED,
+    StaffAttendanceStatus.SICK_LEAVE,
+    StaffAttendanceStatus.CASUAL_LEAVE,
+    StaffAttendanceStatus.ANNUAL_LEAVE,
+  ]);
+
+  // Derives Working time (IN->OUT), Break (OUT->IN gaps), and Overtime
   // (the portion of the final OUT after leaving_time) segments for one day
-  // from the persisted scan sequence. A full-day "Requested day off" segment
-  // is approximated from status=EXCUSED — there is no leave-request model yet.
+  // from the persisted scan sequence.
   private buildDaySegments(
     scans: zk_attendance_scans[],
     leavingTime: Date | null,
@@ -299,7 +305,7 @@ export class StaffAttendanceService {
       return segments;
     }
 
-    if (record?.status === StaffAttendanceStatus.EXCUSED) {
+    if (record?.status && StaffAttendanceService.PAID_LEAVE_STATUSES.has(record.status)) {
       segments.push({ type: 'DAY_OFF', start: '00:00', end: '24:00' });
       return segments;
     }
@@ -623,7 +629,8 @@ export class StaffAttendanceService {
       let checkOutAt: Date | null | undefined = undefined;
       const clearsPunches =
         mark.status === StaffAttendanceStatus.ABSENT ||
-        mark.status === StaffAttendanceStatus.EXCUSED;
+        mark.status === StaffAttendanceStatus.UNPAID_LEAVE ||
+        StaffAttendanceService.PAID_LEAVE_STATUSES.has(mark.status);
 
       if (clearsPunches) {
         checkInAt = null;
