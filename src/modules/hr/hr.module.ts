@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { EmployeesController } from './employees/employees.controller';
+import { EmployeesSelfController } from './employees/employees-self.controller';
 import { EmployeesService } from './employees/employees.service';
 import { DepartmentsController } from './departments/departments.controller';
 import { DepartmentsService } from './departments/departments.service';
@@ -28,6 +29,7 @@ import { SaturdaySchedulesModule } from './saturday-schedules/saturday-schedules
 @Module({
   imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule],
   controllers: [
+    EmployeesSelfController,
     EmployeesController,
     DepartmentsController,
     PoliciesController,

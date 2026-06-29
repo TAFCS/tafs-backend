@@ -109,9 +109,14 @@ export class LeaveRequestsService {
       throw new ForbiddenException('No employee profile is linked to this account');
     }
     const leaveTypes = await this.prisma.leave_types.findMany({
-      orderBy: { id: 'asc' },
       select: { id: true, code: true, name: true, is_paid: true },
     });
+    const typeOrder = ['SICK', 'CASUAL', 'ANNUAL', 'UNPAID'];
+    leaveTypes.sort(
+      (a, b) =>
+        (typeOrder.indexOf(a.code) === -1 ? 99 : typeOrder.indexOf(a.code)) -
+        (typeOrder.indexOf(b.code) === -1 ? 99 : typeOrder.indexOf(b.code)),
+    );
     return {
       employeeId: profile.id,
       isPermanentEmployee: this.isPermanentEmployee(profile),

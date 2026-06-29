@@ -238,6 +238,32 @@ export class EmployeesService {
     return employee;
   }
 
+  async getMine(userId: string) {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { user_id: userId },
+      select: {
+        id: true,
+        employee_code: true,
+        full_name: true,
+        job_title: true,
+        staff_category: true,
+        join_date: true,
+        personal_phone: true,
+        personal_email: true,
+        photo_url: true,
+        is_permanent_employee: true,
+        campuses: { select: { id: true, campus_name: true } },
+        departments: { select: { id: true, name: true } },
+        designations: { select: { id: true, title: true } },
+        users: { select: { id: true, username: true, full_name: true, role: true } },
+      },
+    });
+    if (!employee) {
+      throw new ForbiddenException('No employee profile is linked to this account');
+    }
+    return employee;
+  }
+
   async create(dto: CreateEmployeeDto) {
     const { class_section_assignments, ...rest } = dto;
 
