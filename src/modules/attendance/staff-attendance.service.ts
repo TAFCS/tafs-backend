@@ -406,7 +406,7 @@ export class StaffAttendanceService {
         ? this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd)
         : Promise.resolve([]),
       campusId
-        ? this.calendarResolver.loadMandatorySaturdayDates(campusId, periodStart, periodEnd)
+        ? this.calendarResolver.loadMandatorySaturdayDates(employee.id, periodStart, periodEnd)
         : Promise.resolve(new Set<string>()),
     ]);
 

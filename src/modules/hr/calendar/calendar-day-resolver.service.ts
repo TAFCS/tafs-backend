@@ -202,7 +202,7 @@ export class CalendarDayResolverService {
       resolved = { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
     }
 
-    return this.applyMandatorySaturday(resolved, campusId, date, employee?.staff_category ?? null);
+    return this.applyMandatorySaturday(resolved, employeeId, date, employee?.staff_category ?? null);
   }
 
   private isTeacherCategory(staffCategory: StaffCategory | null): boolean {
@@ -233,7 +233,7 @@ export class CalendarDayResolverService {
 
   private async applyMandatorySaturday(
     resolved: ResolvedCalendarDay,
-    campusId: number,
+    employeeId: number,
     date: Date,
     staffCategory: StaffCategory | null,
   ): Promise<ResolvedCalendarDay> {
@@ -242,7 +242,7 @@ export class CalendarDayResolverService {
     if (!this.isTeacherCategory(staffCategory)) return resolved;
 
     const row = await this.prisma.teacher_saturday_schedules.findUnique({
-      where: { campus_id_date: { campus_id: campusId, date } },
+      where: { employee_id_date: { employee_id: employeeId, date } },
     });
     if (!row) return resolved;
 
@@ -255,15 +255,37 @@ export class CalendarDayResolverService {
   }
 
   async loadMandatorySaturdayDates(
-    campusId: number,
+    employeeId: number,
     dateFrom: Date,
     dateTo: Date,
   ): Promise<Set<string>> {
     const rows = await this.prisma.teacher_saturday_schedules.findMany({
-      where: { campus_id: campusId, date: { gte: dateFrom, lte: dateTo } },
+      where: { employee_id: employeeId, date: { gte: dateFrom, lte: dateTo } },
       select: { date: true },
     });
     return new Set(rows.map((r) => r.date.toISOString().slice(0, 10)));
+  }
+
+  async loadMandatorySaturdayDatesForEmployees(
+    employeeIds: number[],
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<Map<number, Set<string>>> {
+    if (employeeIds.length === 0) return new Map();
+
+    const rows = await this.prisma.teacher_saturday_schedules.findMany({
+      where: { employee_id: { in: employeeIds }, date: { gte: dateFrom, lte: dateTo } },
+      select: { employee_id: true, date: true },
+    });
+
+    const map = new Map<number, Set<string>>();
+    for (const row of rows) {
+      const key = row.date.toISOString().slice(0, 10);
+      const bucket = map.get(row.employee_id);
+      if (bucket) bucket.add(key);
+      else map.set(row.employee_id, new Set([key]));
+    }
+    return map;
   }
 
   /**

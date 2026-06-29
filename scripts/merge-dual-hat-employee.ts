@@ -6,7 +6,7 @@
  *   npx ts-node scripts/merge-dual-hat-employee.ts
  *   npx ts-node scripts/merge-dual-hat-employee.ts sara.naqvi
  */
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, StaffRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -16,7 +16,10 @@ const SEED_ACTOR_ID = '00000000-0000-0000-0000-000000000001';
 type MergeEntry = {
   employeeCode: string;
   operationalUsername: string;
-  employeesUsername: string;
+  /** Separate EMPLOYEE-only login to deactivate after merge (omit when same account). */
+  employeesUsername?: string;
+  /** Promote operational account from EMPLOYEE to this role (same-login dual-hat). */
+  operationalRole?: StaffRole;
   label: string;
 };
 
@@ -44,6 +47,12 @@ const MERGES: MergeEntry[] = [
     employeeCode: '03-00125',
     operationalUsername: 'mrs.adil',
     employeesUsername: 's.adil',
+  },
+  {
+    label: 'Muhammad Hassan Mirza',
+    employeeCode: 'EMP-MHM-001',
+    operationalUsername: 'muhammad.hassan.mirza',
+    operationalRole: 'SUPER_ADMIN',
   },
 ];
 
@@ -92,21 +101,26 @@ async function grantPermission(userId: string, permissionKey: string): Promise<v
 async function mergeOne(entry: MergeEntry): Promise<void> {
   console.log(`\n=== ${entry.label} ===`);
 
-  const operational = await prisma.users.findUnique({
+  let operational = await prisma.users.findUnique({
     where: { username: entry.operationalUsername },
   });
   if (!operational) {
     throw new Error(`Operational user not found: ${entry.operationalUsername}`);
   }
-  if (operational.role === 'EMPLOYEE') {
-    throw new Error(`${entry.operationalUsername} is EMPLOYEE role — expected operational account`);
-  }
 
-  const employeesLogin = await prisma.users.findUnique({
-    where: { username: entry.employeesUsername },
-  });
-  if (!employeesLogin) {
-    throw new Error(`EMPLOYEE login not found: ${entry.employeesUsername}`);
+  if (entry.operationalRole && operational.role !== entry.operationalRole) {
+    await prisma.users.update({
+      where: { id: operational.id },
+      data: { role: entry.operationalRole, updated_at: new Date() },
+    });
+    console.log(
+      `  Promoted ${entry.operationalUsername}: ${operational.role} -> ${entry.operationalRole}`,
+    );
+    operational = { ...operational, role: entry.operationalRole };
+  } else if (!entry.operationalRole && operational.role === 'EMPLOYEE') {
+    throw new Error(
+      `${entry.operationalUsername} is EMPLOYEE role — set operationalRole or use a separate operational login`,
+    );
   }
 
   const profile = await prisma.employee_profiles.findFirst({
@@ -133,12 +147,33 @@ async function mergeOne(entry: MergeEntry): Promise<void> {
   });
   console.log(
     `  Linked ${entry.employeeCode} -> ${entry.operationalUsername} (${operational.role})` +
-      (previousUserId ? ` [was user_id ${previousUserId}]` : ''),
+      (previousUserId && previousUserId !== operational.id
+        ? ` [was user_id ${previousUserId}]`
+        : previousUserId === operational.id
+          ? ' [already linked]'
+          : ''),
   );
 
   for (const key of SELF_PERMS) {
     await grantPermission(operational.id, key);
     console.log(`  Granted ${key}`);
+  }
+
+  if (!entry.employeesUsername) {
+    console.log('  No separate EMPLOYEE login to deactivate (same-account dual-hat).');
+    return;
+  }
+
+  const employeesLogin = await prisma.users.findUnique({
+    where: { username: entry.employeesUsername },
+  });
+  if (!employeesLogin) {
+    throw new Error(`EMPLOYEE login not found: ${entry.employeesUsername}`);
+  }
+
+  if (employeesLogin.id === operational.id) {
+    console.log('  EMPLOYEE login is the same account — no deactivation needed.');
+    return;
   }
 
   if (employeesLogin.is_active) {

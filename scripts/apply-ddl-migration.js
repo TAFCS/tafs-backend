@@ -176,7 +176,7 @@ async function main() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "teacher_saturday_schedules" (
       "id" SERIAL NOT NULL,
-      "campus_id" INTEGER NOT NULL,
+      "employee_id" INTEGER NOT NULL,
       "date" DATE NOT NULL,
       "marked_by" VARCHAR(255) NOT NULL,
       "marked_at" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -184,17 +184,17 @@ async function main() {
     );
   `);
   await prisma.$executeRawUnsafe(`
-    CREATE UNIQUE INDEX IF NOT EXISTS "teacher_saturday_schedules_campus_id_date_key"
-      ON "teacher_saturday_schedules"("campus_id", "date");
+    CREATE UNIQUE INDEX IF NOT EXISTS "teacher_saturday_schedules_employee_id_date_key"
+      ON "teacher_saturday_schedules"("employee_id", "date");
   `);
   await prisma.$executeRawUnsafe(`
-    CREATE INDEX IF NOT EXISTS "teacher_saturday_schedules_campus_id_date_idx"
-      ON "teacher_saturday_schedules"("campus_id", "date");
+    CREATE INDEX IF NOT EXISTS "teacher_saturday_schedules_employee_id_date_idx"
+      ON "teacher_saturday_schedules"("employee_id", "date");
   `);
   await prisma.$executeRawUnsafe(`
     DO $$ BEGIN
-      ALTER TABLE "teacher_saturday_schedules" ADD CONSTRAINT "teacher_saturday_schedules_campus_id_fkey"
-        FOREIGN KEY ("campus_id") REFERENCES "campuses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      ALTER TABLE "teacher_saturday_schedules" ADD CONSTRAINT "teacher_saturday_schedules_employee_id_fkey"
+        FOREIGN KEY ("employee_id") REFERENCES "employee_profiles"("id") ON DELETE CASCADE ON UPDATE CASCADE;
     EXCEPTION WHEN duplicate_object THEN null; END $$;
   `);
   await prisma.$executeRawUnsafe(`

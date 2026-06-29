@@ -411,9 +411,9 @@ export class PayrollService {
     // a single employee-by-employee query loop here took minutes over the
     // network round-trip cost to the remote DB.
     const employeeIds = employees.map((e) => e.id);
-    const [calendarRows, mandatorySaturdayDates, allAttendanceRecords, allScans] = await Promise.all([
+    const [calendarRows, mandatoryByEmployee, allAttendanceRecords, allScans] = await Promise.all([
       this.calendarResolver.loadStaffCalendarRows(dto.campus_id, periodStart, periodEnd),
-      this.calendarResolver.loadMandatorySaturdayDates(dto.campus_id, periodStart, periodEnd),
+      this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
       this.prisma.attendance_staff_daily.findMany({
         where: { employee_id: { in: employeeIds }, date: { gte: periodStart, lte: periodEnd } },
       }),
@@ -484,7 +484,7 @@ export class PayrollService {
         calendarRows,
         attendanceByEmployee.get(employee.id) ?? [],
         scansByEmployee.get(employee.id) ?? [],
-        mandatorySaturdayDates,
+        mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
       ),
     }));
     await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });

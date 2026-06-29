@@ -35,7 +35,7 @@ type RosterEntry = {
 const ROSTER: RosterEntry[] = [
   // SUPER_ADMIN — all campuses
   { username: 'muhammad.hussain.mirza', full_name: 'Muhammad Hussain Mirza', role: 'SUPER_ADMIN', campus_id: null },
-  { username: 'muhammad.hassan.mirza', full_name: 'Muhammad Hassan Mirza', role: 'SUPER_ADMIN', campus_id: null },
+  { username: 'muhammad.hassan.mirza', full_name: 'Muhammad Hassan Mirza', role: 'SUPER_ADMIN', campus_id: null, grant_permissions: ['attendance.self.view', 'payroll.self.view'] },
   { username: 'asad.hussain.mirza', full_name: 'Asad Hussain Mirza', role: 'SUPER_ADMIN', campus_id: null },
 
   // CAMPUS_ADMIN — all campuses

@@ -4,12 +4,32 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { StaffCategory, StaffRole } from '@prisma/client';
+import { Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
+
+const scheduleInclude = {
+  employee_profiles: {
+    select: {
+      id: true,
+      full_name: true,
+      campus_id: true,
+      user_id: true,
+      employee_class_section_assignments: {
+        select: {
+          section_id: true,
+          class_id: true,
+          sections: { select: { description: true } },
+          classes: { select: { description: true, class_code: true } },
+        },
+      },
+    },
+  },
+  users: { select: { id: true, full_name: true } },
+} satisfies Prisma.teacher_saturday_schedulesInclude;
 
 @Injectable()
 export class SaturdaySchedulesService {
@@ -20,69 +40,103 @@ export class SaturdaySchedulesService {
   ) {}
 
   async create(dto: CreateSaturdayScheduleDto, user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertCanManage(user);
 
     const date = this.parseDate(dto.date);
     if (date.getUTCDay() !== 6) {
       throw new BadRequestException('Only Saturdays can be scheduled');
     }
 
-    this.assertBeforePriorMonthCutoff(date);
-
     const monthStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
     const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
 
-    const count = await this.prisma.teacher_saturday_schedules.count({
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: dto.employeeIds } },
+      select: { id: true, full_name: true, campus_id: true, user_id: true },
+    });
+
+    if (employees.length !== dto.employeeIds.length) {
+      throw new BadRequestException('One or more employee IDs were not found');
+    }
+
+    for (const employee of employees) {
+      this.assertCampusAccess(user, employee.campus_id);
+    }
+
+    const existingByEmployee = await this.prisma.teacher_saturday_schedules.groupBy({
+      by: ['employee_id'],
       where: {
-        campus_id: dto.campusId,
+        employee_id: { in: dto.employeeIds },
         date: { gte: monthStart, lte: monthEnd },
       },
+      _count: { _all: true },
     });
-    if (count >= 2) {
-      throw new BadRequestException('Maximum two mandatory Saturdays per campus per month');
+    const countMap = new Map(existingByEmployee.map((r) => [r.employee_id, r._count._all]));
+
+    const existingOnDate = await this.prisma.teacher_saturday_schedules.findMany({
+      where: { employee_id: { in: dto.employeeIds }, date },
+      select: { employee_id: true },
+    });
+    const alreadyOnDate = new Set(existingOnDate.map((r) => r.employee_id));
+
+    for (const employee of employees) {
+      const count = countMap.get(employee.id) ?? 0;
+      if (count >= 2 && !alreadyOnDate.has(employee.id)) {
+        const name = employee.full_name ?? `Employee #${employee.id}`;
+        throw new BadRequestException(
+          `Maximum two mandatory Saturdays per employee per month (${name})`,
+        );
+      }
     }
 
-    const campus = await this.prisma.campuses.findUnique({
-      where: { id: dto.campusId },
-      select: { campus_name: true },
-    });
-    if (!campus) throw new NotFoundException('Campus not found');
+    const created: Prisma.teacher_saturday_schedulesGetPayload<{ include: typeof scheduleInclude }>[] = [];
 
-    const duplicate = await this.prisma.teacher_saturday_schedules.findUnique({
-      where: { campus_id_date: { campus_id: dto.campusId, date } },
-    });
-    if (duplicate) {
-      throw new BadRequestException('This Saturday is already scheduled for this campus');
+    for (const employeeId of dto.employeeIds) {
+      if (alreadyOnDate.has(employeeId)) continue;
+
+      try {
+        const row = await this.prisma.teacher_saturday_schedules.create({
+          data: {
+            employee_id: employeeId,
+            date,
+            marked_by: user.sub,
+          },
+          include: scheduleInclude,
+        });
+        created.push(row);
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          continue;
+        }
+        throw err;
+      }
     }
 
-    const schedule = await this.prisma.teacher_saturday_schedules.create({
-      data: {
-        campus_id: dto.campusId,
-        date,
-        marked_by: user.sub,
-      },
-      include: {
-        campuses: { select: { id: true, campus_name: true } },
-        users: { select: { id: true, full_name: true } },
-      },
-    });
+    const monthLabel = this.formatMonthLabel(date);
+    const affectedCampusIds = new Set<number>();
+    for (const employee of employees) {
+      if (employee.campus_id != null) affectedCampusIds.add(employee.campus_id);
+    }
 
-    const dateLabel = date.toISOString().slice(0, 10);
-    void this.noticeBoard.createPost(
-      {
-        body: `Mandatory Saturday: ${dateLabel} at ${campus.campus_name}. Attendance is required for teachers.`,
-        target_roles: [StaffRole.TEACHER],
-        campus_ids: [dto.campusId],
-      },
-      user,
-    );
+    for (const campusId of affectedCampusIds) {
+      void this.noticeBoard.createPost(
+        {
+          title: `Mandatory Saturday Attendance — ${monthLabel}`,
+          body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
+          target_roles: [StaffRole.TEACHER],
+          campus_ids: [campusId],
+        },
+        user,
+      );
+    }
 
-    void this.notifyTeachers(dto.campusId, dateLabel);
-    return schedule;
+    void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date);
+
+    return created;
   }
 
   async list(query: ListSaturdaySchedulesQueryDto, user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertCanManage(user);
 
     const [year, month] = query.month.split('-').map((v) => parseInt(v, 10));
     if (!year || !month || month < 1 || month > 12) {
@@ -92,35 +146,59 @@ export class SaturdaySchedulesService {
     const monthStart = new Date(Date.UTC(year, month - 1, 1));
     const monthEnd = new Date(Date.UTC(year, month, 0));
 
+    const campusId = query.campusId ?? (user.role === StaffRole.CAMPUS_ADMIN ? user.campusId ?? undefined : undefined);
+    if (user.role === StaffRole.CAMPUS_ADMIN && campusId != null) {
+      this.assertCampusAccess(user, campusId);
+    }
+
+    const employeeFilter: Prisma.employee_profilesWhereInput = {};
+    if (campusId != null) employeeFilter.campus_id = campusId;
+    if (query.sectionId != null) {
+      employeeFilter.employee_class_section_assignments = {
+        some: { section_id: query.sectionId },
+      };
+    }
+
+    const where: Prisma.teacher_saturday_schedulesWhereInput = {
+      date: { gte: monthStart, lte: monthEnd },
+      ...(query.employeeId != null ? { employee_id: query.employeeId } : {}),
+      ...(Object.keys(employeeFilter).length > 0 ? { employee_profiles: employeeFilter } : {}),
+    };
+
     return this.prisma.teacher_saturday_schedules.findMany({
-      where: {
-        campus_id: query.campusId,
-        date: { gte: monthStart, lte: monthEnd },
-      },
-      include: {
-        campuses: { select: { id: true, campus_name: true } },
-        users: { select: { id: true, full_name: true } },
-      },
-      orderBy: { date: 'asc' },
+      where,
+      include: scheduleInclude,
+      orderBy: [{ employee_profiles: { full_name: 'asc' } }, { date: 'asc' }],
     });
   }
 
   async remove(id: number, user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertCanManage(user);
 
     const existing = await this.prisma.teacher_saturday_schedules.findUnique({
       where: { id },
+      include: { employee_profiles: { select: { campus_id: true } } },
     });
     if (!existing) throw new NotFoundException('Saturday schedule not found');
 
-    this.assertBeforePriorMonthCutoff(existing.date);
+    this.assertCampusAccess(user, existing.employee_profiles.campus_id);
     await this.prisma.teacher_saturday_schedules.delete({ where: { id } });
     return { id };
   }
 
-  private assertSuperAdmin(user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can manage Saturday schedules');
+  private assertCanManage(user: IJwtStaffPayload) {
+    if (user.role !== StaffRole.SUPER_ADMIN && user.role !== StaffRole.CAMPUS_ADMIN) {
+      throw new ForbiddenException('Only super admins and campus admins can manage Saturday schedules');
+    }
+  }
+
+  private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
+    if (user.role === StaffRole.SUPER_ADMIN) return;
+    if (employeeCampusId == null) {
+      throw new ForbiddenException('You do not have access to this employee');
+    }
+    if (user.campusId && user.campusId !== employeeCampusId) {
+      throw new ForbiddenException('You do not have access to this campus');
     }
   }
 
@@ -131,46 +209,82 @@ export class SaturdaySchedulesService {
     return d;
   }
 
-  private assertBeforePriorMonthCutoff(scheduleDate: Date, now = new Date()) {
-    const year = scheduleDate.getUTCFullYear();
-    const month = scheduleDate.getUTCMonth();
-    const priorMonth = month === 0 ? 11 : month - 1;
-    const priorYear = month === 0 ? year - 1 : year;
-    const cutoff = new Date(Date.UTC(priorYear, priorMonth, 26));
-    if (now >= cutoff) {
-      throw new BadRequestException(
-        'Saturday schedules must be marked before the 26th of the prior month',
-      );
-    }
+  private formatMonthLabel(date: Date): string {
+    return date.toLocaleDateString('en-GB', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
   }
 
-  private async notifyTeachers(campusId: number, dateLabel: string) {
-    const teachers = await this.prisma.users.findMany({
-      where: {
-        is_active: true,
-        deleted_at: null,
-        campus_id: campusId,
-        OR: [
-          { role: StaffRole.TEACHER },
-          {
-            employee_profile: {
-              staff_category: {
-                in: [StaffCategory.TEACHER, StaffCategory.ASSISTANT_TEACHER],
-              },
-            },
-          },
-        ],
-      },
-      select: { id: true },
-    });
-    const userIds = teachers.map((t) => t.id);
-    if (userIds.length === 0) return;
+  private formatSaturdayList(dates: Date[]): string {
+    const formatted = dates.map((d) =>
+      d.toLocaleDateString('en-GB', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }),
+    );
+    if (formatted.length === 0) return '';
+    if (formatted.length === 1) return formatted[0];
+    if (formatted.length === 2) return `${formatted[0]} and ${formatted[1]}`;
+    return `${formatted.slice(0, -1).join(', ')} and ${formatted[formatted.length - 1]}`;
+  }
 
-    await this.fcmService.sendToUsers(
-      userIds,
-      'Mandatory Saturday scheduled',
-      `Attendance is required on ${dateLabel}`,
-      { type: 'saturday_schedule', date: dateLabel },
+  private async notifyEmployeesMonthlySummary(
+    employeeIds: number[],
+    monthStart: Date,
+    monthEnd: Date,
+    referenceDate: Date,
+  ) {
+    const monthLabel = this.formatMonthLabel(referenceDate);
+
+    const rows = await this.prisma.teacher_saturday_schedules.findMany({
+      where: {
+        employee_id: { in: employeeIds },
+        date: { gte: monthStart, lte: monthEnd },
+      },
+      select: {
+        date: true,
+        employee_profiles: { select: { user_id: true } },
+        employee_id: true,
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    const datesByEmployee = new Map<number, Date[]>();
+    const userIdByEmployee = new Map<number, string>();
+    for (const row of rows) {
+      const bucket = datesByEmployee.get(row.employee_id) ?? [];
+      bucket.push(row.date);
+      datesByEmployee.set(row.employee_id, bucket);
+      if (row.employee_profiles.user_id) {
+        userIdByEmployee.set(row.employee_id, row.employee_profiles.user_id);
+      }
+    }
+
+    const title = `Mandatory Saturday Attendance — ${monthLabel}`;
+
+    await Promise.allSettled(
+      [...datesByEmployee.entries()].map(async ([employeeId, dates]) => {
+        const userId = userIdByEmployee.get(employeeId);
+        if (!userId || dates.length === 0) return;
+
+        const dateList = this.formatSaturdayList(dates);
+        const attendanceNote =
+          dates.length === 1
+            ? 'Please ensure your attendance on that day.'
+            : dates.length === 2
+              ? 'Please ensure your attendance on both days.'
+              : 'Please ensure your attendance on all assigned days.';
+        const body =
+          `You are required to attend school on the following Saturday(s) in ` +
+          `${monthLabel}: ${dateList}. ${attendanceNote}`;
+
+        await this.fcmService.sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE' });
+      }),
     );
   }
 }

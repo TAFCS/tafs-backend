@@ -116,7 +116,6 @@ model campuses {
   hr_policy_sets             hr_policy_sets[]
   payroll_runs               payroll_runs[]
   students                   students[]
-  teacher_saturday_schedules teacher_saturday_schedules[]
   users                      users[]
   vouchers                   vouchers[]
 }
@@ -929,6 +928,7 @@ model employee_profiles {
   employee_work_schedules            employee_work_schedules[]
   leave_requests                     leave_requests[]
   payroll_run_lines                  payroll_run_lines[]
+  teacher_saturday_schedules         teacher_saturday_schedules[]
   zk_attendance_scans                zk_attendance_scans[]
 }
 
@@ -1051,16 +1051,16 @@ model leave_requests {
 }
 
 model teacher_saturday_schedules {
-  id        Int      @id @default(autoincrement())
-  campus_id Int
-  date      DateTime @db.Date
-  marked_by String   @db.VarChar(255)
-  marked_at DateTime @default(now()) @db.Timestamp(6)
-  campuses  campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  users     users    @relation("SaturdayScheduleMarkedBy", fields: [marked_by], references: [id])
+  id                Int               @id @default(autoincrement())
+  employee_id       Int
+  date              DateTime          @db.Date
+  marked_by         String            @db.VarChar(255)
+  marked_at         DateTime          @default(now()) @db.Timestamp(6)
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  users             users             @relation("SaturdayScheduleMarkedBy", fields: [marked_by], references: [id])
 
-  @@unique([campus_id, date])
-  @@index([campus_id, date])
+  @@unique([employee_id, date])
+  @@index([employee_id, date])
 }
 
 model payroll_runs {
