@@ -45,15 +45,9 @@ async function bootstrap() {
   }
 
   // Parse ZKTeco device bodies as raw text before NestJS touches them
-  app.use('/iclock', express.text({ type: '*/*', limit: '1mb' }));
+  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '1mb' }));
 
-  app.setGlobalPrefix('api/v1', {
-    exclude: [
-      { path: 'iclock/cdata', method: RequestMethod.GET },
-      { path: 'iclock/cdata', method: RequestMethod.POST },
-      { path: 'iclock/getrequest', method: RequestMethod.GET },
-    ],
-  });
+  app.setGlobalPrefix('api/v1');
 
   // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;

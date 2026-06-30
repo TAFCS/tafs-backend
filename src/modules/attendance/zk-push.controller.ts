@@ -22,7 +22,7 @@ import { ZkAttendanceProcessorService } from './zk-attendance-processor.service'
 import { ZkPushService } from './zk-push.service';
 
 /**
- * ZK device endpoints — lives at /iclock/* (no api/v1 prefix).
+ * ZK device endpoints — lives at /api/v1/iclock/*.
  * The device hits these directly over plain HTTP.
  */
 @ApiTags('ZK Device')
