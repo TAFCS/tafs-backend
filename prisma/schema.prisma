@@ -98,26 +98,26 @@ model campus_sections {
 }
 
 model campuses {
-  id                         Int                          @id @default(autoincrement())
-  campus_code                String                       @unique @db.VarChar(10)
-  campus_name                String                       @db.VarChar(100)
-  address                    String?
-  campus_prefix              String?                      @db.VarChar(10)
-  is_active                  Boolean                      @default(true)
-  academic_calendar_days     academic_calendar_days[]
-  attendance_roll_sessions   attendance_roll_sessions[]
-  attendance_staff_daily     attendance_staff_daily[]
-  attendance_student_daily   attendance_student_daily[]
-  campus_classes             campus_classes[]
-  campus_sections            campus_sections[]
-  class_check_in_schedules   class_check_in_schedules[]
-  class_fee_schedule         class_fee_schedule[]
-  employee_profiles          employee_profiles[]
-  hr_policy_sets             hr_policy_sets[]
-  payroll_runs               payroll_runs[]
-  students                   students[]
-  users                      users[]
-  vouchers                   vouchers[]
+  id                       Int                        @id @default(autoincrement())
+  campus_code              String                     @unique @db.VarChar(10)
+  campus_name              String                     @db.VarChar(100)
+  address                  String?
+  campus_prefix            String?                    @db.VarChar(10)
+  is_active                Boolean                    @default(true)
+  academic_calendar_days   academic_calendar_days[]
+  attendance_roll_sessions attendance_roll_sessions[]
+  attendance_staff_daily   attendance_staff_daily[]
+  attendance_student_daily attendance_student_daily[]
+  campus_classes           campus_classes[]
+  campus_sections          campus_sections[]
+  class_check_in_schedules class_check_in_schedules[]
+  class_fee_schedule       class_fee_schedule[]
+  employee_profiles        employee_profiles[]
+  hr_policy_sets           hr_policy_sets[]
+  payroll_runs             payroll_runs[]
+  students                 students[]
+  users                    users[]
+  vouchers                 vouchers[]
 }
 
 model class_fee_schedule {
@@ -1052,10 +1052,10 @@ model leave_requests {
 
 model teacher_saturday_schedules {
   id                Int               @id @default(autoincrement())
-  employee_id       Int
   date              DateTime          @db.Date
   marked_by         String            @db.VarChar(255)
   marked_at         DateTime          @default(now()) @db.Timestamp(6)
+  employee_id       Int
   employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   users             users             @relation("SaturdayScheduleMarkedBy", fields: [marked_by], references: [id])
 

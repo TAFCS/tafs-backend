@@ -3281,6 +3281,17 @@ export class VouchersService {
                 unpaid: [],
             };
 
+            // Accumulate the active (non-waived) surcharge `amount` landing on each side
+            // so the vouchers' total_payable_before/after_due can be corrected below —
+            // total_payable_before_due/after_due were created from fee heads only
+            // (paidTotal/unpaidTotal) and would otherwise drop every arrear surcharge.
+            // Mirrors the create path, where activeSurchargeTotal is folded into the
+            // before-due total. Waived rows are excluded (they are forgiven, not payable).
+            const sideSurchargeBeforeDue: Record<'paid' | 'unpaid', Prisma.Decimal> = {
+                paid: new Prisma.Decimal(0),
+                unpaid: new Prisma.Decimal(0),
+            };
+
             for (const s of originalSurcharges) {
                 const amount = new Prisma.Decimal(s.amount || 0);
                 const amountPaid = new Prisma.Decimal(s.amount_paid || 0);
@@ -3306,6 +3317,7 @@ export class VouchersService {
                     });
                     surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
                     sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
+                    sideSurchargeBeforeDue.unpaid = sideSurchargeBeforeDue.unpaid.add(amount);
 
                 } else if (amountPaid.gte(amount)) {
                     // Fully consumed — travels whole, with its payment history, to the paid side.
@@ -3314,6 +3326,7 @@ export class VouchersService {
                     });
                     surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: created.id });
                     sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
+                    sideSurchargeBeforeDue.paid = sideSurchargeBeforeDue.paid.add(amount);
 
                 } else {
                     // Partially consumed — split into a paid portion that carries the
@@ -3331,6 +3344,8 @@ export class VouchersService {
                     surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: paidPortion.id });
                     sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
                     sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
+                    sideSurchargeBeforeDue.paid = sideSurchargeBeforeDue.paid.add(amountPaid);
+                    sideSurchargeBeforeDue.unpaid = sideSurchargeBeforeDue.unpaid.add(remaining);
                 }
             }
 
@@ -3346,6 +3361,33 @@ export class VouchersService {
                 await tx.vouchers.update({
                     where: { id: side === 'paid' ? paid.id : unpaid.id },
                     data: { surcharge_waived: allWaived, surcharge_waived_by: waivedBy } as any,
+                });
+            }
+
+            // ── Step 8c: Fold the per-side arrear surcharges into the payable totals.
+            //    Step 6 created both vouchers with totals derived from fee heads only
+            //    (paidTotal/unpaidTotal); the arrear surcharges classified above must be
+            //    added so the printed challan shows fees + surcharges (matching the create
+            //    path's totalBeforeDueWithSurcharge). Added to BOTH before- and after-due
+            //    so their difference stays exactly the late fee (downstream derives the
+            //    late fee as total_payable_after_due − total_payable_before_due).
+            if (sideSurchargeBeforeDue.paid.gt(0)) {
+                await tx.vouchers.update({
+                    where: { id: paid.id },
+                    data: {
+                        total_payable_before_due: paidTotal.add(sideSurchargeBeforeDue.paid),
+                        total_payable_after_due: paidTotal.add(sideSurchargeBeforeDue.paid),
+                    } as any,
+                });
+            }
+            if (sideSurchargeBeforeDue.unpaid.gt(0)) {
+                const unpaidBeforeDue = unpaidTotal.add(sideSurchargeBeforeDue.unpaid);
+                await tx.vouchers.update({
+                    where: { id: unpaid.id },
+                    data: {
+                        total_payable_before_due: unpaidBeforeDue,
+                        total_payable_after_due: unpaidBeforeDue.add(lateFeeVal),
+                    } as any,
                 });
             }
 
