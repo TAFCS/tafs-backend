@@ -143,8 +143,8 @@ export class VoucherNotificationService {
     const studentName = voucher.students?.full_name ?? 'Student';
     const label = monthLabel(voucher.month);
     const dueFormatted = formatDatePKT(voucher.due_date);
-    const title = `New Fee Challan: ${label}`;
-    const body = `${studentName} — Your fee challan for ${label} is ready. Due on ${dueFormatted}.`;
+    const title = `School Fees: ${label}`;
+    const body = `Please pay ${studentName}'s ${label} school fees by ${dueFormatted}.`;
 
     const row = await this.notifyVoucher(
       familyId,
@@ -188,8 +188,8 @@ export class VoucherNotificationService {
         const studentName = voucher.students?.full_name ?? 'Student';
         const dueFormatted = formatDatePKT(voucher.due_date);
         const label = monthLabel(voucher.month);
-        const title = `Fee Due Soon: ${label}`;
-        const body = `${studentName} — Fee challan due on ${dueFormatted}. Please pay to avoid late fees.`;
+        const title = `Fee Reminder: ${label}`;
+        const body = `${studentName}'s ${label} school fees are due on ${dueFormatted}. Please pay on time to avoid late charges.`;
 
         await this.notifyVoucher(familyId, voucher.student_id, voucher.id, alertType, title, body);
         sent++;
@@ -228,8 +228,8 @@ export class VoucherNotificationService {
 
         const studentName = voucher.students?.full_name ?? 'Student';
         const expiryFormatted = formatDatePKT(voucher.validity_date);
-        const title = 'Voucher Expiring Soon';
-        const body = `${studentName} — Your voucher is going to expire, please pay. (Valid until ${expiryFormatted})`;
+        const title = 'Payment Deadline Approaching';
+        const body = `${studentName}'s outstanding school fees must be paid by ${expiryFormatted}. Please settle the balance soon.`;
 
         await this.notifyVoucher(familyId, voucher.student_id, voucher.id, alertType, title, body);
         sent++;
@@ -266,7 +266,7 @@ export class VoucherNotificationService {
       const dueFormatted = formatDatePKT(voucher.due_date);
       const label = monthLabel(voucher.month);
       const title = `Fee Overdue: ${label}`;
-      const body = `${studentName} — Fee challan is now overdue (due ${dueFormatted}). Please pay promptly.`;
+      const body = `${studentName}'s ${label} school fees were due on ${dueFormatted} and are now overdue. Please pay as soon as possible.`;
 
       await this.notifyVoucher(
         familyId,

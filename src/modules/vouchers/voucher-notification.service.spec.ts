@@ -162,7 +162,7 @@ describe('VoucherNotificationService', () => {
     expect(fcm.sendToFamily).toHaveBeenCalledWith(
       42,
       expect.any(String),
-      expect.stringContaining('going to expire'),
+      expect.stringContaining('must be paid by'),
       expect.any(Object),
     );
   });
@@ -190,8 +190,8 @@ describe('VoucherNotificationService', () => {
     );
     expect(fcm.sendToFamily).toHaveBeenCalledWith(
       42,
-      expect.stringContaining('New Fee Challan'),
-      expect.stringContaining('challan'),
+      expect.stringContaining('School Fees'),
+      expect.stringContaining('school fees'),
       expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
     );
   });
