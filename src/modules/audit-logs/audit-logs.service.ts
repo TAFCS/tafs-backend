@@ -2,6 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
 
+const SECTION_ENTITY_TYPES: Record<string, string[]> = {
+  student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER'],
+  finance: ['VOUCHER', 'DEPOSIT', 'CLASS_FEE_SCHEDULE', 'STUDENT_FEE_SCHEDULE', 'BULK_VOUCHER', 'CHEQUE'],
+  communication: ['NOTICE', 'EMPLOYEE_NOTICE'],
+  hr: ['EMPLOYEE', 'DEPARTMENT'],
+  attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE'],
+  'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
+  system: ['USER', 'PERMISSION', 'BACKUP'],
+};
+
 @Injectable()
 export class AuditLogsService {
   constructor(private readonly prisma: PrismaService) { }
@@ -14,6 +24,7 @@ export class AuditLogsService {
     entity_type: string;
     entity_id: string;
     action: string;
+    section?: string | null;
     field?: string | null;
     old_value?: string | null;
     new_value?: string | null;
@@ -22,11 +33,14 @@ export class AuditLogsService {
     note?: string | null;
   }) {
     try {
+      // Auto-derive section from entity_type if not explicitly provided
+      const section = params.section ?? this.deriveSectionFromEntityType(params.entity_type);
       await this.prisma.audit_logs.create({
         data: {
           entity_type: params.entity_type,
           entity_id: params.entity_id,
           action: params.action,
+          section,
           field: params.field || null,
           old_value: params.old_value || null,
           new_value: params.new_value || null,
@@ -40,6 +54,13 @@ export class AuditLogsService {
     }
   }
 
+  private deriveSectionFromEntityType(entityType: string): string | null {
+    for (const [section, types] of Object.entries(SECTION_ENTITY_TYPES)) {
+      if (types.includes(entityType)) return section;
+    }
+    return null;
+  }
+
   /**
    * Find logs matching query criteria.
    */
@@ -48,6 +69,19 @@ export class AuditLogsService {
 
     if (query.student_id) {
       where.student_id = Number(query.student_id);
+    }
+    if (query.section) {
+      // Filter by section: translate to the entity_types that belong to that section
+      const sectionTypes = SECTION_ENTITY_TYPES[query.section] ?? [];
+      where.section = query.section;
+      if (sectionTypes.length > 0 && !where.entity_type) {
+        // Also support older rows that may not have section set yet
+        where.OR = [
+          { section: query.section },
+          { section: null, entity_type: { in: sectionTypes } },
+        ];
+        delete where.section;
+      }
     }
     if (query.entity_type) {
       const types = query.entity_type.split(',').map((t) => t.trim()).filter(Boolean);

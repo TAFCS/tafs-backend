@@ -13,6 +13,10 @@ export class QueryAuditLogsDto {
 
   @IsOptional()
   @IsString()
+  section?: string;
+
+  @IsOptional()
+  @IsString()
   changed_by?: string;
 
   @IsOptional()

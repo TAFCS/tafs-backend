@@ -195,7 +195,6 @@ model families {
   home_phone               String?                    @db.VarChar(20)
   attendance_notifications attendance_notifications[]
   calendar_notifications   calendar_notifications[]
-  voucher_notifications    voucher_notifications[]
   chat_conversations       chat_conversations?
   family_refresh_tokens    family_refresh_tokens[]
   fcm_device_tokens        fcm_device_tokens[]
@@ -205,6 +204,7 @@ model families {
   student_siblings         student_siblings[]
   students                 students[]
   support_tickets          support_tickets[]
+  voucher_notifications    voucher_notifications[]
 }
 
 model family_refresh_tokens {
@@ -509,7 +509,6 @@ model students {
   attendance_student_daily   attendance_student_daily[]
   audit_logs                 audit_logs[]
   calendar_notifications     calendar_notifications[]
-  voucher_notifications      voucher_notifications[]
   deposits                   deposits[]
   device_user_mappings       device_user_mappings[]
   postdated_cheques          postdated_cheques[]
@@ -531,6 +530,7 @@ model students {
   houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   support_tickets            support_tickets[]
+  voucher_notifications      voucher_notifications[]
   vouchers                   vouchers[]
   zk_attendance_scans        zk_attendance_scans[]
 
@@ -1433,11 +1433,13 @@ model audit_logs {
   changed_at  DateTime  @default(now())
   note        String?
   student_id  Int?
+  section     String?   @db.VarChar(50)
   students    students? @relation(fields: [student_id], references: [cc])
 
   @@index([changed_at(sort: Desc)])
   @@index([entity_type, entity_id])
   @@index([student_id])
+  @@index([section])
 }
 
 model class_check_in_schedules {
