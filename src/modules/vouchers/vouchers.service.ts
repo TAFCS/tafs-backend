@@ -21,6 +21,7 @@ import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 
@@ -107,6 +108,7 @@ export class VouchersService {
         private readonly pdfService: VoucherPdfService,
         private readonly bulkLogic: BulkVoucherLogicService,
         private readonly auditLogs: AuditLogsService,
+        private readonly voucherNotificationService: VoucherNotificationService,
     ) { }
 
     // True for student_fees rows produced by splitPartiallyPaid() — these are a
@@ -467,6 +469,14 @@ export class VouchersService {
             student_id: dto.student_id,
             note: logNote,
         });
+
+        this.voucherNotificationService
+            .sendVoucherIssuedNotification(finalVoucher.id)
+            .catch((err) =>
+                this.logger.error(
+                    `[Voucher ${finalVoucher.id}] Issued notification failed: ${(err as Error).message}`,
+                ),
+            );
 
         return finalVoucher;
     }

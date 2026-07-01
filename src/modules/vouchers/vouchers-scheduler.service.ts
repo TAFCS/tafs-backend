@@ -1,28 +1,42 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { VoucherNotificationService } from './voucher-notification.service';
+import { dateFromPktKey, pktDateKey } from './voucher-notification.service';
 
 @Injectable()
 export class VouchersSchedulerService {
   private readonly logger = new Logger(VouchersSchedulerService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly voucherNotificationService: VoucherNotificationService,
+  ) {}
 
   /**
    * Cron job that runs at midnight (00:00:00) every day.
    * Updates voucher statuses based on due_date and validity_date:
    * 1. Mark UNPAID vouchers as OVERDUE if due_date has passed
    * 2. Mark UNPAID/OVERDUE vouchers as EXPIRED if validity_date has passed
+   * 3. NOTIF-02: notify families when vouchers become overdue
    */
   @Cron('0 0 * * *')
   async handleVoucherStatusUpdate() {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const todayKey = pktDateKey(new Date());
+      const today = dateFromPktKey(todayKey);
 
       this.logger.log(`[Voucher Scheduler] Running daily status update at ${today.toISOString()}`);
 
-      // 1. Mark vouchers as OVERDUE if due_date has passed and still UNPAID
+      const becomingOverdue = await this.prisma.vouchers.findMany({
+        where: {
+          status: 'UNPAID',
+          due_date: { lt: today },
+        },
+        select: { id: true },
+      });
+      const overdueIds = becomingOverdue.map((v) => v.id);
+
       const overdueResult = await this.prisma.vouchers.updateMany({
         where: {
           status: 'UNPAID',
@@ -33,9 +47,9 @@ export class VouchersSchedulerService {
 
       if (overdueResult.count > 0) {
         this.logger.log(`[Voucher Scheduler] Marked ${overdueResult.count} voucher(s) as OVERDUE`);
+        await this.voucherNotificationService.sendBecameOverdueForVoucherIds(overdueIds);
       }
 
-      // 2. Mark vouchers as EXPIRED if validity_date has passed
       const expiredResult = await this.prisma.vouchers.updateMany({
         where: {
           status: { in: ['UNPAID', 'OVERDUE'] },

@@ -782,6 +782,21 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.emitToTicketRoom(ticket.id, 'replyPendingApproval', payload);
   }
 
+  broadcastVoucherAlert(
+    familyId: number,
+    payload: {
+      id: number;
+      voucher_id: number;
+      student_cc: number;
+      alert_type: string;
+      title: string;
+      body: string;
+      created_at: Date;
+    },
+  ) {
+    this.server.to(`family_app_${familyId}`).emit('voucherAlertReceived', payload);
+  }
+
   async broadcastApprovedTicketMessage(ticket: any, message: any) {
     const messagePayload = { ticket, message };
     this.server
