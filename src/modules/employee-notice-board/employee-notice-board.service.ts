@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { StaffRole } from '@prisma/client';
 import { CreateEmployeeNoticeDto } from './dto/create-employee-notice.dto';
@@ -10,6 +11,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 export class EmployeeNoticeBoardService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
     private readonly fcmService: FcmService,
   ) {}
 
@@ -96,7 +98,7 @@ export class EmployeeNoticeBoardService {
     return withReached;
   }
 
-  async createPost(dto: CreateEmployeeNoticeDto, user: IJwtStaffPayload) {
+  async createPost(dto: CreateEmployeeNoticeDto, user: IJwtStaffPayload, changedBy?: string) {
     const post = await this.prisma.employee_notice_posts.create({
       data: {
         posted_by: user.sub,
@@ -114,6 +116,13 @@ export class EmployeeNoticeBoardService {
         _count: { select: { post_reads: true } },
       },
     });
+
+    const noteParts = [`Title: ${dto.title}`];
+    if (dto.body) noteParts.push(`Body: ${dto.body.slice(0, 120)}${dto.body.length > 120 ? '…' : ''}`);
+    if (dto.target_roles?.length) noteParts.push(`Roles: ${dto.target_roles.join(', ')}`);
+    if (dto.campus_ids?.length) noteParts.push(`Campuses: ${dto.campus_ids.join(', ')}`);
+    if (dto.is_pinned) noteParts.push('Pinned');
+    this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(post.id), action: 'CREATED', section: 'communication', note: noteParts.join(' | '), changed_by: changedBy || user.username || user.sub });
 
     // Fan-out FCM — fire and forget
     void this._sendFcmNotifications(post, dto.target_roles ?? [], dto.campus_ids ?? []);
@@ -146,16 +155,18 @@ export class EmployeeNoticeBoardService {
     });
   }
 
-  async deletePost(id: number) {
+  async deletePost(id: number, deletedBy?: string) {
     const post = await this.prisma.employee_notice_posts.findFirst({
       where: { id, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Employee notice not found');
 
-    return this.prisma.employee_notice_posts.update({
+    const result = await this.prisma.employee_notice_posts.update({
       where: { id },
       data: { deleted_at: new Date() },
     });
+    this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(id), action: 'DELETED', section: 'communication', old_value: post.title ?? undefined, changed_by: deletedBy ?? 'system' });
+    return result;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────

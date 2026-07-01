@@ -52,7 +52,7 @@ export class EmployeeNoticeBoardController {
   @Post('admin/employee-notices')
   @ApiOperation({ summary: 'Admin: create an employee notice and fan-out FCM' })
   create(@CurrentUser() user: IJwtStaffPayload, @Body() dto: CreateEmployeeNoticeDto) {
-    return this.service.createPost(dto, user);
+    return this.service.createPost(dto, user, user.username || user.sub);
   }
 
   @Patch('admin/employee-notices/:id')
@@ -66,7 +66,7 @@ export class EmployeeNoticeBoardController {
 
   @Delete('admin/employee-notices/:id')
   @ApiOperation({ summary: 'Admin: soft-delete an employee notice' })
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.service.deletePost(id);
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    return this.service.deletePost(id, user.username || user.sub);
   }
 }

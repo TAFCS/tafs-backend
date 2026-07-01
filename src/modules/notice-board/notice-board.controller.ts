@@ -65,7 +65,7 @@ export class NoticeBoardController {
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: create a post' })
   create(@CurrentUser() user: any, @Body() dto: CreatePostDto) {
-    return this.service.createPost(user.sub, dto);
+    return this.service.createPost(user.sub, dto, user.username || user.sub);
   }
 
   @Patch('admin/notice-board/:id')
@@ -81,8 +81,8 @@ export class NoticeBoardController {
   @Delete('admin/notice-board/:id')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: soft-delete a post' })
-  remove(@Param('id') id: string) {
-    return this.service.deletePost(id);
+  remove(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.deletePost(id, user?.username || user?.sub || 'system');
   }
 
   @Get('admin/notice-board/:id/reads')

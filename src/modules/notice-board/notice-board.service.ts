@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
@@ -12,6 +13,7 @@ export class NoticeBoardService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly fcm: FcmService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   // ── Family-facing ────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ export class NoticeBoardService {
     return merged;
   }
 
-  async createPost(postedBy: string, dto: CreatePostDto) {
+  async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string) {
     const post = await this.prisma.notice_board_posts.create({
       data: {
         posted_by: postedBy,
@@ -162,6 +164,15 @@ export class NoticeBoardService {
         users: { select: { full_name: true } },
         _count: { select: { post_reads: true } },
       },
+    });
+
+    this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(post.id),
+      action: 'CREATED',
+      section: 'communication',
+      new_value: dto.title ?? dto.body?.slice(0, 80),
+      changed_by: creatorUsername || postedBy,
     });
 
     // Fire-and-forget push notifications to all scoped families
@@ -258,7 +269,7 @@ export class NoticeBoardService {
     });
   }
 
-  async deletePost(id: string | number) {
+  async deletePost(id: string | number, deletedBy?: string) {
     if (String(id).startsWith('holiday-')) {
       const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
       const deleted = await this.prisma.academic_calendar_days.delete({
@@ -287,10 +298,19 @@ export class NoticeBoardService {
     });
     if (!post) throw new NotFoundException('Post not found');
 
-    return this.prisma.notice_board_posts.update({
+    const result = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
       data: { deleted_at: new Date() },
     });
+    this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(numericId),
+      action: 'DELETED',
+      section: 'communication',
+      old_value: post.title ?? post.body?.slice(0, 80),
+      changed_by: deletedBy ?? 'system',
+    });
+    return result;
   }
 
   async getReadStats(postId: string | number) {
