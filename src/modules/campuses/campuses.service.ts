@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 
 @Injectable()
 export class CampusesService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly auditLogs: AuditLogsService,
+    ) { }
 
     private readonly campusIncludes = {
         campus_classes: {
@@ -96,8 +100,17 @@ export class CampusesService {
         return this.transformCampusData(campus);
     }
 
-    async create(dto: CreateCampusDto) {
-        return this.prisma.campuses.create({
+    async getDependencies(id: number) {
+        const [students, staff, classes] = await Promise.all([
+            this.prisma.students.count({ where: { campus_id: id, deleted_at: null } }),
+            this.prisma.users.count({ where: { campus_id: id, is_active: true } }),
+            this.prisma.campus_classes.count({ where: { campus_id: id } }),
+        ]);
+        return { students, staff, classes };
+    }
+
+    async create(dto: CreateCampusDto, changedBy?: string) {
+        const record = await this.prisma.campuses.create({
             data: {
                 campus_code: dto.campus_code,
                 campus_name: dto.campus_name,
@@ -105,6 +118,8 @@ export class CampusesService {
                 campus_prefix: dto.campus_prefix,
             } as any,
         });
+        this.auditLogs.log({ entity_type: 'CAMPUS', entity_id: String(record.id), action: 'CREATED', section: 'school-setup', new_value: dto.campus_name, changed_by: changedBy ?? 'system' });
+        return record;
     }
 
     async bulkUpdate(dto: BulkUpdateCampusesDto) {
@@ -151,9 +166,10 @@ export class CampusesService {
     }
 
 
-    async delete(id: number) {
+    async delete(id: number, changedBy?: string) {
+        const campus = await this.prisma.campuses.findUnique({ where: { id }, select: { campus_name: true } });
         // Use a transaction to safely unlink related records and delete the campus
-        return this.prisma.$transaction(async (tx) => {
+        const record = await this.prisma.$transaction(async (tx) => {
             // Check if any active students exist for this campus
             const studentCount = await tx.students.count({
                 where: { campus_id: id, deleted_at: null },
@@ -190,6 +206,8 @@ export class CampusesService {
                 where: { id },
             });
         });
+        this.auditLogs.log({ entity_type: 'CAMPUS', entity_id: String(id), action: 'DELETED', section: 'school-setup', old_value: campus?.campus_name ?? undefined, changed_by: changedBy ?? 'system' });
+        return record;
     }
 
     // ─── Campus Classes ───────────────────────────────────────────────────────

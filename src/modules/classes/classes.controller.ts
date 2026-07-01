@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { ClassesService } from './classes.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -26,8 +27,9 @@ export class ClassesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Class'))
-  async create(@Body() dto: CreateClassDto) {
-    const created = await this.classesService.create(dto);
+  async create(@Body() dto: CreateClassDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const created = await this.classesService.create(dto, changedBy);
     return {
       success: true,
       message: 'Class created successfully',
@@ -47,11 +49,18 @@ export class ClassesController {
     };
   }
 
+  @Get(':id/dependencies')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Class'))
+  async getDependencies(@Param('id', ParseIntPipe) id: number) {
+    return this.classesService.getDependencies(id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Class'))
-  async delete(@Param('id', ParseIntPipe) id: number) {
-    await this.classesService.delete(id);
+  async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.classesService.delete(id, changedBy);
     return {
       success: true,
       message: 'Class deleted successfully',

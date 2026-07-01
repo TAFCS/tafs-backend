@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
 import { CreateClassDto } from './dto/create-class.dto';
 
 @Injectable()
 export class ClassesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   /**
    * Extract a numeric ordering rank from a class code or description.
@@ -42,14 +46,16 @@ export class ClassesService {
       .sort((a, b) => a.class_order - b.class_order);
   }
 
-  async create(dto: CreateClassDto) {
-    return this.prisma.classes.create({
+  async create(dto: CreateClassDto, changedBy?: string) {
+    const record = await this.prisma.classes.create({
       data: {
         description: dto.description,
         class_code: dto.class_code,
         academic_system: dto.academic_system,
       },
     });
+    this.auditLogs.log({ entity_type: 'CLASS', entity_id: String(record.id), action: 'CREATED', section: 'school-setup', new_value: `${dto.class_code} – ${dto.description}`, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
   async bulkUpdate(dto: BulkUpdateClassesDto) {
@@ -85,9 +91,19 @@ export class ClassesService {
     return updated;
   }
 
-  async delete(id: number) {
+  async getDependencies(id: number) {
+    const [students, campusClasses, feeSchedules] = await Promise.all([
+      this.prisma.students.count({ where: { class_id: id, deleted_at: null } }),
+      this.prisma.campus_classes.count({ where: { class_id: id } }),
+      this.prisma.class_fee_schedule.count({ where: { class_id: id } }),
+    ]);
+    return { students, campuses: campusClasses, feeSchedules };
+  }
+
+  async delete(id: number, changedBy?: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const cls = await this.prisma.classes.findUnique({ where: { id }, select: { description: true, class_code: true } });
+      const record = await this.prisma.$transaction(async (tx) => {
         // 1. Unlink Students
         await tx.students.updateMany({
           where: { class_id: id },
@@ -113,6 +129,8 @@ export class ClassesService {
           where: { id },
         });
       });
+      this.auditLogs.log({ entity_type: 'CLASS', entity_id: String(id), action: 'DELETED', section: 'school-setup', old_value: cls ? `${cls.class_code} – ${cls.description}` : undefined, changed_by: changedBy ?? 'system' });
+      return record;
     } catch (e: any) {
       if (e?.code === 'P2025') {
         throw new NotFoundException(`Class #${id} not found`);

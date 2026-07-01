@@ -9,8 +9,10 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { SectionsService } from './sections.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -40,8 +42,9 @@ export class SectionsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Section'))
-  async create(@Body() dto: CreateSectionDto) {
-    const section = await this.sectionsService.create(dto);
+  async create(@Body() dto: CreateSectionDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const section = await this.sectionsService.create(dto, changedBy);
     return createApiResponse(
       section,
       HttpStatus.CREATED,
@@ -61,11 +64,18 @@ export class SectionsController {
     );
   }
 
+  @Get(':id/dependencies')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Section'))
+  async getDependencies(@Param('id', ParseIntPipe) id: number) {
+    return this.sectionsService.getDependencies(id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Section'))
-  async delete(@Param('id', ParseIntPipe) id: number) {
-    await this.sectionsService.delete(id);
+  async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.sectionsService.delete(id, changedBy);
     return createApiResponse(
       null,
       HttpStatus.OK,

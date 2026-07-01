@@ -1,11 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateFeeTypeDto } from './dto/create-fee-type.dto';
 import { BulkUpdateFeeTypesDto } from './dto/bulk-update-fee-types.dto';
 
 @Injectable()
 export class FeeTypesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   private static readonly ACADEMIC_MONTHS = [
     'August',
@@ -28,14 +32,14 @@ export class FeeTypesService {
     });
   }
 
-  async create(dto: CreateFeeTypeDto) {
+  async create(dto: CreateFeeTypeDto, changedBy?: string) {
     const normalizedBreakup = this.normalizeAndValidateBreakup(
       dto.breakup,
       'fee type',
       dto.freq,
     );
 
-    return this.prisma.fee_types.create({
+    const record = await this.prisma.fee_types.create({
       data: {
         description: dto.description,
         freq: dto.freq,
@@ -43,6 +47,8 @@ export class FeeTypesService {
         priority_order: dto.priority_order,
       },
     });
+    this.auditLogs.log({ entity_type: 'FEE_TYPE', entity_id: String(record.id), action: 'CREATED', section: 'school-setup', new_value: dto.description, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
   async bulkUpdate(dto: BulkUpdateFeeTypesDto) {
@@ -93,9 +99,18 @@ export class FeeTypesService {
     return updated;
   }
 
-  async delete(id: number) {
+  async getDependencies(id: number) {
+    const [studentFees, classFeeSchedules] = await Promise.all([
+      this.prisma.student_fees.count({ where: { fee_type_id: id } }),
+      this.prisma.class_fee_schedule.count({ where: { fee_id: id } }),
+    ]);
+    return { studentFees, classFeeSchedules };
+  }
+
+  async delete(id: number, changedBy?: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const ft = await this.prisma.fee_types.findUnique({ where: { id }, select: { description: true } });
+      const record = await this.prisma.$transaction(async (tx) => {
         // 1. Delete associated student fees (no cascade in schema for this direction usually)
         await tx.student_fees.deleteMany({
           where: { fee_type_id: id },
@@ -107,6 +122,8 @@ export class FeeTypesService {
           where: { id },
         });
       });
+      this.auditLogs.log({ entity_type: 'FEE_TYPE', entity_id: String(id), action: 'DELETED', section: 'school-setup', old_value: ft?.description ?? undefined, changed_by: changedBy ?? 'system' });
+      return record;
     } catch (e: any) {
       if (e?.code === 'P2025') {
         throw new NotFoundException(`Fee type #${id} not found`);

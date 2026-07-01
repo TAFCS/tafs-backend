@@ -9,8 +9,10 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { FeeTypesService } from './fee-types.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -40,8 +42,9 @@ export class FeeTypesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
-  async create(@Body() dto: CreateFeeTypeDto) {
-    const feeType = await this.feeTypesService.create(dto);
+  async create(@Body() dto: CreateFeeTypeDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const feeType = await this.feeTypesService.create(dto, changedBy);
     return createApiResponse(
       feeType,
       HttpStatus.CREATED,
@@ -61,11 +64,18 @@ export class FeeTypesController {
     );
   }
 
+  @Get(':id/dependencies')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Fee'))
+  async getDependencies(@Param('id', ParseIntPipe) id: number) {
+    return this.feeTypesService.getDependencies(id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee'))
-  async delete(@Param('id', ParseIntPipe) id: number) {
-    await this.feeTypesService.delete(id);
+  async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.feeTypesService.delete(id, changedBy);
     return createApiResponse(
       null,
       HttpStatus.OK,

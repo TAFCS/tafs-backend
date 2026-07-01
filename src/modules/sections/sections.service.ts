@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { BulkUpdateSectionsDto } from './dto/bulk-update-sections.dto';
 
 @Injectable()
 export class SectionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async findAll() {
     return this.prisma.sections.findMany({
@@ -13,12 +17,14 @@ export class SectionsService {
     });
   }
 
-  async create(dto: CreateSectionDto) {
-    return this.prisma.sections.create({
+  async create(dto: CreateSectionDto, changedBy?: string) {
+    const record = await this.prisma.sections.create({
       data: {
         description: dto.description,
       },
     });
+    this.auditLogs.log({ entity_type: 'SECTION', entity_id: String(record.id), action: 'CREATED', section: 'school-setup', new_value: dto.description, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
   async bulkUpdate(dto: BulkUpdateSectionsDto) {
@@ -46,9 +52,15 @@ export class SectionsService {
     return updated;
   }
 
-  async delete(id: number) {
+  async getDependencies(id: number) {
+    const students = await this.prisma.students.count({ where: { section_id: id, deleted_at: null } });
+    return { students };
+  }
+
+  async delete(id: number, changedBy?: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const sec = await this.prisma.sections.findUnique({ where: { id }, select: { description: true } });
+      const record = await this.prisma.$transaction(async (tx) => {
         // 1. Unlink Students
         await tx.students.updateMany({
           where: { section_id: id },
@@ -65,6 +77,8 @@ export class SectionsService {
           where: { id },
         });
       });
+      this.auditLogs.log({ entity_type: 'SECTION', entity_id: String(id), action: 'DELETED', section: 'school-setup', old_value: sec?.description ?? undefined, changed_by: changedBy ?? 'system' });
+      return record;
     } catch (e: any) {
       if (e?.code === 'P2025') {
         throw new NotFoundException(`Section #${id} not found`);
