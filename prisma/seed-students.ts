@@ -48,12 +48,12 @@ const CLASS_CODE_TO_ID: Record<string, number> = {
     VIII: 17,
     IX: 18,
     X: 19,
-    AS: 21,
-    'AS-A': 21, // some rows include the section in the class column
-    'AS-C': 21,
-    A2: 22,
-    'A2-A': 22,
-    'A2-C': 22,
+    AS: 20,
+    'AS-A': 20, // some rows include the section in the class column
+    'AS-C': 20,
+    A2: 21,
+    'A2-A': 21,
+    'A2-C': 21,
 };
 
 /** Maps section letter to sections.id */

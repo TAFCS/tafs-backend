@@ -1545,13 +1545,13 @@ export class VouchersService {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
 
-        if ((voucher.status === 'VOID' || voucher.status === 'EXPIRED') && !DEV_ALLOW_VOID_DEPOSITS) {
+        if (voucher.status === 'VOID' && !DEV_ALLOW_VOID_DEPOSITS) {
             throw new BadRequestException(
-                voucher.status === 'EXPIRED'
-                    ? `Voucher #${voucherId} has expired. Issue a new voucher for this student and record the deposit against it instead.`
-                    : `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
+                `Voucher #${voucherId} has been voided and superseded by a newer voucher. Record the deposit against the newer voucher instead.`,
             );
         }
+        // EXPIRED vouchers are allowed to receive deposits (fill at own risk) —
+        // the frontend surfaces a warning but does not block the operation.
 
         if (voucher.status === 'PAID') {
             throw new BadRequestException(
