@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -202,7 +203,10 @@ const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) 
 
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   /** Throws ConflictException if employee_code is already taken by another record */
   private async assertCodeAvailable(code: string, excludeId?: number) {
@@ -264,14 +268,14 @@ export class EmployeesService {
     return employee;
   }
 
-  async create(dto: CreateEmployeeDto) {
+  async create(dto: CreateEmployeeDto, changedBy?: string) {
     const { class_section_assignments, ...rest } = dto;
 
     // Check employee code uniqueness before insert
     if (rest.employee_code) {
       await this.assertCodeAvailable(rest.employee_code);
     }
-    return this.prisma.employee_profiles.create({
+    const record = await this.prisma.employee_profiles.create({
       data: {
         user_id: rest.user_id || null,
         cnic: rest.cnic || null,
@@ -315,10 +319,19 @@ export class EmployeesService {
       },
       include: includeRelations
     });
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(record.id),
+      action: 'CREATED',
+      section: 'hr',
+      new_value: record.full_name ?? record.employee_code ?? undefined,
+      changed_by: changedBy ?? 'system',
+    });
+    return record;
   }
 
-  async update(id: number, dto: UpdateEmployeeDto) {
-    await this.findOne(id);
+  async update(id: number, dto: UpdateEmployeeDto, changedBy?: string) {
+    const existing = await this.findOne(id);
 
     // Check code uniqueness, excluding this employee's own record
     if (dto.employee_code) {
@@ -326,7 +339,7 @@ export class EmployeesService {
     }
     const { class_section_assignments, ...rest } = dto;
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       if (class_section_assignments !== undefined) {
         await tx.employee_class_section_assignments.deleteMany({ where: { employee_id: id } });
         if (class_section_assignments.length) {
@@ -381,13 +394,60 @@ export class EmployeesService {
         include: includeRelations
       });
     });
+
+    const trackedFields: Array<{ key: keyof typeof rest; label: string }> = [
+      { key: 'full_name', label: 'Full Name' },
+      { key: 'employee_code', label: 'Code' },
+      { key: 'cnic', label: 'CNIC' },
+      { key: 'job_title', label: 'Job Title' },
+      { key: 'employment_type', label: 'Employment Type' },
+      { key: 'department_id', label: 'Department' },
+      { key: 'designation_id', label: 'Designation' },
+      { key: 'campus_id', label: 'Campus' },
+      { key: 'personal_phone', label: 'Phone' },
+      { key: 'personal_email', label: 'Email' },
+      { key: 'monthly_pay', label: 'Monthly Pay' },
+    ];
+
+    const changes: string[] = [];
+    for (const { key, label } of trackedFields) {
+      if (key in rest && rest[key] !== undefined) {
+        const oldVal = String((existing as any)[key] ?? '');
+        const newVal = String(rest[key] ?? '');
+        if (oldVal !== newVal) {
+          changes.push(`${label}: ${oldVal || '—'} → ${newVal || '—'}`);
+        }
+      }
+    }
+
+    if (changes.length > 0) {
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(id),
+        action: 'UPDATED',
+        section: 'hr',
+        note: `${(existing as any).full_name ?? `#${id}`} — ${changes.join(' | ')}`,
+        changed_by: changedBy ?? 'system',
+      });
+    }
+
+    return result;
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
-    return this.prisma.employee_profiles.delete({
+  async remove(id: number, changedBy?: string) {
+    const existing = await this.findOne(id);
+    const record = await this.prisma.employee_profiles.delete({
       where: { id }
     });
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(id),
+      action: 'DELETED',
+      section: 'hr',
+      old_value: (existing as any).full_name ?? (existing as any).employee_code ?? undefined,
+      changed_by: changedBy ?? 'system',
+    });
+    return record;
   }
 
   async findUnlinkedUsers() {

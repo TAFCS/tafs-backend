@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
 export class CreateDepartmentDto {
   name: string;
@@ -13,7 +14,10 @@ export class CreateDesignationDto {
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async findAll() {
     return this.prisma.departments.findMany({
@@ -32,25 +36,24 @@ export class DepartmentsService {
     return dept;
   }
 
-  async create(dto: CreateDepartmentDto) {
-    return this.prisma.departments.create({
-      data: dto
-    });
+  async create(dto: CreateDepartmentDto, changedBy?: string) {
+    const record = await this.prisma.departments.create({ data: dto });
+    this.auditLogs.log({ entity_type: 'DEPARTMENT', entity_id: String(record.id), action: 'CREATED', section: 'hr', new_value: dto.name, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
-  async update(id: number, dto: Partial<CreateDepartmentDto>) {
-    await this.findOne(id);
-    return this.prisma.departments.update({
-      where: { id },
-      data: dto
-    });
+  async update(id: number, dto: Partial<CreateDepartmentDto>, changedBy?: string) {
+    const existing = await this.findOne(id);
+    const record = await this.prisma.departments.update({ where: { id }, data: dto });
+    this.auditLogs.log({ entity_type: 'DEPARTMENT', entity_id: String(id), action: 'UPDATED', section: 'hr', old_value: existing.name, new_value: dto.name, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
-    return this.prisma.departments.delete({
-      where: { id }
-    });
+  async remove(id: number, changedBy?: string) {
+    const existing = await this.findOne(id);
+    const record = await this.prisma.departments.delete({ where: { id } });
+    this.auditLogs.log({ entity_type: 'DEPARTMENT', entity_id: String(id), action: 'DELETED', section: 'hr', old_value: existing.name, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
   // Designations CRUD

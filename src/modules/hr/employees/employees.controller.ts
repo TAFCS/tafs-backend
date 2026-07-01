@@ -98,22 +98,25 @@ export class EmployeesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async create(@Body() dto: CreateEmployeeDto) {
-    const data = await this.employeesService.create(dto);
+  async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: any) {
+    const changedBy = user?.username || user?.sub || 'system';
+    const data = await this.employeesService.create(dto, changedBy);
     return createApiResponse(data, HttpStatus.CREATED, 'Employee created successfully');
   }
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeDto) {
-    const data = await this.employeesService.update(id, dto);
+  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeDto, @CurrentUser() user: any) {
+    const changedBy = user?.username || user?.sub || 'system';
+    const data = await this.employeesService.update(id, dto, changedBy);
     return createApiResponse(data, HttpStatus.OK, 'Employee updated successfully');
   }
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.employeesService.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    const changedBy = user?.username || user?.sub || 'system';
+    const data = await this.employeesService.remove(id, changedBy);
     return createApiResponse(data, HttpStatus.OK, 'Employee deleted successfully');
   }
 }
