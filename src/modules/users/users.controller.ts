@@ -53,8 +53,8 @@ export class UsersController {
 
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
-  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
-    const user = await this.usersService.updateUser(id, dto);
+  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() editor: IJwtStaffPayload) {
+    const user = await this.usersService.updateUser(id, dto, editor.username || editor.sub);
     return createApiResponse(user, HttpStatus.OK, 'User updated successfully');
   }
 

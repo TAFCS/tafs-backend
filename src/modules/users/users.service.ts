@@ -4,6 +4,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -14,7 +15,10 @@ import { StaffRole } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private auditLogs: AuditLogsService,
+  ) {}
 
   // ─── Auth helpers ────────────────────────────────────────────────────────────
 
@@ -102,7 +106,7 @@ export class UsersService {
     const hash = await bcrypt.hash(dto.password, 10);
     const now = new Date();
 
-    return this.prisma.users.create({
+    const record = await this.prisma.users.create({
       data: {
         id: uuidv4(),
         username: dto.username,
@@ -127,10 +131,12 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
+    this.auditLogs.log({ entity_type: 'USER', entity_id: record.id, action: 'CREATED', section: 'system', new_value: `${dto.username} (${dto.role})`, changed_by: createdById });
+    return record;
   }
 
-  async updateUser(id: string, dto: UpdateUserDto) {
-    await this.findUserById(id); // ensures existence
+  async updateUser(id: string, dto: UpdateUserDto, changedBy?: string) {
+    const existing = await this.findUserById(id);
 
     const data: any = { updated_at: new Date() };
     if (dto.full_name !== undefined) data.full_name = dto.full_name;
@@ -140,7 +146,7 @@ export class UsersService {
     if (dto.is_active !== undefined) data.is_active = dto.is_active;
     if (dto.password) data.password_hash = await bcrypt.hash(dto.password, 10);
 
-    return this.prisma.users.update({
+    const record = await this.prisma.users.update({
       where: { id },
       data,
       select: {
@@ -155,6 +161,8 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
+    this.auditLogs.log({ entity_type: 'USER', entity_id: id, action: 'UPDATED', section: 'system', old_value: (existing as any).username, changed_by: changedBy ?? 'system' });
+    return record;
   }
 
   async deactivateUser(id: string) {
