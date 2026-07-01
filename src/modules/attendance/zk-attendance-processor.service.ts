@@ -12,6 +12,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -66,6 +67,7 @@ export class ZkAttendanceProcessorService {
     private readonly fcmService: FcmService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly policyResolver: AttendancePolicyResolverService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async processPush(
@@ -408,6 +410,15 @@ export class ZkAttendanceProcessorService {
         last_scan_at: seg.lastScanAt,
       },
     });
+
+    this.auditLogs.log({
+      entity_type: 'STAFF_ATTENDANCE',
+      entity_id: String(employeeId),
+      action: 'CREATED',
+      section: 'attendance',
+      note: `Biometric scan — ${status} on ${date.toISOString().slice(0, 10)}`,
+      changed_by: 'zk-device',
+    });
   }
 
   private computeStaffStatus(
@@ -472,6 +483,16 @@ export class ZkAttendanceProcessorService {
         check_out_at: seg.checkOutAt,
         last_scan_at: seg.lastScanAt,
       },
+    });
+
+    this.auditLogs.log({
+      entity_type: 'STUDENT_ATTENDANCE',
+      entity_id: String(studentCc),
+      action: 'CREATED',
+      section: 'attendance',
+      note: `Biometric scan — ${status} on ${date.toISOString().slice(0, 10)}`,
+      changed_by: 'zk-device',
+      student_id: studentCc,
     });
 
     return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;

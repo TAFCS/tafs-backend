@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { attendance_staff_daily, AttendanceSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
@@ -25,6 +26,7 @@ export class StaffAttendanceService {
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly employeeResolver: EmployeeProfileResolverService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -671,6 +673,15 @@ export class StaffAttendanceService {
     });
 
     await this.prisma.$transaction(upserts);
+
+    this.auditLogs.log({
+      entity_type: 'STAFF_ATTENDANCE',
+      entity_id: String(dto.campus_id),
+      action: 'CREATED',
+      section: 'attendance',
+      note: `Bulk marked ${dto.records.length} staff for ${dto.date}`,
+      changed_by: user.username || user.sub,
+    });
 
     // Avoid reloading the full campus register here — getRegister() runs holiday
     // sync for every enrolled student plus per-employee calendar resolution and

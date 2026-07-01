@@ -51,7 +51,7 @@ async function main() {
   const calendarResolver = new CalendarDayResolverService(prisma);
   const policyResolver = new AttendancePolicyResolverService(prisma);
   // fcmService is never touched by recomputeDaySequence/upsertStaffDaily — safe stub for this seed script.
-  const processor = new ZkAttendanceProcessorService(prisma, null as any, calendarResolver, policyResolver);
+  const processor = new ZkAttendanceProcessorService(prisma, null as any, calendarResolver, policyResolver, null as any);
 
   const existing = await prisma.employee_profiles.findFirst({ where: { employee_code: EMPLOYEE_CODE } });
   if (existing) {

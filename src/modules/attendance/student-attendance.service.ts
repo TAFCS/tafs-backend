@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RollRecordStatus, zk_attendance_scans, AttendanceSource } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
@@ -20,6 +21,7 @@ export class StudentAttendanceService {
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly policyResolver: AttendancePolicyResolverService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -394,6 +396,15 @@ export class StudentAttendanceService {
       },
     });
 
+    this.auditLogs.log({
+      entity_type: 'STUDENT_ATTENDANCE',
+      entity_id: String(studentCc),
+      action: 'CREATED',
+      section: 'attendance',
+      new_value: `${dto.date} PRESENT`,
+      changed_by: user.username || user.sub,
+      student_id: studentCc,
+    });
     return { resolved: true, student_cc: studentCc, date: dto.date };
   }
 }
