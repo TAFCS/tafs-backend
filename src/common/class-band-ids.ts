@@ -22,8 +22,8 @@ export const CLASS_IDS = {
   VIII: 17,
   IX: 18,
   X: 19,
-  AS: 21,
-  A2: 22,
+  AS: 20,
+  A2: 21,
 } as const;
 
 /** Principal class-band scopes (allowed_class_ids on users). */
