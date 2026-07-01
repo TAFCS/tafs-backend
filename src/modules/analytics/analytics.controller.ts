@@ -31,4 +31,19 @@ export class AnalyticsController {
     );
     return createApiResponse(stats, HttpStatus.OK, 'Dashboard analytics retrieved successfully');
   }
+
+  @Get('module-stats')
+  async getModuleStats(
+    @Query('campusId') campusId: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const requested = campusId ? parseInt(campusId, 10) : undefined;
+    const cid = resolveAnalyticsCampusId(user, requested);
+    const stats = await this.analyticsService.getModuleStats(
+      cid,
+      user.allowedClassIds,
+    );
+    return createApiResponse(stats, HttpStatus.OK, 'Module stats retrieved successfully');
+  }
 }
+

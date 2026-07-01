@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { PostdatedChequesService } from '../postdated-cheques/postdated-cheques.service';
+import { BackupsService } from '../backups/backups.service';
 
 @Injectable()
 export class AnalyticsService {
   constructor(
     private prisma: PrismaService,
     private postdatedChequesSvc: PostdatedChequesService,
+    private backupsService: BackupsService,
   ) {}
 
   private getCurrentAcademicYear(): string {
@@ -406,4 +408,326 @@ export class AnalyticsService {
       postdated_cheques: postdatedCheques,
     };
   }
+
+  async getModuleStats(campusId?: number, allowedClassIds: number[] = []) {
+    const currentYear = this.getCurrentAcademicYear();
+    const startYear = parseInt(currentYear.split('-')[0]);
+    const yearStart = new Date(startYear, 7, 1);
+    const yearEnd = new Date(startYear + 1, 6, 31, 23, 59, 59, 999);
+    const today = new Date();
+    const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    const studentFilter: any = {
+      status: 'ENROLLED',
+      ...(campusId ? { campus_id: campusId } : {}),
+      ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+      deleted_at: null,
+    };
+
+    const feeFilter: any = {
+      students: studentFilter,
+    };
+
+    const regularFeeWhere = {
+      academic_year: currentYear,
+      is_discount: false,
+      is_arrear_surcharge: false,
+      ...feeFilter,
+    };
+
+    // 1. Student stats
+    const [totalEnrolled, newRegistrations, activeFamilies, openTransfers] = await Promise.all([
+      this.prisma.students.count({
+        where: {
+          status: 'ENROLLED',
+          ...(campusId ? { campus_id: campusId } : {}),
+          ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+          deleted_at: null,
+        },
+      }),
+      this.prisma.students.count({
+        where: {
+          status: 'SOFT_ADMISSION',
+          ...(campusId ? { campus_id: campusId } : {}),
+          ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+          deleted_at: null,
+        },
+      }),
+      this.prisma.families.count({
+        where: {
+          deleted_at: null,
+          ...(campusId || allowedClassIds.length > 0
+            ? {
+                students: {
+                  some: {
+                    deleted_at: null,
+                    ...(campusId ? { campus_id: campusId } : {}),
+                    ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+                  },
+                },
+              }
+            : {}),
+        },
+      }),
+      this.prisma.audit_logs.count({
+        where: {
+          entity_type: 'TRANSFER',
+          ...(campusId || allowedClassIds.length > 0
+            ? {
+                students: {
+                  deleted_at: null,
+                  ...(campusId ? { campus_id: campusId } : {}),
+                  ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+                },
+              }
+            : {}),
+        },
+      }),
+    ]);
+
+    // 2. Finance stats
+    const [feeAgg, surchargeAgg, cashAgg, vouchersIssued] = await Promise.all([
+      this.prisma.student_fees.aggregate({
+        where: regularFeeWhere,
+        _sum: { amount: true, amount_paid: true },
+      }),
+      this.prisma.voucher_arrear_surcharges.aggregate({
+        where: {
+          waived: false,
+          vouchers: {
+            status: { not: 'VOID' },
+            fee_date: { gte: yearStart, lte: yearEnd },
+            students: studentFilter,
+          },
+        },
+        _sum: { amount: true, amount_paid: true },
+      }),
+      this.prisma.deposits.aggregate({
+        where: {
+          deposit_date: { gte: yearStart, lte: yearEnd },
+          students: studentFilter,
+        },
+        _sum: { total_amount: true },
+      }),
+      this.prisma.vouchers.count({
+        where: {
+          status: { not: 'VOID' },
+          academic_year: currentYear,
+          students: studentFilter,
+        },
+      }),
+    ]);
+
+    const expected = Number(feeAgg._sum?.amount || 0) + Number(surchargeAgg._sum?.amount || 0);
+    const collectedToDate = Number(feeAgg._sum?.amount_paid || 0) + Number(surchargeAgg._sum?.amount_paid || 0);
+    const outstanding = expected - collectedToDate;
+    const collected = Number(cashAgg._sum?.total_amount || 0);
+    const collectionRate = expected > 0 ? (collected / expected) * 100 : 0;
+
+    // 3. Communication stats
+    const ticketCampusFilter = campusId || allowedClassIds.length > 0
+      ? {
+          OR: [
+            { students: { deleted_at: null, ...(campusId ? { campus_id: campusId } : {}), ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } },
+            { families: { students: { some: { deleted_at: null, ...(campusId ? { campus_id: campusId } : {}), ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } } } }
+          ]
+        }
+      : {};
+
+    const [openTickets, announcements, unreadTicketsAgg, resolvedToday] = await Promise.all([
+      this.prisma.support_tickets.count({
+        where: {
+          status: { in: ['OPEN', 'ASSIGNED'] },
+          ...ticketCampusFilter,
+        },
+      }),
+      this.prisma.notice_board_posts.count({
+        where: {
+          deleted_at: null,
+          ...(campusId ? { OR: [{ campus_ids: { has: campusId } }, { campus_ids: { equals: [] } }] } : {}),
+        },
+      }),
+      this.prisma.support_tickets.aggregate({
+        where: {
+          status: { in: ['OPEN', 'ASSIGNED'] },
+          ...ticketCampusFilter,
+        },
+        _sum: { unread_by_staff: true },
+      }),
+      this.prisma.support_tickets.count({
+        where: {
+          status: 'CLOSED',
+          closed_at: { gte: todayDate },
+          ...ticketCampusFilter,
+        },
+      }),
+    ]);
+
+    const unread = unreadTicketsAgg._sum?.unread_by_staff || 0;
+
+    // 4. HR stats
+    const hrCampusFilter = campusId ? { campus_id: campusId } : {};
+
+    const [totalStaff, onLeave, departments, payrollRuns] = await Promise.all([
+      this.prisma.employee_profiles.count({
+        where: {
+          ...hrCampusFilter,
+          users: { is_active: true, deleted_at: null },
+        },
+      }),
+      this.prisma.leave_requests.count({
+        where: {
+          status: 'APPROVED',
+          start_date: { lte: todayDate },
+          end_date: { gte: todayDate },
+          employee_profiles: {
+            ...hrCampusFilter,
+            users: { is_active: true, deleted_at: null },
+          },
+        },
+      }),
+      this.prisma.departments.count(),
+      this.prisma.payroll_runs.count({
+        where: {
+          ...(campusId ? { campus_id: campusId } : {}),
+        },
+      }),
+    ]);
+
+    // 5. Attendance stats
+    const [presentStaff, presentStudents, absentStudents, lateStudents] = await Promise.all([
+      this.prisma.attendance_staff_daily.count({
+        where: {
+          date: todayDate,
+          status: { in: ['PRESENT', 'LATE', 'HALF_DAY'] },
+          ...(campusId ? { campus_id: campusId } : {}),
+        },
+      }),
+      this.prisma.attendance_student_daily.count({
+        where: {
+          date: todayDate,
+          status: { in: ['PRESENT', 'LATE'] },
+          ...(campusId ? { campus_id: campusId } : {}),
+          students: {
+            ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+            deleted_at: null,
+          },
+        },
+      }),
+      this.prisma.attendance_student_daily.count({
+        where: {
+          date: todayDate,
+          status: 'ABSENT',
+          ...(campusId ? { campus_id: campusId } : {}),
+          students: {
+            ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+            deleted_at: null,
+          },
+        },
+      }),
+      this.prisma.attendance_student_daily.count({
+        where: {
+          date: todayDate,
+          status: 'LATE',
+          ...(campusId ? { campus_id: campusId } : {}),
+          students: {
+            ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
+            deleted_at: null,
+          },
+        },
+      }),
+    ]);
+
+    // 6. School Setup stats
+    const [campusesCount, classesCount, sectionsCount, feeTypesCount] = await Promise.all([
+      this.prisma.campuses.count({ where: { is_active: true } }),
+      this.prisma.classes.count(),
+      this.prisma.sections.count(),
+      this.prisma.fee_types.count(),
+    ]);
+
+    // 7. System stats
+    let lastBackupStr = 'Never';
+    try {
+      const backups = await this.backupsService.listBackups();
+      if (backups && backups.length > 0) {
+        const lastBackup = backups[0];
+        if (lastBackup && lastBackup.lastModified) {
+          lastBackupStr = new Date(lastBackup.lastModified).toLocaleString('en-US', {
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+        }
+      }
+    } catch (err) {
+      // Don't crash if backups fail to list
+    }
+
+    const [totalUsers, distinctRoles, activeSessions] = await Promise.all([
+      this.prisma.users.count({
+        where: {
+          deleted_at: null,
+          ...(campusId ? { campus_id: campusId } : {}),
+        },
+      }),
+      this.prisma.role_permissions.groupBy({
+        by: ['role'],
+      }),
+      this.prisma.user_refresh_tokens.count({
+        where: {
+          revoked_at: null,
+          expires_at: { gt: new Date() },
+          ...(campusId ? { users: { campus_id: campusId } } : {}),
+        },
+      }),
+    ]);
+
+    return {
+      student: {
+        'Total Enrolled': totalEnrolled,
+        'New Registrations': newRegistrations,
+        'Active Families': activeFamilies,
+        'Open Transfers': openTransfers,
+      },
+      finance: {
+        'Fees Collected': collected,
+        'Outstanding': outstanding,
+        'Vouchers Issued': vouchersIssued,
+        'Collection Rate': collectionRate,
+      },
+      communication: {
+        'Open Tickets': openTickets,
+        'Announcements': announcements,
+        'Unread': unread,
+        'Resolved Today': resolvedToday,
+      },
+      hr: {
+        'Total Staff': totalStaff,
+        'On Leave': onLeave,
+        'Departments': departments,
+        'Payroll Runs': payrollRuns,
+      },
+      attendance: {
+        'Present (Staff)': presentStaff,
+        'Present (Students)': presentStudents,
+        'Absent': absentStudents,
+        'Late Arrivals': lateStudents,
+      },
+      'school-setup': {
+        'Campuses': campusesCount,
+        'Classes': classesCount,
+        'Sections': sectionsCount,
+        'Fee Types': feeTypesCount,
+      },
+      system: {
+        'Total Users': totalUsers,
+        'Roles Defined': distinctRoles.length,
+        'Last Backup': lastBackupStr,
+        'Active Sessions': activeSessions,
+      },
+    };
+  }
 }
+
