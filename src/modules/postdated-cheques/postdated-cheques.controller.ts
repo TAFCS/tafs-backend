@@ -9,8 +9,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PostdatedChequeStatus } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -29,8 +31,15 @@ export class PostdatedChequesController {
 
   @Post()
   @ApiOperation({ summary: 'Record a new post-dated cheque' })
-  async create(@Body() dto: CreatePostdatedChequeDto) {
-    return createApiResponse(await this.svc.create(dto), HttpStatus.CREATED, 'Cheque recorded');
+  async create(@Body() dto: CreatePostdatedChequeDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    return createApiResponse(await this.svc.create(dto, changedBy), HttpStatus.CREATED, 'Cheque recorded');
+  }
+
+  @Get('alerts')
+  @ApiOperation({ summary: 'Get pending cheques due for cashing (Home page alert)' })
+  async getAlerts() {
+    return createApiResponse(await this.svc.getDue(), HttpStatus.OK, 'Cheque alerts retrieved');
   }
 
   @Get()
@@ -82,9 +91,11 @@ export class PostdatedChequesController {
   async updateStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStatusDto,
+    @Req() req: Request,
   ) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     return createApiResponse(
-      await this.svc.updateStatus(id, dto),
+      await this.svc.updateStatus(id, dto, changedBy),
       HttpStatus.OK,
       'Status updated',
     );
@@ -92,8 +103,9 @@ export class PostdatedChequesController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a cheque record' })
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    await this.svc.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.svc.remove(id, changedBy);
     return createApiResponse(null, HttpStatus.OK, 'Cheque deleted');
   }
 }

@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateClassFeeScheduleDto } from './dto/create-class-fee-schedule.dto';
 import { BulkUpdateClassFeeScheduleDto } from './dto/bulk-update-class-fee-schedule.dto';
 
 @Injectable()
 export class ClassFeeScheduleService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) { }
 
   async findAll(academicYear?: string) {
     return this.prisma.class_fee_schedule.findMany({
@@ -38,8 +42,8 @@ export class ClassFeeScheduleService {
     });
   }
 
-  async create(dto: CreateClassFeeScheduleDto) {
-    return this.prisma.class_fee_schedule.create({
+  async create(dto: CreateClassFeeScheduleDto, changedBy?: string) {
+    const record = await this.prisma.class_fee_schedule.create({
       data: {
         class_id: dto.class_id,
         fee_id: dto.fee_id,
@@ -53,9 +57,18 @@ export class ClassFeeScheduleService {
         campuses: true,
       },
     });
+    this.auditLogs.log({
+      entity_type: 'CLASS_FEE_SCHEDULE',
+      entity_id: String(record.id),
+      action: 'CREATED',
+      section: 'finance',
+      new_value: `class=${dto.class_id}, fee=${dto.fee_id}, amount=${dto.amount}`,
+      changed_by: changedBy ?? 'system',
+    });
+    return record;
   }
 
-  async bulkUpdate(dto: BulkUpdateClassFeeScheduleDto) {
+  async bulkUpdate(dto: BulkUpdateClassFeeScheduleDto, changedBy?: string) {
     if (!dto.items || dto.items.length === 0) {
       return [];
     }
@@ -84,13 +97,29 @@ export class ClassFeeScheduleService {
       throw new NotFoundException('One or more class fee schedules not found');
     }
 
+    this.auditLogs.log({
+      entity_type: 'CLASS_FEE_SCHEDULE',
+      entity_id: dto.items.map(i => i.id).join(','),
+      action: 'UPDATED',
+      section: 'finance',
+      note: `Bulk updated ${dto.items.length} class fee schedule entries`,
+      changed_by: changedBy ?? 'system',
+    });
     return updated;
   }
 
-  async remove(id: number) {
-    return this.prisma.class_fee_schedule.delete({
+  async remove(id: number, changedBy?: string) {
+    const record = await this.prisma.class_fee_schedule.delete({
       where: { id },
     });
+    this.auditLogs.log({
+      entity_type: 'CLASS_FEE_SCHEDULE',
+      entity_id: String(id),
+      action: 'DELETED',
+      section: 'finance',
+      changed_by: changedBy ?? 'system',
+    });
+    return record;
   }
 
   async copyHistory(fromYear: string, toYear: string) {

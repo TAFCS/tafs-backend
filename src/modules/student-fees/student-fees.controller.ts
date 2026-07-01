@@ -10,8 +10,10 @@ import {
     Patch,
     Delete,
     ParseIntPipe,
+    Req,
     UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { StudentFeesService } from './student-fees.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -90,8 +92,9 @@ export class StudentFeesController {
             ability.can(Action.Update, 'StudentFee') ||
             ability.can(Action.Manage, 'all'),
     )
-    async bulkSave(@Body() dto: BulkSaveStudentFeesDto) {
-        const updated = await this.studentFeesService.bulkSave(dto);
+    async bulkSave(@Body() dto: BulkSaveStudentFeesDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const updated = await this.studentFeesService.bulkSave(dto, changedBy);
         return {
             success: true,
             message: 'Student fees saved successfully',
@@ -260,8 +263,9 @@ export class StudentFeesController {
     @Delete('bulk-delete')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async bulkDelete(@Body() dto: any) {
-        const data = await this.studentFeesService.bulkDelete(dto);
+    async bulkDelete(@Body() dto: any, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.bulkDelete(dto, changedBy);
         return { success: true, data };
     }
 

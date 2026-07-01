@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PostdatedChequeStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { IsNotEmpty, IsString, IsOptional, IsNumber, IsInt, IsEnum } from 'class-validator';
 
 export class CreatePostdatedChequeDto {
@@ -83,10 +84,13 @@ const CHEQUE_SELECT = {
 
 @Injectable()
 export class PostdatedChequesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
-  async create(dto: CreatePostdatedChequeDto) {
-    return this.prisma.postdated_cheques.create({
+  async create(dto: CreatePostdatedChequeDto, changedBy?: string) {
+    const record = await this.prisma.postdated_cheques.create({
       data: {
         student_id: dto.student_id,
         cheque_number: dto.cheque_number,
@@ -99,6 +103,16 @@ export class PostdatedChequesService {
       },
       select: CHEQUE_SELECT,
     });
+    this.auditLogs.log({
+      entity_type: 'CHEQUE',
+      entity_id: String(record.id),
+      action: 'CREATED',
+      section: 'finance',
+      new_value: `cheque#${dto.cheque_number}, amount=${dto.amount}, date=${dto.cheque_date}`,
+      changed_by: changedBy ?? dto.received_by ?? 'system',
+      student_id: dto.student_id,
+    });
+    return record;
   }
 
   async list(filters: ListPostdatedChequesFilter) {
@@ -152,8 +166,8 @@ export class PostdatedChequesService {
     return cheque;
   }
 
-  async updateStatus(id: number, dto: UpdateStatusDto) {
-    await this.findOne(id);
+  async updateStatus(id: number, dto: UpdateStatusDto, changedBy?: string) {
+    const existing = await this.findOne(id);
 
     const data: any = { status: dto.status };
     if (dto.notes !== undefined) data.notes = dto.notes;
@@ -163,16 +177,37 @@ export class PostdatedChequesService {
       data.cashed_date = dto.cashed_date ? new Date(dto.cashed_date) : new Date();
     }
 
-    return this.prisma.postdated_cheques.update({
+    const record = await this.prisma.postdated_cheques.update({
       where: { id },
       data,
       select: CHEQUE_SELECT,
     });
+    this.auditLogs.log({
+      entity_type: 'CHEQUE',
+      entity_id: String(id),
+      action: 'STATUS_CHANGED',
+      section: 'finance',
+      field: 'status',
+      old_value: (existing as any).status,
+      new_value: dto.status,
+      changed_by: changedBy ?? 'system',
+      student_id: (existing as any).students?.cc,
+    });
+    return record;
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
-    return this.prisma.postdated_cheques.delete({ where: { id } });
+  async remove(id: number, changedBy?: string) {
+    const existing = await this.findOne(id);
+    const record = await this.prisma.postdated_cheques.delete({ where: { id } });
+    this.auditLogs.log({
+      entity_type: 'CHEQUE',
+      entity_id: String(id),
+      action: 'DELETED',
+      section: 'finance',
+      changed_by: changedBy ?? 'system',
+      student_id: (existing as any).students?.cc,
+    });
+    return record;
   }
 
   async getDashboardSummary() {

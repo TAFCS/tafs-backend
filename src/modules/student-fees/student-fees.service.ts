@@ -5,6 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
@@ -15,6 +16,7 @@ import { isSpecial } from '../../common/utils/academic-labels';
 export class StudentFeesService {
     constructor(
         private readonly prisma: PrismaService,
+        private readonly auditLogs: AuditLogsService,
         private readonly studentsService: StudentsService,
     ) { }
 
@@ -490,7 +492,7 @@ export class StudentFeesService {
     }
 
 
-    async bulkSave(dto: BulkSaveStudentFeesDto) {
+    async bulkSave(dto: BulkSaveStudentFeesDto, changedBy?: string) {
         const { student_id, items, bundles } = dto;
 
         if (items.length === 0 && !dto.academic_year) {
@@ -514,7 +516,7 @@ export class StudentFeesService {
             return this.findByStudent(student_id);
         }
 
-        return this.prisma.$transaction(
+        const result = await this.prisma.$transaction(
             async (tx) => {
                 const existingFees = await tx.student_fees.findMany({
                     where: {
@@ -740,6 +742,8 @@ export class StudentFeesService {
                 timeout: 30000,
             },
         );
+        this.auditLogs.log({ entity_type: 'STUDENT_FEE_SCHEDULE', entity_id: String(student_id), action: 'UPDATED', section: 'finance', note: `Bulk saved ${items.length} fee rows`, changed_by: changedBy ?? 'system' });
+        return result;
     }
 
     /**
@@ -1268,7 +1272,7 @@ export class StudentFeesService {
 
     // ─── Tabs 3 & 4: Confirm Delete ───────────────────────────────────────────
 
-    async bulkDelete(dto: import('./dto/bulk-delete.dto').BulkDeleteDto) {
+    async bulkDelete(dto: import('./dto/bulk-delete.dto').BulkDeleteDto, changedBy?: string) {
         const { student_fee_ids } = dto;
 
         // Re-validate — check if any voucher was added since preview
@@ -1284,6 +1288,7 @@ export class StudentFeesService {
             await this.prisma.student_fees.deleteMany({
                 where: { id: { in: canDelete } },
             });
+            this.auditLogs.log({ entity_type: 'STUDENT_FEE_SCHEDULE', entity_id: canDelete.join(','), action: 'DELETED', section: 'finance', note: `Bulk deleted ${canDelete.length} fee rows`, changed_by: changedBy ?? 'system' });
         }
 
         return { deleted: canDelete.length, blocked: blocked.length };

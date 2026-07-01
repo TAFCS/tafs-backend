@@ -9,8 +9,10 @@ import {
   Delete,
   Param,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ClassFeeScheduleService } from './class-fee-schedule.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -74,8 +76,9 @@ export class ClassFeeScheduleController {
       ability.can(Action.Create, 'ClassFeeSchedule') ||
       ability.can(Action.Manage, 'all'),
   )
-  async create(@Body() dto: CreateClassFeeScheduleDto) {
-    const created = await this.classFeeScheduleService.create(dto);
+  async create(@Body() dto: CreateClassFeeScheduleDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const created = await this.classFeeScheduleService.create(dto, changedBy);
     return {
       success: true,
       message: 'Class fee schedule created successfully',
@@ -90,8 +93,9 @@ export class ClassFeeScheduleController {
       ability.can(Action.Update, 'ClassFeeSchedule') ||
       ability.can(Action.Manage, 'all'),
   )
-  async bulkUpdate(@Body() dto: BulkUpdateClassFeeScheduleDto) {
-    const updated = await this.classFeeScheduleService.bulkUpdate(dto);
+  async bulkUpdate(@Body() dto: BulkUpdateClassFeeScheduleDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const updated = await this.classFeeScheduleService.bulkUpdate(dto, changedBy);
     return {
       success: true,
       message: 'Class fee schedules updated successfully',
@@ -106,8 +110,9 @@ export class ClassFeeScheduleController {
       ability.can(Action.Delete, 'ClassFeeSchedule') ||
       ability.can(Action.Manage, 'all'),
   )
-  async remove(@Param('id') id: string) {
-    await this.classFeeScheduleService.remove(Number(id));
+  async remove(@Param('id') id: string, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.classFeeScheduleService.remove(Number(id), changedBy);
     return {
       success: true,
       message: 'Class fee schedule deleted successfully',
