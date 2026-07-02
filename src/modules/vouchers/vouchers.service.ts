@@ -1357,9 +1357,11 @@ export class VouchersService {
             ? {}
             : {
                 OR: [
-                    { status: { notIn: ['VOID', 'EXPIRED'] } },
+                    // Parents must still see EXPIRED vouchers (APP-01). We only suppress VOID
+                    // vouchers unless they have deposits attached.
+                    { status: { notIn: ['VOID'] } },
                     {
-                        status: { in: ['VOID', 'EXPIRED'] },
+                        status: { in: ['VOID'] },
                         voucher_heads: { some: { amount_deposited: { gt: 0 } } },
                     },
                 ],
@@ -1398,42 +1400,62 @@ export class VouchersService {
             );
         }
 
-        const voucher = await this.prisma.vouchers.findFirst({
-            where: {
-                student_id: studentCc,
-                status: { notIn: ['VOID', 'EXPIRED'] },
-                OR: [
-                    { academic_year: academicYear },
-                    {
-                        voucher_heads: {
-                            some: {
-                                student_fees: {
-                                    academic_year: academicYear,
-                                },
+        // Prefer an active voucher (non-VOID, non-EXPIRED). If none exists for the
+        // requested month/year, fall back to the latest EXPIRED voucher so the
+        // parent can see it and request regeneration (APP-01).
+        const baseWhere = {
+            student_id: studentCc,
+            OR: [
+                { academic_year: academicYear },
+                {
+                    voucher_heads: {
+                        some: {
+                            student_fees: {
+                                academic_year: academicYear,
                             },
                         },
                     },
-                ],
-                AND: [
-                    {
-                        OR: [
-                            { month: targetMonth },
-                            {
-                                voucher_heads: {
-                                    some: {
-                                        student_fees: {
-                                            target_month: targetMonth,
-                                        },
+                },
+            ],
+            AND: [
+                {
+                    OR: [
+                        { month: targetMonth },
+                        {
+                            voucher_heads: {
+                                some: {
+                                    student_fees: {
+                                        target_month: targetMonth,
                                     },
                                 },
                             },
-                        ],
-                    },
-                ],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        const orderBy = [{ issue_date: 'desc' as const }, { id: 'desc' as const }];
+
+        let voucher = await this.prisma.vouchers.findFirst({
+            where: {
+                ...baseWhere,
+                status: { notIn: ['VOID', 'EXPIRED'] },
             },
             include: VOUCHER_INCLUDE,
-            orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+            orderBy,
         });
+
+        if (!voucher) {
+            voucher = await this.prisma.vouchers.findFirst({
+                where: {
+                    ...baseWhere,
+                    status: { in: ['EXPIRED'] },
+                },
+                include: VOUCHER_INCLUDE,
+                orderBy,
+            });
+        }
 
         if (!voucher) {
             return {
