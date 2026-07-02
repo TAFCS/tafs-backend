@@ -53,6 +53,16 @@ export class CreateVoucherDto {
     @IsOptional()
     late_fee_amount?: number;
 
+    @Transform(({ value }) => (value === 'true' || value === true))
+    @IsBoolean()
+    @IsOptional()
+    reprint_fee_charge?: boolean;
+
+    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
+    @IsNumber()
+    @IsOptional()
+    reprint_fee_amount?: number;
+
     @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
     @IsInt()
     @IsOptional()

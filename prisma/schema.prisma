@@ -681,6 +681,8 @@ model vouchers {
   status                    String?                     @default("UNPAID") @db.VarChar(20)
   validity_date             DateTime?                   @db.Date
   late_fee_charge           Boolean
+  reprint_fee_charge        Boolean                     @default(false)
+  reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
   section_id                Int?
   academic_year             String?                     @db.VarChar(10)
   month                     Int?

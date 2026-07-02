@@ -438,6 +438,8 @@ interface FeeChallanPDFProps {
         validityDate: string;
         applyLateFee: boolean;
         lateFeeAmount?: number;
+        applyReprintFee?: boolean;
+        reprintFeeAmount?: number;
         voucherNumber: number | string;
         generatedBy: {
             fullName: string;
@@ -638,6 +640,14 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                         </>
                                     )}
                                     {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
+                                    {details.applyReprintFee && (
+                                        <View style={styles.tableRow}>
+                                            <Text style={styles.colDesc}>REPRINT FEE</Text>
+                                            <Text style={styles.colAmount}>
+                                                {Math.round(details.reprintFeeAmount || 100).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                            </Text>
+                                        </View>
+                                    )}
                                 </>
                             );
                         })()}
