@@ -47,6 +47,7 @@ export interface VoucherPdfData {
     }>;
     totalAmount: number;
     lateFeeAmount: number;
+    reprintFeeAmount: number;
     generatedByName?: string;
     /** When true, overlay a PAID stamp on all three challan copies */
     paidStamp?: boolean;
@@ -104,6 +105,8 @@ export class VoucherPdfService {
                 validityDate: data.validityDate,
                 applyLateFee: data.lateFeeAmount > 0,
                 lateFeeAmount: data.lateFeeAmount,
+                applyReprintFee: data.reprintFeeAmount > 0,
+                reprintFeeAmount: data.reprintFeeAmount,
                 voucherNumber: data.voucherNumber,
                 generatedBy: {
                     fullName: data.generatedByName || 'TAFSync System',

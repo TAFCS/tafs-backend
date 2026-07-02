@@ -186,6 +186,7 @@ export class VouchersService {
                     due_date: dueDate,
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
+                    reprint_fee_charge: dto.reprint_fee_charge ?? false,
                     academic_year: (isSpecial(dto.class_id) && feeDate)
                         ? deriveAcademicYear(feeDate.toISOString(), dto.class_id ?? undefined)
                         : dto.academic_year,
@@ -320,13 +321,17 @@ export class VouchersService {
 
             // 5. Update voucher with final totals derived from heads
             const lateFeeVal = dto.late_fee_charge ? (dto.late_fee_amount ?? 1000) : 0;
+            // Reprint fee is an unconditional admin-added charge (not tied to the due date
+            // like late fee), so it is folded into totalBeforeDueWithSurcharge below and
+            // therefore flows into BOTH total_payable_before_due and total_payable_after_due.
+            const reprintFeeVal = dto.reprint_fee_charge ? (dto.reprint_fee_amount ?? 100) : 0;
 
             // Active surcharge = 1000 per distinct arrear month, zero if waived
             const activeSurchargeTotal = (!dto.waive_surcharge && surchargeGroups.length > 0)
                 ? new Prisma.Decimal(surchargeGroups.length * 1000)
                 : new Prisma.Decimal(0);
 
-            const totalBeforeDueWithSurcharge = totalBeforeDueDecimal.add(activeSurchargeTotal);
+            const totalBeforeDueWithSurcharge = totalBeforeDueDecimal.add(activeSurchargeTotal).add(reprintFeeVal);
             const totalAfterDueDecimal = totalBeforeDueWithSurcharge.add(lateFeeVal);
 
             const updatedVoucher = await tx.vouchers.update({
@@ -336,6 +341,7 @@ export class VouchersService {
                     total_payable_after_due: totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
                     voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
+                    reprint_fee_amount: dto.reprint_fee_charge ? new Prisma.Decimal(reprintFeeVal) : null,
                 },
                 include: VOUCHER_INCLUDE,
             });
@@ -1260,6 +1266,7 @@ export class VouchersService {
                 totalPaid: heads.reduce((sum, h) => sum + h.amountDeposited, 0),
                 outstandingBalance: Math.max(totalAmount - heads.reduce((sum, h) => sum + h.amountDeposited, 0), 0),
                 lateFeeAmount: voucher.late_fee_charge ? 1000 : 0,
+                reprintFeeAmount: voucher.reprint_fee_charge ? Number(voucher.reprint_fee_amount ?? 100) : 0,
                 qrUrl,
                 paidStamp,
                 showDiscount: false, // DEV kill switch — flip to true to re-enable
