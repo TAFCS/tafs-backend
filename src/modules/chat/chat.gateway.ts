@@ -30,22 +30,18 @@ import { SupportTicketsService } from '../support-tickets/support-tickets.servic
 export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
-  
-  // Track online families: Map<familyId, Set<socketId>>
-  private familySockets = new Map<number, Set<string>>();
-  // Reverse lookup: Map<socketId, familyId>
-  private socketToFamily = new Map<string, number>();
 
   // Track which admin sockets are actively viewing which family chat
-  // Map<familyId, Set<socketId>> — for FCM suppression when admin is viewing
+  // Map<familyId, Set<socketId>> — for FCM suppression when admin is viewing.
+  // Local-process-only; only used for same-process bookkeeping (enterChat/leaveChat UX),
+  // not for cross-instance presence decisions (those use Socket.IO rooms, see below).
   private adminViewingFamily = new Map<number, Set<string>>();
   // Reverse: Map<socketId, familyId> — so we can clean up on disconnect
   private socketAdminViewing = new Map<string, number>();
 
-  // Parent ticket room presence: familyId → ticketId → socketIds
-  private familyTicketRooms = new Map<number, Map<string, Set<string>>>();
-  // socketId → ticket rooms joined (for disconnect cleanup)
-  private socketTicketRooms = new Map<string, Array<{ familyId: number; ticketId: string }>>();
+  // Timers that force-disconnect a socket when its JWT naturally expires
+  // (mid-session re-validation — auth is otherwise only checked at handshake).
+  private expiryTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly chatService: ChatService,
@@ -75,12 +71,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             return next(new Error('unauthorized'));
           }
           const payload = this.jwtService.verify(cookieToken);
-          (socket as any).tafsPayload = payload;
+          socket.data.tafsPayload = payload;
           return next();
         }
 
         const payload = this.jwtService.verify(rawToken);
-        (socket as any).tafsPayload = payload;
+        socket.data.tafsPayload = payload;
         return next();
       } catch (error: any) {
         const isExpired =
@@ -95,22 +91,36 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   async handleConnection(client: Socket) {
     // Auth is already verified by the server middleware in afterInit.
     // This hook only sets up rooms and presence tracking.
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
     console.log('[ChatGateway] Connected:', payload.userType, payload.sub || payload.familyId);
     try {
+      // JWT is only verified at handshake; force a clean reconnect (with a fresh
+      // token) when it naturally expires instead of trusting a stale session forever.
+      this.scheduleExpiryDisconnect(client, payload);
+
       if (payload.userType === 'STAFF') {
-        client.join('admin_inbox');
+        // admin_inbox carries every family's live messages — only join it if the
+        // staff member actually has chat-view permission (mirrors the REST
+        // PoliciesGuard check on GET /chat/inbox), not just "any authenticated staff".
+        if (this.canViewChats(payload)) {
+          client.join('admin_inbox');
+          console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
+        }
         client.join(`staff_inbox_${payload.sub}`);
         if (payload.role === 'FINANCE_CLERK') client.join('finance_queue');
         if (payload.role === 'SUPER_ADMIN') client.join('super_admin_approvals');
         if (payload.role === 'GENERAL_RESPONDENT') client.join('general_respondent_inbox');
-        console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
       } else if (payload.userType === 'PARENT') {
         const familyId = Number(payload.familyId || payload.sub);
         if (isNaN(familyId)) {
           client.disconnect(true);
           return;
         }
+
+        // Cluster-aware: adapter.rooms is kept in sync across all instances by the
+        // Redis adapter, so this correctly reflects sockets connected to OTHER nodes too.
+        const wasOnline = (this.server.sockets.adapter.rooms.get(`family_app_${familyId}`)?.size ?? 0) > 0;
+
         client.join(`family_app_${familyId}`);
         client.join('all_parents');
 
@@ -128,17 +138,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           }
         }
 
-        // Track presence
-        if (!this.familySockets.has(familyId)) {
-          this.familySockets.set(familyId, new Set());
+        if (!wasOnline) {
+          this.server
+            .to('admin_inbox')
+            .emit('userStatusChanged', { familyId, status: 'ONLINE' });
         }
-        this.familySockets.get(familyId)!.add(client.id);
-        this.socketToFamily.set(client.id, familyId);
-
-        // Notify admins that this family is online
-        this.server
-          .to('admin_inbox')
-          .emit('userStatusChanged', { familyId, status: 'ONLINE' });
         console.log(`[ChatGateway] Parent ${familyId} connected: ${client.id}`);
       }
     } catch (error: any) {
@@ -149,17 +153,23 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   handleDisconnect(client: Socket) {
     console.log('[ChatGateway] Client disconnected:', client.id);
-    
-    // Clean up parent presence
-    const familyId = this.socketToFamily.get(client.id);
-    if (familyId) {
-      this.socketToFamily.delete(client.id);
-      const sockets = this.familySockets.get(familyId);
-      if (sockets) {
-        sockets.delete(client.id);
-        if (sockets.size === 0) {
-          this.familySockets.delete(familyId);
-          // Only notify offline if NO other sockets are connected for this family
+
+    const timer = this.expiryTimers.get(client.id);
+    if (timer) {
+      clearTimeout(timer);
+      this.expiryTimers.delete(client.id);
+    }
+
+    // Socket.IO removes the disconnecting socket from all rooms (incl.
+    // family_app_*) before this hook runs, and the redis adapter keeps that
+    // room membership in sync cluster-wide — so this correctly detects
+    // "family has no more connected devices ANYWHERE", not just this node.
+    const payload = client.data.tafsPayload;
+    if (payload?.userType === 'PARENT') {
+      const familyId = Number(payload.familyId || payload.sub);
+      if (!isNaN(familyId)) {
+        const stillOnline = (this.server.sockets.adapter.rooms.get(`family_app_${familyId}`)?.size ?? 0) > 0;
+        if (!stillOnline) {
           this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'OFFLINE' });
         }
       }
@@ -177,30 +187,42 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
       }
     }
+    // Ticket room presence (parent_ticket_*) and all other rooms are left
+    // automatically by Socket.IO/the redis adapter — no manual bookkeeping needed.
+  }
 
-    // Clean up ticket room tracking
-    const ticketRooms = this.socketTicketRooms.get(client.id);
-    if (ticketRooms) {
-      for (const { familyId, ticketId } of ticketRooms) {
-        const familyRooms = this.familyTicketRooms.get(familyId);
-        const sockets = familyRooms?.get(ticketId);
-        if (sockets) {
-          sockets.delete(client.id);
-          if (sockets.size === 0) {
-            familyRooms!.delete(ticketId);
-            if (familyRooms!.size === 0) {
-              this.familyTicketRooms.delete(familyId);
-            }
-          }
-        }
-      }
-      this.socketTicketRooms.delete(client.id);
+  /** Force-disconnects the socket when its JWT naturally expires, so a
+   * revoked/expired session can't keep live access indefinitely. */
+  private scheduleExpiryDisconnect(client: Socket, payload: { exp?: number }) {
+    if (!payload.exp) return;
+    const msUntilExpiry = payload.exp * 1000 - Date.now();
+    if (msUntilExpiry <= 0) {
+      client.disconnect(true);
+      return;
     }
+    const timer = setTimeout(() => {
+      this.expiryTimers.delete(client.id);
+      client.disconnect(true);
+    }, msUntilExpiry);
+    this.expiryTimers.set(client.id, timer);
+  }
+
+  private canViewChats(payload: { role?: string; permissions?: string[] }): boolean {
+    if (payload.role === 'SUPER_ADMIN') return true;
+    return (payload.permissions ?? []).includes('communication.view_chats');
   }
 
   @SubscribeMessage('getOnlineStatus')
-  handleGetOnlineStatus(@ConnectedSocket() client: Socket) {
-    const onlineIds = Array.from(this.familySockets.keys());
+  handleGetOnlineStatus() {
+    // Cluster-aware: derived from Socket.IO room membership (synced by the redis
+    // adapter) rather than a local-process-only map.
+    const onlineIds: number[] = [];
+    for (const roomName of this.server.sockets.adapter.rooms.keys()) {
+      if (roomName.startsWith('family_app_')) {
+        const familyId = Number(roomName.slice('family_app_'.length));
+        if (!isNaN(familyId)) onlineIds.push(familyId);
+      }
+    }
     return { onlineFamilyIds: onlineIds };
   }
 
@@ -210,7 +232,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any },
   ) {
     const familyId = Number(data.familyId);
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
 
     // Only parents join family_chat_* (FCM suppression when parent has chat open).
     // Staff must NOT join this room — it caused isParentInChatRoom() to always
@@ -245,7 +267,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any },
   ) {
     const familyId = Number(data.familyId);
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
 
     if (payload?.userType === 'PARENT') {
       client.leave(`family_chat_${familyId}`);
@@ -315,20 +337,17 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   /**
    * Checks whether the parent (family) is actively in the chat room
    * (i.e., has the chat screen open in Flutter via enterChat).
+   *
+   * Only parents ever join family_chat_* (see handleEnterChat), so room
+   * membership alone is sufficient — no need to look up each socket's
+   * payload. That lookup used to go through `server.sockets.sockets`,
+   * which only contains sockets local to this process; `adapter.rooms`
+   * is kept in sync across all instances by the redis adapter, so this
+   * check is correct under a horizontally-scaled (multi-instance) deploy.
    */
   private isParentInChatRoom(familyId: number): boolean {
-    const roomName = `family_chat_${familyId}`;
-    const room = this.server.sockets.adapter.rooms.get(roomName);
-    if (!room || room.size === 0) return false;
-
-    for (const socketId of room) {
-      const socket = this.server.sockets.sockets.get(socketId);
-      const payload = (socket as any)?.tafsPayload;
-      if (payload?.userType === 'PARENT') {
-        return true;
-      }
-    }
-    return false;
+    const room = this.server.sockets.adapter.rooms.get(`family_chat_${familyId}`);
+    return !!room && room.size > 0;
   }
 
   broadcastMessagesRead(familyId: number, by: 'ADMIN' | 'GUARDIAN') {
@@ -346,7 +365,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: { familyId: any; senderType: ChatSenderType; messageType: ChatMessageType; content: string; mediaMetadata?: any; senderName?: string },
   ) {
     const familyId = Number(data.familyId);
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
 
     console.log(
       `[ChatGateway] sendMessage family=${familyId} sender=${data.senderType} type=${data.messageType} from=${payload?.userType ?? 'unknown'}`,
@@ -517,7 +536,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       mediaMetadata?: any 
     },
   ) {
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
     if (!this.canSendAnnouncement(payload)) {
       throw new WsException('Forbidden');
     }
@@ -612,59 +631,17 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   // ─── Support Tickets ───────────────────────────────────────────────────────
 
-  /** True when the parent is actively viewing this support ticket (entered ticket room). */
-  isParentInTicketRoom(familyId: number, ticketId: string): boolean {
-    const familyRooms = this.familyTicketRooms.get(familyId);
-    if (!familyRooms) return false;
-    const sockets = familyRooms.get(ticketId);
-    return !!sockets && sockets.size > 0;
-  }
-
-  private trackTicketRoom(
-    socketId: string,
-    familyId: number,
-    ticketId: string,
-  ): void {
-    if (!this.familyTicketRooms.has(familyId)) {
-      this.familyTicketRooms.set(familyId, new Map());
-    }
-    const familyRooms = this.familyTicketRooms.get(familyId)!;
-    if (!familyRooms.has(ticketId)) {
-      familyRooms.set(ticketId, new Set());
-    }
-    familyRooms.get(ticketId)!.add(socketId);
-
-    const rooms = this.socketTicketRooms.get(socketId) ?? [];
-    if (!rooms.some((r) => r.familyId === familyId && r.ticketId === ticketId)) {
-      rooms.push({ familyId, ticketId });
-    }
-    this.socketTicketRooms.set(socketId, rooms);
-  }
-
-  private untrackTicketRoom(
-    socketId: string,
-    familyId: number,
-    ticketId: string,
-  ): void {
-    const familyRooms = this.familyTicketRooms.get(familyId);
-    const sockets = familyRooms?.get(ticketId);
-    if (sockets) {
-      sockets.delete(socketId);
-      if (sockets.size === 0) {
-        familyRooms!.delete(ticketId);
-        if (familyRooms!.size === 0) {
-          this.familyTicketRooms.delete(familyId);
-        }
-      }
-    }
-
-    const rooms = this.socketTicketRooms.get(socketId);
-    if (rooms) {
-      this.socketTicketRooms.set(
-        socketId,
-        rooms.filter((r) => !(r.familyId === familyId && r.ticketId === ticketId)),
-      );
-    }
+  /**
+   * True when the parent is actively viewing this support ticket (entered ticket room).
+   *
+   * Only parents join `parent_ticket_${ticketId}` (staff join the shared
+   * `ticket_${ticketId}` room instead), and room membership is synced across
+   * all instances by the redis adapter — so, like isParentInChatRoom, this is
+   * correct under a multi-instance deploy without any local bookkeeping.
+   */
+  isParentInTicketRoom(ticketId: string): boolean {
+    const room = this.server.sockets.adapter.rooms.get(`parent_ticket_${ticketId}`);
+    return !!room && room.size > 0;
   }
 
   @SubscribeMessage('enterTicket')
@@ -672,7 +649,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { ticketId: string },
   ) {
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
     if (!payload) return { error: 'unauthorized' };
     try {
       await this.supportTicketsService.assertCanEnterTicketRoom(
@@ -681,10 +658,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       );
       client.join(`ticket_${data.ticketId}`);
       if (payload.userType === 'PARENT') {
-        const familyId = Number(payload.familyId || payload.sub);
-        if (!isNaN(familyId)) {
-          this.trackTicketRoom(client.id, familyId, data.ticketId);
-        }
+        client.join(`parent_ticket_${data.ticketId}`);
       }
       return { success: true };
     } catch (err: any) {
@@ -697,13 +671,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { ticketId: string },
   ) {
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
     client.leave(`ticket_${data.ticketId}`);
     if (payload?.userType === 'PARENT') {
-      const familyId = Number(payload.familyId || payload.sub);
-      if (!isNaN(familyId)) {
-        this.untrackTicketRoom(client.id, familyId, data.ticketId);
-      }
+      client.leave(`parent_ticket_${data.ticketId}`);
     }
   }
 
@@ -718,7 +689,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       mediaMetadata?: Record<string, unknown>;
     },
   ) {
-    const payload = (client as any).tafsPayload;
+    const payload = client.data.tafsPayload;
     if (!payload) return { error: 'unauthorized' };
 
     try {
