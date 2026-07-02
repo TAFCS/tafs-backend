@@ -286,7 +286,11 @@ export class ChatService {
     },
   };
 
-  async findMessageByTempId(familyId: number, tempId: string) {
+  async findMessageByTempId(
+    familyId: number,
+    tempId: string,
+    senderType: ChatSenderType = 'GUARDIAN',
+  ) {
     const conv = await this.prisma.chat_conversations.findUnique({
       where: { family_id: familyId },
     });
@@ -295,7 +299,7 @@ export class ChatService {
     const recent = await this.prisma.chat_messages.findMany({
       where: {
         conversation_id: conv.id,
-        sender_type: 'GUARDIAN',
+        sender_type: senderType,
       },
       orderBy: { created_at: 'desc' },
       take: 100,
@@ -321,7 +325,7 @@ export class ChatService {
   ) {
     const tempId = data.mediaMetadata?.tempId as string | undefined;
     if (tempId) {
-      const existing = await this.findMessageByTempId(familyId, tempId);
+      const existing = await this.findMessageByTempId(familyId, tempId, data.senderType);
       if (existing) {
         const conv = await this.prisma.chat_conversations.findUnique({
           where: { family_id: familyId },

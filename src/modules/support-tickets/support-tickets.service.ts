@@ -1061,10 +1061,7 @@ export class SupportTicketsService {
     });
 
     await this.chatGateway.broadcastApprovedTicketMessage(fullTicket, message);
-    const parentInTicket = this.chatGateway.isParentInTicketRoom(
-      ticket.family_id,
-      ticket.id,
-    );
+    const parentInTicket = this.chatGateway.isParentInTicketRoom(ticket.id);
     if (!parentInTicket) {
       await this.fcmService.sendToFamily(
         ticket.family_id,
