@@ -98,6 +98,7 @@ export class VoucherNotificationService {
 
     await this.fcmService.sendToFamily(familyId, title, body, {
       type: 'voucher_alert',
+      notification_id: String(row.id),
       voucher_id: String(voucherId),
       student_cc: String(studentCc),
       alert_type: alertType,
