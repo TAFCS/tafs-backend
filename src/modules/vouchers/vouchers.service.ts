@@ -1269,7 +1269,7 @@ export class VouchersService {
                 reprintFeeAmount: voucher.reprint_fee_charge ? Number(voucher.reprint_fee_amount ?? 100) : 0,
                 qrUrl,
                 paidStamp,
-                showDiscount: false, // DEV kill switch — flip to true to re-enable
+                showDiscount: true,
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
                 arrearsLabel,
@@ -2594,7 +2594,7 @@ export class VouchersService {
      * Generate a voucher PDF server-side, upload it, persist pdf_url, and return the URL.
      * Used by both the single-voucher challan flow and the PAID-stamp download on the vouchers list.
      */
-    async generatePdf(voucherId: number, showDiscount = false, paidStamp = false) {
+    async generatePdf(voucherId: number, showDiscount = true, paidStamp = false) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,
