@@ -681,8 +681,6 @@ model vouchers {
   status                    String?                     @default("UNPAID") @db.VarChar(20)
   validity_date             DateTime?                   @db.Date
   late_fee_charge           Boolean
-  reprint_fee_charge        Boolean                     @default(false)
-  reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
   section_id                Int?
   academic_year             String?                     @db.VarChar(10)
   month                     Int?
@@ -696,6 +694,8 @@ model vouchers {
   total_arrears             Decimal?                    @default(0) @db.Decimal(12, 2)
   voucher_number            String?                     @unique @db.VarChar(11)
   split_parent_id           Int?
+  reprint_fee_charge        Boolean                     @default(false)
+  reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]

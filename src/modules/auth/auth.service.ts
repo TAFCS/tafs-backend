@@ -220,6 +220,9 @@ export class AuthService {
         gr_number: true,
         photograph_url: true,
         academic_year: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
@@ -283,6 +286,9 @@ export class AuthService {
         classCode: student.classes?.class_code ?? null,
         section: student.sections?.description ?? null,
         academicYear: student.academic_year,
+        campusId: student.campus_id,
+        classId: student.class_id,
+        sectionId: student.section_id,
       })),
     };
   }
