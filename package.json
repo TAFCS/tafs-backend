@@ -27,7 +27,8 @@
     "bulk:north-campus-photos": "ts-node scripts/bulk-upload-north-campus-photos.ts",
     "verify:chat-socket": "ts-node scripts/verify-chat-socket.ts",
     "verify:support-tickets": "ts-node scripts/verify-support-tickets.ts",
-    "verify:voucher-notifications": "ts-node scripts/verify-voucher-notifications.ts"
+    "verify:voucher-notifications": "ts-node scripts/verify-voucher-notifications.ts",
+    "verify:split-reversal": "ts-node scripts/verify-split-deposit-reversal.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

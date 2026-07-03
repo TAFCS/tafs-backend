@@ -2207,10 +2207,26 @@ export class VouchersService {
                 await tx.deposits.delete({ where: { id: depositId } });
             }
 
-            if (isPaidVoucher && isSplitVoucher) {
-                // ── PAID + SPLIT path (UNCHANGED): delete the voucher entirely and reset all
-                // heads to NOT_ISSUED. Same logic as remove() — split artifacts are cleaned up,
-                // superseded VOID vouchers are reactivated, and the voucher row is hard-deleted.
+            // ── Does any OTHER deposit still fund this voucher after Step 1's delete?
+            //    If so, we must NOT destroy the voucher — a second deposit's payment still
+            //    lives on it. This is the multi-deposit-split case: the clean full-undo in
+            //    Step 0 correctly bailed (an independent deposit exists), but the old
+            //    unconditional _destroyVoucherInTx below would then hard-delete this PAID
+            //    split child, orphan the surviving deposit's allocation, and leave the VOID
+            //    original + balance sibling dangling. Route to the recompute branch instead,
+            //    which steps the voucher back (PAID → PARTIALLY_PAID) and leaves the split
+            //    intact. The last deposit's removal is handled by Step 0's full-undo.
+            const remainingOnVoucher = await tx.deposit_allocations.count({
+                where: { voucher_id: voucherId },
+            });
+
+            if (isPaidVoucher && isSplitVoucher && remainingOnVoucher === 0) {
+                // ── PAID + SPLIT, last payment removed: delete the voucher entirely and reset
+                // all heads to NOT_ISSUED. Same logic as remove() — split artifacts are cleaned
+                // up, superseded VOID vouchers are reactivated, and the voucher row is
+                // hard-deleted. Reached for legacy splits (no split_parent_id, so Step 0 never
+                // runs) and for marker splits whose full-undo bailed for a non-independent-deposit
+                // reason (multi-level / re-split / unexpected shape).
                 await this._destroyVoucherInTx(voucherId, voucher as any, tx, true);
             } else {
                 // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from the
@@ -2396,8 +2412,7 @@ export class VouchersService {
         });
         if (!parent || parent.status !== 'VOID') return false;
 
-        // Exactly the two direct split children, neither itself re-split or VOID,
-        // in the normal post-split shape (one PAID + one UNPAID/OVERDUE).
+        // Exactly the two direct split children, neither itself re-split or VOID.
         const children = await tx.vouchers.findMany({
             where: { split_parent_id: parentId },
             include: { voucher_heads: { include: { student_fees: true } } },
@@ -2408,18 +2423,32 @@ export class VouchersService {
             const grandchildren = await tx.vouchers.count({ where: { split_parent_id: c.id } });
             if (grandchildren > 0) return false;
         }
-        const hasPaid = children.some((c: any) => c.status === 'PAID');
-        const hasUnpaid = children.some((c: any) => c.status === 'UNPAID' || c.status === 'OVERDUE');
-        if (!hasPaid || !hasUnpaid) return false;
 
         const childIds = children.map((c: any) => c.id);
 
         // Every deposit_allocation on the children must belong to the deposit being
         // reversed — otherwise an independent payment exists and a clean undo is impossible.
+        // This is also the "last deposit" gate: it only holds when the deposit being
+        // reversed is the final payment left across the whole split family.
         const childAllocs = await tx.deposit_allocations.findMany({
             where: { voucher_id: { in: childIds } },
         });
         if (childAllocs.some((a: any) => a.deposit_id !== depositId)) return false;
+
+        // The two children must still form a settled-side + balance-side pair. Identify the
+        // settled side by which child the (single, last) remaining deposit funds — NOT by
+        // voucher status. Reversing an earlier deposit of a MULTI-deposit split steps the
+        // settled child PAID → PARTIALLY_PAID (see clearDeposit's recompute branch), so by
+        // the time the final deposit is reversed the settled child is no longer PAID; the old
+        // "one PAID + one UNPAID/OVERDUE" shape check wrongly blocked the merge here. The
+        // merge below is driven purely by split_pair_id / PARTIAL|BALANCE prefixes and summed
+        // head net_amount — not by payment status — so it reconstructs the parent correctly
+        // however far the settled child was stepped down. Require exactly one child carrying
+        // deposit allocations (the settled side) and one carrying none (the balance side);
+        // anything else — e.g. an independent payment on the balance side — bails to the
+        // caller's proven fallback.
+        const childIdsWithAllocs = new Set(childAllocs.map((a: any) => a.voucher_id));
+        if (childIdsWithAllocs.size !== 1) return false;
 
         // ─────────────────────────────────────────────────────────────────────
         // Guard passed — perform the clean full-undo.
