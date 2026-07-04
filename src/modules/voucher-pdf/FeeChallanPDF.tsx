@@ -804,7 +804,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                     </View>
                                 ))}
                                 <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.6 }]}>TOTAL PAID</Text>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.4 }]}>TOTAL PAID</Text>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 0.7, textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
                             </>
