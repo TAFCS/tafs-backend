@@ -379,6 +379,24 @@ export class StaffEditingService {
           });
         }
 
+        // Write academic history if class or section changed
+        const classChanged = dto.class_id !== undefined && existing.class_id !== dto.class_id;
+        const sectionChanged = dto.section_id !== undefined && existing.section_id !== dto.section_id;
+        if (classChanged || sectionChanged) {
+          await tx.student_academic_history.create({
+            data: {
+              student_cc: cc,
+              class_id: dto.class_id !== undefined ? dto.class_id : existing.class_id,
+              section_id: dto.section_id !== undefined ? dto.section_id : existing.section_id,
+              campus_id: dto.campus_id !== undefined ? dto.campus_id : existing.campus_id,
+              academic_year: (dto as any).academic_year ?? existing.academic_year,
+              gr_number: (dto as any).gr_number ?? existing.gr_number,
+              change_type: 'REASSIGNED',
+              changed_by: changedBy,
+            },
+          });
+        }
+
         // Fetch all current guardian links to match in JS
         const allLinks = await tx.student_guardians.findMany({
           where: { student_id: cc },

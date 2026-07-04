@@ -115,6 +115,7 @@ model campuses {
   employee_profiles        employee_profiles[]
   hr_policy_sets           hr_policy_sets[]
   payroll_runs             payroll_runs[]
+  student_academic_history student_academic_history[]
   students                 students[]
   users                    users[]
   vouchers                 vouchers[]
@@ -148,6 +149,7 @@ model classes {
   class_check_in_schedules           class_check_in_schedules[]
   class_fee_schedule                 class_fee_schedule[]
   employee_class_section_assignments employee_class_section_assignments[]
+  student_academic_history           student_academic_history[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   vouchers                           vouchers[]
@@ -313,6 +315,7 @@ model sections {
   attendance_roll_sessions           attendance_roll_sessions[]
   campus_sections                    campus_sections[]
   employee_class_section_assignments employee_class_section_assignments[]
+  student_academic_history           student_academic_history[]
   students                           students[]
   vouchers                           vouchers[]
 }
@@ -339,6 +342,26 @@ model student_admissions {
   students           students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")
+}
+
+model student_academic_history {
+  id            Int       @id @default(autoincrement())
+  student_cc    Int
+  class_id      Int?
+  section_id    Int?
+  campus_id     Int?
+  academic_year String?   @db.VarChar(10)
+  gr_number     String?   @db.VarChar(50)
+  change_type   String    @db.VarChar(30)
+  changed_by    String?   @db.VarChar(255)
+  changed_at    DateTime  @default(now()) @db.Timestamp(6)
+  notes         String?   @db.VarChar(255)
+  campuses      campuses? @relation(fields: [campus_id], references: [id])
+  classes       classes?  @relation(fields: [class_id], references: [id])
+  sections      sections? @relation(fields: [section_id], references: [id])
+  students      students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@index([student_cc, changed_at(sort: Desc)])
 }
 
 model student_fee_bundles {
@@ -513,6 +536,7 @@ model students {
   device_user_mappings       device_user_mappings[]
   postdated_cheques          postdated_cheques[]
   relatives_attending_tafs   relatives_attending_tafs[]
+  student_academic_history   student_academic_history[]
   student_activities         student_activities[]
   student_admissions         student_admissions[]
   student_alevel_details     student_alevel_details?

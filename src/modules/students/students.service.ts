@@ -24,6 +24,7 @@ type PromotionReasonCode =
   | 'TARGET_CLASS_INACTIVE_FOR_CAMPUS'
   | 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS'
   | 'MISSING_TARGET'
+  | 'GR_DUPLICATE'
   | 'INTERNAL_ERROR';
 
 type PromotionOutcome = {
@@ -1075,15 +1076,37 @@ export class StudentsService {
       }
     }
 
-    return this.prisma.students.update({
+    const classChanged = dto.class_id !== undefined && student.class_id !== dto.class_id;
+    const sectionChanged = dto.section_id !== undefined && student.section_id !== dto.section_id;
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.students.update({
         where: { cc: id },
         data: {
-            campus_id: dto.campus_id !== undefined ? dto.campus_id : undefined,
-            class_id: dto.class_id !== undefined ? dto.class_id : undefined,
-            section_id: dto.section_id !== undefined ? dto.section_id : undefined,
-            house_id: dto.house_id !== undefined ? dto.house_id : undefined,
+          campus_id: dto.campus_id !== undefined ? dto.campus_id : undefined,
+          class_id: dto.class_id !== undefined ? dto.class_id : undefined,
+          section_id: dto.section_id !== undefined ? dto.section_id : undefined,
+          house_id: dto.house_id !== undefined ? dto.house_id : undefined,
         },
         include: this.assignmentInclude,
+      });
+
+      if (classChanged || sectionChanged) {
+        await tx.student_academic_history.create({
+          data: {
+            student_cc: id,
+            class_id: dto.class_id !== undefined ? dto.class_id : student.class_id,
+            section_id: dto.section_id !== undefined ? dto.section_id : student.section_id,
+            campus_id: dto.campus_id !== undefined ? dto.campus_id : student.campus_id,
+            academic_year: student.academic_year,
+            gr_number: student.gr_number,
+            change_type: 'REASSIGNED',
+            changed_by: changedBy,
+          },
+        });
+      }
+
+      return updated;
     });
   }
 
@@ -1286,6 +1309,18 @@ export class StudentsService {
     });
   }
 
+  async getAcademicHistory(cc: number) {
+    return this.prisma.student_academic_history.findMany({
+      where: { student_cc: cc },
+      orderBy: { changed_at: 'asc' },
+      include: {
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } },
+      },
+    });
+  }
+
   async promoteSingle(dto: PromoteSingleStudentDto) {
     const result = await this.promoteBulk({
       from: dto.from,
@@ -1379,6 +1414,7 @@ export class StudentsService {
         campus_id: true,
         academic_year: true,
         status: true,
+        gr_number: true,
       },
       orderBy: { cc: 'asc' },
     });
@@ -1386,6 +1422,7 @@ export class StudentsService {
     const classActiveCache = new Map<string, boolean>();
     const sectionActiveCache = new Map<string, boolean>();
     const results: PromotionOutcome[] = [];
+    const grOverrideMap = new Map((dto.gr_overrides ?? []).map(o => [o.student_cc, o.new_gr]));
 
     const CHUNK_SIZE = 25;
     if (isExplicitIds) {
@@ -1421,6 +1458,7 @@ export class StudentsService {
             dryRun,
             classActiveCache,
             sectionActiveCache,
+            grOverrideMap.get(studentId),
           );
           results.push(outcome);
         }));
@@ -1443,6 +1481,7 @@ export class StudentsService {
             dryRun,
             classActiveCache,
             sectionActiveCache,
+            grOverrideMap.get(student.cc),
           );
           results.push(outcome);
         }));
@@ -1483,6 +1522,7 @@ export class StudentsService {
       campus_id: number | null;
       academic_year: string | null;
       status: string;
+      gr_number: string | null;
     },
     fromClass: ResolvedClass | null,
     toClass: ResolvedClass | null,
@@ -1496,6 +1536,7 @@ export class StudentsService {
     dryRun: boolean,
     classActiveCache: Map<string, boolean>,
     sectionActiveCache: Map<string, boolean>,
+    grOverride?: string,
   ): Promise<PromotionOutcome> {
     // ── Already expelled guard ───────────────────────────────────────────────
     if (student.status === StudentStatus.EXPELLED) {
@@ -1662,6 +1703,19 @@ export class StudentsService {
               comment: reason?.trim() || null,
             },
           });
+
+          await tx.student_academic_history.create({
+            data: {
+              student_cc: student.cc,
+              class_id: null,
+              section_id: student.section_id,
+              campus_id: student.campus_id,
+              academic_year: nextAcademicYear,
+              gr_number: student.gr_number,
+              change_type: 'GRADUATED',
+              changed_by: reason?.trim() || null,
+            },
+          });
         });
         return {
           student_id: student.cc,
@@ -1743,6 +1797,32 @@ export class StudentsService {
         };
       } else {
         // Normal promotion
+        const effectiveGr = grOverride ?? student.gr_number;
+
+        if (grOverride) {
+          const duplicate = await this.prisma.students.findFirst({
+            where: {
+              campus_id: student.campus_id,
+              gr_number: grOverride,
+              cc: { not: student.cc },
+              deleted_at: null,
+            },
+          });
+          if (duplicate) {
+            return {
+              student_id: student.cc,
+              status: 'failed',
+              reason_code: 'GR_DUPLICATE',
+              message: `GR number ${grOverride} is already in use`,
+              from_class_id: student.class_id,
+              to_class_id: toClass!.id,
+              from_academic_year: student.academic_year,
+              to_academic_year: nextAcademicYear,
+              dry_run: false,
+            };
+          }
+        }
+
         await this.prisma.$transaction(
           async (tx) => {
             await tx.students.update({
@@ -1751,6 +1831,7 @@ export class StudentsService {
                 class_id: toClass!.id,
                 section_id: toSectionId !== undefined ? toSectionId : student.section_id,
                 academic_year: nextAcademicYear,
+                ...(grOverride ? { gr_number: grOverride } : {}),
               },
             });
 
@@ -1760,6 +1841,18 @@ export class StudentsService {
                 academic_system: toClass!.academic_system,
                 requested_grade: toClass!.description,
                 academic_year: nextAcademicYear,
+              },
+            });
+
+            await tx.student_academic_history.create({
+              data: {
+                student_cc: student.cc,
+                class_id: toClass!.id,
+                section_id: toSectionId !== undefined ? toSectionId : student.section_id,
+                campus_id: student.campus_id,
+                academic_year: nextAcademicYear,
+                gr_number: effectiveGr,
+                change_type: 'PROMOTED',
               },
             });
           },

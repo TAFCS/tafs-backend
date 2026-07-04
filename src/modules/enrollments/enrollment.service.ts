@@ -451,14 +451,14 @@ export class EnrollmentService {
       }
     }
 
-    return this.prisma.students.update({
+    const enrolled = await this.prisma.students.update({
       where: { cc },
       data: {
         status: 'ENROLLED',
         gr_number: dto.gr_number,
         house_id: dto.house_id,
         section_id: dto.section_id || undefined,
-        class_id: resolvedClassId ?? undefined, // writes it so future queries don't need the fallback
+        class_id: resolvedClassId ?? undefined,
         doa: new Date(),
       },
       include: {
@@ -468,6 +468,20 @@ export class EnrollmentService {
         houses: true,
       },
     });
+
+    await this.prisma.student_academic_history.create({
+      data: {
+        student_cc: cc,
+        class_id: enrolled.class_id,
+        section_id: enrolled.section_id,
+        campus_id: enrolled.campus_id,
+        academic_year: enrolled.academic_year,
+        gr_number: enrolled.gr_number,
+        change_type: 'ENROLLED',
+      },
+    });
+
+    return enrolled;
   }
 
   private async computeNextGr(campusId: number | null, isALevel = false): Promise<string> {

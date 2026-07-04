@@ -218,10 +218,14 @@ export class AuthController {
   @Post('parent/account/deletion-request')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtParentGuard)
-  async requestParentAccountDeletion(@CurrentUser() user: IJwtParentPayload) {
+  async requestParentAccountDeletion(
+    @CurrentUser() user: IJwtParentPayload,
+    @Body('reason') reason?: string,
+  ) {
     const request =
       await this.parentChangeRequestsService.createAccountDeletionRequestForFamily(
         user.familyId,
+        reason,
       );
     return createApiResponse(
       request,
