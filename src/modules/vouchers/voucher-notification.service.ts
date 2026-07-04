@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nest
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { ChatGateway } from '../chat/chat.gateway';
-import { resolveTemplate } from '../../utils/notification-templates.util';
+import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 
 const PKT = 'Asia/Karachi';
 
@@ -146,6 +146,9 @@ export class VoucherNotificationService {
     const label = monthLabel(voucher.month);
     const dueFormatted = formatDatePKT(voucher.due_date);
     const vars = { student_name: studentName, month: label, due_date: dueFormatted };
+
+    if (await isTemplateDisabled(this.prisma, 'notif_fee_issued_title')) return null;
+
     const title = await resolveTemplate(this.prisma, 'notif_fee_issued_title', 'School Fees: {month}', vars);
     const body = await resolveTemplate(this.prisma, 'notif_fee_issued_body',
       "Please pay {student_name}'s {month} school fees by {due_date}.", vars);
@@ -193,8 +196,11 @@ export class VoucherNotificationService {
         const dueFormatted = formatDatePKT(voucher.due_date);
         const label = monthLabel(voucher.month);
         const daysKey = alertType.replace('DUE_REMINDER_', '').toLowerCase();
+        const templateKey = `notif_fee_due_${daysKey}_title`;
+        if (await isTemplateDisabled(this.prisma, templateKey)) continue;
+
         const vars = { student_name: studentName, month: label, due_date: dueFormatted };
-        const title = await resolveTemplate(this.prisma, `notif_fee_due_${daysKey}_title`, 'Fee Reminder: {month}', vars);
+        const title = await resolveTemplate(this.prisma, templateKey, 'Fee Reminder: {month}', vars);
         const body = await resolveTemplate(this.prisma, `notif_fee_due_${daysKey}_body`,
           "{student_name}'s {month} school fees are due on {due_date}. Please pay on time to avoid late charges.", vars);
 
@@ -236,8 +242,11 @@ export class VoucherNotificationService {
         const studentName = voucher.students?.full_name ?? 'Student';
         const expiryFormatted = formatDatePKT(voucher.validity_date);
         const daysKey = alertType.replace('EXPIRY_REMINDER_', '').toLowerCase();
+        const templateKey = `notif_fee_expiry_${daysKey}_title`;
+        if (await isTemplateDisabled(this.prisma, templateKey)) continue;
+
         const vars = { student_name: studentName, expiry_date: expiryFormatted };
-        const title = await resolveTemplate(this.prisma, `notif_fee_expiry_${daysKey}_title`, 'Payment Deadline Approaching', vars);
+        const title = await resolveTemplate(this.prisma, templateKey, 'Payment Deadline Approaching', vars);
         const body = await resolveTemplate(this.prisma, `notif_fee_expiry_${daysKey}_body`,
           "{student_name}'s outstanding school fees must be paid by {expiry_date}. Please settle the balance soon.", vars);
 
@@ -275,6 +284,8 @@ export class VoucherNotificationService {
       const studentName = voucher.students?.full_name ?? 'Student';
       const dueFormatted = formatDatePKT(voucher.due_date);
       const label = monthLabel(voucher.month);
+      if (await isTemplateDisabled(this.prisma, 'notif_fee_overdue_title')) continue;
+
       const vars = { student_name: studentName, month: label, due_date: dueFormatted };
       const title = await resolveTemplate(this.prisma, 'notif_fee_overdue_title', 'Fee Overdue: {month}', vars);
       const body = await resolveTemplate(this.prisma, 'notif_fee_overdue_body',

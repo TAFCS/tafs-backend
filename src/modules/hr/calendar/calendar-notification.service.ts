@@ -3,7 +3,7 @@ import { student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
-import { resolveTemplate } from '../../../utils/notification-templates.util';
+import { resolveTemplate, isTemplateDisabled } from '../../../utils/notification-templates.util';
 
 function formatDatePKT(date: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -76,6 +76,7 @@ export class CalendarNotificationService {
 
   async notifyFamiliesForCalendarDay(calendarRow: any) {
     if (calendarRow.applies_to !== 'STUDENT') return;
+    if (await isTemplateDisabled(this.prisma, 'notif_holiday_title')) return;
 
     const students = await this.prisma.students.findMany({
       where: {
@@ -184,6 +185,7 @@ export class CalendarNotificationService {
       if (resolved.isWorkingDay) continue;
 
       if (resolved.dayType === 'HOLIDAY') {
+        if (await isTemplateDisabled(this.prisma, 'notif_holiday_title')) continue;
         const rawResolvedDesc = resolved.description || 'Holiday';
         const cleanResolvedDesc = rawResolvedDesc.startsWith('[PINNED] ') ? rawResolvedDesc.replace('[PINNED] ', '') : rawResolvedDesc;
         const vars = { student_name: student.full_name, date: formattedDate, description: cleanResolvedDesc };
@@ -199,6 +201,7 @@ export class CalendarNotificationService {
           hBody,
         );
       } else if (resolved.dayType === 'WEEKEND') {
+        if (await isTemplateDisabled(this.prisma, 'notif_day_off_title')) continue;
         const vars = { student_name: student.full_name, date: formattedDate };
         const doTitle = await resolveTemplate(this.prisma, 'notif_day_off_title', 'Scheduled Day Off', vars);
         const doBody = await resolveTemplate(this.prisma, 'notif_day_off_body',
@@ -217,6 +220,7 @@ export class CalendarNotificationService {
 
   async notifySchoolOpenForCalendarDay(calendarRow: any) {
     if (calendarRow.applies_to !== 'STUDENT') return;
+    if (await isTemplateDisabled(this.prisma, 'notif_school_open_title')) return;
 
     const students = await this.prisma.students.findMany({
       where: {

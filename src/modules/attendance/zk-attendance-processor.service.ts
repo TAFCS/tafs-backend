@@ -13,7 +13,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { resolveTemplate } from '../../utils/notification-templates.util';
+import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -544,6 +544,17 @@ export class ZkAttendanceProcessorService {
 
     let title: string;
     let body: string;
+    let templateTitleKey: string;
+    if (direction === ScanDirection.IN && isLate) {
+      templateTitleKey = 'notif_attend_late_title';
+    } else if (direction === ScanDirection.IN) {
+      templateTitleKey = 'notif_attend_arrived_title';
+    } else {
+      templateTitleKey = 'notif_attend_left_title';
+    }
+
+    if (await isTemplateDisabled(this.prisma, templateTitleKey)) return;
+
     if (direction === ScanDirection.IN && isLate) {
       title = await resolveTemplate(this.prisma, 'notif_attend_late_title', 'Arrived Late', vars);
       body = await resolveTemplate(this.prisma, 'notif_attend_late_body', '{student_name} has arrived late at TAFS at {time}', vars);

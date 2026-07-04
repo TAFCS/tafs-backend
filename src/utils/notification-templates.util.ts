@@ -33,6 +33,31 @@ export function clearTemplateCache() {
 }
 
 /**
+ * Check whether a notification type is disabled via `app_config`.
+ * Uses the same cache with `_disabled` suffix keys.
+ * The `templateKey` should be the title key (e.g. `notif_fee_issued_title`);
+ * the disabled key is derived by replacing `_title` with `_disabled`.
+ */
+export async function isTemplateDisabled(
+  prisma: PrismaService,
+  templateKey: string,
+): Promise<boolean> {
+  const disabledKey = templateKey.replace(/_title$/, '_disabled');
+  const cached = getCached(disabledKey);
+  if (cached !== undefined) {
+    return cached === 'true';
+  }
+
+  try {
+    const row = await prisma.app_config.findUnique({ where: { key: disabledKey } });
+    setCache(disabledKey, row?.value ?? null);
+    return row?.value === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Load a notification template from `app_config`, falling back to the
  * hardcoded default if no row exists, then interpolate variables.
  */
