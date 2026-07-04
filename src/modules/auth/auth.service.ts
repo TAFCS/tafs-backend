@@ -417,10 +417,12 @@ export class AuthService {
    * Attaches login credentials to the guardian's existing institutional family.
    */
   async registerParent(dto: RegisterParentDto) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
     // Verify OTP before any DB mutations
     const otpResult = await this.otpService.verify({
       purpose: otp_purpose.PARENT_SIGNUP,
-      email: dto.email,
+      email: normalizedEmail,
       code: dto.otp,
     });
 
@@ -465,7 +467,7 @@ export class AuthService {
 
     const emailTakenElsewhere = await this.prisma.families.findFirst({
       where: {
-        email: dto.email,
+        email: normalizedEmail,
         id: { not: resolvedFamilyId },
       },
     });
@@ -479,7 +481,7 @@ export class AuthService {
     const family = await this.prisma.families.update({
       where: { id: resolvedFamilyId },
       data: {
-        email: dto.email,
+        email: normalizedEmail,
         password_hash: passwordHash,
         household_name: guardian.full_name || institutionalFamily.household_name,
       },

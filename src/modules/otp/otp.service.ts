@@ -38,47 +38,49 @@ export class OtpService {
     const { purpose, email, familyId, userId, cnic } = params;
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Enforce resend cooldown
-    const recentCode = await this.prisma.otp_codes.findFirst({
-      where: {
-        email: normalizedEmail,
-        purpose,
-        consumed_at: null,
-        created_at: { gt: new Date(Date.now() - RESEND_COOLDOWN_MS) },
-      },
-      orderBy: { created_at: 'desc' },
-    });
-
-    if (recentCode) {
-      throw new BadRequestException(
-        'Please wait 60 seconds before requesting a new code.',
-      );
-    }
-
-    // Invalidate any prior unconsumed codes for the same (email, purpose)
-    await this.prisma.otp_codes.updateMany({
-      where: {
-        email: normalizedEmail,
-        purpose,
-        consumed_at: null,
-      },
-      data: { consumed_at: new Date() },
-    });
-
     const code = this.generateCode();
     const codeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
 
-    await this.prisma.otp_codes.create({
-      data: {
-        id: crypto.randomUUID(),
-        purpose,
-        email: normalizedEmail,
-        code_hash: codeHash,
-        expires_at: new Date(Date.now() + OTP_EXPIRY_MS),
-        ...(familyId != null && { family_id: familyId }),
-        ...(userId != null && { user_id: userId }),
-        ...(cnic != null && { cnic }),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      // Enforce resend cooldown
+      const recentCode = await tx.otp_codes.findFirst({
+        where: {
+          email: normalizedEmail,
+          purpose,
+          consumed_at: null,
+          created_at: { gt: new Date(Date.now() - RESEND_COOLDOWN_MS) },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+
+      if (recentCode) {
+        throw new BadRequestException(
+          'Please wait 60 seconds before requesting a new code.',
+        );
+      }
+
+      // Invalidate any prior unconsumed codes for the same (email, purpose)
+      await tx.otp_codes.updateMany({
+        where: {
+          email: normalizedEmail,
+          purpose,
+          consumed_at: null,
+        },
+        data: { consumed_at: new Date() },
+      });
+
+      await tx.otp_codes.create({
+        data: {
+          id: crypto.randomUUID(),
+          purpose,
+          email: normalizedEmail,
+          code_hash: codeHash,
+          expires_at: new Date(Date.now() + OTP_EXPIRY_MS),
+          ...(familyId != null && { family_id: familyId }),
+          ...(userId != null && { user_id: userId }),
+          ...(cnic != null && { cnic }),
+        },
+      });
     });
 
     const emailPurpose =
