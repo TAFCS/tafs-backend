@@ -70,13 +70,14 @@ export class OtpService {
 
     await this.prisma.otp_codes.create({
       data: {
+        id: crypto.randomUUID(),
         purpose,
         email: normalizedEmail,
         code_hash: codeHash,
-        family_id: familyId ?? null,
-        user_id: userId ?? null,
-        cnic: cnic ?? null,
         expires_at: new Date(Date.now() + OTP_EXPIRY_MS),
+        ...(familyId != null && { family_id: familyId }),
+        ...(userId != null && { user_id: userId }),
+        ...(cnic != null && { cnic }),
       },
     });
 
