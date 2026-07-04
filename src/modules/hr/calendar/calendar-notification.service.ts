@@ -3,6 +3,7 @@ import { student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
+import { resolveTemplate } from '../../../utils/notification-templates.util';
 
 function formatDatePKT(date: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -95,14 +96,17 @@ export class CalendarNotificationService {
       if (!student.family_id) continue;
       if (!this.matchesStudentScope(calendarRow, student.class_id, student.section_id)) continue;
 
-      const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${cleanDesc}.`;
+      const vars = { student_name: student.full_name, date: formattedDate, description: cleanDesc };
+      const hTitle = await resolveTemplate(this.prisma, 'notif_holiday_title', 'School Closed', vars);
+      const hBody = await resolveTemplate(this.prisma, 'notif_holiday_body',
+        '{student_name} — TAFS is closed on {date} for {description}.', vars);
       await this.notifyStudentDay(
         student.family_id,
         student.cc,
         calendarRow.date,
         'HOLIDAY',
-        'School Closed',
-        body,
+        hTitle,
+        hBody,
       );
     }
   }
@@ -178,24 +182,30 @@ export class CalendarNotificationService {
       if (resolved.dayType === 'HOLIDAY') {
         const rawResolvedDesc = resolved.description || 'Holiday';
         const cleanResolvedDesc = rawResolvedDesc.startsWith('[PINNED] ') ? rawResolvedDesc.replace('[PINNED] ', '') : rawResolvedDesc;
-        const body = `${student.full_name} — TAFS is closed on ${formattedDate} for ${cleanResolvedDesc}.`;
+        const vars = { student_name: student.full_name, date: formattedDate, description: cleanResolvedDesc };
+        const hTitle = await resolveTemplate(this.prisma, 'notif_holiday_title', 'School Closed', vars);
+        const hBody = await resolveTemplate(this.prisma, 'notif_holiday_body',
+          '{student_name} — TAFS is closed on {date} for {description}.', vars);
         await this.notifyStudentDay(
           student.family_id,
           student.cc,
           date,
           'HOLIDAY',
-          'School Closed',
-          body,
+          hTitle,
+          hBody,
         );
       } else if (resolved.dayType === 'WEEKEND') {
-        const body = `${student.full_name} — TAFS is closed on ${formattedDate} (weekend).`;
+        const vars = { student_name: student.full_name, date: formattedDate };
+        const doTitle = await resolveTemplate(this.prisma, 'notif_day_off_title', 'Scheduled Day Off', vars);
+        const doBody = await resolveTemplate(this.prisma, 'notif_day_off_body',
+          '{student_name} — TAFS is closed on {date} (weekend).', vars);
         await this.notifyStudentDay(
           student.family_id,
           student.cc,
           date,
           'DAY_OFF',
-          'Scheduled Day Off',
-          body,
+          doTitle,
+          doBody,
         );
       }
     }
@@ -225,14 +235,17 @@ export class CalendarNotificationService {
       if (!student.family_id) continue;
       if (!this.matchesStudentScope(calendarRow, student.class_id, student.section_id)) continue;
 
-      const body = `${student.full_name} — TAFS will be open on ${formattedDate}.`;
+      const vars = { student_name: student.full_name, date: formattedDate };
+      const soTitle = await resolveTemplate(this.prisma, 'notif_school_open_title', 'School Open', vars);
+      const soBody = await resolveTemplate(this.prisma, 'notif_school_open_body',
+        '{student_name} — TAFS will be open on {date}.', vars);
       await this.notifyStudentDay(
         student.family_id,
         student.cc,
         calendarRow.date,
         'SCHOOL_OPEN',
-        'School Open',
-        body,
+        soTitle,
+        soBody,
       );
     }
   }

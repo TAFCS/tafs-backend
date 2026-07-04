@@ -10,6 +10,7 @@ import { FcmService } from '../../../common/fcm/fcm.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
+import { resolveTemplate } from '../../../utils/notification-templates.util';
 
 const scheduleInclude = {
   employee_profiles: {
@@ -265,8 +266,6 @@ export class SaturdaySchedulesService {
       }
     }
 
-    const title = `Mandatory Saturday Attendance — ${monthLabel}`;
-
     await Promise.allSettled(
       [...datesByEmployee.entries()].map(async ([employeeId, dates]) => {
         const userId = userIdByEmployee.get(employeeId);
@@ -279,9 +278,11 @@ export class SaturdaySchedulesService {
             : dates.length === 2
               ? 'Please ensure your attendance on both days.'
               : 'Please ensure your attendance on all assigned days.';
-        const body =
-          `You are required to attend school on the following Saturday(s) in ` +
-          `${monthLabel}: ${dateList}. ${attendanceNote}`;
+        const vars = { month: monthLabel, date_list: dateList, attendance_note: attendanceNote };
+        const title = await resolveTemplate(this.prisma, 'notif_staff_saturday_title',
+          'Working Saturday Notice', vars);
+        const body = await resolveTemplate(this.prisma, 'notif_staff_saturday_body',
+          'You are required to attend school on the following Saturday(s) in {month}: {date_list}. {attendance_note}', vars);
 
         await this.fcmService.sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE' });
       }),

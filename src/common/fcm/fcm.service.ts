@@ -83,7 +83,7 @@ export class FcmService implements OnModuleInit {
       token: t.device_token,
       notification: { title, body },
       data: stringData,
-      apns: { payload: { aps: { badge: 1, sound: 'default' } } },
+      apns: { payload: { aps: { sound: 'default' } } },
       android: {
         priority: 'high' as const,
         notification: { channelId: 'high_importance_channel' },
@@ -193,7 +193,7 @@ export class FcmService implements OnModuleInit {
       token: t.device_token,
       notification: { title, body },
       data: stringData,
-      apns: { payload: { aps: { badge: 1, sound: 'default' } } },
+      apns: { payload: { aps: { sound: 'default' } } },
       android: {
         priority: 'high' as const,
         notification: { channelId: 'high_importance_channel' },

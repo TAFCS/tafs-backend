@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nest
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { ChatGateway } from '../chat/chat.gateway';
+import { resolveTemplate } from '../../utils/notification-templates.util';
 
 const PKT = 'Asia/Karachi';
 
@@ -144,8 +145,10 @@ export class VoucherNotificationService {
     const studentName = voucher.students?.full_name ?? 'Student';
     const label = monthLabel(voucher.month);
     const dueFormatted = formatDatePKT(voucher.due_date);
-    const title = `School Fees: ${label}`;
-    const body = `Please pay ${studentName}'s ${label} school fees by ${dueFormatted}.`;
+    const vars = { student_name: studentName, month: label, due_date: dueFormatted };
+    const title = await resolveTemplate(this.prisma, 'notif_fee_issued_title', 'School Fees: {month}', vars);
+    const body = await resolveTemplate(this.prisma, 'notif_fee_issued_body',
+      "Please pay {student_name}'s {month} school fees by {due_date}.", vars);
 
     const row = await this.notifyVoucher(
       familyId,
@@ -189,8 +192,11 @@ export class VoucherNotificationService {
         const studentName = voucher.students?.full_name ?? 'Student';
         const dueFormatted = formatDatePKT(voucher.due_date);
         const label = monthLabel(voucher.month);
-        const title = `Fee Reminder: ${label}`;
-        const body = `${studentName}'s ${label} school fees are due on ${dueFormatted}. Please pay on time to avoid late charges.`;
+        const daysKey = alertType.replace('DUE_REMINDER_', '').toLowerCase();
+        const vars = { student_name: studentName, month: label, due_date: dueFormatted };
+        const title = await resolveTemplate(this.prisma, `notif_fee_due_${daysKey}_title`, 'Fee Reminder: {month}', vars);
+        const body = await resolveTemplate(this.prisma, `notif_fee_due_${daysKey}_body`,
+          "{student_name}'s {month} school fees are due on {due_date}. Please pay on time to avoid late charges.", vars);
 
         await this.notifyVoucher(familyId, voucher.student_id, voucher.id, alertType, title, body);
         sent++;
@@ -229,8 +235,11 @@ export class VoucherNotificationService {
 
         const studentName = voucher.students?.full_name ?? 'Student';
         const expiryFormatted = formatDatePKT(voucher.validity_date);
-        const title = 'Payment Deadline Approaching';
-        const body = `${studentName}'s outstanding school fees must be paid by ${expiryFormatted}. Please settle the balance soon.`;
+        const daysKey = alertType.replace('EXPIRY_REMINDER_', '').toLowerCase();
+        const vars = { student_name: studentName, expiry_date: expiryFormatted };
+        const title = await resolveTemplate(this.prisma, `notif_fee_expiry_${daysKey}_title`, 'Payment Deadline Approaching', vars);
+        const body = await resolveTemplate(this.prisma, `notif_fee_expiry_${daysKey}_body`,
+          "{student_name}'s outstanding school fees must be paid by {expiry_date}. Please settle the balance soon.", vars);
 
         await this.notifyVoucher(familyId, voucher.student_id, voucher.id, alertType, title, body);
         sent++;
@@ -266,8 +275,10 @@ export class VoucherNotificationService {
       const studentName = voucher.students?.full_name ?? 'Student';
       const dueFormatted = formatDatePKT(voucher.due_date);
       const label = monthLabel(voucher.month);
-      const title = `Fee Overdue: ${label}`;
-      const body = `${studentName}'s ${label} school fees were due on ${dueFormatted} and are now overdue. Please pay as soon as possible.`;
+      const vars = { student_name: studentName, month: label, due_date: dueFormatted };
+      const title = await resolveTemplate(this.prisma, 'notif_fee_overdue_title', 'Fee Overdue: {month}', vars);
+      const body = await resolveTemplate(this.prisma, 'notif_fee_overdue_body',
+        "{student_name}'s {month} school fees were due on {due_date} and are now overdue. Please pay as soon as possible.", vars);
 
       await this.notifyVoucher(
         familyId,

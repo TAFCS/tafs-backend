@@ -13,6 +13,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { resolveTemplate } from '../../utils/notification-templates.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -539,13 +540,20 @@ export class ZkAttendanceProcessorService {
     });
 
     const isLate = direction === ScanDirection.IN && dailyRow?.status === RollRecordStatus.LATE;
-    const title = isLate ? 'Arrived Late' : (direction === ScanDirection.IN ? 'Arrived at School' : 'Left School');
-    const body =
-      direction === ScanDirection.IN
-        ? (isLate
-            ? `${student.full_name} has arrived late at TAFS at ${time}`
-            : `${student.full_name} has arrived at TAFS at ${time}`)
-        : `${student.full_name} has left TAFS at ${time}`;
+    const vars = { student_name: student.full_name, time };
+
+    let title: string;
+    let body: string;
+    if (direction === ScanDirection.IN && isLate) {
+      title = await resolveTemplate(this.prisma, 'notif_attend_late_title', 'Arrived Late', vars);
+      body = await resolveTemplate(this.prisma, 'notif_attend_late_body', '{student_name} has arrived late at TAFS at {time}', vars);
+    } else if (direction === ScanDirection.IN) {
+      title = await resolveTemplate(this.prisma, 'notif_attend_arrived_title', 'Arrived at School', vars);
+      body = await resolveTemplate(this.prisma, 'notif_attend_arrived_body', '{student_name} has arrived at TAFS at {time}', vars);
+    } else {
+      title = await resolveTemplate(this.prisma, 'notif_attend_left_title', 'Left School', vars);
+      body = await resolveTemplate(this.prisma, 'notif_attend_left_body', '{student_name} has left TAFS at {time}', vars);
+    }
 
     await this.prisma.attendance_notifications.create({
       data: {
