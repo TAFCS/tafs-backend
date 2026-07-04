@@ -170,4 +170,15 @@ export class StudentsController {
       STUDENTS_MESSAGES.PROMOTION_BULK_SUCCESS,
     );
   }
+
+  @Get(':id/academic-history')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async getAcademicHistory(@Param('id', ParseIntPipe) id: number) {
+    const history = await this.studentsService.getAcademicHistory(id);
+    return createApiResponse(
+      history,
+      HttpStatus.OK,
+      'Academic history retrieved successfully',
+    );
+  }
 }

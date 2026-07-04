@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Min,
@@ -10,6 +11,16 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ClassSelectorDto } from './class-selector.dto';
+
+export class GrOverrideDto {
+  @IsInt()
+  @Min(1)
+  student_cc: number;
+
+  @IsString()
+  @IsNotEmpty()
+  new_gr: string;
+}
 
 export class PromoteBulkStudentsDto {
   /**
@@ -111,6 +122,12 @@ export class PromoteBulkStudentsDto {
   @IsOptional()
   @IsString()
   academic_year?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => GrOverrideDto)
+  gr_overrides?: GrOverrideDto[];
 
   @IsOptional()
   @IsBoolean()

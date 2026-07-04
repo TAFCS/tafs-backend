@@ -21,7 +21,7 @@ export class ParentChangeRequestsService {
     private readonly authService: AuthService,
   ) {}
 
-  async createAccountDeletionRequestForFamily(familyId: number) {
+  async createAccountDeletionRequestForFamily(familyId: number, reason?: string) {
     const familyGuardianLinks = await this.prisma.student_guardians.findMany({
       where: {
         students: { family_id: familyId },
@@ -60,7 +60,10 @@ export class ParentChangeRequestsService {
     return this.createRequest({
       guardian_id: guardian.id,
       family_id: familyId,
-      requested_data: { request_type: ACCOUNT_DELETION_REQUEST_TYPE },
+      requested_data: {
+        request_type: ACCOUNT_DELETION_REQUEST_TYPE,
+        reason: reason?.trim() || null,
+      },
     });
   }
 
