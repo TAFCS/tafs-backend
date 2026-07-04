@@ -553,7 +553,7 @@ export class ZkAttendanceProcessorService {
       templateTitleKey = 'notif_attend_left_title';
     }
 
-    if (await isTemplateDisabled(this.prisma, templateTitleKey)) return;
+    if (await isTemplateDisabled(this.prisma, templateTitleKey)) return false;
 
     if (direction === ScanDirection.IN && isLate) {
       title = await resolveTemplate(this.prisma, 'notif_attend_late_title', 'Arrived Late', vars);

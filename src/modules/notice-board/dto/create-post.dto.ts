@@ -55,6 +55,10 @@ export class CreatePostDto {
   is_pinned?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  notification_only?: boolean;
+
+  @IsOptional()
   @IsDateString()
   expires_at?: string;
 }

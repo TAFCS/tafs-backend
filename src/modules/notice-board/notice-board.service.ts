@@ -56,6 +56,7 @@ export class NoticeBoardService {
     const posts = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        notification_only: false,
         OR: [
           ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
           scopeFilter,
@@ -141,6 +142,7 @@ export class NoticeBoardService {
         media_urls: [],
         media_types: [],
         is_pinned: isPinned,
+        notification_only: false,
         posted_at: h.date,
         expires_at: null,
         deleted_at: null,
@@ -171,6 +173,7 @@ export class NoticeBoardService {
         media_urls: dto.media_urls ?? [],
         media_types: dto.media_types ?? [],
         is_pinned: dto.is_pinned ?? false,
+        notification_only: dto.notification_only ?? false,
         expires_at: dto.expires_at ? new Date(dto.expires_at) : null,
       },
       include: {

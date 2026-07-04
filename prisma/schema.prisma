@@ -1404,12 +1404,13 @@ model notice_board_posts {
   student_ccs Int[]               @default([])
   media_urls  Json?               @default("[]")
   media_types Json?               @default("[]")
-  is_pinned   Boolean             @default(false)
-  posted_at   DateTime            @default(now()) @db.Timestamp(6)
-  expires_at  DateTime?           @db.Timestamp(6)
-  deleted_at  DateTime?           @db.Timestamp(6)
-  users       users               @relation(fields: [posted_by], references: [id])
-  post_reads  notice_post_reads[]
+  is_pinned        Boolean             @default(false)
+  notification_only Boolean            @default(false)
+  posted_at        DateTime            @default(now()) @db.Timestamp(6)
+  expires_at       DateTime?           @db.Timestamp(6)
+  deleted_at       DateTime?           @db.Timestamp(6)
+  users            users               @relation(fields: [posted_by], references: [id])
+  post_reads       notice_post_reads[]
 
   @@index([posted_at(sort: Desc)])
   @@index([campus_ids], type: Gin)
