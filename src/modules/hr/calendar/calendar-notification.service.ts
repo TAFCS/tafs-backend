@@ -30,7 +30,7 @@ export class CalendarNotificationService {
     title: string,
     body: string,
   ) {
-    const row = await this.prisma.calendar_notifications.upsert({
+    const existing = await this.prisma.calendar_notifications.findUnique({
       where: {
         family_id_student_cc_date_alert_type: {
           family_id: familyId,
@@ -39,7 +39,12 @@ export class CalendarNotificationService {
           alert_type: alertType,
         },
       },
-      create: {
+    });
+
+    if (existing) return existing;
+
+    const row = await this.prisma.calendar_notifications.create({
+      data: {
         family_id: familyId,
         student_cc: studentCc,
         date,
@@ -47,7 +52,6 @@ export class CalendarNotificationService {
         title,
         body,
       },
-      update: {},
     });
 
     await this.fcmService.sendToFamily(familyId, title, body, {
