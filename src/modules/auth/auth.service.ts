@@ -5,11 +5,14 @@ import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { PermissionsService } from '../users/permissions.service';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { OtpService } from '../otp/otp.service';
 import {
   IJwtStaffPayload,
   IJwtParentPayload,
 } from './interfaces/jwt-payload.interface';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
+import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
+import { otp_purpose } from '@prisma/client';
 
 export const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -27,6 +30,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private prisma: PrismaService,
+    private otpService: OtpService,
   ) {}
 
   // ─── Staff ─────────────────────────────────────────────────────────────────
@@ -413,6 +417,13 @@ export class AuthService {
    * Attaches login credentials to the guardian's existing institutional family.
    */
   async registerParent(dto: RegisterParentDto) {
+    // Verify OTP before any DB mutations
+    const otpResult = await this.otpService.verify({
+      purpose: otp_purpose.PARENT_SIGNUP,
+      email: dto.email,
+      code: dto.otp,
+    });
+
     const guardian = await this.prisma.guardians.findUnique({
       where: { cnic: dto.cnic },
       select: { id: true, full_name: true },
@@ -426,6 +437,13 @@ export class AuthService {
     if (!resolvedFamilyId) {
       throw new BadRequestException(
         'No students linked to this CNIC. Please contact the school office.',
+      );
+    }
+
+    // Defensive check: OTP's familyId must match freshly-resolved one
+    if (otpResult.familyId && otpResult.familyId !== resolvedFamilyId) {
+      throw new BadRequestException(
+        'Verification mismatch. Please restart the signup process.',
       );
     }
 
@@ -500,6 +518,146 @@ export class AuthService {
       refreshToken,
       ...(await this._fetchParentData(family.id)),
     };
+  }
+
+  // ─── Signup OTP ────────────────────────────────────────────────────────────
+
+  async sendSignupOtp(dto: SendSignupOtpDto) {
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { cnic: dto.cnic },
+      select: { id: true },
+    });
+
+    if (!guardian) {
+      throw new BadRequestException('CNIC not found in system');
+    }
+
+    const resolvedFamilyId = await this._resolveFamilyIdByGuardianId(guardian.id);
+    if (!resolvedFamilyId) {
+      throw new BadRequestException(
+        'No students linked to this CNIC. Please contact the school office.',
+      );
+    }
+
+    const institutionalFamily = await this.prisma.families.findUnique({
+      where: { id: resolvedFamilyId },
+    });
+
+    if (!institutionalFamily) {
+      throw new BadRequestException(
+        'No students linked to this CNIC. Please contact the school office.',
+      );
+    }
+
+    if (institutionalFamily.email || institutionalFamily.password_hash) {
+      throw new ConflictException(
+        'Account already registered. Please log in.',
+      );
+    }
+
+    const normalizedEmail = dto.email.toLowerCase().trim();
+    const emailTakenElsewhere = await this.prisma.families.findFirst({
+      where: {
+        email: normalizedEmail,
+        id: { not: resolvedFamilyId },
+      },
+    });
+
+    if (emailTakenElsewhere) {
+      throw new ConflictException('Email already in use');
+    }
+
+    await this.otpService.issue({
+      purpose: otp_purpose.PARENT_SIGNUP,
+      email: normalizedEmail,
+      familyId: resolvedFamilyId,
+      cnic: dto.cnic,
+    });
+  }
+
+  // ─── Forgot / Reset Password ─────────────────────────────────────────────
+
+  async forgotPasswordParent(dto: ForgotPasswordDto) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
+    const family = await this.prisma.families.findFirst({
+      where: {
+        email: normalizedEmail,
+        deleted_at: null,
+        password_hash: { not: null },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    if (family) {
+      await this.otpService.issue({
+        purpose: otp_purpose.PARENT_FORGOT_PASSWORD,
+        email: normalizedEmail,
+        familyId: family.id,
+      });
+    }
+    // Always return success to prevent email enumeration
+  }
+
+  async forgotPasswordStaff(dto: ForgotPasswordDto) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
+    const user = await this.prisma.users.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (user && user.is_active && !user.deleted_at) {
+      await this.otpService.issue({
+        purpose: otp_purpose.STAFF_FORGOT_PASSWORD,
+        email: normalizedEmail,
+        userId: user.id,
+      });
+    }
+    // Always return success to prevent email enumeration
+  }
+
+  async resetPasswordParent(dto: ResetPasswordDto) {
+    const otpResult = await this.otpService.verify({
+      purpose: otp_purpose.PARENT_FORGOT_PASSWORD,
+      email: dto.email,
+      code: dto.code,
+    });
+
+    if (!otpResult.familyId) {
+      throw new BadRequestException('Invalid or expired code');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    await this.prisma.families.update({
+      where: { id: otpResult.familyId },
+      data: { password_hash: passwordHash },
+    });
+
+    // Revoke all existing refresh tokens, forcing re-login on all devices
+    await this.logoutParent(otpResult.familyId);
+  }
+
+  async resetPasswordStaff(dto: ResetPasswordDto) {
+    const otpResult = await this.otpService.verify({
+      purpose: otp_purpose.STAFF_FORGOT_PASSWORD,
+      email: dto.email,
+      code: dto.code,
+    });
+
+    if (!otpResult.userId) {
+      throw new BadRequestException('Invalid or expired code');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+
+    await this.prisma.users.update({
+      where: { id: otpResult.userId },
+      data: { password_hash: passwordHash },
+    });
+
+    // Revoke all existing refresh tokens, forcing re-login on all devices
+    await this.logoutStaff(otpResult.userId);
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────

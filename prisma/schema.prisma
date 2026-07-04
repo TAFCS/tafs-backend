@@ -1394,23 +1394,23 @@ model postdated_cheques {
 }
 
 model notice_board_posts {
-  id          Int                 @id @default(autoincrement())
-  posted_by   String              @db.VarChar(255)
-  title       String?             @db.VarChar(255)
-  body        String
-  campus_ids  Int[]               @default([])
-  class_ids   Int[]               @default([])
-  section_ids Int[]               @default([])
-  student_ccs Int[]               @default([])
-  media_urls  Json?               @default("[]")
-  media_types Json?               @default("[]")
-  is_pinned        Boolean             @default(false)
-  notification_only Boolean            @default(false)
-  posted_at        DateTime            @default(now()) @db.Timestamp(6)
-  expires_at       DateTime?           @db.Timestamp(6)
-  deleted_at       DateTime?           @db.Timestamp(6)
-  users            users               @relation(fields: [posted_by], references: [id])
-  post_reads       notice_post_reads[]
+  id                Int                 @id @default(autoincrement())
+  posted_by         String              @db.VarChar(255)
+  title             String?             @db.VarChar(255)
+  body              String
+  campus_ids        Int[]               @default([])
+  class_ids         Int[]               @default([])
+  section_ids       Int[]               @default([])
+  media_urls        Json?               @default("[]")
+  media_types       Json?               @default("[]")
+  is_pinned         Boolean             @default(false)
+  posted_at         DateTime            @default(now()) @db.Timestamp(6)
+  expires_at        DateTime?           @db.Timestamp(6)
+  deleted_at        DateTime?           @db.Timestamp(6)
+  student_ccs       Int[]               @default([])
+  notification_only Boolean             @default(false)
+  users             users               @relation(fields: [posted_by], references: [id])
+  post_reads        notice_post_reads[]
 
   @@index([posted_at(sort: Desc)])
   @@index([campus_ids], type: Gin)
@@ -1494,14 +1494,14 @@ model employee_notice_posts {
   body         String
   target_roles StaffRole[]                  @default([])
   campus_ids   Int[]                        @default([])
-  class_ids    Int[]                        @default([])
-  section_ids  Int[]                        @default([])
   media_urls   Json?                        @default("[]")
   media_types  Json?                        @default("[]")
   is_pinned    Boolean                      @default(false)
   posted_at    DateTime                     @default(now()) @db.Timestamp(6)
   expires_at   DateTime?                    @db.Timestamp(6)
   deleted_at   DateTime?                    @db.Timestamp(6)
+  class_ids    Int[]                        @default([])
+  section_ids  Int[]                        @default([])
   post_reads   employee_notice_post_reads[]
   users        users                        @relation(fields: [posted_by], references: [id])
 
@@ -1521,6 +1521,25 @@ model employee_notice_post_reads {
   users   users                 @relation(fields: [user_id], references: [id])
 
   @@unique([post_id, user_id])
+}
+
+model otp_codes {
+  id           String      @id
+  purpose      otp_purpose
+  email        String      @db.VarChar(100)
+  code_hash    String      @db.VarChar(255)
+  family_id    Int?
+  user_id      String?
+  cnic         String?     @db.VarChar(15)
+  attempts     Int         @default(0)
+  max_attempts Int         @default(5)
+  consumed_at  DateTime?
+  expires_at   DateTime
+  created_at   DateTime    @default(now()) @db.Timestamp(6)
+
+  @@index([family_id, purpose], map: "idx_otp_codes_family")
+  @@index([email, purpose, consumed_at, expires_at], map: "idx_otp_codes_lookup")
+  @@index([user_id, purpose], map: "idx_otp_codes_user")
 }
 
 enum BulkJobStatus {
@@ -1689,4 +1708,10 @@ enum StaffCategory {
   IT_STAFF
   CREATIVE_STAFF
   FINANCE_STAFF
+}
+
+enum otp_purpose {
+  PARENT_SIGNUP
+  PARENT_FORGOT_PASSWORD
+  STAFF_FORGOT_PASSWORD
 }

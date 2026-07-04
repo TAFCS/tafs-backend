@@ -12,12 +12,14 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ParentChangeRequestsModule } from '../parent-change-requests/parent-change-requests.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
+import { OtpModule } from '../otp/otp.module';
 
 @Module({
   imports: [
     forwardRef(() => UsersModule),
     forwardRef(() => ParentChangeRequestsModule),
     FcmModule,
+    OtpModule,
     PassportModule,
     ConfigModule,
     JwtModule.registerAsync({

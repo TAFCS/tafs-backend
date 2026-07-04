@@ -14,6 +14,7 @@ import type { Request, Response } from 'express';
 import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
 import { ParentChangeRequestsService } from '../parent-change-requests/parent-change-requests.service';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
+import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { RegisterFcmTokenDto } from './dto/register-fcm-token.dto';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -249,10 +250,47 @@ export class AuthController {
     return createApiResponse(result, HttpStatus.OK, 'CNIC verification result');
   }
 
+  @Post('parent/signup/send-otp')
+  @HttpCode(HttpStatus.OK)
+  async sendSignupOtp(@Body() dto: SendSignupOtpDto) {
+    await this.authService.sendSignupOtp(dto);
+    return createApiResponse({}, HttpStatus.OK, 'Verification code sent to your email');
+  }
+
   @Post('parent/register')
   @HttpCode(HttpStatus.CREATED)
   async registerParent(@Body() dto: RegisterParentDto) {
     const result = await this.authService.registerParent(dto);
     return createApiResponse(result, HttpStatus.CREATED, 'Registration successful');
+  }
+
+  // ─── Forgot / Reset Password ─────────────────────────────────────────────
+
+  @Post('parent/forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPasswordParent(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPasswordParent(dto);
+    return createApiResponse({}, HttpStatus.OK, 'If an account exists for this email, a verification code has been sent');
+  }
+
+  @Post('parent/reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPasswordParent(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPasswordParent(dto);
+    return createApiResponse({}, HttpStatus.OK, 'Password reset successful. Please log in with your new password.');
+  }
+
+  @Post('staff/forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPasswordStaff(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPasswordStaff(dto);
+    return createApiResponse({}, HttpStatus.OK, 'If an account exists for this email, a verification code has been sent');
+  }
+
+  @Post('staff/reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPasswordStaff(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPasswordStaff(dto);
+    return createApiResponse({}, HttpStatus.OK, 'Password reset successful. Please log in with your new password.');
   }
 }
