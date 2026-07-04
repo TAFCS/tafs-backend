@@ -137,6 +137,7 @@ export class NoticeBoardService {
         campus_ids: [h.campus_id],
         class_ids: h.class_id ? [h.class_id] : [],
         section_ids: h.section_id ? [h.section_id] : [],
+        student_ccs: [],
         media_urls: [],
         media_types: [],
         is_pinned: isPinned,
