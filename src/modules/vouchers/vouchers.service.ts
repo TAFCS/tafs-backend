@@ -1184,6 +1184,7 @@ export class VouchersService {
                     date: dateObj ? dateObj.toISOString().split('T')[0] : 'N/A',
                     head,
                     amount: paidAmount,
+                    payment_method: (sf as any).deposit_allocations?.[0]?.deposits?.payment_method || null,
                 };
             })
             .filter((row: any) => !!row)
@@ -1201,6 +1202,7 @@ export class VouchersService {
                 head: row.head,
                 amount: row.amount.toLocaleString(),
                 totalAmount: paymentRunningTotal.toLocaleString(),
+                payment_method: row.payment_method,
             };
         });
 

@@ -64,7 +64,7 @@ const styles = StyleSheet.create({
     },
     paidStamp: {
         position: 'absolute',
-        top: '35%',
+        top: '50%',
         left: '5%',
         width: '90%',
         textAlign: 'center',
@@ -785,24 +785,26 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
-                            <Text style={styles.historyTableHeaderCell}>DATE</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>DATE</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>METHOD</Text>
                             <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
                         </View>
                         {paymentHistory && paymentHistory.length > 0 ? (
                             <>
                                 {paymentHistory.map((p: any, idx: number) => (
                                     <View key={idx} style={styles.historyTableRow}>
-                                        <Text style={styles.historyTableCell}>{(() => {
+                                        <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{(() => {
                                             const [y, m, d] = String(p.date || '').split('-');
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
                                         })()}</Text>
                                         <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{p.payment_method ? String(p.payment_method).toUpperCase() : '-'}</Text>
                                         <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
                                 <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL PAID</Text>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 4.2 }]}>TOTAL PAID</Text>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
                             </>
