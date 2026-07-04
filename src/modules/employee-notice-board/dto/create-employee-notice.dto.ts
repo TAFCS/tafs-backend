@@ -33,6 +33,20 @@ export class CreateEmployeeNoticeDto {
   @Type(() => Number)
   campus_ids?: number[];
 
+  @ApiPropertyOptional({ description: 'Empty array = all classes' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  class_ids?: number[];
+
+  @ApiPropertyOptional({ description: 'Empty array = all sections' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  section_ids?: number[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsArray()

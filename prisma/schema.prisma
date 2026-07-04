@@ -1377,6 +1377,7 @@ model notice_board_posts {
   campus_ids  Int[]               @default([])
   class_ids   Int[]               @default([])
   section_ids Int[]               @default([])
+  student_ccs Int[]               @default([])
   media_urls  Json?               @default("[]")
   media_types Json?               @default("[]")
   is_pinned   Boolean             @default(false)
@@ -1390,6 +1391,7 @@ model notice_board_posts {
   @@index([campus_ids], type: Gin)
   @@index([class_ids], type: Gin)
   @@index([section_ids], type: Gin)
+  @@index([student_ccs], type: Gin)
 }
 
 model notice_post_reads {
@@ -1467,6 +1469,8 @@ model employee_notice_posts {
   body         String
   target_roles StaffRole[]                  @default([])
   campus_ids   Int[]                        @default([])
+  class_ids    Int[]                        @default([])
+  section_ids  Int[]                        @default([])
   media_urls   Json?                        @default("[]")
   media_types  Json?                        @default("[]")
   is_pinned    Boolean                      @default(false)
@@ -1479,6 +1483,8 @@ model employee_notice_posts {
   @@index([posted_at(sort: Desc)])
   @@index([target_roles], type: Gin)
   @@index([campus_ids], type: Gin)
+  @@index([class_ids], type: Gin)
+  @@index([section_ids], type: Gin)
 }
 
 model employee_notice_post_reads {

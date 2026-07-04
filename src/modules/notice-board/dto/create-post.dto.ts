@@ -36,6 +36,12 @@ export class CreatePostDto {
 
   @IsOptional()
   @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  student_ccs?: number[];
+
+  @IsOptional()
+  @IsArray()
   @IsString({ each: true })
   media_urls?: string[];
 

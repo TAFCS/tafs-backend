@@ -18,6 +18,13 @@ export class EmployeeNoticeBoardService {
   // ── Employee-facing ──────────────────────────────────────────────────────
 
   async getFeedForUser(user: IJwtStaffPayload) {
+    const profile = await this.prisma.employee_profiles.findFirst({
+      where: { user_id: user.sub },
+      select: { employee_class_section_assignments: { select: { class_id: true, section_id: true } } },
+    });
+    const assignedClassIds = [...new Set(profile?.employee_class_section_assignments.map(a => a.class_id) ?? [])];
+    const assignedSectionIds = [...new Set(profile?.employee_class_section_assignments.map(a => a.section_id) ?? [])];
+
     return this.prisma.employee_notice_posts.findMany({
       where: {
         deleted_at: null,
@@ -34,6 +41,18 @@ export class EmployeeNoticeBoardService {
               ...(user.campusId != null
                 ? [{ campus_ids: { has: user.campusId } }]
                 : []),
+            ],
+          },
+          {
+            OR: [
+              { class_ids: { isEmpty: true } },
+              ...(assignedClassIds.length ? [{ class_ids: { hasSome: assignedClassIds } }] : []),
+            ],
+          },
+          {
+            OR: [
+              { section_ids: { isEmpty: true } },
+              ...(assignedSectionIds.length ? [{ section_ids: { hasSome: assignedSectionIds } }] : []),
             ],
           },
           {
@@ -106,6 +125,8 @@ export class EmployeeNoticeBoardService {
         body: dto.body,
         target_roles: dto.target_roles ?? [],
         campus_ids: dto.campus_ids ?? [],
+        class_ids: dto.class_ids ?? [],
+        section_ids: dto.section_ids ?? [],
         media_urls: dto.media_urls ?? [],
         media_types: dto.media_types ?? [],
         is_pinned: dto.is_pinned ?? false,
@@ -125,7 +146,7 @@ export class EmployeeNoticeBoardService {
     this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(post.id), action: 'CREATED', section: 'communication', note: noteParts.join(' | '), changed_by: changedBy || user.username || user.sub });
 
     // Fan-out FCM — fire and forget
-    void this._sendFcmNotifications(post, dto.target_roles ?? [], dto.campus_ids ?? []);
+    void this._sendFcmNotifications(post, dto.target_roles ?? [], dto.campus_ids ?? [], dto.class_ids ?? [], dto.section_ids ?? []);
 
     return post;
   }
@@ -143,6 +164,8 @@ export class EmployeeNoticeBoardService {
         ...(dto.body !== undefined && { body: dto.body }),
         ...(dto.target_roles !== undefined && { target_roles: dto.target_roles }),
         ...(dto.campus_ids !== undefined && { campus_ids: dto.campus_ids }),
+        ...(dto.class_ids !== undefined && { class_ids: dto.class_ids }),
+        ...(dto.section_ids !== undefined && { section_ids: dto.section_ids }),
         ...(dto.is_pinned !== undefined && { is_pinned: dto.is_pinned }),
         ...(dto.expires_at !== undefined && {
           expires_at: dto.expires_at ? new Date(dto.expires_at) : null,
@@ -175,17 +198,46 @@ export class EmployeeNoticeBoardService {
     post: { id: number; title: string | null; body: string },
     targetRoles: StaffRole[],
     campusIds: number[],
+    classIds: number[] = [],
+    sectionIds: number[] = [],
   ) {
     try {
-      const targets = await this.prisma.users.findMany({
-        where: {
-          is_active: true,
-          deleted_at: null,
-          ...(targetRoles.length ? { role: { in: targetRoles } } : {}),
-          ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
-        },
-        select: { id: true },
-      });
+      const hasClassOrSection = classIds.length > 0 || sectionIds.length > 0;
+
+      let targets: { id: string }[];
+
+      if (hasClassOrSection) {
+        const profiles = await this.prisma.employee_profiles.findMany({
+          where: {
+            users: {
+              is_active: true,
+              deleted_at: null,
+              ...(targetRoles.length ? { role: { in: targetRoles } } : {}),
+              ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
+            },
+            employee_class_section_assignments: {
+              some: {
+                ...(classIds.length ? { class_id: { in: classIds } } : {}),
+                ...(sectionIds.length ? { section_id: { in: sectionIds } } : {}),
+              },
+            },
+          },
+          select: { user_id: true },
+        });
+        targets = profiles
+          .filter((p) => p.user_id != null)
+          .map((p) => ({ id: p.user_id! }));
+      } else {
+        targets = await this.prisma.users.findMany({
+          where: {
+            is_active: true,
+            deleted_at: null,
+            ...(targetRoles.length ? { role: { in: targetRoles } } : {}),
+            ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
+          },
+          select: { id: true },
+        });
+      }
 
       if (!targets.length) return;
 

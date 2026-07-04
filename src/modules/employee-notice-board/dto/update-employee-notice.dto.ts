@@ -31,6 +31,18 @@ export class UpdateEmployeeNoticeDto {
   campus_ids?: number[];
 
   @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  class_ids?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  section_ids?: number[];
+
+  @IsOptional()
   @IsBoolean()
   is_pinned?: boolean;
 

@@ -21,35 +21,46 @@ export class NoticeBoardService {
   async getPostsForFamily(familyId: number, cursor?: number) {
     const students = await this.prisma.students.findMany({
       where: { family_id: familyId, deleted_at: null },
-      select: { campus_id: true, class_id: true, section_id: true },
+      select: { cc: true, campus_id: true, class_id: true, section_id: true },
     });
 
+    const studentCcs = students.map((s) => s.cc);
     const campusIds = [...new Set(students.map((s) => s.campus_id).filter(Boolean))] as number[];
     const classIds  = [...new Set(students.map((s) => s.class_id).filter(Boolean))] as number[];
     const sectionIds = [...new Set(students.map((s) => s.section_id).filter(Boolean))] as number[];
 
+    const scopeFilter = {
+      AND: [
+        {
+          OR: [
+            { campus_ids: { isEmpty: true } },
+            ...(campusIds.length ? [{ campus_ids: { hasSome: campusIds } }] : []),
+          ],
+        },
+        {
+          OR: [
+            { class_ids: { isEmpty: true } },
+            ...(classIds.length ? [{ class_ids: { hasSome: classIds } }] : []),
+          ],
+        },
+        {
+          OR: [
+            { section_ids: { isEmpty: true } },
+            ...(sectionIds.length ? [{ section_ids: { hasSome: sectionIds } }] : []),
+          ],
+        },
+      ],
+      student_ccs: { isEmpty: true },
+    };
+
     const posts = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        OR: [
+          ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
+          scopeFilter,
+        ],
         AND: [
-          {
-            OR: [
-              { campus_ids: { isEmpty: true } },
-              ...(campusIds.length ? [{ campus_ids: { hasSome: campusIds } }] : []),
-            ],
-          },
-          {
-            OR: [
-              { class_ids: { isEmpty: true } },
-              ...(classIds.length ? [{ class_ids: { hasSome: classIds } }] : []),
-            ],
-          },
-          {
-            OR: [
-              { section_ids: { isEmpty: true } },
-              ...(sectionIds.length ? [{ section_ids: { hasSome: sectionIds } }] : []),
-            ],
-          },
           {
             OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
           },
@@ -155,6 +166,7 @@ export class NoticeBoardService {
         campus_ids: dto.campus_ids ?? [],
         class_ids: dto.class_ids ?? [],
         section_ids: dto.section_ids ?? [],
+        student_ccs: dto.student_ccs ?? [],
         media_urls: dto.media_urls ?? [],
         media_types: dto.media_types ?? [],
         is_pinned: dto.is_pinned ?? false,
@@ -190,10 +202,12 @@ export class NoticeBoardService {
     campus_ids: unknown;
     class_ids: unknown;
     section_ids: unknown;
+    student_ccs: unknown;
   }) {
     const campusIds = (post.campus_ids as number[]) ?? [];
     const classIds  = (post.class_ids as number[])  ?? [];
     const sectionIds = (post.section_ids as number[]) ?? [];
+    const studentCcs = (post.student_ccs as number[]) ?? [];
 
     const families = await this.prisma.families.findMany({
       where: {
@@ -216,9 +230,23 @@ export class NoticeBoardService {
     const body  = post.body.length > 120 ? post.body.slice(0, 117) + '…' : post.body;
     const data  = { type: 'notice_board', post_id: String(post.id) };
 
+    const sentFamilyIds = new Set(families.map((f) => f.id));
+
     await Promise.allSettled(
       families.map((f) => this.fcm.sendToFamily(f.id, title, body, data)),
     );
+
+    if (studentCcs.length) {
+      const targetStudents = await this.prisma.students.findMany({
+        where: { cc: { in: studentCcs }, deleted_at: null, family_id: { not: null } },
+        select: { family_id: true },
+      });
+      const extraFamilyIds = [...new Set(targetStudents.map((s) => s.family_id!))];
+      const newFamilies = extraFamilyIds.filter((id) => !sentFamilyIds.has(id));
+      await Promise.allSettled(
+        newFamilies.map((id) => this.fcm.sendToFamily(id, title, body, data)),
+      );
+    }
   }
 
   async updatePost(id: string | number, dto: UpdatePostDto) {
