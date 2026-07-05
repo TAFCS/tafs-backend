@@ -656,6 +656,9 @@ export class AuthService {
 
     // Revoke all existing refresh tokens, forcing re-login on all devices
     await this.logoutParent(otpResult.familyId);
+    await this.prisma.fcm_device_tokens.deleteMany({
+      where: { family_id: otpResult.familyId },
+    });
   }
 
   async resetPasswordStaff(dto: ResetPasswordDto) {
@@ -678,6 +681,9 @@ export class AuthService {
 
     // Revoke all existing refresh tokens, forcing re-login on all devices
     await this.logoutStaff(otpResult.userId);
+    await this.prisma.fcm_device_tokens.deleteMany({
+      where: { user_id: otpResult.userId },
+    });
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
