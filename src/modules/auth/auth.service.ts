@@ -14,11 +14,11 @@ import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './d
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { otp_purpose } from '@prisma/client';
 
-export const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
-const ACCESS_TOKEN_TTL = '7d';
-const REFRESH_TOKEN_TTL = '30d';
+const ACCESS_TOKEN_TTL = '90d';
+const REFRESH_TOKEN_TTL = '90d';
 
 @Injectable()
 export class AuthService {
