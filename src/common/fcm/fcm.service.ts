@@ -151,6 +151,28 @@ export class FcmService implements OnModuleInit {
     return row;
   }
 
+  async unregisterToken(
+    token: string,
+    scope: { familyId?: number; userId?: string },
+  ) {
+    const where: {
+      device_token: string;
+      family_id?: number;
+      user_id?: string;
+    } = { device_token: token };
+
+    if (scope.familyId != null) where.family_id = scope.familyId;
+    if (scope.userId != null) where.user_id = scope.userId;
+
+    const result = await this.prisma.fcm_device_tokens.deleteMany({ where });
+    if (result.count > 0) {
+      console.log(
+        `[FCM] Unregistered token (family=${scope.familyId ?? 'n/a'}, user=${scope.userId ?? 'n/a'})`,
+      );
+    }
+    return result.count;
+  }
+
   async registerStaffToken(userId: string, token: string, deviceType?: string) {
     const row = await this.prisma.fcm_device_tokens.upsert({
       where: { device_token: token },

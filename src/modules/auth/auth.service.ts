@@ -13,6 +13,7 @@ import {
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { otp_purpose } from '@prisma/client';
+import { FcmService } from '../../common/fcm/fcm.service';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -31,6 +32,7 @@ export class AuthService {
     private configService: ConfigService,
     private prisma: PrismaService,
     private otpService: OtpService,
+    private fcmService: FcmService,
   ) {}
 
   // ─── Staff ─────────────────────────────────────────────────────────────────
@@ -153,11 +155,19 @@ export class AuthService {
     };
   }
 
-  async logoutStaff(userId: string) {
+  async logoutStaff(userId: string, fcmToken?: string) {
     await this.prisma.user_refresh_tokens.updateMany({
       where: { user_id: userId, revoked_at: null },
       data: { revoked_at: new Date() },
     });
+
+    if (fcmToken) {
+      await this.fcmService
+        .unregisterToken(fcmToken, { userId })
+        .catch((e) =>
+          console.error('Failed to unregister staff FCM token on logout:', e.message),
+        );
+    }
   }
 
   // ─── Parent ────────────────────────────────────────────────────────────────
@@ -333,11 +343,19 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  async logoutParent(familyId: number) {
+  async logoutParent(familyId: number, fcmToken?: string) {
     await this.prisma.family_refresh_tokens.updateMany({
       where: { family_id: familyId, revoked_at: null },
       data: { revoked_at: new Date() },
     });
+
+    if (fcmToken) {
+      await this.fcmService
+        .unregisterToken(fcmToken, { familyId })
+        .catch((e) =>
+          console.error('Failed to unregister parent FCM token on logout:', e.message),
+        );
+    }
   }
 
   /**

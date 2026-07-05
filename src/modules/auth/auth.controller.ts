@@ -16,6 +16,7 @@ import { ParentChangeRequestsService } from '../parent-change-requests/parent-ch
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { RegisterFcmTokenDto } from './dto/register-fcm-token.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
@@ -115,10 +116,11 @@ export class AuthController {
   @UseGuards(JwtStaffGuard)
   async logoutStaff(
     @CurrentUser() user: IJwtStaffPayload,
+    @Body() dto: LogoutDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     clearAuthCookies(res);
-    return this.authService.logoutStaff(user.sub);
+    return this.authService.logoutStaff(user.sub, dto.fcmToken);
   }
 
   // ─── Staff mobile (body-based — Flutter dual login) ───────────────────────
@@ -140,8 +142,11 @@ export class AuthController {
   @Post('staff/mobile/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtStaffGuard)
-  logoutStaffMobile(@CurrentUser() user: IJwtStaffPayload) {
-    return this.authService.logoutStaff(user.sub);
+  logoutStaffMobile(
+    @CurrentUser() user: IJwtStaffPayload,
+    @Body() dto: LogoutDto,
+  ) {
+    return this.authService.logoutStaff(user.sub, dto.fcmToken);
   }
 
   // ─── Parent (body-based — Flutter mobile app) ──────────────────────────────
@@ -165,8 +170,11 @@ export class AuthController {
   @Post('parent/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtParentGuard)
-  logoutParent(@CurrentUser() user: IJwtParentPayload) {
-    return this.authService.logoutParent(user.familyId);
+  logoutParent(
+    @CurrentUser() user: IJwtParentPayload,
+    @Body() dto: LogoutDto,
+  ) {
+    return this.authService.logoutParent(user.familyId, dto.fcmToken);
   }
 
   @Post('parent/fcm-token')
