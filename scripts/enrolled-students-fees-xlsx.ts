@@ -23,24 +23,15 @@ const HEADER_FONT: Partial<ExcelJS.Font> = { bold: true, color: { argb: 'FFFFFFF
 const AMOUNT_FILL: ExcelJS.Fill = {
     type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' }
 };
-const FAMILY_FILL: ExcelJS.Fill = {
-    type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDAE8FC' }
+const SIBLING_FILL: ExcelJS.Fill = {
+    type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' }
 };
-
-function styleAmountCells(row: ExcelJS.Row, startCol: number, count: number) {
-    for (let ci = startCol; ci < startCol + count; ci++) {
-        const cell = row.getCell(ci);
-        cell.fill = AMOUNT_FILL;
-        cell.numFmt = '#,##0';
-        cell.alignment = { horizontal: 'right' };
-    }
-}
 
 function addStudentRow(
     ws: ExcelJS.Worksheet,
     s: any,
     feeMap: Map<number, Map<string, any>>,
-    extraCols: { key: string; value: any }[] = []
+    isPulledSibling: boolean
 ) {
     const pmap = feeMap.get(s.cc);
     let note = '';
@@ -50,44 +41,41 @@ function addStudentRow(
     }
 
     const rowData: Record<string, any> = {
-        cc:   s.cc,
-        gr:   s.gr_number || '',
-        name: s.full_name,
+        cc:    s.cc,
+        gr:    s.gr_number || '',
+        name:  s.full_name,
         class: s.classes?.description || '',
         note,
     };
-    for (const ec of extraCols) rowData[ec.key] = ec.value;
     for (const p of PERIODS) {
         const fee = pmap?.get(periodKey(p.month, p.academicYear));
         rowData[p.label] = fee?.amount != null ? Number(fee.amount) : null;
     }
 
     const row = ws.addRow(rowData);
-    // amount cols start at 5 (after cc, gr, name, class) for base sheet; siblings has family col too
-    const amountStart = extraCols.length > 0 ? 6 : 5;
-    styleAmountCells(row, amountStart, PERIODS.length);
+
+    for (let ci = 5; ci < 5 + PERIODS.length; ci++) {
+        const cell = row.getCell(ci);
+        cell.fill = AMOUNT_FILL;
+        cell.numFmt = '#,##0';
+        cell.alignment = { horizontal: 'right' };
+    }
 
     if (note) row.getCell('note').font = { bold: true, color: { argb: 'FFCC0000' } };
 
-    return row;
-}
+    // Highlight rows for siblings pulled in from another class
+    if (isPulledSibling) {
+        row.getCell('class').fill = SIBLING_FILL;
+        row.getCell('class').font = { bold: true };
+    }
 
-function applyHeader(ws: ExcelJS.Worksheet) {
-    const headerRow = ws.getRow(1);
-    headerRow.eachCell(cell => {
-        cell.fill = HEADER_FILL;
-        cell.font = HEADER_FONT;
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        cell.border = { bottom: { style: 'thin', color: { argb: 'FF000000' } } };
-    });
-    headerRow.height = 20;
-    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    return row;
 }
 
 function addSheet(
     wb: ExcelJS.Workbook,
     sheetName: string,
-    students: any[],
+    rows: { student: any; isPulledSibling: boolean }[],
     feeMap: Map<number, Map<string, any>>
 ) {
     const ws = wb.addWorksheet(sheetName);
@@ -99,60 +87,80 @@ function addSheet(
         ...PERIODS.map(p => ({ header: p.label, key: p.label, width: 12 })),
         { header: 'Note',      key: 'note',  width: 18 },
     ];
-    applyHeader(ws);
-    for (const s of students) addStudentRow(ws, s, feeMap);
+
+    const headerRow = ws.getRow(1);
+    headerRow.eachCell(cell => {
+        cell.fill = HEADER_FILL;
+        cell.font = HEADER_FONT;
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { bottom: { style: 'thin', color: { argb: 'FF000000' } } };
+    });
+    headerRow.height = 20;
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    for (const r of rows) addStudentRow(ws, r.student, feeMap, r.isPulledSibling);
 }
 
-function addSiblingsSheet(
-    wb: ExcelJS.Workbook,
-    campusStudents: any[],
-    feeMap: Map<number, Map<string, any>>,
-    familyNameMap: Map<number, string>
-) {
-    // Build familyId → students[], keep only families with ≥2 enrolled students
+/**
+ * Builds per-class row sets for one campus, processed smallest class first.
+ * When a student's siblings (same family_id) live in a different class, those
+ * siblings are pulled into the sibling-group's smallest class sheet instead of
+ * appearing in their own class sheet.
+ */
+function buildCampusClassSheets(campusStudents: any[]) {
     const byFamily = new Map<number, any[]>();
     for (const s of campusStudents) {
         if (s.family_id == null) continue;
         if (!byFamily.has(s.family_id)) byFamily.set(s.family_id, []);
         byFamily.get(s.family_id)!.push(s);
     }
-    const multiChildFamilies = Array.from(byFamily.entries())
-        .filter(([, members]) => members.length >= 2)
-        .sort(([a], [b]) => a - b);
 
-    if (multiChildFamilies.length === 0) return; // no siblings on this campus
-
-    const ws = wb.addWorksheet('Siblings');
-    ws.columns = [
-        { header: 'CC',        key: 'cc',     width: 8  },
-        { header: 'GR',        key: 'gr',     width: 10 },
-        { header: 'Full Name', key: 'name',   width: 30 },
-        { header: 'Class',     key: 'class',  width: 18 },
-        { header: 'Family',    key: 'family', width: 28 },
-        ...PERIODS.map(p => ({ header: p.label, key: p.label, width: 12 })),
-        { header: 'Note',      key: 'note',   width: 18 },
-    ];
-    applyHeader(ws);
-
-    for (const [familyId, members] of multiChildFamilies) {
-        const householdName = familyNameMap.get(familyId) ?? `Family #${familyId}`;
-        const sorted = [...members].sort((a, b) => a.cc - b.cc);
-
-        for (const s of sorted) {
-            const row = addStudentRow(ws, s, feeMap, [{ key: 'family', value: householdName }]);
-            // Tint the family cell to visually group rows
-            row.getCell('family').fill = FAMILY_FILL;
+    // Group students by class, ordered by class id ascending (smallest class first)
+    const byClass = new Map<number, { order: number; description: string; students: any[] }>();
+    for (const s of campusStudents) {
+        const classId = s.classes?.id ?? -1;
+        const description = s.classes?.description ?? 'Unknown Class';
+        if (!byClass.has(classId)) {
+            byClass.set(classId, { order: classId === -1 ? Number.MAX_SAFE_INTEGER : classId, description, students: [] });
         }
-
-        // Blank separator between families
-        ws.addRow({});
+        byClass.get(classId)!.students.push(s);
     }
 
-    return multiChildFamilies.length;
+    const orderedClasses = Array.from(byClass.values()).sort((a, b) => a.order - b.order);
+
+    const claimed = new Set<number>();
+    const sheets: { sheetName: string; rows: { student: any; isPulledSibling: boolean }[] }[] = [];
+
+    for (const classEntry of orderedClasses) {
+        const roster = [...classEntry.students].sort((a, b) => a.cc - b.cc);
+        const rows: { student: any; isPulledSibling: boolean }[] = [];
+
+        for (const anchor of roster) {
+            if (claimed.has(anchor.cc)) continue; // already shown in an earlier (smaller) class sheet
+
+            claimed.add(anchor.cc);
+            rows.push({ student: anchor, isPulledSibling: false });
+
+            const familyMembers = anchor.family_id != null ? byFamily.get(anchor.family_id) ?? [] : [];
+            const siblings = familyMembers
+                .filter(m => m.cc !== anchor.cc && !claimed.has(m.cc))
+                .sort((a, b) => a.cc - b.cc);
+
+            for (const sibling of siblings) {
+                claimed.add(sibling.cc);
+                rows.push({ student: sibling, isPulledSibling: sibling.classes?.id !== classEntry.order });
+            }
+        }
+
+        if (rows.length > 0) {
+            sheets.push({ sheetName: classEntry.description, rows });
+        }
+    }
+
+    return sheets;
 }
 
 async function main() {
-    // Fetch students (include family_id)
     const students = await prisma.students.findMany({
         where: { status: 'ENROLLED', deleted_at: null },
         select: {
@@ -172,14 +180,6 @@ async function main() {
         select: { id: true, campus_name: true },
         orderBy: { id: 'asc' }
     });
-
-    // Fetch family names for all family_ids present
-    const familyIds = [...new Set(students.map(s => s.family_id).filter((id): id is number => id != null))];
-    const families = await prisma.families.findMany({
-        where: { id: { in: familyIds } },
-        select: { id: true, household_name: true }
-    });
-    const familyNameMap = new Map(families.map(f => [f.id, f.household_name]));
 
     const allFees = await prisma.student_fees.findMany({
         where: {
@@ -201,23 +201,18 @@ async function main() {
         if (!feeMap.get(f.student_id)!.has(k)) feeMap.get(f.student_id)!.set(k, f);
     }
 
-    console.log(`Students: ${students.length} | Fee rows: ${allFees.length} | Families: ${familyIds.length}`);
+    console.log(`Students: ${students.length} | Fee rows: ${allFees.length}`);
 
-    // Group: campusId → classDescription → students[]
-    const byCampus = new Map<number, { byClass: Map<string, any[]>; all: any[] }>();
+    const byCampus = new Map<number, any[]>();
     for (const s of students) {
         const cid = s.campus_id ?? 0;
-        if (!byCampus.has(cid)) byCampus.set(cid, { byClass: new Map(), all: [] });
-        const entry = byCampus.get(cid)!;
-        entry.all.push(s);
-        const cls = s.classes?.description ?? 'Unknown Class';
-        if (!entry.byClass.has(cls)) entry.byClass.set(cls, []);
-        entry.byClass.get(cls)!.push(s);
+        if (!byCampus.has(cid)) byCampus.set(cid, []);
+        byCampus.get(cid)!.push(s);
     }
 
     for (const campus of campuses) {
-        const entry = byCampus.get(campus.id);
-        if (!entry || entry.all.length === 0) {
+        const campusStudents = byCampus.get(campus.id);
+        if (!campusStudents || campusStudents.length === 0) {
             console.log(`  ${campus.campus_name}: no enrolled students, skipping`);
             continue;
         }
@@ -226,18 +221,16 @@ async function main() {
         wb.creator = 'TAFS';
         wb.created = new Date();
 
-        const sortedClasses = Array.from(entry.byClass.keys()).sort();
-        for (const cls of sortedClasses) {
-            const sheetName = cls.length > 31 ? cls.slice(0, 31) : cls;
-            addSheet(wb, sheetName, entry.byClass.get(cls)!, feeMap);
+        const classSheets = buildCampusClassSheets(campusStudents);
+        for (const cs of classSheets) {
+            const sheetName = cs.sheetName.length > 31 ? cs.sheetName.slice(0, 31) : cs.sheetName;
+            addSheet(wb, sheetName, cs.rows, feeMap);
         }
-
-        const siblingFamilyCount = addSiblingsSheet(wb, entry.all, feeMap, familyNameMap);
 
         const safeName = campus.campus_name.replace(/[^a-zA-Z0-9 \-]/g, '').trim().replace(/\s+/g, '_');
         const filePath = path.join(OUTPUT_DIR, `${safeName}_fees_may-sep26.xlsx`);
         await wb.xlsx.writeFile(filePath);
-        console.log(`  [${campus.campus_name}] ${entry.all.length} students, ${sortedClasses.length} class sheets + Siblings sheet (${siblingFamilyCount ?? 0} families) → ${filePath}`);
+        console.log(`  [${campus.campus_name}] ${campusStudents.length} students, ${classSheets.length} class sheets → ${filePath}`);
     }
 
     console.log('\nDone.');

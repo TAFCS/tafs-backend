@@ -799,7 +799,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
                                         })()}</Text>
                                         <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{p.payment_method ? String(p.payment_method).toUpperCase() : '-'}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{p.payment_method ? String(p.payment_method).toUpperCase().replace(/_/g, ' ') : '-'}</Text>
                                         <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right' }]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
