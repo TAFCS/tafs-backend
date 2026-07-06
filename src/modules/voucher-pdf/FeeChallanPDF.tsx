@@ -7,6 +7,21 @@ import fs from 'fs';
 const LOGO_PATH = path.join(process.cwd(), 'src', 'assets', 'logo.png');
 const LOGO_BUFFER = fs.readFileSync(LOGO_PATH);
 
+// Mirrors tafs-webapp/src/lib/payment-methods.ts — keep both in sync
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    cash: 'CASH',
+    bank_transfer: 'BANK TRANSFER',
+    cheque: 'CHEQUE',
+    online: 'IBFT',
+    pos: 'POS',
+    pay_order: 'PAY ORDER',
+};
+
+function formatPaymentMethod(value?: string | null): string {
+    if (!value) return '-';
+    return PAYMENT_METHOD_LABELS[value] ?? String(value).toUpperCase().replace(/_/g, ' ');
+}
+
 // Renders a QR code via react-pdf native SVG — fully synchronous, no data URL needed
 const QrCodeView = ({ url, size = 36 }: { url: string; size?: number }) => {
     try {
@@ -732,7 +747,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         <View style={styles.historyTableHeader}>
                             <Text style={styles.historyTableHeaderCell}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
+                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
                         </View>
                         {arrearsHistory && arrearsHistory.length > 0 ? (() => {
                             const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -758,28 +773,28 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             <View key={idx} style={styles.historyTableRow}>
                                                 <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
                                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
-                                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{amt.toLocaleString()}</Text>
+                                                <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>{amt.toLocaleString()}</Text>
                                             </View>
                                         );
                                     })}
-                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL OUTSTANDING</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>
+                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3, borderRightWidth: 0 }]}>TOTAL OUTSTANDING</Text>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', borderRightWidth: 0 }]}>
                                             {runningTotal.toLocaleString()}
                                         </Text>
                                     </View>
                                 </>
                             );
                         })() : (
-                            <View style={styles.historyTableRow}>
+                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={styles.historyTableCell}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
                             </View>
                         )}
                     </View>
                 </View>
-                
+
                 {/* PAYMENT HISTORY */}
                 <View style={styles.historySection}>
                     <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
@@ -787,8 +802,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         <View style={styles.historyTableHeader}>
                             <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>DATE</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>METHOD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7, textAlign: 'right' }]}>AMOUNT</Text>
+                            <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
+                                <Text style={{ fontSize: 4, fontWeight: 'bold', color: '#1e293b' }}>METHOD</Text>
+                            </View>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
                         </View>
                         {paymentHistory && paymentHistory.length > 0 ? (
                             <>
@@ -799,20 +816,25 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
                                         })()}</Text>
                                         <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{p.payment_method ? String(p.payment_method).toUpperCase().replace(/_/g, ' ') : '-'}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right' }]}>{p.amount || '0'}</Text>
+                                        <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
+                                            <Text style={{ fontSize: 4, color: '#1e293b' }}>{formatPaymentMethod(p.payment_method)}</Text>
+                                        </View>
+                                        <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
-                                <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.4 }]}>TOTAL PAID</Text>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 0.7, textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
+                                <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.4, borderRightWidth: 0 }]}>TOTAL PAID</Text>
+                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
                             </>
                         ) : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={styles.historyTableCell}>-</Text>
+                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                                <Text style={[styles.historyTableCell, { flex: 0.7 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
+                                <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
+                                    <Text style={{ fontSize: 4, color: '#1e293b' }}>-</Text>
+                                </View>
+                                <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
                             </View>
                         )}
                     </View>
@@ -826,7 +848,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right' }]}>STATUS</Text>
+                            <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0 }]}>STATUS</Text>
                         </View>
                         {installmentsHistory && installmentsHistory.length > 0 ? (() => {
                             const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
@@ -839,25 +861,25 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
                                                 {Number(inst.amount || 0).toLocaleString()}
                                             </Text>
-                                            <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
+                                            <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0, color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
                                                 {inst.status}
                                             </Text>
                                         </View>
                                     ))}
-                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2 }]}>TOTAL</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8 }]}>
+                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2, borderRightWidth: 0 }]}>TOTAL</Text>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8, borderRightWidth: 0 }]}>
                                             {planTotal.toLocaleString()}
                                         </Text>
                                     </View>
                                 </>
                             );
                         })() : (
-                            <View style={styles.historyTableRow}>
+                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right' }]}>-</Text>
+                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
                             </View>
                         )}
                     </View>
@@ -872,7 +894,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             <Text style={styles.historyTableHeaderCell}>GR</Text>
                             <Text style={styles.historyTableHeaderCell}>LVL</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2.2 }]}>NAME</Text>
-                            <Text style={styles.historyTableHeaderCell}>STATUS</Text>
+                            <Text style={[styles.historyTableHeaderCell, { borderRightWidth: 0 }]}>STATUS</Text>
                         </View>
                         {siblings && siblings.length > 0 ? (
                             siblings.map((s, idx) => (
@@ -881,12 +903,12 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                     <Text style={styles.historyTableCell}>{s.gr_number}</Text>
                                     <Text style={styles.historyTableCell}>{s.className}</Text>
                                     <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name}</Text>
-                                    <Text style={styles.historyTableCell}>{s.status || 'Active'}</Text>
+                                    <Text style={[styles.historyTableCell, { borderRightWidth: 0 }]}>{s.status || 'Active'}</Text>
                                 </View>
                             ))
                         ) : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5 }]}>No siblings</Text>
+                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                                <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5, borderRightWidth: 0 }]}>No siblings</Text>
                             </View>
                         )}
                     </View>
