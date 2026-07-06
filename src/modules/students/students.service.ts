@@ -1796,14 +1796,20 @@ export class StudentsService {
           dry_run: false,
         };
       } else {
-        // Normal promotion
-        const effectiveGr = grOverride ?? student.gr_number;
+        // Normal promotion — O-Level → A-Level: auto-prefix GR (e.g. 554 → A-554)
+        let resolvedGrOverride = grOverride;
+        if (!resolvedGrOverride && toClass && this.isALevelAcademicSystem(toClass.academic_system)) {
+          const prefixed = this.applyALevelGrPrefix(student.gr_number);
+          if (prefixed) resolvedGrOverride = prefixed;
+        }
 
-        if (grOverride) {
+        const effectiveGr = resolvedGrOverride ?? student.gr_number;
+
+        if (resolvedGrOverride) {
           const duplicate = await this.prisma.students.findFirst({
             where: {
               campus_id: student.campus_id,
-              gr_number: grOverride,
+              gr_number: resolvedGrOverride,
               cc: { not: student.cc },
               deleted_at: null,
             },
@@ -1813,7 +1819,7 @@ export class StudentsService {
               student_id: student.cc,
               status: 'failed',
               reason_code: 'GR_DUPLICATE',
-              message: `GR number ${grOverride} is already in use`,
+              message: `GR number ${resolvedGrOverride} is already in use`,
               from_class_id: student.class_id,
               to_class_id: toClass!.id,
               from_academic_year: student.academic_year,
@@ -1831,7 +1837,7 @@ export class StudentsService {
                 class_id: toClass!.id,
                 section_id: toSectionId !== undefined ? toSectionId : student.section_id,
                 academic_year: nextAcademicYear,
-                ...(grOverride ? { gr_number: grOverride } : {}),
+                ...(resolvedGrOverride ? { gr_number: resolvedGrOverride } : {}),
               },
             });
 
@@ -1883,6 +1889,21 @@ export class StudentsService {
         dry_run: false,
       };
     }
+  }
+
+  private isALevelAcademicSystem(system?: string | null): boolean {
+    return system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+  }
+
+  /** e.g. 554 → A-554; leaves A-554 unchanged */
+  private applyALevelGrPrefix(currentGr: string | null | undefined): string | null {
+    if (!currentGr?.trim()) return null;
+    const trimmed = currentGr.trim();
+    const prefix = 'A-';
+    if (trimmed.startsWith(prefix)) return trimmed;
+    const match = trimmed.match(/(\d+)$/);
+    if (!match) return null;
+    return `${prefix}${match[1]}`;
   }
 
   private async resolveClassSelector(
