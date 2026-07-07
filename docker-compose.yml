@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tafs-backend-app
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - NODE_ENV=production
+      # Connecting to the local 'db' container using Docker's internal networking
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres_secure_pass}@db:5432/tafs?schema=public
+      - REDIS_URL=redis://redis:6379
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      - JWT_SECRET=${JWT_SECRET:-change_me_to_a_random_string_123}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-change_me_to_a_random_string_456}
+      - MAILJET_API_KEY=${MAILJET_API_KEY}
+      - MAILJET_API_SECRET=${MAILJET_API_SECRET}
+      - MAILJET_FROM_EMAIL=${MAILJET_FROM_EMAIL:-noreply@tafs.edu.pk}
+      - MAILJET_FROM_NAME=${MAILJET_FROM_NAME:-TAFS}
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16-alpine
+    container_name: tafs-backend-db
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres_secure_pass}
+      - POSTGRES_DB=tafs
+    volumes:
+      # Persist PostgreSQL data on the host machine to prevent data loss
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: tafs-backend-redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
