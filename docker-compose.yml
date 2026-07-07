@@ -27,7 +27,7 @@ services:
       - redis
 
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: tafs-backend-db
     restart: always
     environment:
@@ -36,7 +36,7 @@ services:
       - POSTGRES_DB=tafs
     volumes:
       # Persist PostgreSQL data on the host machine to prevent data loss
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     ports:
       - "5432:5432"
 
