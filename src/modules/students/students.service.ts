@@ -11,6 +11,7 @@ import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { allocateSequentialGrNumbers } from '../../common/utils/gr-number.util';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
@@ -1321,6 +1322,63 @@ export class StudentsService {
     });
   }
 
+  /** Preview next A-Level GR assignments for a promotion batch (same logic as promoteBulk). */
+  async suggestGrNumbersForPromotion(studentCcs: number[], isALevel = true): Promise<Record<number, string>> {
+    if (!studentCcs.length) return {};
+
+    const students = await this.prisma.students.findMany({
+      where: { cc: { in: studentCcs }, deleted_at: null },
+      select: { cc: true, campus_id: true },
+      orderBy: { cc: 'asc' },
+    });
+
+    const byCampus = new Map<number, Array<{ cc: number; campus_id: number }>>();
+    for (const s of students) {
+      if (!s.campus_id) continue;
+      if (!byCampus.has(s.campus_id)) byCampus.set(s.campus_id, []);
+      byCampus.get(s.campus_id)!.push({ cc: s.cc, campus_id: s.campus_id });
+    }
+
+    const assignments: Record<number, string> = {};
+    for (const [, group] of byCampus) {
+      const grs = await allocateSequentialGrNumbers(
+        this.prisma,
+        group[0].campus_id,
+        group.length,
+        isALevel,
+      );
+      group.forEach((s, i) => {
+        assignments[s.cc] = grs[i];
+      });
+    }
+
+    return assignments;
+  }
+
+  private async assignALevelGrOverridesForPromotion(
+    candidates: Array<{ cc: number; campus_id: number | null }>,
+    grOverrideMap: Map<number, string>,
+    isALevelPromotion: boolean,
+  ): Promise<void> {
+    if (!isALevelPromotion) return;
+
+    const needing = candidates
+      .filter((c) => !grOverrideMap.has(c.cc) && c.campus_id)
+      .sort((a, b) => a.cc - b.cc);
+
+    const byCampus = new Map<number, typeof needing>();
+    for (const s of needing) {
+      const cid = s.campus_id!;
+      if (!byCampus.has(cid)) byCampus.set(cid, []);
+      byCampus.get(cid)!.push(s);
+    }
+
+    for (const [campusId, group] of byCampus) {
+      const grs = await allocateSequentialGrNumbers(this.prisma, campusId, group.length, true);
+      group.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
+    }
+  }
+
   async promoteSingle(dto: PromoteSingleStudentDto) {
     const result = await this.promoteBulk({
       from: dto.from,
@@ -1423,6 +1481,9 @@ export class StudentsService {
     const sectionActiveCache = new Map<string, boolean>();
     const results: PromotionOutcome[] = [];
     const grOverrideMap = new Map((dto.gr_overrides ?? []).map(o => [o.student_cc, o.new_gr]));
+
+    const isALevelPromotion = !!toClass && this.isALevelAcademicSystem(toClass.academic_system);
+    await this.assignALevelGrOverridesForPromotion(candidates, grOverrideMap, isALevelPromotion);
 
     const CHUNK_SIZE = 25;
     if (isExplicitIds) {
@@ -1796,13 +1857,8 @@ export class StudentsService {
           dry_run: false,
         };
       } else {
-        // Normal promotion — O-Level → A-Level: auto-prefix GR (e.g. 554 → A-554)
-        let resolvedGrOverride = grOverride;
-        if (!resolvedGrOverride && toClass && this.isALevelAcademicSystem(toClass.academic_system)) {
-          const prefixed = this.applyALevelGrPrefix(student.gr_number);
-          if (prefixed) resolvedGrOverride = prefixed;
-        }
-
+        // Normal promotion — A-Level promotions get next available A- GR from promoteBulk pre-allocation
+        const resolvedGrOverride = grOverride;
         const effectiveGr = resolvedGrOverride ?? student.gr_number;
 
         if (resolvedGrOverride) {
@@ -1893,17 +1949,6 @@ export class StudentsService {
 
   private isALevelAcademicSystem(system?: string | null): boolean {
     return system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
-  }
-
-  /** e.g. 554 → A-554; leaves A-554 unchanged */
-  private applyALevelGrPrefix(currentGr: string | null | undefined): string | null {
-    if (!currentGr?.trim()) return null;
-    const trimmed = currentGr.trim();
-    const prefix = 'A-';
-    if (trimmed.startsWith(prefix)) return trimmed;
-    const match = trimmed.match(/(\d+)$/);
-    if (!match) return null;
-    return `${prefix}${match[1]}`;
   }
 
   private async resolveClassSelector(
