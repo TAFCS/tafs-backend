@@ -8,6 +8,7 @@ import { PaymentHistoryQueryDto } from './dto/payment-history-query.dto';
 import { AssignStudentDto } from './dto/assign-student.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
+import { SuggestGrNumbersDto } from './dto/suggest-gr-numbers.dto';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -61,6 +62,20 @@ export class StudentsController {
       'Content-Length': buffer.length,
     });
     res.send(buffer);
+  }
+
+  @Post('gr-numbers/suggest-for-promotion')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto) {
+    const assignments = await this.studentsService.suggestGrNumbersForPromotion(
+      dto.student_ccs,
+      dto.a_level !== false,
+    );
+    return createApiResponse(
+      { assignments },
+      HttpStatus.OK,
+      'GR number suggestions retrieved successfully',
+    );
   }
 
   @Get(':id')
