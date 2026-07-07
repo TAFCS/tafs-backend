@@ -12,6 +12,7 @@ import {
 } from './interfaces/jwt-payload.interface';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { otp_purpose } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
 
@@ -683,6 +684,58 @@ export class AuthService {
     await this.logoutStaff(otpResult.userId);
     await this.prisma.fcm_device_tokens.deleteMany({
       where: { user_id: otpResult.userId },
+    });
+  }
+
+  async changePasswordParent(familyId: number, dto: ChangePasswordDto) {
+    const family = await this.prisma.families.findUnique({
+      where: { id: familyId },
+      select: { password_hash: true },
+    });
+
+    if (!family?.password_hash) {
+      throw new UnauthorizedException('Account not found');
+    }
+
+    const isMatch = await bcrypt.compare(dto.currentPassword, family.password_hash);
+    if (!isMatch) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('New password must be different from current password');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.families.update({
+      where: { id: familyId },
+      data: { password_hash: passwordHash },
+    });
+  }
+
+  async changePasswordStaff(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { password_hash: true, is_active: true },
+    });
+
+    if (!user?.password_hash || !user.is_active) {
+      throw new UnauthorizedException('Account not found');
+    }
+
+    const isMatch = await bcrypt.compare(dto.currentPassword, user.password_hash);
+    if (!isMatch) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('New password must be different from current password');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.users.update({
+      where: { id: userId },
+      data: { password_hash: passwordHash },
     });
   }
 

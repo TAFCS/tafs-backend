@@ -17,6 +17,7 @@ import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './d
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { RegisterFcmTokenDto } from './dto/register-fcm-token.dto';
 import { LogoutDto } from './dto/logout.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
@@ -177,6 +178,17 @@ export class AuthController {
     return this.authService.logoutParent(user.familyId, dto.fcmToken);
   }
 
+  @Post('parent/change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtParentGuard)
+  async changePasswordParent(
+    @CurrentUser() user: IJwtParentPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    await this.authService.changePasswordParent(user.familyId, dto);
+    return createApiResponse({}, HttpStatus.OK, 'Password changed successfully');
+  }
+
   @Post('parent/fcm-token')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtParentGuard)
@@ -212,6 +224,17 @@ export class AuthController {
   ) {
     await this.fcmService.registerStaffToken(user.sub, dto.fcmToken, dto.deviceType);
     return createApiResponse({}, HttpStatus.OK, 'Staff FCM token registered');
+  }
+
+  @Post('staff/mobile/change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtStaffGuard)
+  async changePasswordStaffMobile(
+    @CurrentUser() user: IJwtStaffPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    await this.authService.changePasswordStaff(user.sub, dto);
+    return createApiResponse({}, HttpStatus.OK, 'Password changed successfully');
   }
 
   // ─── Parent Signup (Flutter mobile app) ───────────────────────────────────
