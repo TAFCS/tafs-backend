@@ -129,6 +129,9 @@ export class RollSessionsService {
           : {}),
       ...(query.section_id ? { section_id: query.section_id } : {}),
       ...(query.period ? { period: query.period } : {}),
+      ...(query.timetable_slot_id !== undefined
+        ? { timetable_slot_id: query.timetable_slot_id }
+        : {}),
     };
 
     return this.prisma.attendance_roll_sessions.findMany({
@@ -200,7 +203,35 @@ export class RollSessionsService {
     await this.assertCampusSection(dto.campus_id, dto.class_id, dto.section_id);
 
     const sessionDate = this.parseDate(dto.session_date);
-    const period = dto.period ?? 1;
+    let period = dto.period ?? 1;
+    let timetableSlotId: number | null = dto.timetable_slot_id ?? null;
+
+    if (dto.timetable_slot_id) {
+      const slot = await this.prisma.timetable_slots.findUnique({
+        where: { id: dto.timetable_slot_id },
+        include: { timetables: true },
+      });
+      if (!slot) {
+        throw new NotFoundException('Timetable slot not found');
+      }
+      const tt = slot.timetables;
+      if (
+        tt.campus_id !== dto.campus_id ||
+        tt.class_id !== dto.class_id ||
+        tt.section_id !== dto.section_id
+      ) {
+        throw new BadRequestException(
+          'Timetable slot does not match campus/class/section',
+        );
+      }
+      if (slot.day_of_week !== sessionDate.getUTCDay()) {
+        throw new BadRequestException(
+          'Timetable slot is not scheduled for this weekday',
+        );
+      }
+      period = slot.block_number;
+      timetableSlotId = slot.id;
+    }
 
     const dayResolved = await this.calendarResolver.resolveStudentDay(
       dto.campus_id,
@@ -209,15 +240,14 @@ export class RollSessionsService {
       sessionDate,
     );
 
-    const existing = await this.prisma.attendance_roll_sessions.findUnique({
+    const existing = await this.prisma.attendance_roll_sessions.findFirst({
       where: {
-        campus_id_class_id_section_id_session_date_period: {
-          campus_id: dto.campus_id,
-          class_id: dto.class_id,
-          section_id: dto.section_id,
-          session_date: sessionDate,
-          period,
-        },
+        campus_id: dto.campus_id,
+        class_id: dto.class_id,
+        section_id: dto.section_id,
+        session_date: sessionDate,
+        period,
+        timetable_slot_id: timetableSlotId,
       },
       include: this.sessionInclude(),
     });
@@ -235,6 +265,7 @@ export class RollSessionsService {
           section_id: dto.section_id,
           session_date: sessionDate,
           period,
+          timetable_slot_id: timetableSlotId,
           status: 'SKIPPED',
           skip_reason: skipReason,
           created_by_id: user.sub,
@@ -254,6 +285,7 @@ export class RollSessionsService {
         section_id: dto.section_id,
         session_date: sessionDate,
         period,
+        timetable_slot_id: timetableSlotId,
         created_by_id: user.sub,
       },
       include: this.sessionInclude(),

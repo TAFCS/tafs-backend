@@ -49,7 +49,7 @@ function pickFiveWorkingDays(): { y: number; m: number; d: number }[] {
 async function main() {
   const prisma = new PrismaService();
   const calendarResolver = new CalendarDayResolverService(prisma);
-  const policyResolver = new AttendancePolicyResolverService(prisma);
+  const policyResolver = new AttendancePolicyResolverService(prisma, null as any);
   // fcmService is never touched by recomputeDaySequence/upsertStaffDaily — safe stub for this seed script.
   const processor = new ZkAttendanceProcessorService(prisma, null as any, calendarResolver, policyResolver, null as any);
 

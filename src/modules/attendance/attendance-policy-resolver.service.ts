@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { EmployeeExpectedTimesService } from '../timetables/employee-expected-times.service';
 
 type PolicyRuleRow = {
   rule_type: string;
@@ -9,7 +10,10 @@ type PolicyRuleRow = {
 
 @Injectable()
 export class AttendancePolicyResolverService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly expectedTimes: EmployeeExpectedTimesService,
+  ) {}
 
   async resolveActivePolicySet(campusId: number, date: Date) {
     return this.prisma.hr_policy_sets.findFirst({
@@ -174,23 +178,14 @@ export class AttendancePolicyResolverService {
     campusId: number,
     date: Date,
   ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
-    const employee = await this.prisma.employee_profiles.findUnique({
-      where: { id: employeeId },
-      select: { reporting_time: true, late_relaxation_minutes: true },
-    });
-
-    if (employee?.reporting_time) {
-      return {
-        expectedCheckIn: employee.reporting_time,
-        graceMinutes: employee.late_relaxation_minutes ?? 0,
-      };
-    }
-
-    const policySets = await this.listActivePolicySets(campusId, date);
-    if (policySets.length > 0) {
-      return this.resolveStaffRulesFromPolicySets(policySets);
-    }
-
-    return { expectedCheckIn: null, graceMinutes: 0 };
+    const resolved = await this.expectedTimes.resolveExpectedTimes(
+      employeeId,
+      campusId,
+      date,
+    );
+    return {
+      expectedCheckIn: resolved.expectedCheckIn,
+      graceMinutes: resolved.graceMinutes,
+    };
   }
 }

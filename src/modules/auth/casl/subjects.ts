@@ -24,4 +24,5 @@ export type AppSubjects =
   | 'Payroll'
   | 'SupportTicket'
   | 'Chat'
+  | 'Timetable'
   | 'all';

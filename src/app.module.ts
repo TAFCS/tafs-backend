@@ -40,6 +40,7 @@ import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
 import { EmployeeNoticeBoardModule } from './modules/employee-notice-board/employee-notice-board.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
+import { TimetablesModule } from './modules/timetables/timetables.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
     BackupsModule,
     HrModule,
     AttendanceModule,
+    TimetablesModule,
     NoticeBoardModule,
     EmployeeNoticeBoardModule,
     AppConfigModule,

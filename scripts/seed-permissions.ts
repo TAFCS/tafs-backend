@@ -70,6 +70,8 @@ const permissionsList = [
     { key: 'attendance.student.rollcall.mark', module: 'HR & Attendance', description: 'Mark student roll call attendance' },
     { key: 'attendance.student.rollcall.view', module: 'HR & Attendance', description: 'View student roll call attendance' },
     { key: 'attendance.student.edit_locked', module: 'HR & Attendance', description: 'Edit locked student attendance records' },
+    { key: 'hr.timetable.view', module: 'HR & Attendance', description: 'View A-Level class timetables' },
+    { key: 'hr.timetable.manage', module: 'HR & Attendance', description: 'Create and edit A-Level class timetables' },
 
     // Communication
     { key: 'communication.view_chats', module: 'Communication', description: 'View legacy chat hub (announcements)' },
@@ -109,6 +111,7 @@ async function main() {
             'hr.employees.view', 'hr.leave.apply', 'hr.leave.approve', 'attendance.reports.view',
             'attendance.staff.mark',
             'attendance.student.biometric.view', 'attendance.student.rollcall.view', 'attendance.student.edit_locked',
+            'hr.timetable.view',
             'communication.support_tickets.view', 'communication.view_chats',
         ],
         FINANCE_CLERK: [

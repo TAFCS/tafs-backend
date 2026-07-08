@@ -38,6 +38,11 @@ export class ListRollSessionsQueryDto {
   @Min(1)
   @Max(12)
   period?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  timetable_slot_id?: number;
 }
 
 export class CreateRollSessionDto {
@@ -62,6 +67,11 @@ export class CreateRollSessionDto {
   @Min(1)
   @Max(12)
   period?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  timetable_slot_id?: number;
 }
 
 export class RollRecordMarkDto {

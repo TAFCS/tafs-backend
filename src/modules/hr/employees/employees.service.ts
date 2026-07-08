@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
-import { StaffRole } from '@prisma/client';
+import { CheckInSource, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -81,6 +81,9 @@ export class CreateEmployeeDto {
 
   @IsOptional() @IsString()
   leaving_time?: string;
+
+  @IsOptional() @IsEnum(CheckInSource)
+  check_in_source?: CheckInSource;
 
   @IsOptional() @IsInt() @Min(0)
   late_relaxation_minutes?: number;
@@ -298,6 +301,7 @@ export class EmployeesService {
         notes: rest.notes || null,
         reporting_time: toTime(rest.reporting_time),
         leaving_time: toTime(rest.leaving_time),
+        check_in_source: rest.check_in_source ?? CheckInSource.FIXED,
         late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
         monthly_pay: rest.monthly_pay ?? null,
         staff_type_id: rest.staff_type_id || null,
@@ -378,6 +382,7 @@ export class EmployeesService {
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
           reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
           leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined) : undefined,
+          check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
           staff_type_id: rest.staff_type_id !== undefined ? rest.staff_type_id : undefined,

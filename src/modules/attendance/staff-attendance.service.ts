@@ -12,6 +12,7 @@ import {
   GetStaffTimelineQueryDto,
 } from './dto/staff-attendance.dto';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
+import { EmployeeExpectedTimesService } from '../timetables/employee-expected-times.service';
 import {
   computePayrollWindow,
   currentPayrollPeriodLabel,
@@ -26,6 +27,7 @@ export class StaffAttendanceService {
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly employeeResolver: EmployeeProfileResolverService,
+    private readonly expectedTimes: EmployeeExpectedTimesService,
     private readonly auditLogs: AuditLogsService,
   ) {}
 
@@ -130,9 +132,10 @@ export class StaffAttendanceService {
   }
 
   private computeDailyCounts(
-    employees: { id: number; reporting_time: Date | null; late_relaxation_minutes: number | null }[],
+    employees: { id: number }[],
     records: Map<number, attendance_staff_daily>,
     offDayIds: Set<number>,
+    expectedByEmployee: Map<number, { expectedCheckIn: Date | null; graceMinutes: number }>,
   ) {
     let onTime = 0;
     let late = 0;
@@ -164,7 +167,12 @@ export class StaffAttendanceService {
       if (!record.check_in_at) {
         noClockIn++;
       } else {
-        const cls = this.classifyCheckIn(record.check_in_at, emp.reporting_time, emp.late_relaxation_minutes);
+        const expected = expectedByEmployee.get(emp.id);
+        const cls = this.classifyCheckIn(
+          record.check_in_at,
+          expected?.expectedCheckIn ?? null,
+          expected?.graceMinutes ?? 0,
+        );
         if (cls === 'on_time') onTime++;
         else if (cls === 'late') late++;
         else early++;
@@ -202,7 +210,21 @@ export class StaffAttendanceService {
     const recordMap = new Map(records.map((r) => [r.employee_id, r]));
     const offDayIds = await this.getOffDayEmployeeIds(campusId, employees, date);
 
-    return this.computeDailyCounts(employees, recordMap, offDayIds);
+    const expectedEntries = await Promise.all(
+      employees.map(async (emp) => {
+        const resolved = await this.expectedTimes.resolveExpectedTimes(emp.id, campusId, date);
+        return [
+          emp.id,
+          {
+            expectedCheckIn: resolved.expectedCheckIn,
+            graceMinutes: resolved.graceMinutes,
+          },
+        ] as const;
+      }),
+    );
+    const expectedByEmployee = new Map(expectedEntries);
+
+    return this.computeDailyCounts(employees, recordMap, offDayIds, expectedByEmployee);
   }
 
   async getSummary(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
@@ -262,8 +284,17 @@ export class StaffAttendanceService {
     });
     const recordMap = new Map(records.map((r) => [r.employee_id, r]));
 
+    const expectedEntries = await Promise.all(
+      employees.map(async (emp) => {
+        const resolved = await this.expectedTimes.resolveExpectedTimes(emp.id, campusId, date);
+        return [emp.id, resolved] as const;
+      }),
+    );
+    const expectedByEmployee = new Map(expectedEntries);
+
     return employees.map((emp) => {
       const record = recordMap.get(emp.id) ?? null;
+      const expected = expectedByEmployee.get(emp.id);
       return {
         employee: {
           id: emp.id,
@@ -275,7 +306,10 @@ export class StaffAttendanceService {
         },
         check_in_at: record?.check_in_at ?? null,
         check_out_at: record?.check_out_at ?? null,
-        overtime_minutes: this.computeOvertimeMinutes(record?.check_out_at, emp.leaving_time),
+        overtime_minutes: this.computeOvertimeMinutes(
+          record?.check_out_at,
+          expected?.expectedCheckOut ?? null,
+        ),
         location: emp.campuses?.campus_name ?? null,
         note: record?.notes ?? null,
         status: record?.status ?? null,
@@ -518,7 +552,7 @@ export class StaffAttendanceService {
   async getTimeline(employeeId: number, query: GetStaffTimelineQueryDto, user: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true, full_name: true, leaving_time: true, campus_id: true },
+      select: { id: true, full_name: true, campus_id: true },
     });
     if (!employee) throw new NotFoundException('Employee not found');
     if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
@@ -567,7 +601,15 @@ export class StaffAttendanceService {
         ? await this.calendarResolver.resolveStaffDay(employeeId, campusId, new Date(d))
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 
-      let segments = this.buildDaySegments(scansByDate.get(key) ?? [], employee.leaving_time, record);
+      const expected = campusId
+        ? await this.expectedTimes.resolveExpectedTimes(employeeId, campusId, new Date(d))
+        : { expectedCheckOut: null as Date | null };
+
+      let segments = this.buildDaySegments(
+        scansByDate.get(key) ?? [],
+        expected.expectedCheckOut ?? null,
+        record,
+      );
       if (!resolved.isWorkingDay && segments.length === 0) {
         segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
       }

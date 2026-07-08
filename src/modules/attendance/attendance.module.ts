@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { HrModule } from '../hr/hr.module';
 import { ChatModule } from '../chat/chat.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
+import { TimetablesModule } from '../timetables/timetables.module';
 import { AttendanceNotificationsController } from './attendance-notifications.controller';
 import { AttendanceNotificationsService } from './attendance-notifications.service';
 import { RollSessionsController } from './roll-sessions.controller';
@@ -26,7 +27,7 @@ import { ClassCheckInScheduleController } from './class-check-in-schedule.contro
 import { RecomputeLateController } from './recompute-late.controller';
 
 @Module({
-  imports: [AuthModule, HrModule, ChatModule, FcmModule],
+  imports: [AuthModule, HrModule, ChatModule, FcmModule, TimetablesModule],
   controllers: [
     RollSessionsController,
     StaffAttendanceController,
@@ -53,6 +54,11 @@ import { RecomputeLateController } from './recompute-late.controller';
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
   ],
-  exports: [RollSessionsService, StaffAttendanceService, StudentAttendanceService, AttendancePolicyResolverService],
+  exports: [
+    RollSessionsService,
+    StaffAttendanceService,
+    StudentAttendanceService,
+    AttendancePolicyResolverService,
+  ],
 })
 export class AttendanceModule {}

@@ -3,6 +3,7 @@ import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, Staf
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
+import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
@@ -91,6 +92,7 @@ export class PayrollService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly expectedTimes: EmployeeExpectedTimesService,
   ) {}
 
   // Fixed school payroll cycle — see payroll-period.util.ts
@@ -208,17 +210,37 @@ export class PayrollService {
     return byDate;
   }
 
-  private computeEmployeeLine(
+  private async computeEmployeeLine(
     employee: EmployeeLineInput,
+    campusId: number,
     periodStart: Date,
     periodEnd: Date,
     calendarRows: StaffCalendarRows,
     attendanceRecords: AttendanceStaffDailyRow[],
     scans: zk_attendance_scans[],
     mandatorySaturdayDates?: Set<string>,
-  ): ComputedLine {
+  ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
+
+    // Cache expected times per weekday — weekly template, identical every week.
+    const expectedByDow = new Map<
+      number,
+      { expectedCheckIn: Date | null; expectedCheckOut: Date | null; graceMinutes: number }
+    >();
+    for (let dow = 0; dow <= 6; dow++) {
+      const synth = new Date(Date.UTC(2024, 0, 7 + dow)); // Sun-Sat week
+      const resolvedTimes = await this.expectedTimes.resolveExpectedTimes(
+        employee.id,
+        campusId,
+        synth,
+      );
+      expectedByDow.set(dow, {
+        expectedCheckIn: resolvedTimes.expectedCheckIn,
+        expectedCheckOut: resolvedTimes.expectedCheckOut,
+        graceMinutes: resolvedTimes.graceMinutes,
+      });
+    }
 
     // Walk every calendar day in the period once and classify it — this array
     // is the single source of truth; every aggregate below is derived from it
@@ -249,6 +271,11 @@ export class PayrollService {
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
       const breakMinutes = Math.round(this.sumBreakMinutes(dayScans));
+      const expected = expectedByDow.get(d.getUTCDay()) ?? {
+        expectedCheckIn: employee.reporting_time,
+        expectedCheckOut: employee.leaving_time,
+        graceMinutes: employee.late_relaxation_minutes ?? 0,
+      };
 
       let classification: DayClassification;
       if (!resolved.isWorkingDay) {
@@ -268,7 +295,7 @@ export class PayrollService {
         classification = 'PRESENT';
       }
 
-      let segments = this.buildDaySegments(dayScans, employee.leaving_time, record ?? null);
+      let segments = this.buildDaySegments(dayScans, expected.expectedCheckOut, record ?? null);
       if (!resolved.isWorkingDay && segments.length === 0) {
         segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
       }
@@ -307,11 +334,12 @@ export class PayrollService {
       // late_relaxation_minutes they pay nothing; if they exceed it they pay
       // for ALL late minutes (e.g. 6 min late with 5 min grace → 6 min deducted).
       let lateMinutes = 0;
-      if (classification === 'LATE' && checkInAt && employee.reporting_time) {
-        const reportingMinutes = employee.reporting_time.getUTCHours() * 60 + employee.reporting_time.getUTCMinutes();
+      if (classification === 'LATE' && checkInAt && expected.expectedCheckIn) {
+        const reportingMinutes =
+          expected.expectedCheckIn.getUTCHours() * 60 + expected.expectedCheckIn.getUTCMinutes();
         const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
         const rawLate = checkInMinutes - reportingMinutes;
-        const relaxation = employee.late_relaxation_minutes ?? 0;
+        const relaxation = expected.graceMinutes;
         lateMinutes = rawLate > relaxation ? rawLate : 0;
       }
 
@@ -349,7 +377,21 @@ export class PayrollService {
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
     const dailyRate = scheduledWorkingDays > 0 ? monthlyPay.dividedBy(scheduledWorkingDays) : new Prisma.Decimal(0);
 
-    const scheduledMinutes = this.scheduledMinutesPerDay(employee.reporting_time, employee.leaving_time);
+    // Prefer Mon–Fri derived window average; fall back to profile FIXED times.
+    let scheduledMinutes = 0;
+    let scheduledDayCount = 0;
+    for (let dow = 1; dow <= 5; dow++) {
+      const e = expectedByDow.get(dow);
+      if (e?.expectedCheckIn && e?.expectedCheckOut) {
+        scheduledMinutes += this.scheduledMinutesPerDay(e.expectedCheckIn, e.expectedCheckOut);
+        scheduledDayCount++;
+      }
+    }
+    if (scheduledDayCount > 0) {
+      scheduledMinutes = Math.round(scheduledMinutes / scheduledDayCount);
+    } else {
+      scheduledMinutes = this.scheduledMinutesPerDay(employee.reporting_time, employee.leaving_time);
+    }
     const perMinuteRate = scheduledMinutes > 0 ? dailyRate.dividedBy(scheduledMinutes) : new Prisma.Decimal(0);
 
     const absenceDeduction = dailyRate.times(absentDays + unpaidLeaveDays);
@@ -474,19 +516,22 @@ export class PayrollService {
       await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
     }
 
-    const lines = employees.map((employee) => ({
-      payroll_run_id: run.id,
-      employee_id: employee.id,
-      ...this.computeEmployeeLine(
-        employee,
-        periodStart,
-        periodEnd,
-        calendarRows,
-        attendanceByEmployee.get(employee.id) ?? [],
-        scansByEmployee.get(employee.id) ?? [],
-        mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
-      ),
-    }));
+    const lines = await Promise.all(
+      employees.map(async (employee) => ({
+        payroll_run_id: run.id,
+        employee_id: employee.id,
+        ...(await this.computeEmployeeLine(
+          employee,
+          dto.campus_id,
+          periodStart,
+          periodEnd,
+          calendarRows,
+          attendanceByEmployee.get(employee.id) ?? [],
+          scansByEmployee.get(employee.id) ?? [],
+          mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
+        )),
+      })),
+    );
     await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });
 
     return this.getRun(run.id, user);

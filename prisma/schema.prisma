@@ -117,6 +117,7 @@ model campuses {
   payroll_runs             payroll_runs[]
   student_academic_history student_academic_history[]
   students                 students[]
+  timetables               timetables[]
   users                    users[]
   vouchers                 vouchers[]
 }
@@ -152,6 +153,7 @@ model classes {
   student_academic_history           student_academic_history[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
+  timetables                         timetables[]
   vouchers                           vouchers[]
 }
 
@@ -317,7 +319,67 @@ model sections {
   employee_class_section_assignments employee_class_section_assignments[]
   student_academic_history           student_academic_history[]
   students                           students[]
+  timetables                         timetables[]
   vouchers                           vouchers[]
+}
+
+model subjects {
+  id              Int               @id @default(autoincrement())
+  code            String?           @db.VarChar(20)
+  name            String            @db.VarChar(100)
+  academic_system String?           @db.VarChar(20)
+  is_active       Boolean           @default(true)
+  timetable_slots timetable_slots[]
+
+  @@unique([name, academic_system], map: "subjects_name_academic_system_key")
+}
+
+model timetables {
+  id              Int               @id @default(autoincrement())
+  campus_id       Int
+  class_id        Int
+  section_id      Int
+  academic_year   String            @db.VarChar(10)
+  effective_from  DateTime          @db.Date
+  is_active       Boolean           @default(true)
+  created_by      String?
+  created_at      DateTime          @default(now()) @db.Timestamp(6)
+  updated_at      DateTime          @updatedAt @db.Timestamp(6)
+  campuses        campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes         classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  sections        sections          @relation(fields: [section_id], references: [id], onDelete: Cascade)
+  timetable_slots timetable_slots[]
+
+  @@unique([campus_id, class_id, section_id, academic_year], map: "timetables_scope_year_key")
+  @@index([campus_id, class_id, section_id])
+}
+
+model timetable_slots {
+  id                Int               @id @default(autoincrement())
+  timetable_id      Int
+  day_of_week       Int
+  block_number      Int
+  slot_order        Int               @default(1)
+  subject_id        Int
+  employee_id       Int
+  room              String?           @db.VarChar(50)
+  created_at        DateTime          @default(now()) @db.Timestamp(6)
+  updated_at        DateTime          @updatedAt @db.Timestamp(6)
+  timetables        timetables        @relation(fields: [timetable_id], references: [id], onDelete: Cascade)
+  subjects          subjects          @relation(fields: [subject_id], references: [id])
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id])
+  attendance_roll_sessions attendance_roll_sessions[]
+
+  @@unique([timetable_id, day_of_week, block_number, slot_order], map: "timetable_slots_cell_key")
+  @@index([employee_id, day_of_week])
+  @@index([timetable_id, day_of_week])
+}
+
+model timetable_blocks {
+  block_number Int      @id
+  start_time   DateTime @db.Time(0)
+  end_time     DateTime @db.Time(0)
+  label        String?  @db.VarChar(20)
 }
 
 model student_activities {
@@ -929,6 +991,7 @@ model employee_profiles {
   notes                              String?
   reporting_time                     DateTime?                            @db.Time(0)
   leaving_time                       DateTime?                            @db.Time(0)
+  check_in_source                    CheckInSource                        @default(FIXED)
   late_relaxation_minutes            Int?
   monthly_pay                        Decimal?                             @db.Decimal(12, 2)
   staff_type_id                      Int?
@@ -958,6 +1021,7 @@ model employee_profiles {
   leave_requests                     leave_requests[]
   payroll_run_lines                  payroll_run_lines[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
+  timetable_slots                    timetable_slots[]
   zk_attendance_scans                zk_attendance_scans[]
 }
 
@@ -1185,6 +1249,7 @@ model attendance_roll_sessions {
   section_id                                            Int
   session_date                                          DateTime                  @db.Date
   period                                                Int                       @default(1)
+  timetable_slot_id                                     Int?
   status                                                RollSessionStatus         @default(DRAFT)
   skip_reason                                           String?                   @db.VarChar(500)
   created_by_id                                         String?
@@ -1197,9 +1262,10 @@ model attendance_roll_sessions {
   classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                                              sections                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([campus_id, class_id, section_id, session_date, period], map: "attendance_roll_sessions_campus_id_class_id_section_id_session_")
+  @@unique([campus_id, class_id, section_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
   @@index([session_date, campus_id])
   @@index([status, session_date])
 }
@@ -1708,6 +1774,11 @@ enum StaffCategory {
   IT_STAFF
   CREATIVE_STAFF
   FINANCE_STAFF
+}
+
+enum CheckInSource {
+  FIXED
+  TIMETABLE
 }
 
 enum otp_purpose {

@@ -25,9 +25,10 @@ import { PayrollService } from './payroll/payroll.service';
 import { EmployeeProfileResolverService } from './employee-profile-resolver.service';
 import { LeavesModule } from './leaves/leaves.module';
 import { SaturdaySchedulesModule } from './saturday-schedules/saturday-schedules.module';
+import { TimetablesModule } from '../timetables/timetables.module';
 
 @Module({
-  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule],
+  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, TimetablesModule],
   controllers: [
     EmployeesSelfController,
     EmployeesController,

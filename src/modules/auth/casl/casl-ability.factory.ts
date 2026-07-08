@@ -121,6 +121,7 @@ export class CaslAbilityFactory {
         case 'payroll': subjects = ['Payroll']; break;
         case 'calendar': subjects = ['Calendar']; break;
         case 'support_tickets': subjects = ['SupportTicket']; break;
+        case 'timetable': subjects = ['Timetable']; break;
       }
 
       if (resource === 'support_tickets' && action === 'approve') {
