@@ -118,6 +118,7 @@ model campuses {
   student_academic_history student_academic_history[]
   students                 students[]
   timetables               timetables[]
+  unconfirmed_admissions   unconfirmed_admissions[]
   users                    users[]
   vouchers                 vouchers[]
 }
@@ -1602,6 +1603,21 @@ model timetables {
 
   @@unique([campus_id, class_id, section_id, academic_year], map: "timetables_scope_year_key")
   @@index([campus_id, class_id, section_id])
+}
+
+model unconfirmed_admissions {
+  id             Int       @id @default(autoincrement())
+  full_name      String    @db.VarChar(200)
+  date_of_birth  DateTime  @db.Date
+  gender         String    @db.VarChar(20)
+  address        String?
+  campus_id      Int?
+  photograph_url String?
+  deposit_amount Decimal   @db.Decimal(10, 2)
+  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  created_by     String?   @db.VarChar(255)
+  guardians      Json?     @default("[]")
+  campuses       campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
 }
 
 enum BulkJobStatus {

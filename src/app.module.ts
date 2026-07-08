@@ -40,6 +40,7 @@ import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
 import { EmployeeNoticeBoardModule } from './modules/employee-notice-board/employee-notice-board.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
+import { UnconfirmedAdmissionsModule } from './modules/unconfirmed-admissions/unconfirmed-admissions.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
     EmployeeNoticeBoardModule,
     AppConfigModule,
     AuditLogsModule,
+    UnconfirmedAdmissionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
