@@ -24,12 +24,18 @@ services:
       - MAILJET_FROM_EMAIL=${MAILJET_FROM_EMAIL:-noreply@tafs.edu.pk}
       - MAILJET_FROM_NAME=${MAILJET_FROM_NAME:-TAFS}
       # DigitalOcean Spaces (S3-compatible object storage for files/photos)
-      - DO_SPACES_REGION=sgp1
-      - DO_SPACES_ENDPOINT=https://sgp1.digitaloceanspaces.com
-      - DO_SPACES_KEY=DO002Z4MWU2CWQ6XEWBQ
-      - DO_SPACES_SECRET=Qyhaq8SNSbnl4h7Ch+JcE9qIHhJ4f/VP0QV3YwqghJE
-      - DO_SPACES_BUCKET=tafs-assets
-      - DO_SPACES_CDN_ENDPOINT=https://tafs-assets.sgp1.cdn.digitaloceanspaces.com
+      - DO_SPACES_REGION=${DO_SPACES_REGION}
+      - DO_SPACES_ENDPOINT=${DO_SPACES_ENDPOINT}
+      - DO_SPACES_KEY=${DO_SPACES_KEY}
+      - DO_SPACES_SECRET=${DO_SPACES_SECRET}
+      - DO_SPACES_BUCKET=${DO_SPACES_BUCKET}
+      - DO_SPACES_CDN_ENDPOINT=${DO_SPACES_CDN_ENDPOINT}
+      # Meezan Integration
+      - MEEZAN_SERVICE_USER_ID=${MEEZAN_SERVICE_USER_ID}
+      - MEEZAN_SERVICE_PASSWORD=${MEEZAN_SERVICE_PASSWORD}
+      - MEEZAN_COMPANY_CODE=${MEEZAN_COMPANY_CODE}
+      # Firebase Service Account for FCM/notifications
+      - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
     depends_on:
       - db
       - redis
