@@ -328,12 +328,29 @@ export class IdentityService {
     return this.prisma.$transaction(
       async (tx) => {
         // 1. Find existing student
-        const student = await tx.students.findUnique({
+        let student = await tx.students.findUnique({
           where: { cc: dto.cc },
         });
 
         if (!student) {
-          throw new NotFoundException(`Student with CC ${dto.cc} not found`);
+          const unconfirmed = await tx.unconfirmed_admissions.findUnique({
+            where: { id: dto.cc },
+          });
+          if (!unconfirmed) {
+            throw new NotFoundException(`Student with CC ${dto.cc} not found`);
+          }
+
+          student = await tx.students.create({
+            data: {
+              cc: dto.cc,
+              full_name: unconfirmed.full_name,
+              dob: unconfirmed.date_of_birth,
+              gender: unconfirmed.gender,
+              photograph_url: unconfirmed.photograph_url,
+              campus_id: unconfirmed.campus_id,
+              status: 'SOFT_ADMISSION',
+            },
+          });
         }
 
         // 2. Update Student base table
@@ -558,7 +575,54 @@ export class IdentityService {
     });
 
     if (!student) {
-      throw new NotFoundException(`Admission with CC ${cc} not found`);
+      const unconfirmed = await this.prisma.unconfirmed_admissions.findUnique({
+        where: { id: cc },
+        include: { campuses: true }
+      });
+
+      if (!unconfirmed) {
+        throw new NotFoundException(`Admission with CC ${cc} not found`);
+      }
+
+      const names = unconfirmed.full_name.trim().split(/\s+/);
+      const firstName = names[0] || '';
+      const lastName = names.slice(1).join(' ') || '';
+
+      const guardians: any[] = [];
+      const rawGuardians = (unconfirmed.guardians as any[]) || [];
+      for (const g of rawGuardians) {
+        const relUpper = g.relation?.toUpperCase() || 'GUARDIAN';
+        const relationship = relUpper === 'FATHER' ? 'Father' : (relUpper === 'MOTHER' ? 'Mother' : 'Guardian');
+        
+        guardians.push({
+          relationship,
+          is_emergency_contact: guardians.length === 0,
+          guardians: {
+            full_name: g.name,
+            cnic: g.cnic,
+            house_appt_name: unconfirmed.address,
+          }
+        });
+      }
+
+      return {
+        cc_number: unconfirmed.id,
+        first_name: firstName,
+        last_name: lastName,
+        dob: unconfirmed.date_of_birth,
+        gender: unconfirmed.gender,
+        photograph_url: unconfirmed.photograph_url,
+        campus_id: unconfirmed.campus_id,
+        campuses: unconfirmed.campuses,
+        student_guardians: guardians,
+        student_admissions: [
+          {
+            academic_system: 'Secondary',
+            requested_grade: 'N/A'
+          }
+        ],
+        source: 'unconfirmed_admission',
+      } as any;
     }
 
     return student;

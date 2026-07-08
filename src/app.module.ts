@@ -41,6 +41,7 @@ import { EmployeeNoticeBoardModule } from './modules/employee-notice-board/emplo
 import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { TimetablesModule } from './modules/timetables/timetables.module';
+import { UnconfirmedAdmissionsModule } from './modules/unconfirmed-admissions/unconfirmed-admissions.module';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { TimetablesModule } from './modules/timetables/timetables.module';
     EmployeeNoticeBoardModule,
     AppConfigModule,
     AuditLogsModule,
+    UnconfirmedAdmissionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
