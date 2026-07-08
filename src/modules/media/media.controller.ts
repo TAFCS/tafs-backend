@@ -50,12 +50,14 @@ export class MediaController {
     @Param('cc', ParseIntPipe) cc: number,
     @Param('type') type: string,
     @UploadedFile() file: Express.Multer.File,
+    @Query('temp') temp?: string,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
     if (type !== 'standard' && type !== 'blue_bg') {
       throw new BadRequestException('Invalid photo type. Use "standard" or "blue_bg"');
     }
-    return this.mediaService.uploadStudentPhoto(cc, file, type as 'standard' | 'blue_bg');
+    const isTemp = temp === 'true';
+    return this.mediaService.uploadStudentPhoto(cc, file, type as 'standard' | 'blue_bg', isTemp);
   }
 
   @Post('guardian/:id/photo')
@@ -76,9 +78,11 @@ export class MediaController {
   async uploadGuardianPhoto(
     @Param('id', ParseIntPipe) id: number,
     @UploadedFile() file: Express.Multer.File,
+    @Query('temp') temp?: string,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.mediaService.uploadGuardianPhoto(id, file);
+    const isTemp = temp === 'true';
+    return this.mediaService.uploadGuardianPhoto(id, file, isTemp);
   }
 
   @Post('employee/:id/photo')

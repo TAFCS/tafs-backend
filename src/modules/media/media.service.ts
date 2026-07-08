@@ -9,7 +9,7 @@ export class MediaService {
     private readonly storage: StorageService,
   ) {}
 
-  async uploadStudentPhoto(cc: number, file: Express.Multer.File, type: 'standard' | 'blue_bg') {
+  async uploadStudentPhoto(cc: number, file: Express.Multer.File, type: 'standard' | 'blue_bg', isTemp = false) {
     const student = await this.prisma.students.findUnique({ where: { cc } });
     if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
 
@@ -18,17 +18,19 @@ export class MediaService {
     
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
 
-    const field = type === 'blue_bg' ? 'photo_blue_bg_url' : 'photograph_url';
-    
-    await this.prisma.students.update({
-      where: { cc },
-      data: { [field]: url },
-    });
+    if (!isTemp) {
+      const field = type === 'blue_bg' ? 'photo_blue_bg_url' : 'photograph_url';
+      
+      await this.prisma.students.update({
+        where: { cc },
+        data: { [field]: url },
+      });
+    }
 
     return { url };
   }
 
-  async uploadGuardianPhoto(id: number, file: Express.Multer.File) {
+  async uploadGuardianPhoto(id: number, file: Express.Multer.File, isTemp = false) {
     const guardian = await this.prisma.guardians.findUnique({ where: { id } });
     if (!guardian) throw new NotFoundException(`Guardian with ID ${id} not found`);
 
@@ -37,10 +39,12 @@ export class MediaService {
 
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
 
-    await this.prisma.guardians.update({
-      where: { id },
-      data: { photo_url: url },
-    });
+    if (!isTemp) {
+      await this.prisma.guardians.update({
+        where: { id },
+        data: { photo_url: url },
+      });
+    }
 
     return { url };
   }

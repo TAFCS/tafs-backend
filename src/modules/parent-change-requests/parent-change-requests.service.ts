@@ -150,9 +150,19 @@ export class ParentChangeRequestsService {
         const requestedData = request.requested_data as Record<string, unknown>;
         const isAccountDeletion =
           requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
-
         if (isAccountDeletion) {
           await this.authService.deleteParentAccount(request.family_id);
+        } else if (requestedData?.request_type === 'STUDENT_UPDATE') {
+          const studentCc = Number(requestedData.student_cc);
+          const changes = requestedData.changes as Record<string, any>;
+          // Parse date if dob is present
+          if (changes.dob) {
+            changes.dob = new Date(changes.dob);
+          }
+          await tx.students.update({
+            where: { cc: studentCc },
+            data: changes,
+          });
         } else {
           await tx.guardians.update({
             where: { id: request.guardian_id },
