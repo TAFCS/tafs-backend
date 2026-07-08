@@ -104,6 +104,7 @@ export class ParentChangeRequestsService {
         families: {
           select: {
             household_name: true,
+            students: true,
           },
         },
         processor: {
@@ -121,7 +122,11 @@ export class ParentChangeRequestsService {
       where: { id },
       include: {
         guardians: true,
-        families: true,
+        families: {
+          include: {
+            students: true,
+          },
+        },
       },
     });
     if (!request) throw new NotFoundException('Change request not found');
