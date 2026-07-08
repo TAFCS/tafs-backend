@@ -180,6 +180,7 @@ export class FamiliesService {
     const { password_hash, ...safeFamily } = family;
     return {
       ...safeFamily,
+      has_password: !!password_hash,
       guardians: guardians.map((sg) => ({
         ...sg.guardians,
         relationship: sg.relationship,
