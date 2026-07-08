@@ -12,9 +12,9 @@ services:
     environment:
       - PORT=8080
       - NODE_ENV=production
-      # Connecting to the local 'db' container using Docker's internal networking
-      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres_secure_pass}@db:5432/tafs?schema=public
-      - DIRECT_URL=postgresql://postgres:${DB_PASSWORD:-postgres_secure_pass}@db:5432/tafs?schema=public
+      # Connecting to the database specified in the .env configuration
+      - DATABASE_URL=${DATABASE_URL}
+      - DIRECT_URL=${DIRECT_URL}
       - REDIS_URL=redis://redis:6379
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
       - JWT_SECRET=${JWT_SECRET:-change_me_to_a_random_string_123}
