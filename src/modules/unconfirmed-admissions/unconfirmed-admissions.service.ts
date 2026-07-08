@@ -48,7 +48,7 @@ export class UnconfirmedAdmissionsService {
           campus_id: dto.campus_id,
           deposit_amount: dto.deposit_amount,
           created_by: createdBy,
-          guardians: dto.guardians ?? [],
+          guardians: (dto.guardians as any) ?? [],
         },
         include: {
           campuses: true,
