@@ -352,6 +352,7 @@ export class BulkVoucherJobsService {
                 student_name: s.student_name,
                 status: s.status,
                 reason: s.reason,
+                ...(s.partially_paid ? { partially_paid: true } : {}),
             })));
 
             if (skipCountTotal > 0) {
@@ -393,6 +394,9 @@ export class BulkVoucherJobsService {
                             pdf_url: result.value.url,
                             voucher_id: result.value.voucher_id,
                             status: 'SUCCESS',
+                            ...(workItem.splitFromPartiallyPaid
+                                ? { reason: 'Split from a partially-paid period — new voucher created for the remaining unpaid fee heads only.', split_from_partially_paid: true }
+                                : {}),
                         });
                     } else {
                         const errorMsg = String(result.reason);

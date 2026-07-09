@@ -71,7 +71,7 @@ export class BulkVoucherLogicService {
                     fee_date: { gte: feeDateFrom, lte: feeDateTo },
                     status: { notIn: ['VOID', 'EXPIRED'] },
                 },
-                select: { student_id: true, fee_date: true },
+                select: { student_id: true, fee_date: true, status: true },
             }),
         ]);
 
@@ -91,11 +91,11 @@ export class BulkVoucherLogicService {
         const { studentRecords, matchingFees, existingVouchers, expectedFeeDates, skipAlreadyIssued } = params;
         const feeDateFrom = new Date(params.fee_date_from);
         
-        // Set of "cc|dateStr" keys that already have a non-VOID, non-EXPIRED voucher
-        const existingVoucherKeys = new Set(
+        // Map of "cc|dateStr" -> status, for every existing non-VOID, non-EXPIRED voucher
+        const existingVoucherStatusByKey = new Map<string, string>(
             existingVouchers
                 .filter(v => v.fee_date)
-                .map(v => `${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`),
+                .map(v => [`${v.student_id}|${v.fee_date!.toISOString().split('T')[0]}`, v.status]),
         );
 
         const workItems: any[] = [];
@@ -141,13 +141,19 @@ export class BulkVoucherLogicService {
 
             for (const dateStr of expectedFeeDates) {
                 const voucherKey = `${cc}|${dateStr}`;
-                const alreadyIssued = existingVoucherKeys.has(voucherKey);
+                const existingStatus = existingVoucherStatusByKey.get(voucherKey);
+                const alreadyIssued = existingVoucherStatusByKey.has(voucherKey);
+                const isPartiallyPaid = existingStatus === 'PARTIALLY_PAID';
                 const feesInThisMonth = dateMap.get(dateStr) || [];
 
                 if (feesInThisMonth.length > 0) {
                     // NOT_ISSUED heads exist — generate regardless of whether a prior voucher
                     // already exists for this period (handles the case where a previous voucher
                     // only captured some heads and new heads were added/reset afterward).
+                    //
+                    // If the existing voucher for this period is PARTIALLY_PAID, never touch/regenerate
+                    // it — instead split off a brand-new voucher containing just the newly unpaid heads,
+                    // and record a SKIPPED entry noting the partially-paid voucher was left untouched.
                     const itemAcademicYear = params.academic_year_override || deriveAcademicYear(dateStr, student.class_id ?? undefined);
                     workItems.push({
                         cc,
@@ -156,14 +162,28 @@ export class BulkVoucherLogicService {
                         student,
                         academicYear: itemAcademicYear,
                         alreadyIssued,
+                        splitFromPartiallyPaid: isPartiallyPaid,
                     });
+                    if (isPartiallyPaid) {
+                        skips.push({
+                            cc,
+                            student_name: student.full_name,
+                            status: 'SKIPPED',
+                            reason: `Existing voucher for period starting ${dateStr} is partially paid — left untouched. A new voucher was split off for the remaining unpaid fee heads.`,
+                            dateStr,
+                            partially_paid: true,
+                        });
+                    }
                 } else if (alreadyIssued && skipAlreadyIssued) {
                     skips.push({
                         cc,
                         student_name: student.full_name,
                         status: 'SKIPPED',
-                        reason: `Voucher already issued for period starting ${dateStr}`,
+                        reason: isPartiallyPaid
+                            ? `Voucher for period starting ${dateStr} is partially paid — regeneration skipped`
+                            : `Voucher already issued for period starting ${dateStr}`,
                         dateStr,
+                        partially_paid: isPartiallyPaid,
                     });
                 } else {
                     skips.push({
