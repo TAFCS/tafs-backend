@@ -32,8 +32,8 @@ export class EmployeesController {
 
   @Get('next-code')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
-  async getNextEmployeeCode() {
-    const data = await this.employeesService.getNextEmployeeCode();
+  async getNextEmployeeCode(@Query('dep') dep?: string) {
+    const data = await this.employeesService.getNextEmployeeCode(dep);
     return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
   }
 

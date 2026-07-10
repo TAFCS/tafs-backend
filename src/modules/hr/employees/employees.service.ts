@@ -9,6 +9,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields } from './employee-code.util';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -42,6 +43,12 @@ export class CreateEmployeeDto {
 
   @IsOptional() @IsString()
   employee_code?: string;
+
+  @IsOptional() @IsString()
+  employee_code_dep?: string;
+
+  @IsOptional() @IsString()
+  employee_code_number?: string;
 
   @IsOptional() @IsString()
   full_name?: string;
@@ -251,6 +258,8 @@ export class EmployeesService {
       select: {
         id: true,
         employee_code: true,
+        employee_code_dep: true,
+        employee_code_number: true,
         full_name: true,
         job_title: true,
         staff_category: true,
@@ -273,10 +282,10 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto, changedBy?: string) {
     const { class_section_assignments, ...rest } = dto;
+    const codeFields = resolveEmployeeCodeFields(rest);
 
-    // Check employee code uniqueness before insert
-    if (rest.employee_code) {
-      await this.assertCodeAvailable(rest.employee_code);
+    if (codeFields.employee_code) {
+      await this.assertCodeAvailable(codeFields.employee_code);
     }
     const record = await this.prisma.employee_profiles.create({
       data: {
@@ -287,7 +296,9 @@ export class EmployeesService {
         department_id: rest.department_id || null,
         designation_id: rest.designation_id || null,
         reporting_manager_id: rest.reporting_manager_id || null,
-        employee_code: rest.employee_code || null,
+        employee_code: codeFields.employee_code,
+        employee_code_dep: codeFields.employee_code_dep,
+        employee_code_number: codeFields.employee_code_number,
         full_name: rest.full_name || null,
         father_name: rest.father_name || null,
         mother_name: rest.mother_name || null,
@@ -337,11 +348,22 @@ export class EmployeesService {
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string) {
     const existing = await this.findOne(id);
 
-    // Check code uniqueness, excluding this employee's own record
-    if (dto.employee_code) {
-      await this.assertCodeAvailable(dto.employee_code, id);
-    }
     const { class_section_assignments, ...rest } = dto;
+    const hasCodeInput =
+      rest.employee_code !== undefined ||
+      rest.employee_code_dep !== undefined ||
+      rest.employee_code_number !== undefined;
+    const codeFields = hasCodeInput
+      ? resolveEmployeeCodeFields({
+          employee_code: rest.employee_code,
+          employee_code_dep: rest.employee_code_dep,
+          employee_code_number: rest.employee_code_number,
+        })
+      : null;
+
+    if (codeFields?.employee_code) {
+      await this.assertCodeAvailable(codeFields.employee_code, id);
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       if (class_section_assignments !== undefined) {
@@ -367,7 +389,13 @@ export class EmployeesService {
           department_id: rest.department_id !== undefined ? rest.department_id : undefined,
           designation_id: rest.designation_id !== undefined ? rest.designation_id : undefined,
           reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
-          employee_code: rest.employee_code !== undefined ? nullIfEmpty(rest.employee_code) : undefined,
+          employee_code: codeFields
+            ? codeFields.employee_code
+            : rest.employee_code !== undefined
+              ? nullIfEmpty(rest.employee_code)
+              : undefined,
+          employee_code_dep: codeFields ? codeFields.employee_code_dep : undefined,
+          employee_code_number: codeFields ? codeFields.employee_code_number : undefined,
           full_name: rest.full_name !== undefined ? nullIfEmpty(rest.full_name) : undefined,
           father_name: rest.father_name !== undefined ? nullIfEmpty(rest.father_name) : undefined,
           mother_name: rest.mother_name !== undefined ? nullIfEmpty(rest.mother_name) : undefined,
@@ -400,9 +428,11 @@ export class EmployeesService {
       });
     });
 
-    const trackedFields: Array<{ key: keyof typeof rest; label: string }> = [
+    const trackedFields: Array<{ key: keyof typeof rest | 'employee_code_dep' | 'employee_code_number'; label: string; oldKey?: string }> = [
       { key: 'full_name', label: 'Full Name' },
       { key: 'employee_code', label: 'Code' },
+      { key: 'employee_code_dep', label: 'Code Dept', oldKey: 'employee_code_dep' },
+      { key: 'employee_code_number', label: 'Code Number', oldKey: 'employee_code_number' },
       { key: 'cnic', label: 'CNIC' },
       { key: 'job_title', label: 'Job Title' },
       { key: 'employment_type', label: 'Employment Type' },
@@ -415,10 +445,19 @@ export class EmployeesService {
     ];
 
     const changes: string[] = [];
-    for (const { key, label } of trackedFields) {
-      if (key in rest && rest[key] !== undefined) {
-        const oldVal = String((existing as any)[key] ?? '');
-        const newVal = String(rest[key] ?? '');
+    for (const { key, label, oldKey } of trackedFields) {
+      const sourceKey = oldKey ?? key;
+      if (codeFields && (key === 'employee_code' || key === 'employee_code_dep' || key === 'employee_code_number')) {
+        const oldVal = String((existing as any)[sourceKey] ?? '');
+        const newVal = String((codeFields as any)[sourceKey] ?? '');
+        if (oldVal !== newVal) {
+          changes.push(`${label}: ${oldVal || '—'} → ${newVal || '—'}`);
+        }
+        continue;
+      }
+      if (key in rest && rest[key as keyof typeof rest] !== undefined) {
+        const oldVal = String((existing as any)[sourceKey] ?? '');
+        const newVal = String(rest[key as keyof typeof rest] ?? '');
         if (oldVal !== newVal) {
           changes.push(`${label}: ${oldVal || '—'} → ${newVal || '—'}`);
         }
@@ -499,8 +538,47 @@ export class EmployeesService {
     return [...results, ...others];
   }
 
-  async getNextEmployeeCode(): Promise<{ code: string }> {
-    // Find all employee codes that match EMP-NNNN pattern and return next one
+  async getNextEmployeeCode(dep?: string): Promise<{ dep: string | null; number: string; code: string }> {
+    const normalizedDep = dep?.trim();
+    if (normalizedDep) {
+      const depCode = normalizedDep.padStart(2, '0');
+      const employees = await this.prisma.employee_profiles.findMany({
+        select: { employee_code: true, employee_code_dep: true, employee_code_number: true },
+        where: {
+          OR: [
+            { employee_code_dep: depCode },
+            { employee_code: { startsWith: `${depCode}-`, mode: 'insensitive' } },
+          ],
+        },
+      });
+
+      let maxNum = 0;
+      let padWidth = 4;
+      for (const emp of employees) {
+        const numberPart =
+          emp.employee_code_number ??
+          parseEmployeeCode(emp.employee_code ?? undefined)?.number ??
+          null;
+        if (!numberPart) continue;
+        const digits = numberPart.replace(/\D/g, '');
+        if (!digits) continue;
+        const num = parseInt(digits, 10);
+        if (!Number.isFinite(num)) continue;
+        if (num > maxNum) {
+          maxNum = num;
+          padWidth = Math.max(padWidth, numberPart.length);
+        }
+      }
+
+      const nextNumber = String(maxNum + 1).padStart(padWidth, '0');
+      return {
+        dep: depCode,
+        number: nextNumber,
+        code: composeEmployeeCode(depCode, nextNumber),
+      };
+    }
+
+    // Legacy EMP-NNNN suggestion for non-prefixed codes
     const employees = await this.prisma.employee_profiles.findMany({
       select: { employee_code: true },
       where: { employee_code: { not: null } },
@@ -518,7 +596,7 @@ export class EmployeesService {
 
     const nextNum = maxNum + 1;
     const code = `EMP-${String(nextNum).padStart(4, '0')}`;
-    return { code };
+    return { dep: null, number: String(nextNum).padStart(4, '0'), code };
   }
 
   async getWorkSchedule(employeeId: number) {
