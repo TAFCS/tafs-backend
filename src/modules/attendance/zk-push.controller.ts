@@ -87,13 +87,15 @@ export class ZkDeviceController {
     await this.zkPushService.handlePush({ sn, query, body: `GET_CDATA options=${options}` });
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Date', new Date().toUTCString());
-    // Stamp=0      — ADMS v1 / LogIDFunOn=0 devices: push all logs from start.
-    // ATTLOGStamp=0 / OPERLOGStamp=0 — ADMS v2 / LogIDFunOn=1 (e.g. SenseFace 2A):
-    //   same intent but the device only recognises the typed stamp fields.
-    //   Without these a LogIDFunOn=1 device loops back to registry instead of pushing.
-    // TransFlag=TransData AttLog — explicitly tells the device which tables to push.
-    // TimeOut=10 — connection timeout in seconds.
-    res.send('OK\nStamp=0\nATTLOGStamp=0\nOPERLOGStamp=0\nDelay=60\nTransFlag=TransData AttLog\nTimeOut=10\n');
+    // PushOptionsFlag=1 — MUST be echoed back when the device sends it (Push v3+).
+    //   Without this echo the device treats the server as not v3-aware and loops
+    //   back to registry instead of entering the push phase.
+    // Stamp=0 / ATTLOGStamp=0 / OPERLOGStamp=0 / ATTPHOTOStamp=0 — start from
+    //   the beginning; the device advances these stamps after each successful push.
+    // Realtime=1 — push events immediately on scan, not batched at Delay intervals.
+    // TransFlag — list every table the device should push.
+    // Encrypt=None — no payload encryption.
+    res.send('OK\nStamp=0\nATTLOGStamp=0\nOPERLOGStamp=0\nATTPHOTOStamp=0\nDelay=60\nTransFlag=TransData AttLog OpLog AttPhoto\nTimeOut=10\nRealtime=1\nEncrypt=None\nPushOptionsFlag=1\n');
   }
 
   // Device POSTs attendance events — body is tab-separated plain text
