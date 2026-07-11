@@ -47,13 +47,10 @@ export class ZkDeviceController {
    * send a registration payload here before entering the normal cdata/getrequest cycle.
    * Body is comma-separated key=value pairs describing device hardware / firmware.
    *
-   * IMPORTANT: ADMS v2 firmware (PushVersion 3.1.x+) requires the response body to be
-   * "GET OPTION FROM: [SN]" — that is the protocol signal telling the device to advance
-   * to the config-fetch step (GET /iclock/cdata). Responding with plain "OK" causes the
-   * device to stay in a registration loop and never push attendance data.
-   *
-   * The RFC 1123 Date header is used by the device to sync its real-time clock before
-   * it starts pushing logs.
+   * The Date header is required: the device uses it to sync its RTC before pushing logs.
+   * The response body must be a plain "OK" — anything else (e.g. "GET OPTION FROM: SN")
+   * is not a valid ADMS v2 command and causes the device to retry indefinitely.
+   * The Stamp acknowledgement comes later in GET /iclock/cdata.
    */
   @Post('registry')
   @HttpCode(HttpStatus.OK)
@@ -67,21 +64,25 @@ export class ZkDeviceController {
     // Log into the same zk_push_logs table so the device shows up in the admin UI.
     await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
     res.setHeader('Content-Type', 'text/plain');
-    // Date header lets the device sync its RTC before it starts pushing records.
+    // RFC 1123 Date header — device uses this to sync its real-time clock.
     res.setHeader('Date', new Date().toUTCString());
-    // "GET OPTION FROM: SN" is the ADMS v2 handshake signal — without it the device
-    // never leaves the registration loop and never calls POST /iclock/cdata.
-    res.send(`GET OPTION FROM: ${sn}\n`);
+    res.send('OK\n');
   }
 
-  // Device fetches its config on GET — tell it to push attendance logs every 60 s.
-  // Date header is included here too so the device can re-sync if it missed it on registry.
+  /**
+   * GET /iclock/cdata — device fetches its push configuration after a successful registry.
+   *
+   * Stamp=0 is critical for devices with LogIDFunOn=1 (e.g. SenseFace 2A): it tells the
+   * device to start sending all stored logs from the beginning. Without Stamp, the device
+   * never commits to the push phase and loops back to registry instead.
+   * Delay=60 sets the push interval in seconds.
+   */
   @Get('cdata')
   @HttpCode(HttpStatus.OK)
   getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Date', new Date().toUTCString());
-    res.send('OK\nDelay=60\n');
+    res.send('OK\nStamp=0\nDelay=60\n');
   }
 
   // Device POSTs attendance events — body is tab-separated plain text
