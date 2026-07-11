@@ -79,7 +79,12 @@ export class ZkDeviceController {
    */
   @Get('cdata')
   @HttpCode(HttpStatus.OK)
-  getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
+  async getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    const options = query['options'] ?? query['Options'] ?? '(none)';
+    this.logger.log(`GET cdata: SN=${sn} options=${options} query=${JSON.stringify(query)}`);
+    // Log into push_logs table so this cdata call is visible in the admin UI push log viewer.
+    await this.zkPushService.handlePush({ sn, query, body: `GET_CDATA options=${options}` });
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Date', new Date().toUTCString());
     // Stamp=0      — ADMS v1 / LogIDFunOn=0 devices: push all logs from start.
@@ -115,7 +120,10 @@ export class ZkDeviceController {
   // Device polls this for pending commands — just acknowledge
   @Get('getrequest')
   @HttpCode(HttpStatus.OK)
-  getRequest(@Res() res: Response) {
+  async getRequest(@Query() query: Record<string, string>, @Res() res: Response) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.logger.log(`GET getrequest: SN=${sn} — device has completed its push cycle`);
+    await this.zkPushService.handlePush({ sn, query, body: 'GET_GETREQUEST' });
     res.setHeader('Content-Type', 'text/plain');
     res.send('OK\n');
   }
