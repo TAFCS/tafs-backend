@@ -43,10 +43,17 @@ export class ZkDeviceController {
   ) {}
 
   /**
-   * POST /iclock/registry — newer ZKTeco ADMS v2 models (e.g. NYU series) send
-   * a registration payload here before entering the normal cdata/getrequest cycle.
+   * POST /iclock/registry — newer ZKTeco ADMS v2 models (e.g. NYU series, SenseFace)
+   * send a registration payload here before entering the normal cdata/getrequest cycle.
    * Body is comma-separated key=value pairs describing device hardware / firmware.
-   * We log it exactly like a regular cdata push so the SN appears in our device list.
+   *
+   * IMPORTANT: ADMS v2 firmware (PushVersion 3.1.x+) requires the response body to be
+   * "GET OPTION FROM: [SN]" — that is the protocol signal telling the device to advance
+   * to the config-fetch step (GET /iclock/cdata). Responding with plain "OK" causes the
+   * device to stay in a registration loop and never push attendance data.
+   *
+   * The RFC 1123 Date header is used by the device to sync its real-time clock before
+   * it starts pushing logs.
    */
   @Post('registry')
   @HttpCode(HttpStatus.OK)
@@ -60,14 +67,20 @@ export class ZkDeviceController {
     // Log into the same zk_push_logs table so the device shows up in the admin UI.
     await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
     res.setHeader('Content-Type', 'text/plain');
-    res.send('OK\n');
+    // Date header lets the device sync its RTC before it starts pushing records.
+    res.setHeader('Date', new Date().toUTCString());
+    // "GET OPTION FROM: SN" is the ADMS v2 handshake signal — without it the device
+    // never leaves the registration loop and never calls POST /iclock/cdata.
+    res.send(`GET OPTION FROM: ${sn}\n`);
   }
 
-  // Device checks in on GET — tell it to push attendance logs every 60s
+  // Device fetches its config on GET — tell it to push attendance logs every 60 s.
+  // Date header is included here too so the device can re-sync if it missed it on registry.
   @Get('cdata')
   @HttpCode(HttpStatus.OK)
-  getConfig(@Res() res: Response) {
+  getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Date', new Date().toUTCString());
     res.send('OK\nDelay=60\n');
   }
 
