@@ -24,6 +24,13 @@ import { ZkPushService } from './zk-push.service';
 /**
  * ZK device endpoints — lives at /api/v1/iclock/*.
  * The device hits these directly over plain HTTP.
+ *
+ * Endpoint map:
+ *   POST registry    — newer ADMS v2 models (NYU series etc.) register here first.
+ *   GET  cdata       — device asks for its config / push interval.
+ *   POST cdata       — device pushes attendance logs (tab-separated plain text).
+ *   GET  getrequest  — device polls for pending server commands.
+ *   POST devicecmd   — newer models ack command execution here.
  */
 @ApiTags('ZK Device')
 @Controller('iclock')
@@ -34,6 +41,27 @@ export class ZkDeviceController {
     private readonly zkPushService: ZkPushService,
     private readonly zkAttendanceProcessor: ZkAttendanceProcessorService,
   ) {}
+
+  /**
+   * POST /iclock/registry — newer ZKTeco ADMS v2 models (e.g. NYU series) send
+   * a registration payload here before entering the normal cdata/getrequest cycle.
+   * Body is comma-separated key=value pairs describing device hardware / firmware.
+   * We log it exactly like a regular cdata push so the SN appears in our device list.
+   */
+  @Post('registry')
+  @HttpCode(HttpStatus.OK)
+  async postRegistry(
+    @Query() query: Record<string, string>,
+    @Body() rawBody: string,
+    @Res() res: Response,
+  ) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.logger.log(`Device registry: SN=${sn} payload=${(rawBody ?? '').slice(0, 200)}`);
+    // Log into the same zk_push_logs table so the device shows up in the admin UI.
+    await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('OK\n');
+  }
 
   // Device checks in on GET — tell it to push attendance logs every 60s
   @Get('cdata')
@@ -68,6 +96,24 @@ export class ZkDeviceController {
   @Get('getrequest')
   @HttpCode(HttpStatus.OK)
   getRequest(@Res() res: Response) {
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('OK\n');
+  }
+
+  /**
+   * POST /iclock/devicecmd — newer ADMS v2 firmware sends command-execution
+   * acknowledgements here instead of (or in addition to) getrequest.
+   * Just acknowledge so the device doesn't retry.
+   */
+  @Post('devicecmd')
+  @HttpCode(HttpStatus.OK)
+  postDeviceCmd(
+    @Query() query: Record<string, string>,
+    @Body() rawBody: string,
+    @Res() res: Response,
+  ) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.logger.debug(`devicecmd ack from SN=${sn}: ${(rawBody ?? '').slice(0, 200)}`);
     res.setHeader('Content-Type', 'text/plain');
     res.send('OK\n');
   }
