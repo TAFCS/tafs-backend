@@ -129,8 +129,22 @@ export class ZkAttendanceProcessorService {
 
   private parseAttLogLines(body: string): ParsedAttLogRow[] {
     const rows: ParsedAttLogRow[] = [];
+    const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
     for (const line of body.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)) {
-      const [pin, dateTimeStr, status, verify, workCode] = line.split('\t');
+      const fields = line.split('\t');
+
+      // ADMS v1 / LogIDFunOn=0: PIN\tDateTime\tStatus\tVerify\tWorkCode
+      // ADMS v2 / LogIDFunOn=1: LogID\tPIN\tDateTime\tStatus\tVerify\tWorkCode
+      // Distinguish by checking which field position contains the datetime string.
+      let pin: string, dateTimeStr: string, status: string, verify: string, workCode: string;
+      if (fields.length >= 3 && DATETIME_RE.test(fields[2])) {
+        // LogIDFunOn=1 — field[0] is LogID, skip it
+        [, pin, dateTimeStr, status, verify, workCode] = fields;
+      } else {
+        [pin, dateTimeStr, status, verify, workCode] = fields;
+      }
+
       const scanTime = this.parseDeviceDateTime(dateTimeStr);
       if (pin && scanTime) {
         rows.push({ pin, scanTime, status, verify, workCode });

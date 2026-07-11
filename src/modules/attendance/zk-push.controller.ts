@@ -82,7 +82,13 @@ export class ZkDeviceController {
   getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Date', new Date().toUTCString());
-    res.send('OK\nStamp=0\nDelay=60\n');
+    // Stamp=0      — ADMS v1 / LogIDFunOn=0 devices: push all logs from start.
+    // ATTLOGStamp=0 / OPERLOGStamp=0 — ADMS v2 / LogIDFunOn=1 (e.g. SenseFace 2A):
+    //   same intent but the device only recognises the typed stamp fields.
+    //   Without these a LogIDFunOn=1 device loops back to registry instead of pushing.
+    // TransFlag=TransData AttLog — explicitly tells the device which tables to push.
+    // TimeOut=10 — connection timeout in seconds.
+    res.send('OK\nStamp=0\nATTLOGStamp=0\nOPERLOGStamp=0\nDelay=60\nTransFlag=TransData AttLog\nTimeOut=10\n');
   }
 
   // Device POSTs attendance events — body is tab-separated plain text

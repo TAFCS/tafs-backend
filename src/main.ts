@@ -45,7 +45,7 @@ async function bootstrap() {
   }
 
   // Parse ZKTeco device bodies as raw text before NestJS touches them
-  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '1mb' }));
+  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '8mb' }));
 
   app.setGlobalPrefix('api/v1');
 
