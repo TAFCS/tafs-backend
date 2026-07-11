@@ -128,6 +128,28 @@ export class ZkDeviceController {
   }
 
   /**
+   * POST /iclock/regstable — Push v3 devices (e.g. SenseFace 2A) send this
+   * after GET /iclock/cdata to declare which tables they support (ATTLOG,
+   * OPERLOG, ATTPHOTO, etc.) before they start pushing data.  A 404 here
+   * causes the device to abort and loop back to POST /registry.
+   * We log it so it appears in the admin push-log viewer.
+   */
+  @Post('regstable')
+  @HttpCode(HttpStatus.OK)
+  async postRegstable(
+    @Query() query: Record<string, string>,
+    @Body() rawBody: string,
+    @Res() res: Response,
+  ) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.logger.log(`POST regstable: SN=${sn} body=${(rawBody ?? '').slice(0, 300)}`);
+    await this.zkPushService.handlePush({ sn, query, body: `REGSTABLE ${(rawBody ?? '').slice(0, 200)}` });
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Date', new Date().toUTCString());
+    res.send('OK\n');
+  }
+
+  /**
    * POST /iclock/devicecmd — newer ADMS v2 firmware sends command-execution
    * acknowledgements here instead of (or in addition to) getrequest.
    * Just acknowledge so the device doesn't retry.
