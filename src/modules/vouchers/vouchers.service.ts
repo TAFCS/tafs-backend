@@ -596,7 +596,7 @@ export class VouchersService {
             // Fetch all IDs matching the filter for custom sorting in JS
             const allMatching = await this.prisma.vouchers.findMany({
                 where,
-                select: { id: true, status: true, issue_date: true },
+                select: { id: true, status: true, issue_date: true, student_id: true },
             });
 
             // Default sort: most recent first, regardless of status.
@@ -606,6 +606,20 @@ export class VouchersService {
                 if (timeA !== timeB) return timeB - timeA; // desc issue_date
                 return b.id - a.id; // desc id
             });
+
+            // Vouchers may only be deleted in descending (most-recent-first) order per
+            // student. Since allMatching is already sorted most-recent-first, each
+            // student's first appearance here is their latest voucher overall — this
+            // is scoped to `where` (e.g. within a single-student filter), which matches
+            // what the frontend list actually shows.
+            const latestVoucherIdByStudent = new Set<number>();
+            const seenStudents = new Set<number>();
+            for (const v of allMatching) {
+                if (!seenStudents.has(v.student_id)) {
+                    seenStudents.add(v.student_id);
+                    latestVoucherIdByStudent.add(v.id);
+                }
+            }
 
             const total = allMatching.length;
             const paginatedIds = allMatching.slice(skip, skip + take).map(v => v.id);
@@ -643,7 +657,10 @@ export class VouchersService {
             });
 
             return {
-                items: vouchers.map((v) => this.normalizeVoucher(v)),
+                items: vouchers.map((v) => ({
+                    ...this.normalizeVoucher(v),
+                    is_latest_for_student: latestVoucherIdByStudent.has(v.id),
+                })),
                 meta: {
                     total,
                     ...statusStats,
@@ -1982,6 +1999,26 @@ export class VouchersService {
     }
 
     /**
+     * Deposits must be reversed most-recent-first — reversing an older deposit
+     * while a newer one still stands on the same student risks the kind of
+     * split-family corruption fixed in clearDeposit's multi-deposit case (see
+     * the "STEP 2" comment in _destroyVoucherInTx and the split-reversal audit).
+     * Throws if `depositId` isn't the student's latest deposit.
+     */
+    private async assertDepositIsLatest(studentId: number, depositId: number) {
+        const latest = await this.prisma.deposits.findFirst({
+            where: { student_id: studentId },
+            orderBy: [{ deposit_date: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+        });
+        if (latest && latest.id !== depositId) {
+            throw new BadRequestException(
+                'Only the most recent deposit can be reversed. Reverse newer deposits first, in descending order.',
+            );
+        }
+    }
+
+    /**
      * Delete a deposit entirely (all the vouchers/fees/surcharges it touched,
      * not just one). Recomputes — never blindly zeroes — every affected
      * student_fees.amount_paid, voucher_arrear_surcharges.amount_paid, and
@@ -2001,6 +2038,8 @@ export class VouchersService {
         if (!deposit) {
             throw new NotFoundException(`Deposit ${depositId} not found`);
         }
+
+        await this.assertDepositIsLatest(deposit.student_id, depositId);
 
         await this.prisma.$transaction(async (tx) => {
             const allocations = deposit.deposit_allocations;
@@ -2158,6 +2197,12 @@ export class VouchersService {
         const deposit = await this.prisma.deposits.findUnique({
             where: { id: depositId },
         });
+
+        if (!deposit) {
+            throw new NotFoundException(`Deposit ${depositId} not found`);
+        }
+
+        await this.assertDepositIsLatest(deposit.student_id, depositId);
 
         const isPaidVoucher = voucher.status === 'PAID';
 
@@ -4345,6 +4390,20 @@ export class VouchersService {
 
         if (!voucher) {
             throw new NotFoundException(`Voucher #${id} not found`);
+        }
+
+        // Vouchers may only be deleted most-recent-first — deleting an older voucher
+        // while a newer one still stands can break the VOID-reactivation chain
+        // _destroyVoucherInTx relies on (see its STEP 1 comment).
+        const latestForStudent = await this.prisma.vouchers.findFirst({
+            where: { student_id: voucher.student_id },
+            orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+        });
+        if (latestForStudent && latestForStudent.id !== id) {
+            throw new BadRequestException(
+                'Only the most recent voucher for this student can be deleted. Delete newer vouchers first, in descending order.',
+            );
         }
 
         // PAID and PARTIALLY_PAID vouchers cannot be deleted directly.

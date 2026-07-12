@@ -2362,8 +2362,12 @@ export class StudentsService {
     });
 
     // Format Deposits Tab
-    const formattedDeposits = allDeposits.map((d) => ({
+    // allDeposits is ordered deposit_date desc, so index 0 is this student's
+    // most recent deposit — the only one currently allowed to be reversed
+    // (deposits must be reversed most-recent-first, see assertDepositIsLatest).
+    const formattedDeposits = allDeposits.map((d, idx) => ({
       ...d,
+      is_latest: idx === 0,
       total_amount: Number(d.total_amount),
       allocations: d.deposit_allocations.map((a) => {
         const sf = a.student_fees as any;
