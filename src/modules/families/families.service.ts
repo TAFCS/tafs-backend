@@ -223,27 +223,38 @@ export class FamiliesService {
   async updateFamily(id: number, dto: UpdateFamilyDto) {
     await this._assertExists(id);
 
-    const password_hash = dto.password
-      ? await bcrypt.hash(dto.password, 10)
-      : undefined;
+    let password_hash: string | null | undefined = undefined;
+    if (dto.password !== undefined) {
+      password_hash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
+    }
 
-    const updated = await this.prisma.families.update({
-      where: { id },
-      data: {
-        ...(dto.household_name !== undefined && { household_name: dto.household_name }),
-        ...(dto.primary_address !== undefined && { primary_address: dto.primary_address }),
-        ...(dto.email !== undefined && { email: dto.email }),
-        ...(password_hash !== undefined && { password_hash }),
-        ...(dto.legacy_pid !== undefined && { legacy_pid: dto.legacy_pid }),
-      },
-      select: {
-        id: true,
-        household_name: true,
-        email: true,
-        primary_address: true,
-        legacy_pid: true,
-        created_at: true,
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const family = await tx.families.update({
+        where: { id },
+        data: {
+          ...(dto.household_name !== undefined && { household_name: dto.household_name }),
+          ...(dto.primary_address !== undefined && { primary_address: dto.primary_address }),
+          ...(dto.email !== undefined && { email: dto.email }),
+          ...(password_hash !== undefined && { password_hash }),
+          ...(dto.legacy_pid !== undefined && { legacy_pid: dto.legacy_pid }),
+        },
+        select: {
+          id: true,
+          household_name: true,
+          email: true,
+          primary_address: true,
+          legacy_pid: true,
+          created_at: true,
+        },
+      });
+
+      if (password_hash !== undefined) {
+        await tx.family_refresh_tokens.deleteMany({
+          where: { family_id: id },
+        });
+      }
+
+      return family;
     });
 
     return updated;
