@@ -1792,6 +1792,7 @@ enum StaffCategory {
   IT_STAFF
   CREATIVE_STAFF
   FINANCE_STAFF
+  SUPPORT_STAFF
 }
 
 enum CheckInSource {
