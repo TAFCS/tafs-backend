@@ -120,6 +120,33 @@ export class FamiliesService {
     };
   }
 
+  // ── Stats ─────────────────────────────────────────────────────────────────
+
+  async getFamilyStats() {
+    const [total, registeredOnApp, notConfigured] = await this.prisma.$transaction([
+      // Total non-deleted families
+      this.prisma.families.count({
+        where: { deleted_at: null },
+      }),
+      // Families that have set an app password
+      this.prisma.families.count({
+        where: {
+          deleted_at: null,
+          password_hash: { not: null },
+        },
+      }),
+      // Families that have NOT yet registered on the app (no password set)
+      this.prisma.families.count({
+        where: {
+          deleted_at: null,
+          password_hash: null,
+        },
+      }),
+    ]);
+
+    return { total, registeredOnApp, notConfigured };
+  }
+
   // ── Get one (with students + guardians) ───────────────────────────────────
 
   async getFamilyById(id: number) {

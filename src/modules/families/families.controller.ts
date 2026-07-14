@@ -44,6 +44,19 @@ export class FamiliesController {
     };
   }
 
+  // GET /api/v1/families/stats
+  @Get('stats')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
+  async getFamilyStats() {
+    const stats = await this.familiesService.getFamilyStats();
+    return {
+      success: true,
+      message: 'Family stats fetched successfully',
+      data: stats,
+    };
+  }
+
   // GET /api/v1/families/:id
   @Get(':id')
   @HttpCode(HttpStatus.OK)
