@@ -4,3 +4,5 @@ DROP COLUMN IF EXISTS "guardian_name",
 DROP COLUMN IF EXISTS "guardian_relation",
 DROP COLUMN IF EXISTS "guardian_cnic",
 ADD COLUMN "guardians" JSONB DEFAULT '[]'::jsonb;
+
+
