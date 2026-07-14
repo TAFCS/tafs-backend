@@ -192,18 +192,39 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Force-disconnects the socket when its JWT naturally expires, so a
-   * revoked/expired session can't keep live access indefinitely. */
+   * revoked/expired session can't keep live access indefinitely.
+   *
+   * Node's setTimeout max is 2^31-1 ms (~24.8 days). Longer JWTs overflow that
+   * limit, which clamps the delay to 1ms and immediately kills the socket —
+   * breaking realtime typing/messages. Clamp and reschedule until real expiry.
+   */
+  private static readonly MAX_TIMEOUT_MS = 2_147_483_647;
+
   private scheduleExpiryDisconnect(client: Socket, payload: { exp?: number }) {
+    const existing = this.expiryTimers.get(client.id);
+    if (existing) {
+      clearTimeout(existing);
+      this.expiryTimers.delete(client.id);
+    }
     if (!payload.exp) return;
+
     const msUntilExpiry = payload.exp * 1000 - Date.now();
     if (msUntilExpiry <= 0) {
       client.disconnect(true);
       return;
     }
+
+    const delay = Math.min(msUntilExpiry, ChatGateway.MAX_TIMEOUT_MS);
     const timer = setTimeout(() => {
       this.expiryTimers.delete(client.id);
-      client.disconnect(true);
-    }, msUntilExpiry);
+      const remaining = payload.exp! * 1000 - Date.now();
+      if (remaining <= 0) {
+        client.disconnect(true);
+        return;
+      }
+      // Still valid — reschedule another capped chunk until true expiry.
+      this.scheduleExpiryDisconnect(client, payload);
+    }, delay);
     this.expiryTimers.set(client.id, timer);
   }
 
@@ -678,6 +699,50 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  /**
+   * Broadcast typing indicator to every relevant parent/staff spectator.
+   * Fans out beyond `ticket_*` because parents may be in `family_app_*` /
+   * `parent_ticket_*` without a successful ticket-room join — and typing must
+   * still appear while they have the thread open.
+   */
+  @SubscribeMessage('ticketTyping')
+  async handleTicketTyping(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { ticketId?: string; ticket_id?: string; isTyping?: boolean },
+  ) {
+    const payload = client.data.tafsPayload;
+    const ticketId = data?.ticketId ?? data?.ticket_id;
+    if (!payload?.userType || !ticketId) return { error: 'unauthorized' };
+
+    const typingPayload = {
+      ticketId,
+      isTyping: !!data?.isTyping,
+      userType: payload.userType as 'STAFF' | 'PARENT',
+      userId: payload.sub != null ? String(payload.sub) : undefined,
+      role: payload.role as string | undefined,
+    };
+
+    // Exclude sender; deliver everywhere a parent/staff might be listening.
+    client.to(`ticket_${ticketId}`).emit('ticketTyping', typingPayload);
+    client.to(`parent_ticket_${ticketId}`).emit('ticketTyping', typingPayload);
+
+    try {
+      const ticket = await this.prisma.support_tickets.findUnique({
+        where: { id: ticketId },
+        select: { family_id: true },
+      });
+      if (ticket?.family_id != null) {
+        client
+          .to(`family_app_${ticket.family_id}`)
+          .emit('ticketTyping', typingPayload);
+      }
+    } catch (err: any) {
+      console.warn('[ChatGateway] ticketTyping family fan-out failed:', err?.message);
+    }
+
+    return { success: true };
+  }
+
   @SubscribeMessage('sendTicketMessage')
   async handleSendTicketMessage(
     @ConnectedSocket() client: Socket,
@@ -769,7 +834,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   async broadcastApprovedTicketMessage(ticket: any, message: any) {
-    const messagePayload = { ticket, message };
+    // Always include ticket_id on the message — some Prisma shapes omit it when
+    // nested under includes, and Flutter filters live events by ticketId.
+    const normalizedMessage = {
+      ...message,
+      ticket_id: message?.ticket_id ?? message?.ticketId ?? ticket?.id,
+    };
+    const messagePayload = { ticket, message: normalizedMessage };
     this.server
       .to(`family_app_${ticket.family_id}`)
       .emit('ticketMessageReceived', messagePayload);
@@ -778,10 +849,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageReceived', messagePayload);
     }
+    // Super admins watching from oversight may not be the assignee — ensure they
+    // still receive realtime delivery when in the ticket room (and via approvals).
+    this.server.to('super_admin_approvals').emit('ticketMessageReceived', messagePayload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', messagePayload);
     const reviewedPayload = {
       ticket,
-      message,
+      message: normalizedMessage,
       status: 'APPROVED' as const,
     };
     this.server.to('super_admin_approvals').emit('replyReviewed', reviewedPayload);
@@ -806,7 +880,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   async broadcastTicketMessageToStaff(ticket: any, message: any) {
-    const payload = { ticket, message };
+    const normalizedMessage = {
+      ...message,
+      ticket_id: message?.ticket_id ?? message?.ticketId ?? ticket?.id,
+    };
+    const payload = { ticket, message: normalizedMessage };
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
@@ -815,6 +893,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
       this.server.to('finance_queue').emit('ticketMessageReceived', payload);
     }
+    this.server.to('super_admin_approvals').emit('ticketMessageReceived', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', payload);
   }
 
