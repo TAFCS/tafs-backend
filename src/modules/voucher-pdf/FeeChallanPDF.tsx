@@ -815,11 +815,11 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             const [y, m, d] = String(p.date || '').split('-');
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
                                         })()}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 2 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.head || '-'}</Text>
                                         <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
-                                            <Text style={{ fontSize: 4, color: '#1e293b' }}>{formatPaymentMethod(p.payment_method)}</Text>
+                                            <Text style={{ fontSize: 4, color: '#1e293b' }}>{p.isDiscount ? '-' : formatPaymentMethod(p.payment_method)}</Text>
                                         </View>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>{p.amount || '0'}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
                                 <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>

@@ -49,6 +49,9 @@ export class UnconfirmedAdmissionsService {
           deposit_amount: dto.deposit_amount,
           created_by: createdBy,
           guardians: (dto.guardians as any) ?? [],
+          academic_system: dto.academic_system ?? undefined,
+          requested_grade: dto.requested_grade ?? undefined,
+          admin_notes: dto.admin_notes ?? undefined,
         },
         include: {
           campuses: true,
@@ -90,6 +93,33 @@ export class UnconfirmedAdmissionsService {
     return { url };
   }
 
+  async uploadGuardianPhoto(cc: number, guardianIndex: number, file: Express.Multer.File) {
+    const admission = await this.prisma.unconfirmed_admissions.findUnique({
+      where: { id: cc },
+    });
+    if (!admission) {
+      throw new NotFoundException(`Unconfirmed admission with CC ${cc} not found`);
+    }
+
+    const guardians = ((admission.guardians as any[]) ?? []).slice();
+    if (!guardians[guardianIndex]) {
+      throw new NotFoundException(`Guardian at index ${guardianIndex} not found for CC ${cc}`);
+    }
+
+    const extension = file.originalname.split('.').pop() || 'jpg';
+    const key = `media/unconfirmed-admissions/${cc}/guardian-${guardianIndex}-photo-${Date.now()}.${extension}`;
+    const url = await this.storage.upload(key, file.buffer, file.mimetype);
+
+    guardians[guardianIndex] = { ...guardians[guardianIndex], photograph_url: url };
+
+    await this.prisma.unconfirmed_admissions.update({
+      where: { id: cc },
+      data: { guardians },
+    });
+
+    return { url };
+  }
+
   async generateDepositSlipPdf(cc: number): Promise<Buffer> {
     const admission = await this.getByCC(cc);
     const ageStr = this.calculateAge(admission.date_of_birth);
@@ -102,11 +132,15 @@ export class UnconfirmedAdmissionsService {
       gender: admission.gender,
       address: admission.address || undefined,
       campusName: admission.campuses?.campus_name || undefined,
+      academicSystem: admission.academic_system || undefined,
+      requestedGrade: admission.requested_grade || undefined,
       depositAmount: Number(admission.deposit_amount).toLocaleString('en-US', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       }),
       guardians: (admission.guardians as any[]) || [],
+      adminNotes: admission.admin_notes || undefined,
+      createdBy: admission.created_by || undefined,
       createdAt: admission.created_at.toLocaleDateString('en-GB'),
     };
 

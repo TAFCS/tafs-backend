@@ -825,8 +825,8 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             const [y, m, d] = String(p.date || '').split('-');
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
                                         })()}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 2 }]}>{p.head || '-'}</Text>
-                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{p.amount || '0'}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 2 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.head || '-'}</Text>
+                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
                                 <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>

@@ -1612,18 +1612,21 @@ model otp_codes {
 }
 
 model unconfirmed_admissions {
-  id             Int       @id @default(autoincrement())
-  full_name      String    @db.VarChar(200)
-  date_of_birth  DateTime  @db.Date
-  gender         String    @db.VarChar(20)
-  address        String?
-  campus_id      Int?
-  photograph_url String?
-  deposit_amount Decimal   @db.Decimal(10, 2)
-  created_at     DateTime  @default(now()) @db.Timestamp(6)
-  created_by     String?   @db.VarChar(255)
-  guardians      Json?     @default("[]")
-  campuses       campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
+  id              Int       @id @default(autoincrement())
+  full_name       String    @db.VarChar(200)
+  date_of_birth   DateTime  @db.Date
+  gender          String    @db.VarChar(20)
+  address         String?
+  campus_id       Int?
+  photograph_url  String?
+  deposit_amount  Decimal   @db.Decimal(10, 2)
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  created_by      String?   @db.VarChar(255)
+  guardians       Json?     @default("[]")
+  academic_system String?   @db.VarChar(20)
+  requested_grade String?   @db.VarChar(20)
+  admin_notes     String?
+  campuses        campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
 }
 
 enum BulkJobStatus {

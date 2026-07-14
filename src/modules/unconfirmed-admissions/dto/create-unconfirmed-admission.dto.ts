@@ -9,6 +9,8 @@ import {
   Matches,
   IsArray,
   ValidateNested,
+  MaxLength,
+  Allow,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -60,4 +62,17 @@ export class CreateUnconfirmedAdmissionDto {
   @ValidateNested({ each: true })
   @Type(() => GuardianDetailDto)
   guardians?: GuardianDetailDto[];
+
+  @Allow()
+  @IsOptional()
+  academic_system?: any;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(20)
+  requested_grade?: string;
+
+  @IsString()
+  @IsOptional()
+  admin_notes?: string;
 }

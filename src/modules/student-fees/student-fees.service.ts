@@ -1303,23 +1303,44 @@ export class StudentFeesService {
      */
     async createDiscount(dto: {
         student_id: number;
-        discount_type_id: number | null;
+        discount_type_id?: number | null;
         custom_title?: string;
         amount: number;
-        fee_date: string;
+        fee_date?: string;
         target_month: number;
         academic_year: string;
     }) {
         const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
         if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
 
-        // If no preset and a custom_title is provided, create a new preset on the fly
-        let discountTypeId = dto.discount_type_id;
-        if (!discountTypeId && dto.custom_title) {
+        if (!Number.isFinite(dto.amount) || dto.amount <= 0) {
+            throw new BadRequestException(`Discount amount must be a positive number, got "${dto.amount}"`);
+        }
+
+        // Either an existing preset (must actually exist) or a custom_title (used to create one on the fly).
+        let discountTypeId = dto.discount_type_id ?? null;
+        if (discountTypeId != null) {
+            const preset = await this.prisma.discount_presets.findUnique({ where: { id: discountTypeId } });
+            if (!preset) throw new NotFoundException(`Discount preset #${discountTypeId} not found`);
+        } else if (dto.custom_title?.trim()) {
             const newPreset = await this.prisma.discount_presets.create({
-                data: { title: dto.custom_title, is_active: true },
+                data: { title: dto.custom_title.trim(), is_active: true },
             });
             discountTypeId = newPreset.id;
+        } else {
+            throw new BadRequestException('Provide either a discount_type_id or a custom_title for the discount.');
+        }
+
+        // fee_date is optional — leave it null rather than passing an unparsable
+        // value through to Prisma (new Date(undefined) is an "Invalid Date" and
+        // crashes the insert with an opaque 500).
+        let feeDate: Date | null = null;
+        if (dto.fee_date) {
+            const parsed = new Date(dto.fee_date);
+            if (Number.isNaN(parsed.getTime())) {
+                throw new BadRequestException(`Invalid fee_date "${dto.fee_date}" — expected format YYYY-MM-DD.`);
+            }
+            feeDate = parsed;
         }
 
         return this.prisma.student_fees.create({
@@ -1332,7 +1353,7 @@ export class StudentFeesService {
                 amount_paid: new Prisma.Decimal(0),
                 academic_year: dto.academic_year,
                 target_month: dto.target_month,
-                fee_date: new Date(dto.fee_date),
+                fee_date: feeDate,
                 status: 'DISCOUNT' as any,
             },
             include: {

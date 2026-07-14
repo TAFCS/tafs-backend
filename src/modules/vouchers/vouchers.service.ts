@@ -1171,6 +1171,23 @@ export class VouchersService {
             orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
         });
 
+        // Discount rows never have amount_paid set (they reduce the total up front rather
+        // than being deposited against), so they can't be picked up by the query above.
+        // Fetch them separately and slot each one under the paid heads that share its
+        // fee_date (i.e. the same billing period), once that period has actually been paid.
+        const discountStudentFees = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: voucher.student_id,
+                is_discount: true,
+                fee_date: { not: null },
+            },
+            include: { discount_presets: true } as any,
+            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
+        });
+
+        const feeDateKeyOf = (d: Date | string | null | undefined) =>
+            d ? new Date(d).toISOString().split('T')[0] : null;
+
         const paymentHistoryRows = paidStudentFees
             .filter((sf: any) => {
                 const isStandaloneInstallment = sf.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
@@ -1199,27 +1216,71 @@ export class VouchersService {
                 return {
                     dateObj,
                     date: dateObj ? dateObj.toISOString().split('T')[0] : 'N/A',
+                    feeDateKey: feeDateKeyOf(sf.fee_date),
                     head,
                     amount: paidAmount,
+                    isDiscount: false,
                     payment_method: (sf as any).deposit_allocations?.[0]?.deposits?.payment_method || null,
                 };
             })
-            .filter((row: any) => !!row)
-            .sort((a: any, b: any) => {
+            .filter((row: any) => !!row);
+
+        // Group the paid heads by billing period (fee_date). paidStudentFees was queried
+        // ordered by fee_date asc, so the order groups are first seen in is already the
+        // ascending fee_date order we want between groups.
+        const groupOrder: string[] = [];
+        const groupedRows = new Map<string, any[]>();
+        for (const row of paymentHistoryRows as any[]) {
+            const key = row.feeDateKey ?? `__nodate_${row.date}`;
+            if (!groupedRows.has(key)) {
+                groupedRows.set(key, []);
+                groupOrder.push(key);
+            }
+            groupedRows.get(key)!.push(row);
+        }
+        // Within each fee_date group, order by when it was actually deposited (ascending).
+        for (const key of groupOrder) {
+            groupedRows.get(key)!.sort((a: any, b: any) => {
                 const aTime = a.dateObj ? a.dateObj.getTime() : 0;
                 const bTime = b.dateObj ? b.dateObj.getTime() : 0;
                 return aTime - bTime;
             });
+        }
+
+        // Only surface a discount once the heads from the same fee_date have been paid
+        // (i.e. only for fee_date groups that already exist above).
+        const discountsByFeeDate = new Map<string, any[]>();
+        for (const sf of discountStudentFees as any[]) {
+            const key = feeDateKeyOf(sf.fee_date);
+            if (!key || !groupedRows.has(key)) continue;
+            const amount = Number(sf.amount ?? 0);
+            if (amount <= 0) continue;
+            if (!discountsByFeeDate.has(key)) discountsByFeeDate.set(key, []);
+            discountsByFeeDate.get(key)!.push({
+                date: key,
+                head: sf.discount_presets?.title || 'Discount',
+                amount,
+                isDiscount: true,
+                payment_method: null,
+            });
+        }
+
+        const orderedPaymentRows: any[] = [];
+        for (const key of groupOrder) {
+            orderedPaymentRows.push(...groupedRows.get(key)!);
+            if (discountsByFeeDate.has(key)) orderedPaymentRows.push(...discountsByFeeDate.get(key)!);
+        }
 
         let paymentRunningTotal = 0;
-        const paymentHistory = paymentHistoryRows.map((row: any) => {
-            paymentRunningTotal += row.amount;
+        const paymentHistory = orderedPaymentRows.map((row: any) => {
+            paymentRunningTotal += row.isDiscount ? -row.amount : row.amount;
             return {
                 date: row.date,
                 head: row.head,
-                amount: row.amount.toLocaleString(),
+                amount: row.isDiscount ? `-${row.amount.toLocaleString()}` : row.amount.toLocaleString(),
                 totalAmount: paymentRunningTotal.toLocaleString(),
                 payment_method: row.payment_method,
+                isDiscount: row.isDiscount,
             };
         });
 

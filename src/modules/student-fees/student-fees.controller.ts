@@ -20,6 +20,7 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
+import { CreateDiscountDto } from './dto/create-discount.dto';
 
 @Controller('student-fees')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -274,24 +275,8 @@ export class StudentFeesController {
     @Post('discount')
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async createDiscount(@Body() body: {
-        student_id: number;
-        discount_type_id?: number;
-        custom_title?: string;
-        amount: number;
-        fee_date: string;
-        target_month: number;
-        academic_year: string;
-    }) {
-        const data = await this.studentFeesService.createDiscount({
-            student_id: body.student_id,
-            discount_type_id: body.discount_type_id ?? null,
-            custom_title: body.custom_title,
-            amount: body.amount,
-            fee_date: body.fee_date,
-            target_month: body.target_month,
-            academic_year: body.academic_year,
-        });
+    async createDiscount(@Body() body: CreateDiscountDto) {
+        const data = await this.studentFeesService.createDiscount(body);
         return { success: true, data };
     }
 

@@ -86,6 +86,35 @@ export class UnconfirmedAdmissionsController {
     return createApiResponse(data, HttpStatus.OK, 'Photograph uploaded successfully');
   }
 
+  @Post(':cc/guardian-photo/:index')
+  @ApiOperation({ summary: 'Upload photograph for a guardian on an unconfirmed admission' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadGuardianPhoto(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Param('index', ParseIntPipe) index: number,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    this.assertSuperAdmin(user);
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+    const data = await this.service.uploadGuardianPhoto(cc, index, file);
+    return createApiResponse(data, HttpStatus.OK, 'Guardian photograph uploaded successfully');
+  }
+
   @Get(':cc/deposit-slip')
   @ApiOperation({ summary: 'Get deposit slip PDF for unconfirmed admission' })
   async getDepositSlip(

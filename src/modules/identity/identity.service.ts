@@ -601,6 +601,7 @@ export class IdentityService {
             full_name: g.name,
             cnic: g.cnic,
             house_appt_name: unconfirmed.address,
+            photo_url: g.photograph_url,
           }
         });
       }
@@ -617,10 +618,11 @@ export class IdentityService {
         student_guardians: guardians,
         student_admissions: [
           {
-            academic_system: 'Secondary',
-            requested_grade: 'N/A'
+            academic_system: unconfirmed.academic_system || 'Secondary',
+            requested_grade: unconfirmed.requested_grade || 'N/A',
           }
         ],
+        admin_notes: unconfirmed.admin_notes || undefined,
         source: 'unconfirmed_admission',
       } as any;
     }
