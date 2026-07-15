@@ -246,7 +246,8 @@ export class StudentsService {
     if (class_id)    where.class_id   = class_id;
     if (section_id)  where.section_id = section_id;
     if (house_id)    where.house_id   = house_id;
-    if (status)      where.status     = status;
+    // 'UNCONFIRMED' is a virtual status served from unconfirmed_admissions, not a real students.status value.
+    if (status && status !== 'UNCONFIRMED') where.status = status as any;
 
     // Data Audit Filters
     const auditType = query.audit_type || (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true ? 'abnormal' : null);
@@ -294,11 +295,138 @@ export class StudentsService {
     return where;
   }
 
+  /**
+   * Builds the where-clause for surfacing pending quick-admission
+   * (unconfirmed_admissions) records in the directory. Returns null when the
+   * active filters make these class-less, pre-student records irrelevant.
+   */
+  private buildUnconfirmedWhere(
+    query: GetStudentsDto,
+    user?: IJwtStaffPayload,
+  ): Prisma.unconfirmed_admissionsWhereInput | null {
+    const { search, campus_id, class_id, section_id, house_id, has_photo } = query;
+    const auditType =
+      query.audit_type ||
+      (query.is_abnormal === '1' || query.is_abnormal === 'true' ? 'abnormal' : null);
+
+    // These filters have no meaning for unconfirmed rows → exclude them entirely.
+    if (class_id || section_id || house_id || auditType) return null;
+    // Class-band-restricted staff cannot be scoped to class-less records.
+    if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
+
+    const where: Prisma.unconfirmed_admissionsWhereInput = {};
+    const and: Prisma.unconfirmed_admissionsWhereInput[] = [];
+
+    if (search) {
+      const isNumeric = /^\d+$/.test(search);
+      where.OR = [
+        { full_name: { contains: search, mode: 'insensitive' } },
+        ...(isNumeric ? [{ id: Number(search) }] : []),
+      ];
+    }
+
+    // Campus scope: a staff member's own campus wins, else the optional filter.
+    const scopedCampus = user?.campusId ?? campus_id;
+    if (scopedCampus != null) where.campus_id = scopedCampus;
+
+    if (has_photo === 'true') {
+      and.push({ photograph_url: { not: null } }, { photograph_url: { not: '' } });
+    } else if (has_photo === 'false') {
+      and.push({ OR: [{ photograph_url: null }, { photograph_url: '' }] });
+    }
+    if (and.length) where.AND = and;
+
+    return where;
+  }
+
+  /** Maps an unconfirmed_admissions row into the same item shape as a student. */
+  private mapUnconfirmedItem(u: any) {
+    const guardians = Array.isArray(u.guardians) ? u.guardians : [];
+    const primary = guardians[0] || null;
+    const core = {
+      cc: u.id,
+      full_name: u.full_name,
+      cc_number: u.id,
+      gr_number: null,
+      cnic: null,
+      campus_name: u.campuses?.campus_name ?? null,
+      campus_code: u.campuses?.campus_code ?? null,
+      class_description: u.requested_grade ?? null,
+      class_code: null,
+      section_description: null,
+      house_name: null,
+      house_color: null,
+      enrollment_status: 'UNCONFIRMED',
+      class_id: null,
+      photograph_url: u.photograph_url ?? null,
+      academic_system: u.academic_system ?? null,
+      requested_grade: u.requested_grade ?? null,
+      primary_guardian_name: primary?.name ?? null,
+      guardian_relationship: primary?.relation ?? null,
+      primary_guardian_cnic: primary?.cnic ?? null,
+    };
+    return {
+      id: u.id,
+      cc: u.id,
+      core,
+      student_full_name: core.full_name,
+      gr_number: null,
+      cc_number: u.id,
+      cnic: null,
+      campus: core.campus_name,
+      class_id: null,
+      grade_and_section: u.requested_grade ?? null,
+      primary_guardian_name: core.primary_guardian_name,
+      whatsapp_number: null,
+      enrollment_status: 'UNCONFIRMED',
+      financial_status_badge: 'NO_SCHEDULE',
+      family_id: null,
+      household_name: null,
+      primary_guardian_cnic: core.primary_guardian_cnic,
+      date_of_birth: u.date_of_birth,
+      registration_number: u.id,
+      residential_address: u.address ?? null,
+      siblings: [],
+      source: 'unconfirmed_admission',
+    };
+  }
+
   async findAll(query: GetStudentsDto, user?: IJwtStaffPayload) {
     const { page = 1, limit = 10, fields } = query;
     const offset = calculateOffset(page, limit);
 
     const where = await this.buildStudentsWhere(query, user);
+
+    // ── Unconfirmed (quick-admission) records ───────────────────────────────
+    // Shown when no status filter is applied (mixed in, sorted first by their
+    // higher CC), or exclusively when the virtual 'UNCONFIRMED' status is picked.
+    const statusFilter = query.status;
+    const onlyUnconfirmed = statusFilter === 'UNCONFIRMED';
+    const uncWhere =
+      !statusFilter || onlyUnconfirmed
+        ? this.buildUnconfirmedWhere(query, user)
+        : null;
+    const uncInclude = { campuses: { select: { campus_name: true, campus_code: true } } };
+
+    if (onlyUnconfirmed) {
+      if (!uncWhere) {
+        return { items: [], meta: createPaginationMeta(page, limit, 0) };
+      }
+      const [uncTotal, uncData] = await Promise.all([
+        this.prisma.unconfirmed_admissions.count({ where: uncWhere }),
+        this.prisma.unconfirmed_admissions.findMany({
+          where: uncWhere,
+          include: uncInclude,
+          orderBy: { id: 'desc' },
+          skip: offset,
+          take: limit,
+        }),
+      ]);
+      return {
+        items: uncData.map((u) => this.mapUnconfirmedItem(u)),
+        meta: createPaginationMeta(page, limit, uncTotal),
+      };
+    }
 
     // Determine what relations to include based on user's selected fields
     // If fields is undefined, we return ALL categories by default.
@@ -435,17 +563,47 @@ export class StudentsService {
       };
     }
 
-    // Execute count and data queries concurrently
-    const [total, studentsData] = await Promise.all([
-      this.prisma.students.count({ where }),
-      this.prisma.students.findMany({
-        where,
-        skip: offset,
-        take: limit,
-        orderBy: { cc: 'desc' },
-        select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true },
-      }),
-    ]);
+    // Unconfirmed rows (if any) sort first since they carry the highest CCs.
+    // Work out how this page splits between unconfirmed and real students.
+    const uncTotal = uncWhere
+      ? await this.prisma.unconfirmed_admissions.count({ where: uncWhere })
+      : 0;
+    const studentsTotal = await this.prisma.students.count({ where });
+    const total = studentsTotal + uncTotal;
+
+    let unconfirmedItemsForPage: any[] = [];
+    let studentsSkip = offset;
+    let studentsTake = limit;
+
+    if (uncTotal > 0 && uncWhere) {
+      if (offset < uncTotal) {
+        const uncTake = Math.min(limit, uncTotal - offset);
+        const uncData = await this.prisma.unconfirmed_admissions.findMany({
+          where: uncWhere,
+          include: uncInclude,
+          orderBy: { id: 'desc' },
+          skip: offset,
+          take: uncTake,
+        });
+        unconfirmedItemsForPage = uncData.map((u) => this.mapUnconfirmedItem(u));
+        studentsSkip = 0;
+        studentsTake = limit - uncTake;
+      } else {
+        studentsSkip = offset - uncTotal;
+        studentsTake = limit;
+      }
+    }
+
+    const studentsData =
+      studentsTake > 0
+        ? await this.prisma.students.findMany({
+            where,
+            skip: studentsSkip,
+            take: studentsTake,
+            orderBy: { cc: 'desc' },
+            select: Object.keys(selectArgs).length > 1 ? selectArgs : { cc: true },
+          })
+        : [];
 
     // ── Batch Financial Status (NEW) ────────────────────────────────────────
     // To avoid N+1 queries when populating financial badges for the list view,
@@ -635,7 +793,8 @@ export class StudentsService {
 
     const meta = createPaginationMeta(page, limit, total);
 
-    return { items: mappedItems, meta };
+    // Unconfirmed records lead the page (highest CCs first), then real students.
+    return { items: [...unconfirmedItemsForPage, ...mappedItems], meta };
   }
 
   async exportExcel(query: GetStudentsDto, user?: IJwtStaffPayload): Promise<Buffer> {

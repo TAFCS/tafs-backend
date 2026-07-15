@@ -1,6 +1,11 @@
-import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray, IsIn } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { StudentStatus } from '../../../constants/student-status.constant';
+
+// Accepts every real student status plus the virtual "UNCONFIRMED" pseudo-status,
+// which surfaces pending quick-admission (unconfirmed_admissions) records.
+export const STUDENT_LIST_STATUSES = [...Object.values(StudentStatus), 'UNCONFIRMED'] as const;
+export type StudentListStatus = (typeof STUDENT_LIST_STATUSES)[number];
 
 export class GetStudentsDto {
   @IsOptional()
@@ -40,8 +45,8 @@ export class GetStudentsDto {
   house_id?: number;
 
   @IsOptional()
-  @IsEnum(StudentStatus)
-  status?: StudentStatus;
+  @IsIn(STUDENT_LIST_STATUSES as unknown as string[])
+  status?: StudentListStatus;
 
   @IsOptional()
   @IsArray()

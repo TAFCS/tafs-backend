@@ -94,6 +94,20 @@ const styles = StyleSheet.create({
     color: '#333333',
     marginTop: 1,
   },
+  provisionalBadge: {
+    marginTop: 3,
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: '#b45309',
+    backgroundColor: '#fef3c7',
+    borderWidth: 0.5,
+    borderColor: '#f59e0b',
+    borderRadius: 3,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   studentSection: {
     flexDirection: 'column',
     backgroundColor: '#f9f9f9',
@@ -284,6 +298,7 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
         <Text style={styles.schoolName}>THE AMERICAN FOUNDATION SCHOOL</Text>
         <Text style={styles.schoolAddress}>{data.campusName || 'Main Campus'}</Text>
         <Text style={styles.schoolAddress}>QUICK ADMISSION — DEPOSIT SLIP</Text>
+        <Text style={styles.provisionalBadge}>PROVISIONAL RECEIPT</Text>
       </View>
     </View>
 
