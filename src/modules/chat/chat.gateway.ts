@@ -833,6 +833,34 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.server.to(`family_app_${familyId}`).emit('voucherAlertReceived', payload);
   }
 
+  broadcastNoticeBoard(
+    familyId: number,
+    payload: {
+      type: 'notice_board';
+      post_id: number;
+      title: string;
+      body: string;
+      is_pinned: boolean;
+    },
+  ) {
+    this.server.to(`family_app_${familyId}`).emit('noticeBoardReceived', payload);
+  }
+
+  broadcastAttendanceAlert(
+    familyId: number,
+    payload: {
+      id: number;
+      student_cc: number;
+      direction: string;
+      scan_time: string;
+      title: string;
+      body: string;
+      created_at: Date | string;
+    },
+  ) {
+    this.server.to(`family_app_${familyId}`).emit('attendanceAlertReceived', payload);
+  }
+
   async broadcastApprovedTicketMessage(ticket: any, message: any) {
     // Always include ticket_id on the message — some Prisma shapes omit it when
     // nested under includes, and Flutter filters live events by ticketId.

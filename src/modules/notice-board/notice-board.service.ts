@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ChatGateway } from '../chat/chat.gateway';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
@@ -14,6 +15,8 @@ export class NoticeBoardService {
     private readonly storage: StorageService,
     private readonly fcm: FcmService,
     private readonly auditLogs: AuditLogsService,
+    @Inject(forwardRef(() => ChatGateway))
+    private readonly chatGateway: ChatGateway,
   ) {}
 
   // ── Family-facing ────────────────────────────────────────────────────────
@@ -161,15 +164,22 @@ export class NoticeBoardService {
   }
 
   async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string) {
+    // Student targeting is exclusive in the feed — strip campus/class/section so
+    // the stored post can't look school-/campus-scoped while only listing kids.
+    const studentCcs = dto.student_ccs ?? [];
+    const campusIds = studentCcs.length ? [] : (dto.campus_ids ?? []);
+    const classIds = studentCcs.length ? [] : (dto.class_ids ?? []);
+    const sectionIds = studentCcs.length ? [] : (dto.section_ids ?? []);
+
     const post = await this.prisma.notice_board_posts.create({
       data: {
         posted_by: postedBy,
         title: dto.title,
         body: dto.body,
-        campus_ids: dto.campus_ids ?? [],
-        class_ids: dto.class_ids ?? [],
-        section_ids: dto.section_ids ?? [],
-        student_ccs: dto.student_ccs ?? [],
+        campus_ids: campusIds,
+        class_ids: classIds,
+        section_ids: sectionIds,
+        student_ccs: studentCcs,
         media_urls: dto.media_urls ?? [],
         media_types: dto.media_types ?? [],
         is_pinned: dto.is_pinned ?? false,
@@ -203,54 +213,104 @@ export class NoticeBoardService {
     id: number;
     title: string | null;
     body: string;
+    is_pinned?: boolean;
     campus_ids: unknown;
     class_ids: unknown;
     section_ids: unknown;
     student_ccs: unknown;
   }) {
+    const familyIds = await this._resolveAudienceFamilyIds(post);
+    if (!familyIds.length) return;
+
+    const title = post.title ?? 'New School Notice';
+    const body =
+      post.body.length > 120 ? post.body.slice(0, 117) + '…' : post.body;
+    const data = { type: 'notice_board', post_id: String(post.id) };
+    const socketPayload = {
+      type: 'notice_board' as const,
+      post_id: post.id,
+      title,
+      body,
+      is_pinned: post.is_pinned ?? false,
+    };
+
+    await Promise.allSettled(
+      familyIds.map(async (familyId) => {
+        this.chatGateway.broadcastNoticeBoard(familyId, socketPayload);
+        await this.fcm.sendToFamily(familyId, title, body, data);
+      }),
+    );
+  }
+
+  /**
+   * Resolve which families should receive a notice push / socket event.
+   * Must match getPostsForFamily visibility:
+   * - student_ccs set → ONLY those students' families (exclusive)
+   * - else campus/class/section → matching families
+   * - else → school-wide
+   */
+  private async _resolveAudienceFamilyIds(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+  }): Promise<number[]> {
     const campusIds = (post.campus_ids as number[]) ?? [];
-    const classIds  = (post.class_ids as number[])  ?? [];
+    const classIds = (post.class_ids as number[]) ?? [];
     const sectionIds = (post.section_ids as number[]) ?? [];
     const studentCcs = (post.student_ccs as number[]) ?? [];
 
+    // Student targeting is exclusive — same as feed filtering.
+    if (studentCcs.length) {
+      const targetStudents = await this.prisma.students.findMany({
+        where: {
+          cc: { in: studentCcs },
+          deleted_at: null,
+          family_id: { not: null },
+        },
+        select: { family_id: true },
+      });
+      return [
+        ...new Set(
+          targetStudents
+            .map((s) => s.family_id)
+            .filter((id): id is number => id != null),
+        ),
+      ];
+    }
+
+    const hasScope =
+      campusIds.length > 0 || classIds.length > 0 || sectionIds.length > 0;
+
+    if (hasScope) {
+      const families = await this.prisma.families.findMany({
+        where: {
+          deleted_at: null,
+          students: {
+            some: {
+              deleted_at: null,
+              AND: [
+                campusIds.length ? { campus_id: { in: campusIds } } : {},
+                classIds.length ? { class_id: { in: classIds } } : {},
+                sectionIds.length ? { section_id: { in: sectionIds } } : {},
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      });
+      return families.map((f) => f.id);
+    }
+
+    // School-wide notice: no audience filters set.
     const families = await this.prisma.families.findMany({
       where: {
         deleted_at: null,
-        students: {
-          some: {
-            deleted_at: null,
-            AND: [
-              campusIds.length  ? { campus_id:  { in: campusIds  } } : {},
-              classIds.length   ? { class_id:   { in: classIds   } } : {},
-              sectionIds.length ? { section_id: { in: sectionIds } } : {},
-            ],
-          },
-        },
+        students: { some: { deleted_at: null } },
       },
       select: { id: true },
     });
-
-    const title = post.title ?? 'New School Notice';
-    const body  = post.body.length > 120 ? post.body.slice(0, 117) + '…' : post.body;
-    const data  = { type: 'notice_board', post_id: String(post.id) };
-
-    const sentFamilyIds = new Set(families.map((f) => f.id));
-
-    await Promise.allSettled(
-      families.map((f) => this.fcm.sendToFamily(f.id, title, body, data)),
-    );
-
-    if (studentCcs.length) {
-      const targetStudents = await this.prisma.students.findMany({
-        where: { cc: { in: studentCcs }, deleted_at: null, family_id: { not: null } },
-        select: { family_id: true },
-      });
-      const extraFamilyIds = [...new Set(targetStudents.map((s) => s.family_id!))];
-      const newFamilies = extraFamilyIds.filter((id) => !sentFamilyIds.has(id));
-      await Promise.allSettled(
-        newFamilies.map((id) => this.fcm.sendToFamily(id, title, body, data)),
-      );
-    }
+    return families.map((f) => f.id);
   }
 
   async updatePost(id: string | number, dto: UpdatePostDto) {

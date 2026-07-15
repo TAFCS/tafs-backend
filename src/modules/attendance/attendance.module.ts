@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { HrModule } from '../hr/hr.module';
 import { ChatModule } from '../chat/chat.module';
@@ -27,7 +27,13 @@ import { ClassCheckInScheduleController } from './class-check-in-schedule.contro
 import { RecomputeLateController } from './recompute-late.controller';
 
 @Module({
-  imports: [AuthModule, HrModule, ChatModule, FcmModule, TimetablesModule],
+  imports: [
+    AuthModule,
+    HrModule,
+    forwardRef(() => ChatModule),
+    FcmModule,
+    TimetablesModule,
+  ],
   controllers: [
     RollSessionsController,
     StaffAttendanceController,

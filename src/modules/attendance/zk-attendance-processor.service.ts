@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import {
   AttendanceSource,
   DevicePersonType,
@@ -13,6 +13,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
@@ -69,6 +70,8 @@ export class ZkAttendanceProcessorService {
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly policyResolver: AttendancePolicyResolverService,
     private readonly auditLogs: AuditLogsService,
+    @Inject(forwardRef(() => ChatGateway))
+    private readonly chatGateway: ChatGateway,
   ) {}
 
   async processPush(
@@ -580,7 +583,7 @@ export class ZkAttendanceProcessorService {
       body = await resolveTemplate(this.prisma, 'notif_attend_left_body', '{student_name} has left TAFS at {time}', vars);
     }
 
-    await this.prisma.attendance_notifications.create({
+    const row = await this.prisma.attendance_notifications.create({
       data: {
         family_id: student.family_id,
         student_cc: studentCc,
@@ -591,11 +594,25 @@ export class ZkAttendanceProcessorService {
       },
     });
 
+    const scanTimeIso = scanRow.scan_time.toISOString();
+    this.chatGateway.broadcastAttendanceAlert(student.family_id, {
+      id: row.id,
+      student_cc: studentCc,
+      direction,
+      scan_time: scanTimeIso,
+      title,
+      body,
+      created_at: row.created_at,
+    });
+
     await this.fcmService.sendToFamily(student.family_id, title, body, {
       type: 'biometric_attendance',
+      notification_id: String(row.id),
       student_cc: String(studentCc),
       direction,
-      scan_time: scanRow.scan_time.toISOString(),
+      scan_time: scanTimeIso,
+      title,
+      body,
     });
 
     return true;
