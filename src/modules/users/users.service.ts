@@ -31,7 +31,7 @@ export class UsersService {
 
   async findParentByUsername(username: string) {
     return this.prisma.families.findFirst({
-      where: { email: username },
+      where: { email: username, deleted_at: null, password_hash: { not: null } },
       select: {
         id: true,
         email: true,

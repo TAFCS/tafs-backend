@@ -327,9 +327,10 @@ export class AuthService {
       where: { id: existing.family_id },
       select: {
         id: true,
+        deleted_at: true,
       },
     });
-    if (!family) throw new UnauthorizedException('Account not found');
+    if (!family || family.deleted_at) throw new UnauthorizedException('Account not found');
 
     const payload: IJwtParentPayload = {
       sub: family.id,
@@ -478,7 +479,9 @@ export class AuthService {
       );
     }
 
-    if (institutionalFamily.email || institutionalFamily.password_hash) {
+    // Only block re-registration if the account is ACTIVE (not deleted) and already has credentials.
+    // A soft-deleted account (deleted_at set) must always be allowed to re-register.
+    if (!institutionalFamily.deleted_at && (institutionalFamily.email || institutionalFamily.password_hash)) {
       throw new ConflictException(
         'Account already registered. Please log in.',
       );
@@ -503,6 +506,7 @@ export class AuthService {
         email: normalizedEmail,
         password_hash: passwordHash,
         household_name: guardian.full_name || institutionalFamily.household_name,
+        deleted_at: null, // Clear soft-delete flag in case the account was previously deleted and is being re-registered
       },
     });
 
@@ -570,7 +574,9 @@ export class AuthService {
       );
     }
 
-    if (institutionalFamily.email || institutionalFamily.password_hash) {
+    // Only block re-registration if the account is ACTIVE (not deleted) and already has credentials.
+    // A soft-deleted account (deleted_at set) must always be allowed to re-register.
+    if (!institutionalFamily.deleted_at && (institutionalFamily.email || institutionalFamily.password_hash)) {
       throw new ConflictException(
         'Account already registered. Please log in.',
       );
