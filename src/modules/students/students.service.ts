@@ -246,8 +246,12 @@ export class StudentsService {
     if (class_id)    where.class_id   = class_id;
     if (section_id)  where.section_id = section_id;
     if (house_id)    where.house_id   = house_id;
-    // 'UNCONFIRMED' is a virtual status served from unconfirmed_admissions, not a real students.status value.
-    if (status && status !== 'UNCONFIRMED') where.status = status as any;
+    // UNCONFIRMED is kept as an alias for QUICK_ADMISSION (real students status).
+    if (status === 'UNCONFIRMED') {
+      where.status = StudentStatus.QUICK_ADMISSION as any;
+    } else if (status) {
+      where.status = status as any;
+    }
 
     // Data Audit Filters
     const auditType = query.audit_type || (query.is_abnormal === '1' || query.is_abnormal === 'true' || (query as any).is_abnormal === true ? 'abnormal' : null);
@@ -296,11 +300,11 @@ export class StudentsService {
   }
 
   /**
-   * Builds the where-clause for surfacing pending quick-admission
-   * (unconfirmed_admissions) records in the directory. Returns null when the
-   * active filters make these class-less, pre-student records irrelevant.
+   * Remaining unconfirmed_admissions rows (collision leftovers after migration,
+   * or not-yet-migrated rows). Migrated non-colliding rows are deleted from this
+   * table by the migration script so they do not duplicate QUICK_ADMISSION students.
    */
-  private buildUnconfirmedWhere(
+  private buildLeftoverUnconfirmedWhere(
     query: GetStudentsDto,
     user?: IJwtStaffPayload,
   ): Prisma.unconfirmed_admissionsWhereInput | null {
@@ -309,9 +313,7 @@ export class StudentsService {
       query.audit_type ||
       (query.is_abnormal === '1' || query.is_abnormal === 'true' ? 'abnormal' : null);
 
-    // These filters have no meaning for unconfirmed rows → exclude them entirely.
     if (class_id || section_id || house_id || auditType) return null;
-    // Class-band-restricted staff cannot be scoped to class-less records.
     if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
 
     const where: Prisma.unconfirmed_admissionsWhereInput = {};
@@ -325,7 +327,6 @@ export class StudentsService {
       ];
     }
 
-    // Campus scope: a staff member's own campus wins, else the optional filter.
     const scopedCampus = user?.campusId ?? campus_id;
     if (scopedCampus != null) where.campus_id = scopedCampus;
 
@@ -339,7 +340,7 @@ export class StudentsService {
     return where;
   }
 
-  /** Maps an unconfirmed_admissions row into the same item shape as a student. */
+  /** Maps a leftover unconfirmed_admissions row into the student list item shape. */
   private mapUnconfirmedItem(u: any) {
     const guardians = Array.isArray(u.guardians) ? u.guardians : [];
     const primary = guardians[0] || null;
@@ -356,7 +357,7 @@ export class StudentsService {
       section_description: null,
       house_name: null,
       house_color: null,
-      enrollment_status: 'UNCONFIRMED',
+      enrollment_status: 'QUICK_ADMISSION',
       class_id: null,
       photograph_url: u.photograph_url ?? null,
       academic_system: u.academic_system ?? null,
@@ -378,7 +379,7 @@ export class StudentsService {
       grade_and_section: u.requested_grade ?? null,
       primary_guardian_name: core.primary_guardian_name,
       whatsapp_number: null,
-      enrollment_status: 'UNCONFIRMED',
+      enrollment_status: 'QUICK_ADMISSION',
       financial_status_badge: 'NO_SCHEDULE',
       family_id: null,
       household_name: null,
@@ -395,36 +396,127 @@ export class StudentsService {
     const { page = 1, limit = 10, fields } = query;
     const offset = calculateOffset(page, limit);
 
+    // Alias UNCONFIRMED → QUICK_ADMISSION for the students query
+    const statusFilter = query.status;
+    const quickOnly =
+      statusFilter === 'UNCONFIRMED' || statusFilter === StudentStatus.QUICK_ADMISSION;
+
     const where = await this.buildStudentsWhere(query, user);
 
-    // ── Unconfirmed (quick-admission) records ───────────────────────────────
-    // Shown when no status filter is applied (mixed in, sorted first by their
-    // higher CC), or exclusively when the virtual 'UNCONFIRMED' status is picked.
-    const statusFilter = query.status;
-    const onlyUnconfirmed = statusFilter === 'UNCONFIRMED';
+    // Remaining unconfirmed rows (collision leftovers / pre-migration) — dual-read
     const uncWhere =
-      !statusFilter || onlyUnconfirmed
-        ? this.buildUnconfirmedWhere(query, user)
+      !statusFilter || quickOnly
+        ? this.buildLeftoverUnconfirmedWhere(query, user)
         : null;
     const uncInclude = { campuses: { select: { campus_name: true, campus_code: true } } };
 
-    if (onlyUnconfirmed) {
-      if (!uncWhere) {
-        return { items: [], meta: createPaginationMeta(page, limit, 0) };
-      }
-      const [uncTotal, uncData] = await Promise.all([
-        this.prisma.unconfirmed_admissions.count({ where: uncWhere }),
-        this.prisma.unconfirmed_admissions.findMany({
-          where: uncWhere,
-          include: uncInclude,
-          orderBy: { id: 'desc' },
-          skip: offset,
-          take: limit,
-        }),
+    if (quickOnly) {
+      // QUICK_ADMISSION students + leftover unconfirmed rows
+      const [studentsTotal, uncTotal] = await Promise.all([
+        this.prisma.students.count({ where }),
+        uncWhere
+          ? this.prisma.unconfirmed_admissions.count({ where: uncWhere })
+          : Promise.resolve(0),
       ]);
+      const total = studentsTotal + uncTotal;
+
+      let leftoverItems: any[] = [];
+      let studentsSkip = offset;
+      let studentsTake = limit;
+
+      if (uncTotal > 0 && uncWhere) {
+        if (offset < uncTotal) {
+          const uncTake = Math.min(limit, uncTotal - offset);
+          const uncData = await this.prisma.unconfirmed_admissions.findMany({
+            where: uncWhere,
+            include: uncInclude,
+            orderBy: { id: 'desc' },
+            skip: offset,
+            take: uncTake,
+          });
+          leftoverItems = uncData.map((u) => this.mapUnconfirmedItem(u));
+          studentsSkip = 0;
+          studentsTake = limit - uncTake;
+        } else {
+          studentsSkip = offset - uncTotal;
+        }
+      }
+
+      const studentsData =
+        studentsTake > 0
+          ? await this.prisma.students.findMany({
+              where,
+              skip: studentsSkip,
+              take: studentsTake,
+              orderBy: { cc: 'desc' },
+              include: {
+                campuses: { select: { campus_name: true, campus_code: true } },
+                classes: { select: { description: true, class_code: true } },
+                sections: { select: { description: true } },
+                houses: { select: { house_name: true, house_color: true } },
+                student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
+                student_guardians: {
+                  include: { guardians: true },
+                  orderBy: { guardian_id: 'asc' },
+                },
+              },
+            })
+          : [];
+
+      const mappedStudents = studentsData.map((s: any) => {
+        const primary = s.student_guardians?.[0];
+        const adm = s.student_admissions?.[0];
+        const meta = (s.quick_admission_meta as any) || {};
+        return {
+          id: s.cc,
+          cc: s.cc,
+          core: {
+            cc: s.cc,
+            full_name: s.full_name,
+            cc_number: s.cc,
+            gr_number: s.gr_number,
+            cnic: s.cnic,
+            campus_name: s.campuses?.campus_name ?? null,
+            campus_code: s.campuses?.campus_code ?? null,
+            class_description: s.classes?.description ?? adm?.requested_grade ?? null,
+            class_code: s.classes?.class_code ?? null,
+            section_description: s.sections?.description ?? null,
+            house_name: s.houses?.house_name ?? null,
+            house_color: s.houses?.house_color ?? null,
+            enrollment_status: s.status,
+            class_id: s.class_id,
+            photograph_url: s.photograph_url ?? null,
+            academic_system: adm?.academic_system ?? null,
+            requested_grade: adm?.requested_grade ?? null,
+            primary_guardian_name: primary?.guardians?.full_name ?? null,
+            guardian_relationship: primary?.relationship ?? null,
+            primary_guardian_cnic: primary?.guardians?.cnic ?? null,
+          },
+          student_full_name: s.full_name,
+          gr_number: s.gr_number,
+          cc_number: s.cc,
+          cnic: s.cnic,
+          campus: s.campuses?.campus_name ?? null,
+          class_id: s.class_id,
+          grade_and_section: adm?.requested_grade ?? null,
+          primary_guardian_name: primary?.guardians?.full_name ?? null,
+          whatsapp_number: null,
+          enrollment_status: s.status,
+          financial_status_badge: 'NO_SCHEDULE',
+          family_id: s.family_id,
+          household_name: null,
+          primary_guardian_cnic: primary?.guardians?.cnic ?? null,
+          date_of_birth: s.dob,
+          registration_number: s.cc,
+          residential_address: meta.address ?? null,
+          siblings: [],
+          source: 'quick_admission',
+        };
+      });
+
       return {
-        items: uncData.map((u) => this.mapUnconfirmedItem(u)),
-        meta: createPaginationMeta(page, limit, uncTotal),
+        items: [...leftoverItems, ...mappedStudents],
+        meta: createPaginationMeta(page, limit, total),
       };
     }
 
@@ -1190,6 +1282,7 @@ export class StudentsService {
           .replace(/_LOG$/, '');       // strip plain _LOG suffix
         const titleMap: Record<string, string> = {
           ENROLLED:       'Enrolled',
+          QUICK_ADMISSION: 'Quick Admission',
           SOFT_ADMISSION: 'Soft Admission',
           LEFT:           'Marked as Left',
           UNDO_LEFT:      'Left Status Reversed',
@@ -1417,6 +1510,7 @@ export class StudentsService {
 
     // Each status maps to a timestamped flag prefix so every transition is individually logged.
     const flagPrefixMap: Record<StudentStatus, string> = {
+      [StudentStatus.QUICK_ADMISSION]: 'QUICK_ADMISSION_LOG',
       [StudentStatus.ENROLLED]:       'ENROLLED_LOG',
       [StudentStatus.SOFT_ADMISSION]: 'SOFT_ADMISSION_LOG',
       [StudentStatus.LEFT]:           'LEFT_LOG',

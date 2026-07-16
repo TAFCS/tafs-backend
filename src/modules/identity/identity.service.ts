@@ -7,6 +7,8 @@ import {
 } from './dto/create-admission.dto';
 import { StudentFlagsService } from '../student-flags/student-flags.service';
 import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
+import { CcAllocatorService } from './cc-allocator.service';
+import { StudentStatus } from '../../constants/student-status.constant';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -15,6 +17,7 @@ export class IdentityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly flagsSvc: StudentFlagsService,
+    private readonly ccAllocator: CcAllocatorService,
   ) { }
 
   async registerAdmission(dto: CreateAdmissionDto) {
@@ -125,12 +128,8 @@ export class IdentityService {
       // ── 2. Create student ────────────────────────────────────────────────
       const dob = new Date(dto.dob);
 
-      // Manual increment of CC (Computer Code) to avoid sequence desync issues
-      const latestStudent = await tx.students.findFirst({
-        orderBy: { cc: 'desc' },
-        select: { cc: true },
-      });
-      const nextCC = (latestStudent?.cc || 0) + 1;
+      // Shared CC allocator (students + leftover unconfirmed max)
+      const nextCC = await this.ccAllocator.next(tx);
 
       let classId = dto.admission.class_id || undefined;
       if (!classId && dto.admission.requested_grade) {
@@ -327,11 +326,12 @@ export class IdentityService {
   async submitAdmissionForm(dto: SubmitAdmissionFormDto) {
     return this.prisma.$transaction(
       async (tx) => {
-        // 1. Find existing student
+        // 1. Find existing student (quick-reg now creates students with QUICK_ADMISSION)
         let student = await tx.students.findUnique({
           where: { cc: dto.cc },
         });
 
+        // Collision leftovers only: promote from unconfirmed if no student row exists yet
         if (!student) {
           const unconfirmed = await tx.unconfirmed_admissions.findUnique({
             where: { id: dto.cc },
@@ -348,10 +348,18 @@ export class IdentityService {
               gender: unconfirmed.gender,
               photograph_url: unconfirmed.photograph_url,
               campus_id: unconfirmed.campus_id,
-              status: 'SOFT_ADMISSION',
+              status: StudentStatus.SOFT_ADMISSION,
+              quick_admission_meta: {
+                address: unconfirmed.address ?? undefined,
+                admin_notes: unconfirmed.admin_notes ?? undefined,
+                created_by: unconfirmed.created_by ?? undefined,
+                deposit_amount: Number(unconfirmed.deposit_amount),
+              },
             },
           });
         }
+
+        const promoteFromQuick = student.status === StudentStatus.QUICK_ADMISSION;
 
         // 2. Update Student base table
         await tx.students.update({
@@ -370,6 +378,7 @@ export class IdentityService {
             is_fee_endowment: dto.is_fee_endowment ?? undefined,
             fee_start_term: dto.fee_start_term || undefined,
             academic_year: dto.admission?.academic_year || undefined,
+            ...(promoteFromQuick ? { status: StudentStatus.SOFT_ADMISSION } : {}),
           },
         });
 
@@ -574,60 +583,88 @@ export class IdentityService {
       include: this.defaultStudentInclude(),
     });
 
-    if (!student) {
-      const unconfirmed = await this.prisma.unconfirmed_admissions.findUnique({
-        where: { id: cc },
-        include: { campuses: true }
-      });
+    if (student) {
+      if (student.status === StudentStatus.QUICK_ADMISSION) {
+        const meta = (student.quick_admission_meta as Record<string, any>) || {};
+        const names = student.full_name.trim().split(/\s+/);
+        const firstName = names[0] || '';
+        const lastName = names.slice(1).join(' ') || '';
 
-      if (!unconfirmed) {
-        throw new NotFoundException(`Admission with CC ${cc} not found`);
+        const admissions = (student as any).student_admissions || [];
+
+        return {
+          ...student,
+          cc_number: student.cc,
+          first_name: firstName,
+          last_name: lastName,
+          admin_notes: meta.admin_notes || undefined,
+          address: meta.address || undefined,
+          student_admissions: admissions.length
+            ? admissions
+            : [
+                {
+                  academic_system: 'Secondary',
+                  requested_grade: 'N/A',
+                },
+              ],
+          source: 'quick_admission',
+        } as any;
       }
 
-      const names = unconfirmed.full_name.trim().split(/\s+/);
-      const firstName = names[0] || '';
-      const lastName = names.slice(1).join(' ') || '';
-
-      const guardians: any[] = [];
-      const rawGuardians = (unconfirmed.guardians as any[]) || [];
-      for (const g of rawGuardians) {
-        const relUpper = g.relation?.toUpperCase() || 'GUARDIAN';
-        const relationship = relUpper === 'FATHER' ? 'Father' : (relUpper === 'MOTHER' ? 'Mother' : 'Guardian');
-        
-        guardians.push({
-          relationship,
-          is_emergency_contact: guardians.length === 0,
-          guardians: {
-            full_name: g.name,
-            cnic: g.cnic,
-            house_appt_name: unconfirmed.address,
-            photo_url: g.photograph_url,
-          }
-        });
-      }
-
-      return {
-        cc_number: unconfirmed.id,
-        first_name: firstName,
-        last_name: lastName,
-        dob: unconfirmed.date_of_birth,
-        gender: unconfirmed.gender,
-        photograph_url: unconfirmed.photograph_url,
-        campus_id: unconfirmed.campus_id,
-        campuses: unconfirmed.campuses,
-        student_guardians: guardians,
-        student_admissions: [
-          {
-            academic_system: unconfirmed.academic_system || 'Secondary',
-            requested_grade: unconfirmed.requested_grade || 'N/A',
-          }
-        ],
-        admin_notes: unconfirmed.admin_notes || undefined,
-        source: 'unconfirmed_admission',
-      } as any;
+      return student;
     }
 
-    return student;
+    // Collision leftovers only — still readable until ops resolves them
+    const unconfirmed = await this.prisma.unconfirmed_admissions.findUnique({
+      where: { id: cc },
+      include: { campuses: true }
+    });
+
+    if (!unconfirmed) {
+      throw new NotFoundException(`Admission with CC ${cc} not found`);
+    }
+
+    const names = unconfirmed.full_name.trim().split(/\s+/);
+    const firstName = names[0] || '';
+    const lastName = names.slice(1).join(' ') || '';
+
+    const guardians: any[] = [];
+    const rawGuardians = (unconfirmed.guardians as any[]) || [];
+    for (const g of rawGuardians) {
+      const relUpper = g.relation?.toUpperCase() || 'GUARDIAN';
+      const relationship = relUpper === 'FATHER' ? 'Father' : (relUpper === 'MOTHER' ? 'Mother' : 'Guardian');
+      
+      guardians.push({
+        relationship,
+        is_emergency_contact: guardians.length === 0,
+        guardians: {
+          full_name: g.name,
+          cnic: g.cnic,
+          house_appt_name: unconfirmed.address,
+          photo_url: g.photograph_url,
+        }
+      });
+    }
+
+    return {
+      cc_number: unconfirmed.id,
+      first_name: firstName,
+      last_name: lastName,
+      dob: unconfirmed.date_of_birth,
+      gender: unconfirmed.gender,
+      photograph_url: unconfirmed.photograph_url,
+      campus_id: unconfirmed.campus_id,
+      campuses: unconfirmed.campuses,
+      student_guardians: guardians,
+      student_admissions: [
+        {
+          academic_system: unconfirmed.academic_system || 'Secondary',
+          requested_grade: unconfirmed.requested_grade || 'N/A',
+        }
+      ],
+      admin_notes: unconfirmed.admin_notes || undefined,
+      source: 'unconfirmed_admission',
+    } as any;
   }
 
   async getGuardianByCnic(cnic: string) {
