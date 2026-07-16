@@ -2,8 +2,7 @@ import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray, IsIn } from 'class-v
 import { Type, Transform } from 'class-transformer';
 import { StudentStatus } from '../../../constants/student-status.constant';
 
-// Accepts every real student status plus the virtual "UNCONFIRMED" pseudo-status,
-// which surfaces pending quick-admission (unconfirmed_admissions) records.
+// Accepts every real student status plus "UNCONFIRMED" as an alias for QUICK_ADMISSION.
 export const STUDENT_LIST_STATUSES = [...Object.values(StudentStatus), 'UNCONFIRMED'] as const;
 export type StudentListStatus = (typeof STUDENT_LIST_STATUSES)[number];
 

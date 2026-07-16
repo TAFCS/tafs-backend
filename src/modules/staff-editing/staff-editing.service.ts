@@ -1395,6 +1395,7 @@ export class StaffEditingService {
       // Unified status-change log matching — covers both legacy and new changeStatus patterns
       const statusFlagConfig: Array<{ test: (f: string) => boolean; type: string; title: string }> = [
         { test: f => f.startsWith('ENROLLED_LOG_'),       type: 'ENROLLED',       title: 'Student enrolled' },
+        { test: f => f.startsWith('QUICK_ADMISSION_LOG_'), type: 'QUICK_ADMISSION', title: 'Quick admission recorded' },
         { test: f => f.startsWith('SOFT_ADMISSION_LOG_'), type: 'SOFT_ADMISSION', title: 'Soft admission recorded' },
         { test: f => f.startsWith('LEFT_LOG_'),           type: 'LEFT',           title: 'Student left' },
         { test: f => f.startsWith('UNDO_LEFT_LOG_'),      type: 'UNDO_LEFT',      title: 'Student re-enrolled (left undone)' },
