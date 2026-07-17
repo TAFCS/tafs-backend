@@ -766,6 +766,7 @@ export class SupportTicketsService {
       dto.note,
     );
     await this.chatGateway.broadcastTicketClosed(updated);
+    await this.notifyParentTicketClosed(updated, dto.note);
     return updated;
   }
 
@@ -1079,6 +1080,25 @@ export class SupportTicketsService {
         },
       );
     }
+  }
+
+  private async notifyParentTicketClosed(
+    ticket: { id: string; family_id: number; subtopic?: string | null },
+    note?: string,
+  ) {
+    if (this.chatGateway.isParentInTicketRoom(ticket.id)) return;
+
+    const trimmedNote = note?.trim();
+    const body =
+      trimmedNote ||
+      (ticket.subtopic
+        ? `Your query “${ticket.subtopic}” has been closed.`
+        : 'Your support query has been closed.');
+
+    await this.fcmService.sendToFamily(ticket.family_id, 'Query closed', body, {
+      type: 'SUPPORT_TICKET_CLOSED',
+      ticketId: ticket.id,
+    });
   }
 
   private assertCanPostToTicket(

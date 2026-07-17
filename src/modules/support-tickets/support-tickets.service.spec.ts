@@ -11,6 +11,7 @@ describe('SupportTicketsService leak-proofing', () => {
     broadcastApprovedTicketMessage: jest.fn(),
     broadcastReplyRejected: jest.fn(),
     broadcastTicketMessageToStaff: jest.fn(),
+    broadcastTicketClosed: jest.fn(),
     isParentInTicketRoom: jest.fn().mockReturnValue(false),
   };
 
@@ -303,6 +304,70 @@ describe('SupportTicketsService leak-proofing', () => {
         where: expect.objectContaining({ current_assignee_id: null }),
       }),
     );
+  });
+
+  it('staff close notifies parent via FCM when parent is offline', async () => {
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      family_id: 5,
+      subtopic: 'Academics',
+    });
+    prisma.support_tickets.update.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      subtopic: 'Academics',
+      status: TicketStatus.CLOSED,
+    });
+    prisma.ticket_events.create.mockResolvedValue({});
+    mockGateway.isParentInTicketRoom.mockReturnValue(false);
+
+    await service.closeByStaff(
+      't1',
+      { sub: 'staff-1', role: 'PRINCIPAL', userType: 'STAFF' } as any,
+      { note: 'Resolved' },
+    );
+
+    expect(mockGateway.broadcastTicketClosed).toHaveBeenCalled();
+    expect(mockFcm.sendToFamily).toHaveBeenCalledWith(
+      5,
+      'Query closed',
+      'Resolved',
+      expect.objectContaining({
+        type: 'SUPPORT_TICKET_CLOSED',
+        ticketId: 't1',
+      }),
+    );
+  });
+
+  it('staff close skips FCM when parent is viewing the ticket', async () => {
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      family_id: 5,
+      subtopic: 'Academics',
+    });
+    prisma.support_tickets.update.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      subtopic: 'Academics',
+      status: TicketStatus.CLOSED,
+    });
+    prisma.ticket_events.create.mockResolvedValue({});
+    mockGateway.isParentInTicketRoom.mockReturnValue(true);
+
+    await service.closeByStaff(
+      't1',
+      { sub: 'staff-1', role: 'PRINCIPAL', userType: 'STAFF' } as any,
+      {},
+    );
+
+    expect(mockGateway.broadcastTicketClosed).toHaveBeenCalled();
+    expect(mockFcm.sendToFamily).not.toHaveBeenCalled();
   });
 });
 
