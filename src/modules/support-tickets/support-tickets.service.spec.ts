@@ -15,7 +15,7 @@ describe('SupportTicketsService leak-proofing', () => {
     isParentInTicketRoom: jest.fn().mockReturnValue(false),
   };
 
-  const mockFcm = { sendToFamily: jest.fn() };
+  const mockFcm = { sendToFamily: jest.fn(), sendToUsers: jest.fn() };
 
   const prisma = {
     support_tickets: {
@@ -35,6 +35,10 @@ describe('SupportTicketsService leak-proofing', () => {
       updateMany: jest.fn(),
     },
     ticket_events: { create: jest.fn() },
+    users: {
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+    },
     $transaction: jest.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
 
@@ -368,6 +372,30 @@ describe('SupportTicketsService leak-proofing', () => {
 
     expect(mockGateway.broadcastTicketClosed).toHaveBeenCalled();
     expect(mockFcm.sendToFamily).not.toHaveBeenCalled();
+  });
+
+  it('ticket created notifies superadmins and assignee', async () => {
+    prisma.users.findMany.mockResolvedValue([{ id: 'admin-1' }, { id: 'admin-2' }]);
+
+    await (service as any).notifyStaffTicketCreated({
+      id: 't1',
+      current_assignee_id: 'principal-1',
+      routed_role: 'PRINCIPAL',
+      subtopic: 'Academics',
+      description: 'Need help with homework',
+      students: { full_name: 'Ali Khan' },
+      families: { household_name: 'Khan' },
+    });
+
+    expect(mockFcm.sendToUsers).toHaveBeenCalledWith(
+      expect.arrayContaining(['admin-1', 'admin-2', 'principal-1']),
+      'New support ticket',
+      expect.stringContaining('Ali Khan'),
+      expect.objectContaining({
+        type: 'SUPPORT_TICKET_CREATED',
+        ticketId: 't1',
+      }),
+    );
   });
 });
 

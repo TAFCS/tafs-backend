@@ -335,6 +335,7 @@ export class SupportTicketsService {
     });
 
     await this.chatGateway.broadcastTicketCreated(ticket);
+    await this.notifyStaffTicketCreated(ticket);
     return ticket;
   }
 
@@ -1099,6 +1100,66 @@ export class SupportTicketsService {
       type: 'SUPPORT_TICKET_CLOSED',
       ticketId: ticket.id,
     });
+  }
+
+  private async notifyStaffTicketCreated(ticket: {
+    id: string;
+    current_assignee_id: string | null;
+    routed_role: StaffRole;
+    subtopic?: string | null;
+    description: string;
+    families?: { household_name?: string | null } | null;
+    students?: { full_name?: string | null } | null;
+  }) {
+    const superAdmins = await this.prisma.users.findMany({
+      where: {
+        role: StaffRole.SUPER_ADMIN,
+        is_active: true,
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
+
+    const recipientIds = new Set(superAdmins.map((u) => u.id));
+
+    if (ticket.current_assignee_id) {
+      recipientIds.add(ticket.current_assignee_id);
+    } else if (ticket.routed_role === StaffRole.FINANCE_CLERK) {
+      // Unclaimed finance tickets have no assignee — notify the finance queue.
+      const clerks = await this.prisma.users.findMany({
+        where: {
+          role: StaffRole.FINANCE_CLERK,
+          is_active: true,
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      for (const clerk of clerks) recipientIds.add(clerk.id);
+    }
+
+    if (recipientIds.size === 0) return;
+
+    const studentName = ticket.students?.full_name?.trim();
+    const household = ticket.families?.household_name?.trim();
+    const requester =
+      studentName ||
+      (household
+        ? `FAMILY OF ${household.replace(/^family\s+of\s+/i, '').toUpperCase()}`
+        : null);
+    const topic = ticket.subtopic?.trim();
+    const bodyParts = [requester, topic, ticket.description.slice(0, 80)].filter(
+      Boolean,
+    );
+
+    await this.fcmService.sendToUsers(
+      [...recipientIds],
+      'New support ticket',
+      bodyParts.join(' · ') || 'A parent opened a new support ticket',
+      {
+        type: 'SUPPORT_TICKET_CREATED',
+        ticketId: ticket.id,
+      },
+    );
   }
 
   private assertCanPostToTicket(
