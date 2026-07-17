@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
 
@@ -10,7 +11,12 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE'],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
   system: ['USER', 'PERMISSION', 'BACKUP'],
+  'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };
+
+// Entity types whose audit trail is restricted to super admins only, regardless
+// of which sections/roles are otherwise allowed to view /audit-logs.
+const SUPER_ADMIN_ONLY_ENTITY_TYPES = ['PARENT_CHANGE_REQUEST'];
 
 @Injectable()
 export class AuditLogsService {
@@ -63,8 +69,10 @@ export class AuditLogsService {
 
   /**
    * Find logs matching query criteria.
+   * `requestingUser` is used to strip out entity types that are restricted
+   * to super admins (e.g. parent data-change requests) for anyone else.
    */
-  async findAll(query: QueryAuditLogsDto) {
+  async findAll(query: QueryAuditLogsDto, requestingUser?: { role?: string }) {
     const where: any = {};
 
     if (query.student_id) {
@@ -105,17 +113,22 @@ export class AuditLogsService {
       }
     }
 
+    const isSuperAdmin = requestingUser?.role === StaffRole.SUPER_ADMIN;
+    const finalWhere = isSuperAdmin
+      ? where
+      : { AND: [where, { entity_type: { notIn: SUPER_ADMIN_ONLY_ENTITY_TYPES } }] };
+
     const limit = Number(query.limit) || 50;
     const offset = Number(query.offset) || 0;
 
     const [data, total] = await Promise.all([
       this.prisma.audit_logs.findMany({
-        where,
+        where: finalWhere,
         orderBy: { changed_at: 'desc' },
         take: limit,
         skip: offset,
       }),
-      this.prisma.audit_logs.count({ where }),
+      this.prisma.audit_logs.count({ where: finalWhere }),
     ]);
 
     // Fetch classes and campuses to map IDs to Names

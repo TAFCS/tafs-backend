@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Query,
+  Request,
   UseGuards,
   HttpStatus,
 } from '@nestjs/common';
@@ -17,8 +18,8 @@ export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
   @Get()
-  async findAll(@Query() query: QueryAuditLogsDto) {
-    const result = await this.auditLogsService.findAll(query);
+  async findAll(@Query() query: QueryAuditLogsDto, @Request() req: any) {
+    const result = await this.auditLogsService.findAll(query, req.user);
     return createApiResponse(
       result,
       HttpStatus.OK,

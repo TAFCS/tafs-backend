@@ -44,6 +44,7 @@ export class ParentChangeRequestsController {
     @Body() dto: ProcessChangeRequestDto,
     @Request() req: any,
   ) {
-    return this.service.processRequest(id, dto, req.user.id);
+    const adminLabel = req.user?.username || req.user?.sub || 'system';
+    return this.service.processRequest(id, dto, req.user.id, adminLabel);
   }
 }
