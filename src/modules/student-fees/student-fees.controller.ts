@@ -85,6 +85,13 @@ export class StudentFeesController {
     }
 
 
+    @Get('caution-fee-history/:studentId')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee'))
+    async getCautionFeeHistory(@Param('studentId', ParseIntPipe) studentId: number) {
+        const data = await this.studentFeesService.getCautionFeeHistory(studentId);
+        return { success: true, data };
+    }
+
     @Post('bulk')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(

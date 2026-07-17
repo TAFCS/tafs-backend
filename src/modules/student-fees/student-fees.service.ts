@@ -1363,6 +1363,19 @@ export class StudentFeesService {
     }
 
     /**
+     * Fetch a student's REFUNDABLE/ADJUSTABLE CAUTION FEE row(s) (fee_type_id=3)
+     * across all academic years — used to surface a caution fee taken years ago
+     * (e.g. at O-3 admission) that won't show in the current year's schedule.
+     */
+    async getCautionFeeHistory(studentId: number) {
+        return this.prisma.student_fees.findMany({
+            where: { student_id: studentId, fee_type_id: 3, is_discount: false },
+            select: { id: true, amount: true, amount_paid: true, fee_date: true, academic_year: true, status: true },
+            orderBy: { academic_year: 'desc' },
+        });
+    }
+
+    /**
      * Hard-reset a student's fee history:
      *   1. Delete all deposits  → cascades to deposit_allocations
      *   2. Delete all vouchers  → cascades to voucher_heads + voucher_arrear_surcharges
