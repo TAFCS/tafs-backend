@@ -8,9 +8,10 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateChangeRequestDto } from './dto/create-change-request.dto';
 import { ProcessChangeRequestDto, ChangeRequestStatus } from './dto/process-change-request.dto';
-import { Prisma } from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { NoticeBoardService } from '../notice-board/notice-board.service';
+import { Prisma } from '@prisma/client';
 
 export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
@@ -24,6 +25,8 @@ export class ParentChangeRequestsService {
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
     private readonly auditLogs: AuditLogsService,
+    @Inject(forwardRef(() => NoticeBoardService))
+    private readonly noticeBoardService: NoticeBoardService,
   ) {}
 
   /**
@@ -306,6 +309,47 @@ export class ParentChangeRequestsService {
     });
 
     await logProcessedDiffs();
+
+    // Trigger notice board notification to the family
+    try {
+      const isDeletion = (request.requested_data as any)?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
+      // If account was approved for deletion, the parent account is deleted and tokens revoked, no notification needed.
+      if (!(isDeletion && dto.status === ChangeRequestStatus.APPROVED)) {
+        const title = dto.status === ChangeRequestStatus.APPROVED ? 'Profile Update Approved' : 'Profile Update Rejected';
+        const body = dto.status === ChangeRequestStatus.APPROVED
+          ? 'Your profile change request has been approved and synced successfully.'
+          : `Your profile change request has been rejected.${dto.comment ? ` Reason: ${dto.comment}` : ''}`;
+
+        // Get student CCs if this is a student update so the notice can be targeted directly to the family's students
+        const studentCcs: number[] = [];
+        const requestedData = request.requested_data as Record<string, unknown>;
+        if (requestedData?.request_type === 'STUDENT_UPDATE' && requestedData.student_cc) {
+          studentCcs.push(Number(requestedData.student_cc));
+        } else {
+          // If it's a guardian change, target all students in the family so the family feed gets it.
+          const students = await this.prisma.students.findMany({
+            where: { family_id: request.family_id, deleted_at: null },
+            select: { cc: true },
+          });
+          studentCcs.push(...students.map((s) => s.cc));
+        }
+
+        // Delegate entire creation, logging, WebSockets, and FCM dispatch to NoticeBoardService
+        await this.noticeBoardService.createPost(
+          adminId,
+          {
+            title,
+            body,
+            student_ccs: studentCcs,
+            is_pinned: false,
+            notification_only: false,
+          },
+          adminLabel,
+        );
+      }
+    } catch (err) {
+      console.error('Failed to dispatch parent change request process notification:', err.message);
+    }
 
     return result;
   }

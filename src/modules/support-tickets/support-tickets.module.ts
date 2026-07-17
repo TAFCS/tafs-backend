@@ -10,7 +10,7 @@ import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.g
 @Module({
   imports: [
     PrismaModule,
-    AuthModule,
+    forwardRef(() => AuthModule),
     FcmModule,
     forwardRef(() => ChatModule),
   ],

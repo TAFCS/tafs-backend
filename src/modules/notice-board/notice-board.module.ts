@@ -11,11 +11,12 @@ import { ChatModule } from '../chat/chat.module';
   imports: [
     PrismaModule,
     StorageModule,
-    AuthModule,
+    forwardRef(() => AuthModule),
     FcmModule,
     forwardRef(() => ChatModule),
   ],
   providers: [NoticeBoardService],
   controllers: [NoticeBoardController],
+  exports: [NoticeBoardService],
 })
 export class NoticeBoardModule {}

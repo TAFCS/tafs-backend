@@ -12,7 +12,7 @@ import { FcmModule } from '../../common/fcm/fcm.module';
   imports: [
     PrismaModule,
     StorageModule,
-    AuthModule,
+    forwardRef(() => AuthModule),
     FcmModule,
     forwardRef(() => SupportTicketsModule),
   ],
