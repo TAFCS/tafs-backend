@@ -45,6 +45,6 @@ export class ParentChangeRequestsController {
     @Request() req: any,
   ) {
     const adminLabel = req.user?.username || req.user?.sub || 'system';
-    return this.service.processRequest(id, dto, req.user.id, adminLabel);
+    return this.service.processRequest(id, dto, req.user.sub, adminLabel);
   }
 }
