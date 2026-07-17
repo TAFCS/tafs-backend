@@ -751,7 +751,10 @@ export class SupportTicketsService {
       where: { id: ticketId },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
-    if (ticket.current_assignee_id !== staff.sub) {
+    if (
+      ticket.current_assignee_id !== staff.sub &&
+      staff.role !== 'SUPER_ADMIN'
+    ) {
       throw new ForbiddenException('You are not the assigned responder');
     }
     this.assertCanPostToTicket(ticket, staff);
