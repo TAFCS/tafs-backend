@@ -42,6 +42,8 @@ import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { TimetablesModule } from './modules/timetables/timetables.module';
 import { UnconfirmedAdmissionsModule } from './modules/unconfirmed-admissions/unconfirmed-admissions.module';
+import { HouseBalancerModule } from './modules/house-balancer/house-balancer.module';
+import { StudentAllocationModule } from './modules/student-allocation/student-allocation.module';
 
 @Module({
   imports: [
@@ -86,6 +88,8 @@ import { UnconfirmedAdmissionsModule } from './modules/unconfirmed-admissions/un
     AppConfigModule,
     AuditLogsModule,
     UnconfirmedAdmissionsModule,
+    StudentAllocationModule,
+    HouseBalancerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

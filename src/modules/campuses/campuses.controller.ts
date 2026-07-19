@@ -21,6 +21,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
+import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CAMPUSES_MESSAGES } from '../../constants/api-response/campuses.constant';
 
@@ -125,9 +126,9 @@ export class CampusesController {
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
-        @Body('is_active') isActive?: boolean,
+        @Body() dto: UpsertCampusSectionDto,
     ) {
-        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, isActive);
+        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, dto);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
     }
 

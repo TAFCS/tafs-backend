@@ -2,10 +2,14 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { student_status } from '@prisma/client';
+import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 
 @Injectable()
 export class EnrollmentService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly allocation: StudentAllocationService,
+  ) { }
 
   async getCandidates() {
     return this.prisma.students.findMany({
@@ -173,14 +177,37 @@ export class EnrollmentService {
         },
         include: { sections: true },
       });
+
+      const occupancyMap = await this.allocation.computeOccupancyStatsBatch(
+        campus_sections.map((cs) => ({
+          campus_id: cs.campus_id,
+          class_id: cs.class_id,
+          section_id: cs.section_id,
+          student_capacity: cs.student_capacity,
+          gender_mode: cs.gender_mode,
+        })),
+      );
+
       const seen = new Set();
       available_sections = campus_sections
-        .map(cs => cs.sections)
-        .filter(s => {
-          if (!s || seen.has(s.id)) return false;
-          seen.add(s.id);
-          return true;
-        });
+        .map((cs) => {
+          if (!cs.sections || seen.has(cs.sections.id)) return null;
+          seen.add(cs.sections.id);
+          const key = `${cs.campus_id}:${cs.class_id}:${cs.section_id}`;
+          const occupancy = occupancyMap.get(key);
+          return {
+            id: cs.sections.id,
+            description: cs.sections.description,
+            student_capacity: cs.student_capacity,
+            gender_mode: cs.gender_mode,
+            enrolled_count: occupancy?.enrolled_count ?? 0,
+            remaining_seats: occupancy?.remaining_seats ?? null,
+            is_full: occupancy?.is_full ?? false,
+            male_count: occupancy?.male_count ?? 0,
+            female_count: occupancy?.female_count ?? 0,
+          };
+        })
+        .filter(Boolean);
     }
 
     return {
@@ -449,6 +476,68 @@ export class EnrollmentService {
         });
         resolvedClassId = matched?.id ?? null;
       }
+    }
+
+    const targetSectionId = dto.section_id ?? student.section_id ?? null;
+    const targetCampusId = student.campus_id;
+    const targetClassId = resolvedClassId;
+
+    if (
+      this.allocation.shouldValidatePlacement({
+        campusId: targetCampusId,
+        classId: targetClassId,
+        sectionId: targetSectionId,
+      })
+    ) {
+      const target = {
+        campusId: targetCampusId!,
+        classId: targetClassId!,
+        sectionId: targetSectionId!,
+      };
+
+      return this.allocation.withSectionLock(target, async (tx) => {
+        await this.allocation.assertPlacementAllowed(
+          target,
+          {
+            studentCc: cc,
+            gender: student.gender,
+            countsTowardCapacity: true,
+          },
+          tx,
+        );
+
+        const enrolled = await tx.students.update({
+          where: { cc },
+          data: {
+            status: 'ENROLLED',
+            gr_number: dto.gr_number,
+            house_id: dto.house_id,
+            section_id: dto.section_id || undefined,
+            class_id: resolvedClassId ?? undefined,
+            doa: new Date(),
+          },
+          include: {
+            campuses: true,
+            classes: true,
+            sections: true,
+            houses: true,
+          },
+        });
+
+        await tx.student_academic_history.create({
+          data: {
+            student_cc: cc,
+            class_id: enrolled.class_id,
+            section_id: enrolled.section_id,
+            campus_id: enrolled.campus_id,
+            academic_year: enrolled.academic_year,
+            gr_number: enrolled.gr_number,
+            change_type: 'ENROLLED',
+          },
+        });
+
+        return enrolled;
+      });
     }
 
     const enrolled = await this.prisma.students.update({

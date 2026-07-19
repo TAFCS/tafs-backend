@@ -5,6 +5,8 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import * as React from 'react';
 import { TransferOrderPDF } from './TransferOrderPDF';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { StudentAllocationService } from '../student-allocation/student-allocation.service';
+import { StudentStatus } from '../../constants/student-status.constant';
 
 @Injectable()
 export class TransferService {
@@ -14,6 +16,7 @@ export class TransferService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly auditLogs: AuditLogsService,
+    private readonly allocation: StudentAllocationService,
   ) {}
   async searchStudents(q: string) {
     if (!q?.trim()) return [];
@@ -217,6 +220,33 @@ export class TransferService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      const nextCampusId = dto.to_campus_id ?? student.campus_id;
+      const nextClassId = dto.to_class_id;
+      const nextSectionId =
+        dto.to_section_id !== undefined ? dto.to_section_id : student.section_id;
+
+      if (
+        this.allocation.shouldValidatePlacement({
+          campusId: nextCampusId,
+          classId: nextClassId,
+          sectionId: nextSectionId,
+        })
+      ) {
+        await this.allocation.assertPlacementAllowed(
+          {
+            campusId: nextCampusId!,
+            classId: nextClassId,
+            sectionId: nextSectionId!,
+          },
+          {
+            studentCc: cc,
+            gender: student.gender,
+            countsTowardCapacity: student.status === StudentStatus.ENROLLED,
+          },
+          tx,
+        );
+      }
+
       await tx.students.update({
         where: { cc },
         data: {

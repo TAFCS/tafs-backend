@@ -1,14 +1,18 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { SectionGenderMode } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
+import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
 
 @Injectable()
 export class CampusesService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly auditLogs: AuditLogsService,
+        private readonly allocation: StudentAllocationService,
     ) { }
 
     private readonly campusIncludes = {
@@ -35,6 +39,8 @@ export class CampusesService {
                 is_active: true,
                 class_id: true,
                 section_id: true,
+                student_capacity: true,
+                gender_mode: true,
                 sections: {
                     select: {
                         id: true,
@@ -52,19 +58,53 @@ export class CampusesService {
         },
     };
 
-    private transformCampusData(campus: any) {
+    private async transformCampusData(campus: any) {
         const { campus_classes, campus_sections, ...rest } = campus;
+
+        const occupancyMap = await this.allocation.computeOccupancyStatsBatch(
+            (campus_sections || []).map((cs: any) => ({
+                campus_id: campus.id,
+                class_id: cs.class_id,
+                section_id: cs.section_id,
+                student_capacity: cs.student_capacity ?? null,
+                gender_mode: cs.gender_mode ?? SectionGenderMode.COED,
+            })),
+        );
 
         const offered_classes = campus_classes.map((cc: any) => {
             const cls = cc.classes;
             const sections = campus_sections
                 .filter((cs: any) => cs.class_id === cls.id)
-                .map((cs: any) => ({
-                    id: cs.sections.id,
-                    description: cs.sections.description,
-                    campus_section_id: cs.id,
-                    is_active: cs.is_active,
-                }));
+                .map((cs: any) => {
+                    const key = `${campus.id}:${cs.class_id}:${cs.section_id}`;
+                    const occupancy = occupancyMap.get(key) ?? {
+                        enrolled_count: 0,
+                        male_count: 0,
+                        female_count: 0,
+                        unknown_count: 0,
+                        remaining_seats: cs.student_capacity ?? null,
+                        is_full: false,
+                        capacity_conflict_count: 0,
+                        gender_conflict_count: 0,
+                    };
+
+                    return {
+                        id: cs.sections.id,
+                        description: cs.sections.description,
+                        campus_section_id: cs.id,
+                        is_active: cs.is_active,
+                        student_capacity: cs.student_capacity ?? null,
+                        gender_mode: cs.gender_mode ?? SectionGenderMode.COED,
+                        enrolled_count: occupancy.enrolled_count,
+                        remaining_seats: occupancy.remaining_seats,
+                        is_full: occupancy.is_full,
+                        male_count: occupancy.male_count,
+                        female_count: occupancy.female_count,
+                        unknown_count: occupancy.unknown_count,
+                        capacity_conflict_count: occupancy.capacity_conflict_count,
+                        gender_conflict_count: occupancy.gender_conflict_count,
+                    };
+                });
 
             return {
                 id: cls.id,
@@ -88,7 +128,7 @@ export class CampusesService {
             orderBy: { campus_name: 'asc' },
             include: this.campusIncludes,
         });
-        return campuses.map((c) => this.transformCampusData(c));
+        return Promise.all(campuses.map((c) => this.transformCampusData(c)));
     }
 
     async findOne(id: number) {
@@ -130,7 +170,6 @@ export class CampusesService {
         const updated = await this.prisma.$transaction(
             dto.items.map((item) => {
                 if (item.id) {
-                    // Update existing
                     return this.prisma.campuses.update({
                         where: { id: item.id },
                         data: {
@@ -149,7 +188,6 @@ export class CampusesService {
                         } as any,
                     });
                 } else {
-                    // Create new
                     return this.prisma.campuses.create({
                         data: {
                             campus_code: item.campus_code || '',
@@ -168,9 +206,7 @@ export class CampusesService {
 
     async delete(id: number, changedBy?: string) {
         const campus = await this.prisma.campuses.findUnique({ where: { id }, select: { campus_name: true } });
-        // Use a transaction to safely unlink related records and delete the campus
         const record = await this.prisma.$transaction(async (tx) => {
-            // Check if any active students exist for this campus
             const studentCount = await tx.students.count({
                 where: { campus_id: id, deleted_at: null },
             });
@@ -180,19 +216,16 @@ export class CampusesService {
                 );
             }
 
-            // 1. Unlink Users/Staff
             await tx.users.updateMany({
                 where: { campus_id: id },
                 data: { campus_id: null },
             });
 
-            // 2. Unlink Class Fee Schedules
             await tx.class_fee_schedule.updateMany({
                 where: { campus_id: id },
                 data: { campus_id: null },
             });
 
-            // 3. Delete Junction Records (Campus Sections & Classes assignments)
             await tx.campus_sections.deleteMany({
                 where: { campus_id: id },
             });
@@ -201,7 +234,6 @@ export class CampusesService {
                 where: { campus_id: id },
             });
 
-            // 4. Finally, delete the campus itself
             return tx.campuses.delete({
                 where: { id },
             });
@@ -213,7 +245,6 @@ export class CampusesService {
     // ─── Campus Classes ───────────────────────────────────────────────────────
 
     async upsertCampusClass(campusId: number, classId: number, isActive: boolean = true) {
-        // Verify both campus and class exist
         const [campus, cls] = await Promise.all([
             this.prisma.campuses.findUnique({ where: { id: campusId }, select: { id: true } }),
             this.prisma.classes.findUnique({ where: { id: classId }, select: { id: true } }),
@@ -231,7 +262,6 @@ export class CampusesService {
     }
 
     async removeClassFromCampus(campusId: number, classId: number) {
-        // Check if any active students in this campus are assigned to this class
         const studentCount = await this.prisma.students.count({
             where: { campus_id: campusId, class_id: classId, deleted_at: null },
         });
@@ -243,7 +273,6 @@ export class CampusesService {
 
         try {
             await this.prisma.$transaction([
-                // delete orphaned section records first
                 this.prisma.campus_sections.deleteMany({
                     where: { campus_id: campusId, class_id: classId },
                 }),
@@ -262,8 +291,17 @@ export class CampusesService {
 
     // ─── Campus Sections ──────────────────────────────────────────────────────
 
-    async upsertCampusSection(campusId: number, classId: number, sectionId: number, isActive: boolean = true) {
-        // Verify all entities exist
+    async upsertCampusSection(
+        campusId: number,
+        classId: number,
+        sectionId: number,
+        dto: UpsertCampusSectionDto = {},
+    ) {
+        const isActive = dto.is_active ?? true;
+        if (dto.student_capacity !== undefined && dto.student_capacity !== null && dto.student_capacity < 1) {
+            throw new BadRequestException('student_capacity must be null (unlimited) or a positive integer');
+        }
+
         const [campus, cls, section] = await Promise.all([
             this.prisma.campuses.findUnique({ where: { id: campusId }, select: { id: true } }),
             this.prisma.classes.findUnique({ where: { id: classId }, select: { id: true } }),
@@ -274,24 +312,48 @@ export class CampusesService {
         if (!cls) throw new NotFoundException(`Class #${classId} not found`);
         if (!section) throw new NotFoundException(`Section #${sectionId} not found`);
 
-        // Autonomous link: Ensure class is linked to campus first
         await this.prisma.campus_classes.upsert({
             where: { campus_id_class_id: { campus_id: campusId, class_id: classId } },
-            update: { is_active: true }, // Re-enable if disabled
+            update: { is_active: true },
             create: { campus_id: campusId, class_id: classId, is_active: true },
         });
 
+        const updateData: {
+            is_active: boolean;
+            student_capacity?: number | null;
+            gender_mode?: SectionGenderMode;
+        } = { is_active: isActive };
+
+        if (dto.student_capacity !== undefined) {
+            updateData.student_capacity = dto.student_capacity;
+        }
+        if (dto.gender_mode !== undefined) {
+            updateData.gender_mode = dto.gender_mode;
+        }
+
         await this.prisma.campus_sections.upsert({
-            where: { campus_id_class_id_section_id: { campus_id: campusId, class_id: classId, section_id: sectionId } },
-            update: { is_active: isActive },
-            create: { campus_id: campusId, class_id: classId, section_id: sectionId, is_active: isActive },
+            where: {
+                campus_id_class_id_section_id: {
+                    campus_id: campusId,
+                    class_id: classId,
+                    section_id: sectionId,
+                },
+            },
+            update: updateData,
+            create: {
+                campus_id: campusId,
+                class_id: classId,
+                section_id: sectionId,
+                is_active: isActive,
+                student_capacity: dto.student_capacity ?? null,
+                gender_mode: dto.gender_mode ?? SectionGenderMode.COED,
+            },
         });
 
         return this.findOne(campusId);
     }
 
     async removeSectionFromCampus(campusId: number, classId: number, sectionId: number) {
-        // Check for students assigned to this campus/class/section
         const studentCount = await this.prisma.students.count({
             where: { campus_id: campusId, class_id: classId, section_id: sectionId, deleted_at: null },
         });

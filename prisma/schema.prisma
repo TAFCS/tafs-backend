@@ -84,14 +84,16 @@ model campus_classes {
 }
 
 model campus_sections {
-  id         Int      @id @default(autoincrement())
-  campus_id  Int
-  class_id   Int
-  section_id Int
-  is_active  Boolean? @default(true)
-  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes    classes  @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections   sections @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id               Int               @id @default(autoincrement())
+  campus_id        Int
+  class_id         Int
+  section_id       Int
+  is_active        Boolean?          @default(true)
+  student_capacity Int?
+  gender_mode      SectionGenderMode @default(COED)
+  campuses         campuses          @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes          classes           @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections         sections          @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([campus_id, class_id, section_id], map: "campus_sections_unique")
   @@index([campus_id], map: "idx_campus_sections_campus")
@@ -1698,6 +1700,12 @@ enum student_status {
   EXPELLED
   GRADUATED
   LEFT
+}
+
+enum SectionGenderMode {
+  COED
+  BOYS_ONLY
+  GIRLS_ONLY
 }
 
 enum ChatMessageType {

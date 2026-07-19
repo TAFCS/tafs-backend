@@ -10,12 +10,15 @@ import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { StudentAllocationService } from '../student-allocation/student-allocation.service';
+import { StudentStatus } from '../../constants/student-status.constant';
 
 @Injectable()
 export class StaffEditingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly allocation: StudentAllocationService,
   ) { }
 
   // ─── Date Helpers ─────────────────────────────────────────────────────────
@@ -373,6 +376,44 @@ export class StaffEditingService {
 
         // 1. Update student fields
         if (Object.keys(studentData).length > 0) {
+          const nextCampusId =
+            dto.campus_id !== undefined ? dto.campus_id : existing.campus_id;
+          const nextClassId =
+            dto.class_id !== undefined ? dto.class_id : existing.class_id;
+          const nextSectionId =
+            dto.section_id !== undefined ? dto.section_id : existing.section_id;
+          const nextGender =
+            dto.gender !== undefined ? dto.gender : existing.gender;
+          const nextStatus =
+            (dto as any).status !== undefined
+              ? (dto as any).status
+              : existing.status;
+          const countsTowardCapacity = nextStatus === StudentStatus.ENROLLED;
+
+          if (
+            this.allocation.shouldValidatePlacement({
+              campusId: nextCampusId,
+              classId: nextClassId,
+              sectionId: nextSectionId,
+            })
+          ) {
+            const target = {
+              campusId: nextCampusId!,
+              classId: nextClassId!,
+              sectionId: nextSectionId!,
+            };
+            await this.allocation.acquireSectionLock(tx, target);
+            await this.allocation.assertPlacementAllowed(
+              target,
+              {
+                studentCc: cc,
+                gender: nextGender,
+                countsTowardCapacity,
+              },
+              tx,
+            );
+          }
+
           await tx.students.update({
             where: { cc },
             data: studentData as any,

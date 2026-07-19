@@ -446,6 +446,13 @@ export class NoticeBoardService {
     }
 
     const numericId = typeof postId === 'number' ? postId : parseInt(postId, 10);
+    if (isNaN(numericId)) {
+      return {
+        post_id: postId,
+        total_reached: 0,
+        total_read: 0,
+      };
+    }
     const post = await this.prisma.notice_board_posts.findFirst({
       where: { id: numericId, deleted_at: null },
       select: {

@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { StudentsController } from './students.controller';
 import { StudentsService } from './students.service';
 import { AuthModule } from '../auth/auth.module';
+import { StudentAllocationModule } from '../student-allocation/student-allocation.module';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, StudentAllocationModule],
   controllers: [StudentsController],
   providers: [StudentsService],
   exports: [StudentsService],

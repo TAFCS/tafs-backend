@@ -26,6 +26,11 @@ type PromotionReasonCode =
   | 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS'
   | 'MISSING_TARGET'
   | 'GR_DUPLICATE'
+  | 'SECTION_FULL'
+  | 'SECTION_GENDER_RESTRICTED'
+  | 'STUDENT_GENDER_REQUIRED'
+  | 'SECTION_NOT_OFFERED'
+  | 'SECTION_INACTIVE'
   | 'INTERNAL_ERROR';
 
 type PromotionOutcome = {
@@ -51,12 +56,15 @@ type ResolvedClass = {
 };
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { StudentAllocationService } from '../student-allocation/student-allocation.service';
+import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
 
 @Injectable()
 export class StudentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly allocation: StudentAllocationService,
   ) { }
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
@@ -1332,7 +1340,34 @@ export class StudentsService {
     const classChanged = dto.class_id !== undefined && student.class_id !== dto.class_id;
     const sectionChanged = dto.section_id !== undefined && student.section_id !== dto.section_id;
 
-    return this.prisma.$transaction(async (tx) => {
+    const nextCampusId = dto.campus_id !== undefined ? dto.campus_id : student.campus_id;
+    const nextClassId = dto.class_id !== undefined ? dto.class_id : student.class_id;
+    const nextSectionId = dto.section_id !== undefined ? dto.section_id : student.section_id;
+    const countsTowardCapacity = student.status === StudentStatus.ENROLLED;
+
+    const runUpdate = async (tx: any) => {
+      if (
+        this.allocation.shouldValidatePlacement({
+          campusId: nextCampusId,
+          classId: nextClassId,
+          sectionId: nextSectionId,
+        })
+      ) {
+        await this.allocation.assertPlacementAllowed(
+          {
+            campusId: nextCampusId,
+            classId: nextClassId,
+            sectionId: nextSectionId,
+          },
+          {
+            studentCc: id,
+            gender: student.gender,
+            countsTowardCapacity,
+          },
+          tx,
+        );
+      }
+
       const updated = await tx.students.update({
         where: { cc: id },
         data: {
@@ -1360,7 +1395,26 @@ export class StudentsService {
       }
 
       return updated;
-    });
+    };
+
+    if (
+      this.allocation.shouldValidatePlacement({
+        campusId: nextCampusId,
+        classId: nextClassId,
+        sectionId: nextSectionId,
+      })
+    ) {
+      return this.allocation.withSectionLock(
+        {
+          campusId: nextCampusId,
+          classId: nextClassId,
+          sectionId: nextSectionId,
+        },
+        runUpdate,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => runUpdate(tx));
   }
 
   async unexpelStudent(id: number, changedBy: string) {
@@ -1726,6 +1780,7 @@ export class StudentsService {
         academic_year: true,
         status: true,
         gr_number: true,
+        gender: true,
       },
       orderBy: { cc: 'asc' },
     });
@@ -1837,6 +1892,7 @@ export class StudentsService {
       academic_year: string | null;
       status: string;
       gr_number: string | null;
+      gender: string | null;
     },
     fromClass: ResolvedClass | null,
     toClass: ResolvedClass | null,
@@ -1946,11 +2002,37 @@ export class StudentsService {
     }
 
     // ── Campus/class mapping validation (promotion only) ─────────────────────
+    // Resolve the destination section: if none was supplied, keep the current
+    // section only when it remains valid for the destination class; otherwise clear it.
+    let resolvedSectionId: number | null | undefined = toSectionId;
+    if (!isGraduating && toClass && toSectionId === undefined) {
+      if (student.section_id != null && student.campus_id != null) {
+        const sectionKey = `${student.campus_id}:${toClass.id}:${student.section_id}`;
+        let sectionIsActive = sectionActiveCache.get(sectionKey);
+        if (sectionIsActive === undefined) {
+          const sectionMapping = await this.prisma.campus_sections.findFirst({
+            where: {
+              campus_id: student.campus_id,
+              class_id: toClass.id,
+              section_id: student.section_id,
+              is_active: true,
+            },
+            select: { id: true },
+          });
+          sectionIsActive = !!sectionMapping;
+          sectionActiveCache.set(sectionKey, sectionIsActive);
+        }
+        resolvedSectionId = sectionIsActive ? student.section_id : null;
+      } else {
+        resolvedSectionId = student.section_id;
+      }
+    }
+
     if (!isGraduating && toClass) {
       const mappingValidation = await this.validateTargetMapping(
         student.campus_id,
         toClass.id,
-        toSectionId,
+        resolvedSectionId === null ? undefined : resolvedSectionId ?? toSectionId,
         classActiveCache,
         sectionActiveCache,
       );
@@ -1967,6 +2049,63 @@ export class StudentsService {
           to_academic_year: nextAcademicYear,
           dry_run: dryRun,
         };
+      }
+
+      const sectionForRules =
+        resolvedSectionId !== undefined ? resolvedSectionId : toSectionId ?? student.section_id;
+      if (
+        student.campus_id != null &&
+        sectionForRules != null &&
+        this.allocation.shouldValidatePlacement({
+          campusId: student.campus_id,
+          classId: toClass.id,
+          sectionId: sectionForRules,
+        })
+      ) {
+        try {
+          await this.allocation.assertPlacementAllowed(
+            {
+              campusId: student.campus_id,
+              classId: toClass.id,
+              sectionId: sectionForRules,
+            },
+            {
+              studentCc: student.cc,
+              gender: student.gender,
+              countsTowardCapacity: student.status === StudentStatus.ENROLLED,
+            },
+          );
+        } catch (err: any) {
+          const code = err?.response?.code || err?.response?.message?.code;
+          const message =
+            err?.response?.message?.message ||
+            err?.response?.message ||
+            err?.message ||
+            'Section allocation rules rejected this promotion';
+          const reason_code: PromotionReasonCode =
+            code === ALLOCATION_ERROR_CODES.SECTION_FULL
+              ? 'SECTION_FULL'
+              : code === ALLOCATION_ERROR_CODES.SECTION_GENDER_RESTRICTED
+                ? 'SECTION_GENDER_RESTRICTED'
+                : code === ALLOCATION_ERROR_CODES.STUDENT_GENDER_REQUIRED
+                  ? 'STUDENT_GENDER_REQUIRED'
+                  : code === ALLOCATION_ERROR_CODES.SECTION_INACTIVE
+                    ? 'SECTION_INACTIVE'
+                    : code === ALLOCATION_ERROR_CODES.SECTION_NOT_OFFERED
+                      ? 'SECTION_NOT_OFFERED'
+                      : 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS';
+          return {
+            student_id: student.cc,
+            status: 'failed',
+            reason_code,
+            message: typeof message === 'string' ? message : 'Section allocation rules rejected this promotion',
+            from_class_id: student.class_id,
+            to_class_id: toClass.id,
+            from_academic_year: student.academic_year,
+            to_academic_year: nextAcademicYear,
+            dry_run: dryRun,
+          };
+        }
       }
     }
 
@@ -2140,11 +2279,18 @@ export class StudentsService {
 
         await this.prisma.$transaction(
           async (tx) => {
+            const finalSectionId =
+              resolvedSectionId !== undefined
+                ? resolvedSectionId
+                : toSectionId !== undefined
+                  ? toSectionId
+                  : student.section_id;
+
             await tx.students.update({
               where: { cc: student.cc },
               data: {
                 class_id: toClass!.id,
-                section_id: toSectionId !== undefined ? toSectionId : student.section_id,
+                section_id: finalSectionId,
                 academic_year: nextAcademicYear,
                 ...(resolvedGrOverride ? { gr_number: resolvedGrOverride } : {}),
               },
@@ -2163,7 +2309,7 @@ export class StudentsService {
               data: {
                 student_cc: student.cc,
                 class_id: toClass!.id,
-                section_id: toSectionId !== undefined ? toSectionId : student.section_id,
+                section_id: finalSectionId,
                 campus_id: student.campus_id,
                 academic_year: nextAcademicYear,
                 gr_number: effectiveGr,
