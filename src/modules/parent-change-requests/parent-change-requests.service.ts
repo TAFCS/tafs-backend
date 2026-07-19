@@ -223,7 +223,7 @@ export class ParentChangeRequestsService {
           },
         },
       },
-      orderBy: { created_at: 'desc' },
+      orderBy: { updated_at: 'desc' },
     });
   }
 
