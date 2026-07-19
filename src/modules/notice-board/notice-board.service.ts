@@ -109,6 +109,37 @@ export class NoticeBoardService {
       take: 30,
     });
 
+    const allStudentCcs = [...new Set(posts.flatMap((p) => p.student_ccs || []))];
+    const students = allStudentCcs.length
+      ? await this.prisma.students.findMany({
+          where: { cc: { in: allStudentCcs } },
+          select: {
+            cc: true,
+            full_name: true,
+            gr_number: true,
+            families: { select: { household_name: true } },
+          },
+        })
+      : [];
+    const studentMap = new Map(
+      students.map((s) => [
+        s.cc,
+        {
+          cc: s.cc,
+          full_name: s.full_name,
+          gr_number: s.gr_number,
+          household_name: s.families?.household_name || null,
+        },
+      ]),
+    );
+
+    const postsWithStudents = posts.map((post) => ({
+      ...post,
+      targeted_students: (post.student_ccs || [])
+        .map((cc) => studentMap.get(cc))
+        .filter(Boolean),
+    }));
+
     const holidays = await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
@@ -154,7 +185,7 @@ export class NoticeBoardService {
       };
     });
 
-    const merged = [...posts, ...holidayPosts];
+    const merged = [...postsWithStudents, ...holidayPosts];
     merged.sort((a, b) => {
       if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
@@ -421,6 +452,7 @@ export class NoticeBoardService {
         campus_ids: true,
         class_ids: true,
         section_ids: true,
+        student_ccs: true,
         _count: { select: { post_reads: true } },
       },
     });
@@ -430,28 +462,78 @@ export class NoticeBoardService {
     const campusIds = post.campus_ids as number[];
     const classIds  = post.class_ids as number[];
     const sectionIds = post.section_ids as number[];
+    const studentCcs = post.student_ccs as number[];
 
-    const scopedFamilies = await this.prisma.families.findMany({
-      where: {
-        deleted_at: null,
-        students: {
-          some: {
-            deleted_at: null,
-            AND: [
-              campusIds.length ? { campus_id: { in: campusIds } } : {},
-              classIds.length ? { class_id: { in: classIds } } : {},
-              sectionIds.length ? { section_id: { in: sectionIds } } : {},
-            ],
+    let reachedCount = 0;
+    let targetedReads: any[] = [];
+
+    if (studentCcs && studentCcs.length) {
+      const targetedFamilies = await this.prisma.families.findMany({
+        where: {
+          deleted_at: null,
+          students: {
+            some: {
+              cc: { in: studentCcs },
+              deleted_at: null,
+            },
           },
         },
-      },
-      select: { id: true },
-    });
+        select: { id: true },
+      });
+      reachedCount = targetedFamilies.length;
+
+      // Query targeted student read statuses
+      const studentsInScope = await this.prisma.students.findMany({
+        where: { cc: { in: studentCcs } },
+        select: {
+          cc: true,
+          full_name: true,
+          gr_number: true,
+          family_id: true,
+          families: {
+            select: {
+              household_name: true,
+              notice_post_reads: {
+                where: { post_id: numericId },
+                select: { read_at: true },
+              },
+            },
+          },
+        },
+      });
+
+      targetedReads = studentsInScope.map((s) => ({
+        cc: s.cc,
+        full_name: s.full_name,
+        gr_number: s.gr_number,
+        household_name: s.families?.household_name || null,
+        read_at: s.families?.notice_post_reads?.[0]?.read_at || null,
+      }));
+    } else {
+      const scopedFamilies = await this.prisma.families.findMany({
+        where: {
+          deleted_at: null,
+          students: {
+            some: {
+              deleted_at: null,
+              AND: [
+                campusIds.length ? { campus_id: { in: campusIds } } : {},
+                classIds.length ? { class_id: { in: classIds } } : {},
+                sectionIds.length ? { section_id: { in: sectionIds } } : {},
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      });
+      reachedCount = scopedFamilies.length;
+    }
 
     return {
       post_id: numericId,
-      total_reached: scopedFamilies.length,
+      total_reached: reachedCount,
       total_read: post._count.post_reads,
+      targeted_reads: targetedReads.length ? targetedReads : undefined,
     };
   }
 

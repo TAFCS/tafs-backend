@@ -12,6 +12,7 @@ import { AuthService } from '../auth/auth.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { NoticeBoardService } from '../notice-board/notice-board.service';
 import { Prisma } from '@prisma/client';
+import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 
 export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
@@ -342,37 +343,67 @@ export class ParentChangeRequestsService {
       const isDeletion = (request.requested_data as any)?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
       // If account was approved for deletion, the parent account is deleted and tokens revoked, no notification needed.
       if (!(isDeletion && dto.status === ChangeRequestStatus.APPROVED)) {
-        const title = dto.status === ChangeRequestStatus.APPROVED ? 'Profile Update Approved' : 'Profile Update Rejected';
-        const body = dto.status === ChangeRequestStatus.APPROVED
-          ? 'Your profile change request has been approved and synced successfully.'
-          : `Your profile change request has been rejected.${dto.comment ? ` Reason: ${dto.comment}` : ''}`;
+        const titleTemplateKey = dto.status === ChangeRequestStatus.APPROVED ? 'notif_profile_approved_title' : 'notif_profile_rejected_title';
+        const isDisabled = await isTemplateDisabled(this.prisma, titleTemplateKey);
+        
+        if (!isDisabled) {
+          let title = '';
+          let body = '';
+          if (dto.status === ChangeRequestStatus.APPROVED) {
+            title = await resolveTemplate(
+              this.prisma,
+              'notif_profile_approved_title',
+              'Profile Update Approved',
+            );
+            body = await resolveTemplate(
+              this.prisma,
+              'notif_profile_approved_body',
+              'Your profile change request has been approved and synced successfully.',
+            );
+          } else {
+            title = await resolveTemplate(
+              this.prisma,
+              'notif_profile_rejected_title',
+              'Profile Update Rejected',
+            );
+            body = await resolveTemplate(
+              this.prisma,
+              'notif_profile_rejected_body',
+              'Your profile change request has been rejected.{reason_clause}',
+              {
+                comment: dto.comment || '',
+                reason_clause: dto.comment ? ` Reason: ${dto.comment}` : '',
+              },
+            );
+          }
 
-        // Get student CCs if this is a student update so the notice can be targeted directly to the family's students
-        const studentCcs: number[] = [];
-        const requestedData = request.requested_data as Record<string, unknown>;
-        if (requestedData?.request_type === 'STUDENT_UPDATE' && requestedData.student_cc) {
-          studentCcs.push(Number(requestedData.student_cc));
-        } else {
-          // If it's a guardian change, target all students in the family so the family feed gets it.
-          const students = await this.prisma.students.findMany({
-            where: { family_id: request.family_id, deleted_at: null },
-            select: { cc: true },
-          });
-          studentCcs.push(...students.map((s) => s.cc));
+          // Get student CCs if this is a student update so the notice can be targeted directly to the family's students
+          const studentCcs: number[] = [];
+          const requestedData = request.requested_data as Record<string, unknown>;
+          if (requestedData?.request_type === 'STUDENT_UPDATE' && requestedData.student_cc) {
+            studentCcs.push(Number(requestedData.student_cc));
+          } else {
+            // If it's a guardian change, target all students in the family so the family feed gets it.
+            const students = await this.prisma.students.findMany({
+              where: { family_id: request.family_id, deleted_at: null },
+              select: { cc: true },
+            });
+            studentCcs.push(...students.map((s) => s.cc));
+          }
+
+          // Delegate entire creation, logging, WebSockets, and FCM dispatch to NoticeBoardService
+          await this.noticeBoardService.createPost(
+            adminId,
+            {
+              title,
+              body,
+              student_ccs: studentCcs,
+              is_pinned: false,
+              notification_only: false,
+            },
+            adminLabel,
+          );
         }
-
-        // Delegate entire creation, logging, WebSockets, and FCM dispatch to NoticeBoardService
-        await this.noticeBoardService.createPost(
-          adminId,
-          {
-            title,
-            body,
-            student_ccs: studentCcs,
-            is_pinned: false,
-            notification_only: false,
-          },
-          adminLabel,
-        );
       }
     } catch (err) {
       console.error('Failed to dispatch parent change request process notification:', err.message);

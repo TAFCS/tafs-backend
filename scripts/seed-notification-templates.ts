@@ -52,6 +52,12 @@ const templates: TemplateEntry[] = [
   // Staff — Saturday schedule
   { key: 'notif_staff_saturday_title', value: 'Working Saturday Notice', description: 'Staff Saturday schedule push title. Vars: {month}' },
   { key: 'notif_staff_saturday_body', value: 'You are required to attend school on the following Saturday(s) in {month}: {date_list}. {attendance_note}', description: 'Staff Saturday schedule push body. Vars: {month}, {date_list}, {attendance_note}' },
+
+  // Profile Update
+  { key: 'notif_profile_approved_title', value: 'Profile Update Approved', description: 'Profile update approval push title.' },
+  { key: 'notif_profile_approved_body', value: 'Your profile change request has been approved and synced successfully.', description: 'Profile update approval push body.' },
+  { key: 'notif_profile_rejected_title', value: 'Profile Update Rejected', description: 'Profile update rejection push title.' },
+  { key: 'notif_profile_rejected_body', value: 'Your profile change request has been rejected.{reason_clause}', description: 'Profile update rejection push body. Vars: {comment}, {reason_clause}' },
 ];
 
 async function main() {
