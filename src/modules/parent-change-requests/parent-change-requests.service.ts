@@ -338,11 +338,27 @@ export class ParentChangeRequestsService {
               data: { primary_address: dataToUpdate.mailing_address },
             });
 
-            // Parse and sync to guardian structured fields
+            // Parse and sync to all family guardians' structured fields
             const parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
-            await tx.guardians.update({
-              where: { id: request.guardian_id },
-              data: parsed,
+            
+            const studentIds = await tx.students.findMany({
+              where: { family_id: request.family_id, deleted_at: null },
+              select: { cc: true },
+            });
+            const sccList = studentIds.map(s => s.cc);
+
+            const guardianLinks = await tx.student_guardians.findMany({
+              where: { student_id: { in: sccList } },
+              select: { guardian_id: true },
+            });
+            const guardianIds = Array.from(new Set(guardianLinks.map(l => l.guardian_id)));
+
+            await tx.guardians.updateMany({
+              where: { id: { in: guardianIds } },
+              data: {
+                mailing_address: dataToUpdate.mailing_address,
+                ...parsed,
+              },
             });
           }
         }
@@ -490,11 +506,11 @@ export class ParentChangeRequestsService {
     }
 
     return {
-      country: country.toUpperCase(),
-      province: province.toUpperCase(),
-      city: city.toUpperCase(),
-      area_block: area_block.toUpperCase(),
-      house_appt_name: house_appt_name.toUpperCase(),
+      country: country.substring(0, 50).toUpperCase(),
+      province: province.substring(0, 50).toUpperCase(),
+      city: city.substring(0, 50).toUpperCase(),
+      area_block: area_block.substring(0, 100).toUpperCase(),
+      house_appt_name: house_appt_name.substring(0, 100).toUpperCase(),
     };
   }
 }
