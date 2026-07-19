@@ -197,6 +197,7 @@ export class FamiliesService {
                 province: true,
                 country: true,
                 work_phone: true,
+                mailing_address: true,
               },
             },
           },

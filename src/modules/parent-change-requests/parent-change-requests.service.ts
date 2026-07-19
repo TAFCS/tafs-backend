@@ -330,6 +330,21 @@ export class ParentChangeRequestsService {
             where: { id: request.guardian_id },
             data: dataToUpdate as Prisma.InputJsonValue,
           });
+
+          // Sync mailing_address to families.primary_address on approval
+          if (dataToUpdate.mailing_address) {
+            await tx.families.update({
+              where: { id: request.family_id },
+              data: { primary_address: dataToUpdate.mailing_address },
+            });
+
+            // Parse and sync to guardian structured fields
+            const parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
+            await tx.guardians.update({
+              where: { id: request.guardian_id },
+              data: parsed,
+            });
+          }
         }
       }
 
@@ -410,5 +425,76 @@ export class ParentChangeRequestsService {
     }
 
     return result;
+  }
+
+  private parseMailingAddress(addressStr: string) {
+    const parts = addressStr.split(',').map(p => p.trim());
+    
+    let country = 'PAKISTAN';
+    let province = 'SINDH';
+    let city = 'KARACHI';
+    let area_block = 'N/A';
+    let house_appt_name = addressStr;
+
+    if (parts.length >= 3) {
+      const last = parts[parts.length - 1].toUpperCase();
+      let offset = 0;
+      if (last.includes('PAKISTAN')) {
+        country = 'PAKISTAN';
+        offset++;
+      }
+      const provs = ['SINDH', 'PUNJAB', 'BALOCHISTAN', 'KPK', 'GILGIT'];
+      const currentProvPart = parts[parts.length - 1 - offset]?.toUpperCase() || '';
+      const matchedProv = provs.find(p => currentProvPart.includes(p));
+      if (matchedProv) {
+        province = matchedProv;
+        offset++;
+      }
+      
+      const currentCityPart = parts[parts.length - 1 - offset]?.toUpperCase() || '';
+      if (currentCityPart) {
+        city = currentCityPart;
+        offset++;
+      }
+
+      if (parts.length - 1 - offset >= 0) {
+        area_block = parts[parts.length - 1 - offset];
+        offset++;
+      }
+
+      if (parts.length - 1 - offset >= 0) {
+        house_appt_name = parts.slice(0, parts.length - offset + 1).join(', ');
+      } else {
+        house_appt_name = parts[0];
+      }
+    } else {
+      const upper = addressStr.toUpperCase();
+      if (upper.includes('KARACHI')) {
+        city = 'KARACHI';
+        province = 'SINDH';
+      } else if (upper.includes('LAHORE')) {
+        city = 'LAHORE';
+        province = 'PUNJAB';
+      } else if (upper.includes('ISLAMABAD')) {
+        city = 'ISLAMABAD';
+        province = 'PUNJAB';
+      }
+
+      const blockIndex = upper.indexOf('BLOCK');
+      if (blockIndex !== -1) {
+        house_appt_name = addressStr.substring(0, blockIndex).trim();
+        area_block = addressStr.substring(blockIndex).replace(/KARACHI|SINDH|PAKISTAN/gi, '').trim();
+      } else {
+        house_appt_name = addressStr.replace(/KARACHI|SINDH|PAKISTAN/gi, '').trim();
+      }
+    }
+
+    return {
+      country: country.toUpperCase(),
+      province: province.toUpperCase(),
+      city: city.toUpperCase(),
+      area_block: area_block.toUpperCase(),
+      house_appt_name: house_appt_name.toUpperCase(),
+    };
   }
 }
