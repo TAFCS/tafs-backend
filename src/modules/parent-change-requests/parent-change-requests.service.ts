@@ -330,6 +330,23 @@ export class ParentChangeRequestsService {
             where: { id: request.guardian_id },
             data: dataToUpdate as Prisma.InputJsonValue,
           });
+
+          // Sync email to families.email if this is the primary contact guardian
+          if (dataToUpdate.email_address) {
+            const primaryContactLink = await tx.student_guardians.findFirst({
+              where: {
+                guardian_id: request.guardian_id,
+                is_primary_contact: true,
+                students: { family_id: request.family_id },
+              },
+            });
+            if (primaryContactLink) {
+              await tx.families.update({
+                where: { id: request.family_id },
+                data: { email: dataToUpdate.email_address },
+              });
+            }
+          }
         }
       }
 
