@@ -123,28 +123,42 @@ export class FamiliesService {
   // ── Stats ─────────────────────────────────────────────────────────────────
 
   async getFamilyStats() {
-    const [total, registeredOnApp, notConfigured] = await this.prisma.$transaction([
-      // Total non-deleted families
-      this.prisma.families.count({
-        where: { deleted_at: null },
-      }),
-      // Families that have set an app password
-      this.prisma.families.count({
-        where: {
-          deleted_at: null,
-          password_hash: { not: null },
-        },
-      }),
-      // Families that have NOT yet registered on the app (no password set)
-      this.prisma.families.count({
-        where: {
-          deleted_at: null,
-          password_hash: null,
-        },
-      }),
-    ]);
+    const [total, activeWithChildren, withCredentials, kidsInCredentialedFamilies] =
+      await this.prisma.$transaction([
+        // Total non-deleted families
+        this.prisma.families.count({
+          where: { deleted_at: null },
+        }),
+        // Families with at least one currently-enrolled (active) child
+        this.prisma.families.count({
+          where: {
+            deleted_at: null,
+            students: { some: { deleted_at: null, status: 'ENROLLED' } },
+          },
+        }),
+        // Families that have set both an email and an app password
+        this.prisma.families.count({
+          where: {
+            deleted_at: null,
+            email: { not: null },
+            password_hash: { not: null },
+          },
+        }),
+        // Enrolled students belonging to families with credentials set
+        this.prisma.students.count({
+          where: {
+            deleted_at: null,
+            status: 'ENROLLED',
+            families: {
+              deleted_at: null,
+              email: { not: null },
+              password_hash: { not: null },
+            },
+          },
+        }),
+      ]);
 
-    return { total, registeredOnApp, notConfigured };
+    return { total, activeWithChildren, withCredentials, kidsInCredentialedFamilies };
   }
 
   // ── Get one (with students + guardians) ───────────────────────────────────
