@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../tafs-flutter"
+		},
+		{
+			"path": "../tafs-webapp"
+		}
+	]
+}

@@ -68,6 +68,25 @@ export class ParentChangeRequestsService {
     return String(value);
   }
 
+  private uppercaseTextValues(data: Record<string, any>): Record<string, any> {
+    const result = { ...data };
+    for (const [key, val] of Object.entries(result)) {
+      if (typeof val === 'string') {
+        const lowerKey = key.toLowerCase();
+        if (
+          lowerKey.includes('email') ||
+          lowerKey.includes('url') ||
+          lowerKey.includes('pic') ||
+          lowerKey === 'dob'
+        ) {
+          continue;
+        }
+        result[key] = val.toUpperCase();
+      }
+    }
+    return result;
+  }
+
   async createAccountDeletionRequestForFamily(familyId: number, reason?: string) {
     const familyGuardianLinks = await this.prisma.student_guardians.findMany({
       where: {
@@ -184,6 +203,11 @@ export class ParentChangeRequestsService {
             organization: true,
             education_level: true,
             mailing_address: true,
+            student_guardians: {
+              select: {
+                relationship: true,
+              },
+            },
           },
         },
         families: {
@@ -288,7 +312,8 @@ export class ParentChangeRequestsService {
           await this.authService.deleteParentAccount(request.family_id);
         } else if (requestedData?.request_type === 'STUDENT_UPDATE') {
           const studentCc = Number(requestedData.student_cc);
-          const changes = requestedData.changes as Record<string, any>;
+          const rawChanges = requestedData.changes as Record<string, any>;
+          const changes = this.uppercaseTextValues(rawChanges);
           // Parse date if dob is present
           if (changes.dob) {
             changes.dob = new Date(changes.dob);
@@ -298,9 +323,11 @@ export class ParentChangeRequestsService {
             data: changes,
           });
         } else {
+          const rawData = request.requested_data as Record<string, any>;
+          const dataToUpdate = this.uppercaseTextValues(rawData);
           await tx.guardians.update({
             where: { id: request.guardian_id },
-            data: request.requested_data as Prisma.InputJsonValue,
+            data: dataToUpdate as Prisma.InputJsonValue,
           });
         }
       }
