@@ -243,6 +243,252 @@ export class ParentChangeRequestsService {
     return request;
   }
 
+  /**
+   * Splits requested_data into approved vs remaining portions when the admin
+   * selects a subset of fields. Returns null when every field is approved
+   * (or approved_fields was omitted / empty meaning "all").
+   */
+  private partitionRequestedData(
+    requestedData: Record<string, unknown>,
+    approvedFields?: string[],
+  ): {
+    approvedData: Record<string, unknown>;
+    remainingData: Record<string, unknown> | null;
+    isPartial: boolean;
+  } {
+    const isAccountDeletion =
+      requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
+    if (isAccountDeletion || !approvedFields || approvedFields.length === 0) {
+      return { approvedData: requestedData, remainingData: null, isPartial: false };
+    }
+
+    const fieldSet = new Set(approvedFields);
+
+    if (requestedData?.request_type === 'STUDENT_UPDATE') {
+      const changes = (requestedData.changes as Record<string, unknown>) || {};
+      const allKeys = Object.keys(changes);
+      const unknown = approvedFields.filter((f) => !allKeys.includes(f));
+      if (unknown.length > 0) {
+        throw new BadRequestException(
+          `Unknown approved fields: ${unknown.join(', ')}`,
+        );
+      }
+      if (approvedFields.length === allKeys.length) {
+        return { approvedData: requestedData, remainingData: null, isPartial: false };
+      }
+
+      const approvedChanges: Record<string, unknown> = {};
+      const remainingChanges: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(changes)) {
+        if (fieldSet.has(key)) approvedChanges[key] = value;
+        else remainingChanges[key] = value;
+      }
+
+      return {
+        approvedData: {
+          ...requestedData,
+          changes: approvedChanges,
+        },
+        remainingData: {
+          ...requestedData,
+          changes: remainingChanges,
+        },
+        isPartial: true,
+      };
+    }
+
+    // Guardian field updates (flat map)
+    const metaKeys = new Set(['request_type', 'student_cc']);
+    const dataKeys = Object.keys(requestedData).filter((k) => !metaKeys.has(k));
+    const unknown = approvedFields.filter((f) => !dataKeys.includes(f));
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        `Unknown approved fields: ${unknown.join(', ')}`,
+      );
+    }
+    if (approvedFields.length === dataKeys.length) {
+      return { approvedData: requestedData, remainingData: null, isPartial: false };
+    }
+
+    const approvedData: Record<string, unknown> = {};
+    const remainingData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(requestedData)) {
+      if (metaKeys.has(key)) {
+        // Meta keys shouldn't appear on guardian payloads, but keep if present
+        continue;
+      }
+      if (fieldSet.has(key)) approvedData[key] = value;
+      else remainingData[key] = value;
+    }
+
+    return { approvedData, remainingData, isPartial: true };
+  }
+
+  private async applyApprovedData(
+    tx: Prisma.TransactionClient,
+    request: {
+      guardian_id: number;
+      family_id: number;
+    },
+    approvedData: Record<string, unknown>,
+  ) {
+    const isAccountDeletion =
+      approvedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
+    if (isAccountDeletion) {
+      await this.authService.deleteParentAccount(request.family_id);
+      return;
+    }
+
+    if (approvedData?.request_type === 'STUDENT_UPDATE') {
+      const studentCc = Number(approvedData.student_cc);
+      const rawChanges = approvedData.changes as Record<string, any>;
+      const changes = this.uppercaseTextValues(rawChanges);
+      if (changes.dob) {
+        changes.dob = new Date(changes.dob);
+      }
+      await tx.students.update({
+        where: { cc: studentCc },
+        data: changes,
+      });
+      return;
+    }
+
+    const dataToUpdate = this.uppercaseTextValues({ ...approvedData } as Record<string, any>);
+
+    if ('home_phone' in dataToUpdate) {
+      const homePhone = dataToUpdate.home_phone;
+      delete dataToUpdate.home_phone;
+      if (request.family_id) {
+        await tx.families.update({
+          where: { id: request.family_id },
+          data: { home_phone: homePhone },
+        });
+        await tx.students.updateMany({
+          where: { family_id: request.family_id },
+          data: { home_phone: homePhone },
+        });
+      }
+    }
+
+    const addressFields = [
+      'house_appt_name',
+      'area_block',
+      'city',
+      'province',
+      'country',
+      'postal_code',
+    ];
+    const hasAddressUpdates = addressFields.some((field) => field in dataToUpdate);
+
+    if (hasAddressUpdates) {
+      const currentGuardian = await tx.guardians.findUnique({
+        where: { id: request.guardian_id },
+        select: {
+          house_appt_name: true,
+          area_block: true,
+          city: true,
+          province: true,
+          country: true,
+          postal_code: true,
+        },
+      });
+
+      const houseApptName =
+        'house_appt_name' in dataToUpdate
+          ? dataToUpdate.house_appt_name
+          : currentGuardian?.house_appt_name || '';
+      const areaBlock =
+        'area_block' in dataToUpdate
+          ? dataToUpdate.area_block
+          : currentGuardian?.area_block || '';
+      const city =
+        'city' in dataToUpdate ? dataToUpdate.city : currentGuardian?.city || '';
+      const province =
+        'province' in dataToUpdate
+          ? dataToUpdate.province
+          : currentGuardian?.province || '';
+      const country =
+        'country' in dataToUpdate
+          ? dataToUpdate.country
+          : currentGuardian?.country || '';
+      const postalCode =
+        'postal_code' in dataToUpdate
+          ? dataToUpdate.postal_code
+          : currentGuardian?.postal_code || '';
+
+      const addressParts = [
+        houseApptName,
+        areaBlock,
+        city,
+        province,
+        country,
+        postalCode,
+      ]
+        .map((p) => p?.toString().trim())
+        .filter(Boolean);
+      dataToUpdate.mailing_address = addressParts.join(', ');
+    }
+
+    await tx.guardians.update({
+      where: { id: request.guardian_id },
+      data: dataToUpdate as Prisma.InputJsonValue,
+    });
+
+    if (dataToUpdate.mailing_address) {
+      await tx.families.update({
+        where: { id: request.family_id },
+        data: { primary_address: dataToUpdate.mailing_address },
+      });
+
+      let parsed: Record<string, string | null> = {};
+      if (hasAddressUpdates) {
+        const currentG = await tx.guardians.findUnique({
+          where: { id: request.guardian_id },
+          select: {
+            house_appt_name: true,
+            area_block: true,
+            city: true,
+            province: true,
+            country: true,
+            postal_code: true,
+          },
+        });
+        parsed = {
+          house_appt_name: currentG?.house_appt_name || null,
+          area_block: currentG?.area_block || null,
+          city: currentG?.city || null,
+          province: currentG?.province || null,
+          country: currentG?.country || null,
+          postal_code: currentG?.postal_code || null,
+        };
+      } else {
+        parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
+      }
+
+      const studentIds = await tx.students.findMany({
+        where: { family_id: request.family_id, deleted_at: null },
+        select: { cc: true },
+      });
+      const sccList = studentIds.map((s) => s.cc);
+
+      const guardianLinks = await tx.student_guardians.findMany({
+        where: { student_id: { in: sccList } },
+        select: { guardian_id: true },
+      });
+      const guardianIds = Array.from(
+        new Set(guardianLinks.map((l) => l.guardian_id)),
+      );
+
+      await tx.guardians.updateMany({
+        where: { id: { in: guardianIds } },
+        data: {
+          mailing_address: dataToUpdate.mailing_address,
+          ...parsed,
+        },
+      });
+    }
+  }
+
   async processRequest(
     id: number,
     dto: ProcessChangeRequestDto,
@@ -255,34 +501,99 @@ export class ParentChangeRequestsService {
       throw new BadRequestException('Request has already been processed');
     }
 
-    // Diff against current data BEFORE the mutation below is applied, so
-    // the audit trail reflects what actually changed as a result of this decision.
     const requestedData = request.requested_data as Record<string, unknown>;
-    const diffs = await this.buildFieldDiffs(requestedData, request.guardian_id);
+    const isApproving = dto.status === ChangeRequestStatus.APPROVED;
+
+    const { approvedData, remainingData, isPartial } = isApproving
+      ? this.partitionRequestedData(requestedData, dto.approved_fields)
+      : { approvedData: requestedData, remainingData: null, isPartial: false };
+
+    if (isApproving && dto.approved_fields && dto.approved_fields.length === 0) {
+      throw new BadRequestException(
+        'Select at least one field to approve, or omit approved_fields to approve all',
+      );
+    }
+
+    // Diff against current data BEFORE the mutation, scoped to what is being decided.
+    const diffs = await this.buildFieldDiffs(
+      isApproving ? approvedData : requestedData,
+      request.guardian_id,
+    );
     const actorLabel = adminLabel || adminId;
     const contextNote =
       `Change request #${id} for Family #${request.family_id} (Guardian: ${request.guardians.full_name ?? request.guardian_id}) ` +
-      `${dto.status.toLowerCase()} by ${actorLabel}.` +
+      `${dto.status.toLowerCase()} by ${actorLabel}` +
+      (isPartial
+        ? ` (partial: ${(dto.approved_fields || []).join(', ')}; remaining fields stay pending).`
+        : '.') +
       (dto.comment ? ` Comment: ${dto.comment}` : '') +
-      (diffs.length === 0 && requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE
+      (diffs.length === 0 &&
+      requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE
         ? ` Account deletion request. Reason: ${(requestedData as any).reason || 'not provided'}.`
         : '');
 
-    const logProcessedDiffs = async () => {
-      if (diffs.length === 0) {
-        await this.auditLogs.log({
-          entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: String(id),
-          action: dto.status,
-          changed_by: actorLabel,
-          note: contextNote,
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (isApproving && isPartial && remainingData) {
+        // Apply selected fields, move them into a new History (APPROVED) row,
+        // and leave the original request PENDING with only unselected fields.
+        await this.applyApprovedData(tx, request, approvedData);
+
+        const historyRequest = await tx.parent_change_requests.create({
+          data: {
+            guardian_id: request.guardian_id,
+            family_id: request.family_id,
+            requested_data: approvedData as any,
+            status: ChangeRequestStatus.APPROVED,
+            comment: dto.comment ?? null,
+            processed_by: adminId,
+            processed_at: new Date(),
+          },
         });
-        return;
+
+        const pendingRequest = await tx.parent_change_requests.update({
+          where: { id },
+          data: {
+            requested_data: remainingData as any,
+          },
+        });
+
+        return { result: pendingRequest, historyId: historyRequest.id };
       }
+
+      const updatedRequest = await tx.parent_change_requests.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          comment: dto.comment,
+          processed_by: adminId,
+          processed_at: new Date(),
+          ...(isApproving
+            ? { requested_data: approvedData as any }
+            : {}),
+        },
+      });
+
+      if (isApproving) {
+        await this.applyApprovedData(tx, request, approvedData);
+      }
+
+      return { result: updatedRequest, historyId: id };
+    });
+
+    const logEntityId = String(result.historyId);
+    if (diffs.length === 0) {
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: logEntityId,
+        action: dto.status,
+        changed_by: actorLabel,
+        note: contextNote,
+      });
+    } else {
       for (const diff of diffs) {
         await this.auditLogs.log({
           entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: String(id),
+          entity_id: logEntityId,
           action: dto.status,
           field: diff.field,
           old_value: diff.old_value,
@@ -292,164 +603,24 @@ export class ParentChangeRequestsService {
           note: contextNote,
         });
       }
-    };
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const updatedRequest = await tx.parent_change_requests.update({
-        where: { id },
-        data: {
-          status: dto.status,
-          comment: dto.comment,
-          processed_by: adminId,
-          processed_at: new Date(),
-        },
-      });
-
-      if (dto.status === ChangeRequestStatus.APPROVED) {
-        const requestedData = request.requested_data as Record<string, unknown>;
-        const isAccountDeletion =
-          requestedData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
-        if (isAccountDeletion) {
-          await this.authService.deleteParentAccount(request.family_id);
-        } else if (requestedData?.request_type === 'STUDENT_UPDATE') {
-          const studentCc = Number(requestedData.student_cc);
-          const rawChanges = requestedData.changes as Record<string, any>;
-          const changes = this.uppercaseTextValues(rawChanges);
-          // Parse date if dob is present
-          if (changes.dob) {
-            changes.dob = new Date(changes.dob);
-          }
-          await tx.students.update({
-            where: { cc: studentCc },
-            data: changes,
-          });
-        } else {
-          const rawData = request.requested_data as Record<string, any>;
-          const dataToUpdate = this.uppercaseTextValues(rawData);
-          
-          if ('home_phone' in dataToUpdate) {
-            const homePhone = dataToUpdate.home_phone;
-            delete dataToUpdate.home_phone;
-            if (request.family_id) {
-              await tx.families.update({
-                where: { id: request.family_id },
-                data: { home_phone: homePhone },
-              });
-              await tx.students.updateMany({
-                where: { family_id: request.family_id },
-                data: { home_phone: homePhone },
-              });
-            }
-          }
-
-          // If any structured address fields are being updated
-          const addressFields = ['house_appt_name', 'area_block', 'city', 'province', 'country', 'postal_code'];
-          const hasAddressUpdates = addressFields.some(field => field in dataToUpdate);
-
-          if (hasAddressUpdates) {
-            const currentGuardian = await tx.guardians.findUnique({
-              where: { id: request.guardian_id },
-              select: {
-                house_appt_name: true,
-                area_block: true,
-                city: true,
-                province: true,
-                country: true,
-                postal_code: true,
-              }
-            });
-
-            const houseApptName = 'house_appt_name' in dataToUpdate ? dataToUpdate.house_appt_name : (currentGuardian?.house_appt_name || '');
-            const areaBlock = 'area_block' in dataToUpdate ? dataToUpdate.area_block : (currentGuardian?.area_block || '');
-            const city = 'city' in dataToUpdate ? dataToUpdate.city : (currentGuardian?.city || '');
-            const province = 'province' in dataToUpdate ? dataToUpdate.province : (currentGuardian?.province || '');
-            const country = 'country' in dataToUpdate ? dataToUpdate.country : (currentGuardian?.country || '');
-            const postalCode = 'postal_code' in dataToUpdate ? dataToUpdate.postal_code : (currentGuardian?.postal_code || '');
-
-            const addressParts = [houseApptName, areaBlock, city, province, country, postalCode].map(p => p?.toString().trim()).filter(Boolean);
-            const mailingAddress = addressParts.join(', ');
-
-            dataToUpdate.mailing_address = mailingAddress;
-          }
-
-          await tx.guardians.update({
-            where: { id: request.guardian_id },
-            data: dataToUpdate as Prisma.InputJsonValue,
-          });
-
-          // Sync mailing_address to families.primary_address on approval
-          if (dataToUpdate.mailing_address) {
-            await tx.families.update({
-              where: { id: request.family_id },
-              data: { primary_address: dataToUpdate.mailing_address },
-            });
-
-            // Parse and sync to all family guardians' structured fields
-            let parsed = {};
-            if (hasAddressUpdates) {
-              const currentG = await tx.guardians.findUnique({
-                where: { id: request.guardian_id },
-                select: {
-                  house_appt_name: true,
-                  area_block: true,
-                  city: true,
-                  province: true,
-                  country: true,
-                  postal_code: true,
-                }
-              });
-              parsed = {
-                house_appt_name: currentG?.house_appt_name || null,
-                area_block: currentG?.area_block || null,
-                city: currentG?.city || null,
-                province: currentG?.province || null,
-                country: currentG?.country || null,
-                postal_code: currentG?.postal_code || null,
-              };
-            } else {
-              parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
-            }
-            
-            const studentIds = await tx.students.findMany({
-              where: { family_id: request.family_id, deleted_at: null },
-              select: { cc: true },
-            });
-            const sccList = studentIds.map(s => s.cc);
-
-            const guardianLinks = await tx.student_guardians.findMany({
-              where: { student_id: { in: sccList } },
-              select: { guardian_id: true },
-            });
-            const guardianIds = Array.from(new Set(guardianLinks.map(l => l.guardian_id)));
-
-            await tx.guardians.updateMany({
-              where: { id: { in: guardianIds } },
-              data: {
-                mailing_address: dataToUpdate.mailing_address,
-                ...parsed,
-              },
-            });
-          }
-        }
-      }
-
-      return updatedRequest;
-    });
-
-    await logProcessedDiffs();
+    }
 
     // Trigger notice board notification to the family
     try {
-      const isDeletion = (request.requested_data as any)?.request_type === ACCOUNT_DELETION_REQUEST_TYPE;
+      const isDeletion =
+        (request.requested_data as any)?.request_type ===
+        ACCOUNT_DELETION_REQUEST_TYPE;
       // If account was approved for deletion, the parent account is deleted and tokens revoked, no notification needed.
-      if (!(isDeletion && dto.status === ChangeRequestStatus.APPROVED)) {
-        const titleTemplateKey = dto.status === ChangeRequestStatus.APPROVED ? 'notif_profile_approved_title' : 'notif_profile_rejected_title';
+      if (!(isDeletion && isApproving)) {
+        const titleTemplateKey = isApproving
+          ? 'notif_profile_approved_title'
+          : 'notif_profile_rejected_title';
         const isDisabled = await isTemplateDisabled(this.prisma, titleTemplateKey);
-        
+
         if (!isDisabled) {
           let title = '';
           let body = '';
-          if (dto.status === ChangeRequestStatus.APPROVED) {
+          if (isApproving) {
             title = await resolveTemplate(
               this.prisma,
               'notif_profile_approved_title',
@@ -458,7 +629,9 @@ export class ParentChangeRequestsService {
             body = await resolveTemplate(
               this.prisma,
               'notif_profile_approved_body',
-              'Your profile change request has been approved and synced successfully.',
+              isPartial
+                ? 'Some of your profile changes have been approved and synced. Remaining fields are still under review.'
+                : 'Your profile change request has been approved and synced successfully.',
             );
           } else {
             title = await resolveTemplate(
@@ -477,13 +650,13 @@ export class ParentChangeRequestsService {
             );
           }
 
-          // Get student CCs if this is a student update so the notice can be targeted directly to the family's students
           const studentCcs: number[] = [];
-          const requestedData = request.requested_data as Record<string, unknown>;
-          if (requestedData?.request_type === 'STUDENT_UPDATE' && requestedData.student_cc) {
+          if (
+            requestedData?.request_type === 'STUDENT_UPDATE' &&
+            requestedData.student_cc
+          ) {
             studentCcs.push(Number(requestedData.student_cc));
           } else {
-            // If it's a guardian change, target all students in the family so the family feed gets it.
             const students = await this.prisma.students.findMany({
               where: { family_id: request.family_id, deleted_at: null },
               select: { cc: true },
@@ -491,7 +664,6 @@ export class ParentChangeRequestsService {
             studentCcs.push(...students.map((s) => s.cc));
           }
 
-          // Delegate entire creation, logging, WebSockets, and FCM dispatch to NoticeBoardService
           await this.noticeBoardService.createPost(
             adminId,
             {
@@ -506,10 +678,13 @@ export class ParentChangeRequestsService {
         }
       }
     } catch (err) {
-      console.error('Failed to dispatch parent change request process notification:', err.message);
+      console.error(
+        'Failed to dispatch parent change request process notification:',
+        err.message,
+      );
     }
 
-    return result;
+    return result.result;
   }
 
   private parseMailingAddress(addressStr: string) {

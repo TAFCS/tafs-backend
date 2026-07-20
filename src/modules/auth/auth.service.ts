@@ -251,6 +251,13 @@ export class AuthService {
       include: { guardians: true },
     });
 
+    const pendingRequests = await this.prisma.parent_change_requests.findMany({
+      where: {
+        family_id: familyId,
+        status: 'PENDING',
+      },
+    });
+
     // Unique by guardian ID
     const uniqueGuardians = Array.from(
       new Map(familyGuardians.map((g) => [g.guardian_id, g])).values(),
@@ -267,6 +274,21 @@ export class AuthService {
         photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
         guardians: uniqueGuardians.map((g: any) => {
           const guardian = g.guardians;
+
+          const guardianPendingRequests = pendingRequests.filter(
+            (r) => r.guardian_id === guardian.id && !((r.requested_data as any)?.request_type === 'STUDENT_UPDATE')
+          );
+          const pendingFields: string[] = [];
+          for (const req of guardianPendingRequests) {
+            const data = req.requested_data as Record<string, any>;
+            if (data) {
+              Object.keys(data).forEach((key) => {
+                if (key !== 'request_type' && key !== 'student_cc') {
+                  pendingFields.push(key);
+                }
+              });
+            }
+          }
           const phoneCode = guardian.primary_phone_country_code ?? '';
           const phoneNum = guardian.primary_phone ?? '';
           const fullPhone = phoneNum.startsWith(phoneCode)
@@ -294,6 +316,7 @@ export class AuthService {
             postalCode: guardian.postal_code || null,
             jobPosition: guardian.job_position || null,
             isEmergencyContact: g.is_emergency_contact ?? false,
+            pendingFields: pendingFields,
           };
         }),
       },
