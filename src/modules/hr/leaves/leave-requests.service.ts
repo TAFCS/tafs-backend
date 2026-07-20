@@ -8,6 +8,7 @@ import { LeaveRequestStatus, Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProfileResolverService } from '../employee-profile-resolver.service';
 import {
   CreateLeaveRequestDto,
@@ -40,6 +41,7 @@ export class LeaveRequestsService {
     private readonly profileResolver: EmployeeProfileResolverService,
     private readonly attendanceSync: LeaveAttendanceSyncService,
     private readonly fcmService: FcmService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async create(userId: string, dto: CreateLeaveRequestDto) {
@@ -235,6 +237,17 @@ export class LeaveRequestsService {
       }
     }
 
+    void this.auditLogs.log({
+      entity_type: 'LEAVE_REQUEST',
+      entity_id: String(id),
+      action: dto.status === LeaveRequestStatus.APPROVED ? 'APPROVED' : 'REJECTED',
+      field: 'status',
+      old_value: 'PENDING',
+      new_value: dto.status,
+      changed_by: user.username,
+      note: dto.reviewReason?.trim() || undefined,
+    });
+
     void this.notifyEmployeeReview(existing, dto.status, id);
     return updated;
   }
@@ -263,6 +276,17 @@ export class LeaveRequestsService {
         reviewed_at: new Date(),
       },
       include: LEAVE_INCLUDE,
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'LEAVE_REQUEST',
+      entity_id: String(id),
+      action: 'REVOKED',
+      field: 'status',
+      old_value: 'APPROVED',
+      new_value: 'REJECTED',
+      changed_by: user.username,
+      note: reason,
     });
 
     void this.notifyEmployeeReview(existing, LeaveRequestStatus.REJECTED, id, 'revoked');

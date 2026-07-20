@@ -22,6 +22,7 @@ import {
   IJwtParentPayload,
   IJwtStaffPayload,
 } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { FcmService } from '../../common/fcm/fcm.service';
 import {
@@ -66,6 +67,7 @@ export class SupportTicketsService {
     private readonly fcmService: FcmService,
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   getOriginationOptions() {
@@ -375,6 +377,13 @@ export class SupportTicketsService {
       },
     });
 
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLAIMED,
+      changed_by: staff.username,
+    });
+
     await this.chatGateway.broadcastTicketClaimed(ticket);
     return ticket;
   }
@@ -430,6 +439,16 @@ export class SupportTicketsService {
         from_user_id: staff.sub,
         to_user_id: targetUserId,
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.TRANSFERRED,
+      field: 'current_assignee_id',
+      old_value: staff.sub,
+      new_value: targetUserId,
+      changed_by: staff.username,
     });
 
     await this.chatGateway.broadcastTicketTransferred(ticket, staff.sub, targetUserId);
@@ -489,6 +508,16 @@ export class SupportTicketsService {
         from_user_id: staff.sub,
         to_user_id: targetUserId,
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.FORWARDED,
+      field: 'current_assignee_id',
+      old_value: staff.sub,
+      new_value: targetUserId,
+      changed_by: staff.username,
     });
 
     await this.chatGateway.broadcastTicketForwarded(updated, staff.sub, targetUserId);
@@ -733,6 +762,17 @@ export class SupportTicketsService {
       return reviewed;
     });
 
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: message.ticket_id,
+      action:
+        dto.status === MessageStatus.APPROVED
+          ? TicketEventType.REPLY_APPROVED
+          : TicketEventType.REPLY_REJECTED,
+      changed_by: superAdmin.username,
+      note: dto.comment ?? undefined,
+    });
+
     if (dto.status === MessageStatus.APPROVED) {
       await this.deliverApprovedStaffMessage(message.ticket, updated);
     } else {
@@ -766,6 +806,15 @@ export class SupportTicketsService {
       { userId: staff.sub },
       dto.note,
     );
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLOSED_BY_STAFF,
+      changed_by: staff.username,
+      note: dto.note,
+    });
+
     await this.chatGateway.broadcastTicketClosed(updated);
     await this.notifyParentTicketClosed(updated, dto.note);
     return updated;
@@ -800,6 +849,15 @@ export class SupportTicketsService {
       { guardianId: guardian?.id ?? null },
       dto.note,
     );
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLOSED_BY_PARENT,
+      changed_by: guardian?.full_name ?? `Guardian (Family #${parent.familyId})`,
+      note: dto.note,
+    });
+
     await this.chatGateway.broadcastTicketClosed(updated);
     return updated;
   }

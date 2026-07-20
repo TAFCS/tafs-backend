@@ -6,9 +6,9 @@ import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
 const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER'],
   finance: ['VOUCHER', 'DEPOSIT', 'CLASS_FEE_SCHEDULE', 'STUDENT_FEE_SCHEDULE', 'BULK_VOUCHER', 'CHEQUE'],
-  communication: ['NOTICE', 'EMPLOYEE_NOTICE'],
-  hr: ['EMPLOYEE', 'DEPARTMENT'],
-  attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE'],
+  communication: ['NOTICE', 'EMPLOYEE_NOTICE', 'SUPPORT_TICKET'],
+  hr: ['EMPLOYEE', 'DEPARTMENT', 'LEAVE_REQUEST', 'PAYROLL_RUN'],
+  attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE', 'ATTENDANCE_OBJECTION'],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
   system: ['USER', 'PERMISSION', 'BACKUP'],
   'parent-requests': ['PARENT_CHANGE_REQUEST'],

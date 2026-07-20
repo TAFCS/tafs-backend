@@ -166,8 +166,11 @@ export class StudentsController {
 
   @Post('promotion/single')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  async promoteSingle(@Body() dto: PromoteSingleStudentDto) {
-    const result = await this.studentsService.promoteSingle(dto);
+  async promoteSingle(
+    @Body() dto: PromoteSingleStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const result = await this.studentsService.promoteSingle(dto, user.username);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -177,8 +180,11 @@ export class StudentsController {
 
   @Post('promotion/bulk')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  async promoteBulk(@Body() dto: PromoteBulkStudentsDto) {
-    const result = await this.studentsService.promoteBulk(dto);
+  async promoteBulk(
+    @Body() dto: PromoteBulkStudentsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const result = await this.studentsService.promoteBulk(dto, user.username);
     return createApiResponse(
       result,
       HttpStatus.OK,

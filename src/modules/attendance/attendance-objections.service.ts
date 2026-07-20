@@ -7,6 +7,7 @@ import {
 import { AttendanceObjectionStatus, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
 import {
@@ -21,6 +22,7 @@ export class AttendanceObjectionsService {
     private readonly prisma: PrismaService,
     private readonly employeeResolver: EmployeeProfileResolverService,
     private readonly fcmService: FcmService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -138,6 +140,17 @@ export class AttendanceObjectionsService {
         data: { work_code: 'OBJECTION_ACCEPTED' },
       });
     }
+
+    void this.auditLogs.log({
+      entity_type: 'ATTENDANCE_OBJECTION',
+      entity_id: String(id),
+      action: dto.status === AttendanceObjectionStatus.ACCEPTED ? 'ACCEPTED' : 'REJECTED',
+      field: 'status',
+      old_value: 'PENDING',
+      new_value: dto.status,
+      changed_by: user.username,
+      note: dto.admin_notes?.trim() || undefined,
+    });
 
     return updated;
   }
