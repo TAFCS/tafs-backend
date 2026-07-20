@@ -69,6 +69,22 @@ export class ParentChangeRequestsService {
     return String(value);
   }
 
+  /**
+   * Renders all field-level diffs for one request as a single "field: old → new; ..."
+   * summary so they land in one audit_logs row instead of one row per changed field.
+   */
+  private formatDiffsSummary(diffs: FieldDiff[]): string {
+    return diffs
+      .map((diff) => {
+        const label = diff.field
+          .replace(/^\w+\./, '')
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        return `${label}: ${diff.old_value ?? '—'} → ${diff.new_value ?? '—'}`;
+      })
+      .join('; ');
+  }
+
   private uppercaseTextValues(data: Record<string, any>): Record<string, any> {
     const result = { ...data };
     for (const [key, val] of Object.entries(result)) {
@@ -172,19 +188,15 @@ export class ParentChangeRequestsService {
         note: contextNote,
       });
     } else {
-      for (const diff of diffs) {
-        await this.auditLogs.log({
-          entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: String(request.id),
-          action: 'REQUESTED',
-          field: diff.field,
-          old_value: diff.old_value,
-          new_value: diff.new_value,
-          changed_by: actorLabel,
-          student_id: diff.student_id ?? null,
-          note: contextNote,
-        });
-      }
+      const studentId = diffs.find((d) => d.student_id != null)?.student_id ?? null;
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: String(request.id),
+        action: 'REQUESTED',
+        changed_by: actorLabel,
+        student_id: studentId,
+        note: `${contextNote} Changes: ${this.formatDiffsSummary(diffs)}`,
+      });
     }
 
     return request;
@@ -609,19 +621,15 @@ export class ParentChangeRequestsService {
         note: contextNote,
       });
     } else {
-      for (const diff of diffs) {
-        await this.auditLogs.log({
-          entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: logEntityId,
-          action: dto.status,
-          field: diff.field,
-          old_value: diff.old_value,
-          new_value: diff.new_value,
-          changed_by: actorLabel,
-          student_id: diff.student_id ?? null,
-          note: contextNote,
-        });
-      }
+      const studentId = diffs.find((d) => d.student_id != null)?.student_id ?? null;
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: logEntityId,
+        action: dto.status,
+        changed_by: actorLabel,
+        student_id: studentId,
+        note: `${contextNote} Changes: ${this.formatDiffsSummary(diffs)}`,
+      });
     }
 
     // Trigger notice board notification to the family
