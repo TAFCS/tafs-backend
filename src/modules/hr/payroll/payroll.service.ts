@@ -4,7 +4,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
-import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
+import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
 
@@ -425,36 +425,20 @@ export class PayrollService {
     };
   }
 
-  async generateRun(dto: GeneratePayrollRunDto, user: IJwtStaffPayload) {
-    this.assertCampusAccess(user, dto.campus_id);
-
-    const { periodStart, periodEnd } = this.computePayrollWindow(dto.year, dto.month);
-
-    const employees = await this.prisma.employee_profiles.findMany({
-      where: { campus_id: dto.campus_id, monthly_pay: { not: null } },
-      select: {
-        id: true,
-        monthly_pay: true,
-        reporting_time: true,
-        leaving_time: true,
-        late_relaxation_minutes: true,
-        department_id: true,
-        staff_category: true,
-        days_per_week: true,
-        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-      },
-    });
-    if (employees.length === 0) {
-      throw new BadRequestException('No employees on this campus have a monthly_pay set yet — nothing to calculate.');
-    }
-
-    // Everything below is loaded once for the whole run (not once per
-    // employee, let alone once per employee per day) and matched in memory —
-    // a single employee-by-employee query loop here took minutes over the
-    // network round-trip cost to the remote DB.
+  // Shared by generateRun (persists a snapshot) and getAttendanceMatrix (reads
+  // live, nothing persisted) — everything is loaded once for the whole batch
+  // (not once per employee, let alone once per employee per day) and matched
+  // in memory; a single employee-by-employee query loop here took minutes
+  // over the network round-trip cost to the remote DB.
+  private async computeEmployeeLinesForRange(
+    employees: EmployeeLineInput[],
+    campusId: number,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
     const [calendarRows, mandatoryByEmployee, allAttendanceRecords, allScans] = await Promise.all([
-      this.calendarResolver.loadStaffCalendarRows(dto.campus_id, periodStart, periodEnd),
+      this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd),
       this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
       this.prisma.attendance_staff_daily.findMany({
         where: { employee_id: { in: employeeIds }, date: { gte: periodStart, lte: periodEnd } },
@@ -482,6 +466,46 @@ export class PayrollService {
       const bucket = scansByEmployee.get(s.employee_id);
       if (bucket) bucket.push(s);
       else scansByEmployee.set(s.employee_id, [s]);
+    }
+
+    return Promise.all(
+      employees.map(async (employee) => ({
+        employee_id: employee.id,
+        ...(await this.computeEmployeeLine(
+          employee,
+          campusId,
+          periodStart,
+          periodEnd,
+          calendarRows,
+          attendanceByEmployee.get(employee.id) ?? [],
+          scansByEmployee.get(employee.id) ?? [],
+          mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
+        )),
+      })),
+    );
+  }
+
+  async generateRun(dto: GeneratePayrollRunDto, user: IJwtStaffPayload) {
+    this.assertCampusAccess(user, dto.campus_id);
+
+    const { periodStart, periodEnd } = this.computePayrollWindow(dto.year, dto.month);
+
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { campus_id: dto.campus_id, monthly_pay: { not: null } },
+      select: {
+        id: true,
+        monthly_pay: true,
+        reporting_time: true,
+        leaving_time: true,
+        late_relaxation_minutes: true,
+        department_id: true,
+        staff_category: true,
+        days_per_week: true,
+        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+      },
+    });
+    if (employees.length === 0) {
+      throw new BadRequestException('No employees on this campus have a monthly_pay set yet — nothing to calculate.');
     }
 
     const existing = await this.prisma.payroll_runs.findUnique({
@@ -516,25 +540,78 @@ export class PayrollService {
       await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
     }
 
-    const lines = await Promise.all(
-      employees.map(async (employee) => ({
-        payroll_run_id: run.id,
-        employee_id: employee.id,
-        ...(await this.computeEmployeeLine(
-          employee,
-          dto.campus_id,
-          periodStart,
-          periodEnd,
-          calendarRows,
-          attendanceByEmployee.get(employee.id) ?? [],
-          scansByEmployee.get(employee.id) ?? [],
-          mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
-        )),
-      })),
-    );
+    const computedLines = await this.computeEmployeeLinesForRange(employees, dto.campus_id, periodStart, periodEnd);
+    const lines = computedLines.map((line) => ({ payroll_run_id: run.id, ...line }));
     await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });
 
     return this.getRun(run.id, user);
+  }
+
+  /**
+   * Same per-day classification as a payroll run's punch-card matrix, but
+   * live and read-only — no payroll_runs/payroll_run_lines row is written.
+   * Lets HR see attendance for an arbitrary date range (e.g. the HR
+   * dashboard) without first generating a payroll run for that period.
+   */
+  async getAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload) {
+    this.assertCampusAccess(user, query.campus_id);
+
+    const periodStart = new Date(`${query.period_start}T00:00:00.000Z`);
+    const periodEnd = new Date(`${query.period_end}T00:00:00.000Z`);
+    if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
+      throw new BadRequestException('Invalid period_start/period_end');
+    }
+
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { campus_id: query.campus_id },
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        job_title: true,
+        photo_url: true,
+        monthly_pay: true,
+        reporting_time: true,
+        leaving_time: true,
+        late_relaxation_minutes: true,
+        department_id: true,
+        staff_category: true,
+        days_per_week: true,
+        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+      },
+    });
+
+    const computedLines = await this.computeEmployeeLinesForRange(employees, query.campus_id, periodStart, periodEnd);
+    const employeeById = new Map(employees.map((e) => [e.id, e]));
+
+    return {
+      campus_id: query.campus_id,
+      period_start: query.period_start,
+      period_end: query.period_end,
+      lines: computedLines.map((line) => {
+        const employee = employeeById.get(line.employee_id)!;
+        return {
+          employee_id: line.employee_id,
+          employee_profiles: {
+            id: employee.id,
+            full_name: employee.full_name,
+            employee_code: employee.employee_code,
+            job_title: employee.job_title,
+            photo_url: employee.photo_url,
+          },
+          present_days: line.present_days,
+          late_days: line.late_days,
+          half_days: line.half_days,
+          absent_days: line.absent_days,
+          excused_days: line.excused_days,
+          unpaid_leave_days: line.unpaid_leave_days,
+          unresolved_days: line.unresolved_days,
+          total_break_minutes: line.total_break_minutes,
+          total_late_minutes: line.total_late_minutes,
+          daily_breakdown: line.daily_breakdown,
+        };
+      }),
+    };
   }
 
   async listRuns(query: ListPayrollRunsQueryDto, user: IJwtStaffPayload) {

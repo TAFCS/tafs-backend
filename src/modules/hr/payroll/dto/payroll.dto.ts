@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -34,4 +34,16 @@ export class ListPayrollRunsQueryDto {
   @Type(() => Number)
   @IsInt()
   campus_id?: number;
+}
+
+export class AttendanceMatrixQueryDto {
+  @Type(() => Number)
+  @IsInt()
+  campus_id: number;
+
+  @IsDateString()
+  period_start: string;
+
+  @IsDateString()
+  period_end: string;
 }
