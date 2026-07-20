@@ -301,7 +301,11 @@ export class EnrollmentService {
     }
 
     // Get link_gr_number from other family members (siblings)
-    const linkGrNumber = student.families?.students.find(s => s.gr_number && s.cc !== student.cc)?.gr_number;
+    const linkGrNumbers = (student.families?.students || [])
+      .filter(s => s.gr_number && s.cc !== student.cc)
+      .map(s => s.gr_number as string)
+      .sort((a, b) => a.localeCompare(b));
+    const linkGrNumber = linkGrNumbers.join(', ');
 
     // Auto-fetch current Day and Date
     const now = new Date();
