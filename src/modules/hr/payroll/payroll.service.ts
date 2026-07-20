@@ -672,6 +672,9 @@ export class PayrollService {
       data: { status: PayrollRunStatus.FINALIZED, finalized_at: new Date() },
     });
 
+    const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+
     void this.auditLogs.log({
       entity_type: 'PAYROLL_RUN',
       entity_id: String(id),
@@ -680,6 +683,7 @@ export class PayrollService {
       old_value: run.status,
       new_value: PayrollRunStatus.FINALIZED,
       changed_by: user.username,
+      note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, ${run.payroll_run_lines.length} employee line(s).`,
     });
 
     return this.getRun(id, user);
@@ -694,13 +698,14 @@ export class PayrollService {
     }
     await this.prisma.payroll_runs.delete({ where: { id } });
 
+    const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
     const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
     void this.auditLogs.log({
       entity_type: 'PAYROLL_RUN',
       entity_id: String(id),
       action: 'DELETED',
       changed_by: user.username,
-      note: `Deleted payroll run for campus #${run.campus_id}, period ${periodLabel}, status was ${run.status}.`,
+      note: `Deleted payroll run for ${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, status was ${run.status}.`,
     });
 
     return { id };

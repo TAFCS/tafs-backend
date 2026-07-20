@@ -1802,6 +1802,7 @@ export class StudentsService {
       where,
       select: {
         cc: true,
+        full_name: true,
         class_id: true,
         section_id: true,
         campus_id: true,
@@ -1916,6 +1917,7 @@ export class StudentsService {
   private async processPromotionForStudent(
     student: {
       cc: number;
+      full_name: string | null;
       class_id: number | null;
       section_id: number | null;
       campus_id: number | null;
@@ -2211,7 +2213,9 @@ export class StudentsService {
           new_value: StudentStatus.GRADUATED,
           changed_by: changedBy,
           student_id: student.cc,
-          note: reason?.trim() || undefined,
+          note: [`${student.full_name ?? `Student CC ${student.cc}`} graduated from class #${student.class_id ?? 'N/A'}.`, reason?.trim()]
+            .filter(Boolean)
+            .join(' '),
         });
 
         return {
@@ -2257,7 +2261,7 @@ export class StudentsService {
           new_value: StudentStatus.EXPELLED,
           changed_by: changedBy,
           student_id: student.cc,
-          note: expulsionReason ?? undefined,
+          note: [`${student.full_name ?? `Student CC ${student.cc}`} expelled.`, expulsionReason].filter(Boolean).join(' '),
         });
 
         return {
@@ -2385,7 +2389,12 @@ export class StudentsService {
           new_value: String(toClass!.id),
           changed_by: changedBy,
           student_id: student.cc,
-          note: reason?.trim() || undefined,
+          note: [
+            `${student.full_name ?? `Student CC ${student.cc}`} promoted from ${student.academic_year ?? 'N/A'} to ${nextAcademicYear}.`,
+            reason?.trim(),
+          ]
+            .filter(Boolean)
+            .join(' '),
         });
 
         return {

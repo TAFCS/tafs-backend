@@ -245,9 +245,7 @@ export class LeaveRequestsService {
       old_value: 'PENDING',
       new_value: dto.status,
       changed_by: user.username,
-      note: [`Leave request for ${this.employeeLabel(existing.employee_profiles)}.`, dto.reviewReason?.trim()]
-        .filter(Boolean)
-        .join(' '),
+      note: this.leaveRequestNote(existing, dto.reviewReason?.trim()),
     });
 
     void this.notifyEmployeeReview(existing, dto.status, id);
@@ -288,7 +286,7 @@ export class LeaveRequestsService {
       old_value: 'APPROVED',
       new_value: 'REJECTED',
       changed_by: user.username,
-      note: `Leave request for ${this.employeeLabel(existing.employee_profiles)}. ${reason}`,
+      note: this.leaveRequestNote(existing, reason),
     });
 
     void this.notifyEmployeeReview(existing, LeaveRequestStatus.REJECTED, id, 'revoked');
@@ -400,6 +398,26 @@ export class LeaveRequestsService {
     return profile.full_name
       ? `${profile.full_name}${profile.employee_code ? ` (${profile.employee_code})` : ''}`
       : profile.employee_code ?? 'Unknown employee';
+  }
+
+  private formatDate(d: Date): string {
+    return d.toISOString().slice(0, 10);
+  }
+
+  private leaveRequestNote(
+    existing: Prisma.leave_requestsGetPayload<{ include: typeof LEAVE_INCLUDE }>,
+    decisionNote?: string,
+  ): string {
+    const dateRange =
+      existing.start_date.getTime() === existing.end_date.getTime()
+        ? this.formatDate(existing.start_date)
+        : `${this.formatDate(existing.start_date)} to ${this.formatDate(existing.end_date)}`;
+    const parts = [
+      `${existing.leave_types.name} leave for ${this.employeeLabel(existing.employee_profiles)}, ${dateRange}.`,
+      `Applied ${this.formatDate(existing.created_at)}${existing.reason ? ` — "${existing.reason}"` : ''}.`,
+    ];
+    if (decisionNote) parts.push(`Decision: ${decisionNote}`);
+    return parts.join(' ');
   }
 
   private assertApprovePermission(user: IJwtStaffPayload) {

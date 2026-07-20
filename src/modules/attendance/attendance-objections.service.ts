@@ -144,6 +144,9 @@ export class AttendanceObjectionsService {
     const employeeLabel = updated.employee.full_name
       ? `${updated.employee.full_name}${updated.employee.employee_code ? ` (${updated.employee.employee_code})` : ''}`
       : updated.employee.employee_code ?? 'Unknown employee';
+    const attendanceDateStr = existing.attendance_date.toISOString().slice(0, 10);
+    const claimedTimeStr = existing.claimed_time.toISOString().slice(11, 16);
+    const appliedDateStr = existing.created_at.toISOString().slice(0, 10);
 
     void this.auditLogs.log({
       entity_type: 'ATTENDANCE_OBJECTION',
@@ -153,7 +156,13 @@ export class AttendanceObjectionsService {
       old_value: 'PENDING',
       new_value: dto.status,
       changed_by: user.username,
-      note: [`Attendance objection for ${employeeLabel}.`, dto.admin_notes?.trim()].filter(Boolean).join(' '),
+      note: [
+        `Attendance objection for ${employeeLabel} — attendance date ${attendanceDateStr}, claimed time ${claimedTimeStr}.`,
+        `Applied ${appliedDateStr} — "${existing.reason}".`,
+        dto.admin_notes?.trim() ? `Decision: ${dto.admin_notes.trim()}` : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
     });
 
     return updated;
