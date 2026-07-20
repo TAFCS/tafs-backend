@@ -534,6 +534,20 @@ export class ParentChangeRequestsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       if (isApproving && isPartial && remainingData) {
+        // Atomic guard: only proceed if the request is still PENDING. This closes
+        // the race where two concurrent requests both pass the pre-transaction
+        // status check and each end up applying the change + writing audit logs.
+        const guard = await tx.parent_change_requests.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            requested_data: remainingData as any,
+          },
+        });
+
+        if (guard.count === 0) {
+          throw new BadRequestException('Request has already been processed');
+        }
+
         // Apply selected fields, move them into a new History (APPROVED) row,
         // and leave the original request PENDING with only unselected fields.
         await this.applyApprovedData(tx, request, approvedData);
@@ -550,18 +564,15 @@ export class ParentChangeRequestsService {
           },
         });
 
-        const pendingRequest = await tx.parent_change_requests.update({
+        const pendingRequest = await tx.parent_change_requests.findUniqueOrThrow({
           where: { id },
-          data: {
-            requested_data: remainingData as any,
-          },
         });
 
         return { result: pendingRequest, historyId: historyRequest.id };
       }
 
-      const updatedRequest = await tx.parent_change_requests.update({
-        where: { id },
+      const guard = await tx.parent_change_requests.updateMany({
+        where: { id, status: 'PENDING' },
         data: {
           status: dto.status,
           comment: dto.comment,
@@ -573,9 +584,17 @@ export class ParentChangeRequestsService {
         },
       });
 
+      if (guard.count === 0) {
+        throw new BadRequestException('Request has already been processed');
+      }
+
       if (isApproving) {
         await this.applyApprovedData(tx, request, approvedData);
       }
+
+      const updatedRequest = await tx.parent_change_requests.findUniqueOrThrow({
+        where: { id },
+      });
 
       return { result: updatedRequest, historyId: id };
     });

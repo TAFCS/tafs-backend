@@ -147,6 +147,9 @@ export class AttendanceObjectionsService {
     const attendanceDateStr = existing.attendance_date.toISOString().slice(0, 10);
     const claimedTimeStr = existing.claimed_time.toISOString().slice(11, 16);
     const appliedDateStr = existing.created_at.toISOString().slice(0, 10);
+    const recordedTimeStr = updated.scan
+      ? `${updated.scan.scan_time.toISOString().slice(11, 16)} (${updated.scan.direction})`
+      : 'no matching scan on record';
 
     void this.auditLogs.log({
       entity_type: 'ATTENDANCE_OBJECTION',
@@ -157,7 +160,7 @@ export class AttendanceObjectionsService {
       new_value: dto.status,
       changed_by: user.username,
       note: [
-        `Attendance objection for ${employeeLabel} — attendance date ${attendanceDateStr}, claimed time ${claimedTimeStr}.`,
+        `Attendance objection for ${employeeLabel} — ${attendanceDateStr}: recorded time ${recordedTimeStr}, claimed time ${claimedTimeStr}.`,
         `Applied ${appliedDateStr} — "${existing.reason}".`,
         dto.admin_notes?.trim() ? `Decision: ${dto.admin_notes.trim()}` : null,
       ]
