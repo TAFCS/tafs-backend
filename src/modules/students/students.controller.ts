@@ -196,4 +196,15 @@ export class StudentsController {
       'Academic history retrieved successfully',
     );
   }
+
+  @Get(':id/house-history')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async getHouseHistory(@Param('id', ParseIntPipe) id: number) {
+    const history = await this.studentsService.getHouseHistory(id);
+    return createApiResponse(
+      history,
+      HttpStatus.OK,
+      'House history retrieved successfully',
+    );
+  }
 }

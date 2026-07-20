@@ -331,6 +331,8 @@ export class HouseBalancerService {
         students.map((s) => ({ house_id: s.house_id })),
       );
 
+      const previousHouseByCc = new Map(students.map((s) => [s.cc, s.house_id]));
+
       for (const item of dto.assignments) {
         await tx.students.update({
           where: { cc: item.student_id },
@@ -352,6 +354,7 @@ export class HouseBalancerService {
         after_counts: afterCounts,
         houses,
         assignments: dto.assignments,
+        previousHouseByCc,
       };
     });
 
@@ -364,7 +367,24 @@ export class HouseBalancerService {
       note: `Rebalanced ${result.student_count} students for campus=${dto.campus_id} class=${dto.class_id} section=${dto.section_id}. before=${JSON.stringify(result.before_counts)} after=${JSON.stringify(result.after_counts)}`,
     });
 
-    return result;
+    for (const item of result.assignments) {
+      const oldHouseId = result.previousHouseByCc.get(item.student_id) ?? null;
+      if (oldHouseId === item.house_id) continue;
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(item.student_id),
+        action: 'REBALANCED',
+        field: 'student.house_id',
+        old_value: oldHouseId !== null ? String(oldHouseId) : null,
+        new_value: String(item.house_id),
+        changed_by: changedBy ?? 'system',
+        student_id: item.student_id,
+        note: 'Reassigned via house balancer',
+      });
+    }
+
+    const { previousHouseByCc, ...publicResult } = result;
+    return publicResult;
   }
 
   async previewCampus(dto: CampusHouseBalancePreviewDto) {
@@ -561,6 +581,11 @@ export class HouseBalancerService {
         before_counts: Record<number, number>;
         after_counts: Record<number, number>;
       }> = [];
+      const houseChanges: Array<{
+        student_id: number;
+        old_house_id: number | null;
+        new_house_id: number;
+      }> = [];
 
       for (const group of sortedGroups) {
         const offering = await tx.campus_sections.findUnique({
@@ -630,11 +655,22 @@ export class HouseBalancerService {
           houses.map((house) => house.id),
           students.map((student) => ({ house_id: student.house_id })),
         );
+        const previousHouseByCc = new Map(
+          students.map((student) => [student.cc, student.house_id]),
+        );
         for (const assignment of group.assignments) {
           await tx.students.update({
             where: { cc: assignment.student_id },
             data: { house_id: assignment.house_id },
           });
+          const oldHouseId = previousHouseByCc.get(assignment.student_id) ?? null;
+          if (oldHouseId !== assignment.house_id) {
+            houseChanges.push({
+              student_id: assignment.student_id,
+              old_house_id: oldHouseId,
+              new_house_id: assignment.house_id,
+            });
+          }
         }
         const afterCounts = this.countByHouse(
           houses.map((house) => house.id),
@@ -657,6 +693,7 @@ export class HouseBalancerService {
         total_students: totalStudents,
         group_count: summaries.length,
         groups: summaries,
+        houseChanges,
       };
     });
 
@@ -669,6 +706,21 @@ export class HouseBalancerService {
       note: `Rebalanced ${result.total_students} students across ${result.group_count} class/section groups at campus=${dto.campus_id}`,
     });
 
-    return result;
+    for (const change of result.houseChanges) {
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(change.student_id),
+        action: 'REBALANCED',
+        field: 'student.house_id',
+        old_value: change.old_house_id !== null ? String(change.old_house_id) : null,
+        new_value: String(change.new_house_id),
+        changed_by: changedBy ?? 'system',
+        student_id: change.student_id,
+        note: 'Reassigned via campus-wide house balancer',
+      });
+    }
+
+    const { houseChanges, ...publicResult } = result;
+    return publicResult;
   }
 }

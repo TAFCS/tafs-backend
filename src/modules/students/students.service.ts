@@ -1629,6 +1629,34 @@ export class StudentsService {
     });
   }
 
+  async getHouseHistory(cc: number) {
+    const logs = await this.prisma.audit_logs.findMany({
+      where: { student_id: cc, entity_type: 'STUDENT', field: 'student.house_id' },
+      orderBy: { changed_at: 'asc' },
+    });
+    if (logs.length === 0) return [];
+
+    const houseIds = new Set<number>();
+    for (const log of logs) {
+      if (log.old_value) houseIds.add(Number(log.old_value));
+      if (log.new_value) houseIds.add(Number(log.new_value));
+    }
+    const houses = await this.prisma.houses.findMany({
+      where: { id: { in: [...houseIds] } },
+      select: { id: true, house_name: true, house_color: true },
+    });
+    const houseMap = new Map(houses.map((h) => [h.id, h]));
+
+    return logs.map((log) => ({
+      id: log.id,
+      from_house: log.old_value ? houseMap.get(Number(log.old_value)) ?? null : null,
+      to_house: log.new_value ? houseMap.get(Number(log.new_value)) ?? null : null,
+      changed_by: log.changed_by,
+      changed_at: log.changed_at,
+      note: log.note,
+    }));
+  }
+
   /** Preview next A-Level GR assignments for a promotion batch (same logic as promoteBulk). */
   async suggestGrNumbersForPromotion(studentCcs: number[], isALevel = true): Promise<Record<number, string>> {
     if (!studentCcs.length) return {};
