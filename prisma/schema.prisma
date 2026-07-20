@@ -89,8 +89,8 @@ model campus_sections {
   class_id         Int
   section_id       Int
   is_active        Boolean?          @default(true)
-  student_capacity Int?
   gender_mode      SectionGenderMode @default(COED)
+  student_capacity Int?
   campuses         campuses          @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes          classes           @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections         sections          @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1694,12 +1694,12 @@ enum fee_status_enum {
 }
 
 enum student_status {
-  QUICK_ADMISSION
   SOFT_ADMISSION
   ENROLLED
   EXPELLED
   GRADUATED
   LEFT
+  QUICK_ADMISSION
 }
 
 enum SectionGenderMode {

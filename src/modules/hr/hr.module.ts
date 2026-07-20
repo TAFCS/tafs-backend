@@ -21,6 +21,7 @@ import { CalendarNotificationService } from './calendar/calendar-notification.se
 import { CalendarNotificationsController } from './calendar/calendar-notifications.controller';
 import { PayrollController } from './payroll/payroll.controller';
 import { PayrollSelfController } from './payroll/payroll-self.controller';
+import { PayrollMatrixController } from './payroll/payroll-matrix.controller';
 import { PayrollService } from './payroll/payroll.service';
 import { EmployeeProfileResolverService } from './employee-profile-resolver.service';
 import { LeavesModule } from './leaves/leaves.module';
@@ -40,6 +41,7 @@ import { TimetablesModule } from '../timetables/timetables.module';
     CalendarNotificationsController,
     PayrollController,
     PayrollSelfController,
+    PayrollMatrixController,
   ],
   providers: [
     EmployeesService,
