@@ -246,9 +246,9 @@ model guardians {
   whatsapp_number            String?                  @db.VarChar(20)
   work_phone                 String?                  @db.VarChar(20)
   email_address              String?                  @db.VarChar(100)
-  education_level            String?                  @db.VarChar(50)
+  education_level            String?                  @db.VarChar(255)
   occupation                 String?                  @db.VarChar(100)
-  organization               String?                  @db.VarChar(100)
+  organization               String?                  @db.VarChar(255)
   job_position               String?                  @db.VarChar(100)
   monthly_income             Decimal?                 @db.Decimal(12, 2)
   work_address               String?

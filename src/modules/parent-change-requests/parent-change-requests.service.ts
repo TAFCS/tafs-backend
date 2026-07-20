@@ -17,6 +17,29 @@ import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-te
 export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
 
+/** Max lengths for guardian varchar columns (keep in sync with prisma schema). */
+const GUARDIAN_FIELD_MAX_LENGTHS: Record<string, number> = {
+  full_name: 100,
+  primary_phone: 20,
+  whatsapp_number: 20,
+  work_phone: 20,
+  email_address: 100,
+  education_level: 255,
+  occupation: 100,
+  organization: 255,
+  job_position: 100,
+  house_appt_name: 100,
+  house_appt_number: 50,
+  area_block: 100,
+  country: 50,
+  province: 50,
+  city: 50,
+  postal_code: 20,
+  fax_number: 20,
+  place_of_birth: 100,
+  occupational_position: 100,
+};
+
 type FieldDiff = { field: string; old_value: string | null; new_value: string | null; student_id?: number | null };
 
 @Injectable()
@@ -324,6 +347,22 @@ export class ParentChangeRequestsService {
     return { approvedData, remainingData, isPartial: true };
   }
 
+  private assertGuardianFieldLengths(data: Record<string, any>) {
+    const tooLong: string[] = [];
+    for (const [key, value] of Object.entries(data)) {
+      if (value == null || typeof value !== 'string') continue;
+      const max = GUARDIAN_FIELD_MAX_LENGTHS[key];
+      if (max != null && value.length > max) {
+        tooLong.push(`${key} (${value.length}/${max} chars)`);
+      }
+    }
+    if (tooLong.length > 0) {
+      throw new BadRequestException(
+        `Value too long for column(s): ${tooLong.join('; ')}. Shorten the value or ask an admin to widen the column.`,
+      );
+    }
+  }
+
   private async applyApprovedData(
     tx: Prisma.TransactionClient,
     request: {
@@ -354,6 +393,7 @@ export class ParentChangeRequestsService {
     }
 
     const dataToUpdate = this.uppercaseTextValues({ ...approvedData } as Record<string, any>);
+    this.assertGuardianFieldLengths(dataToUpdate);
 
     if ('home_phone' in dataToUpdate) {
       const homePhone = dataToUpdate.home_phone;
