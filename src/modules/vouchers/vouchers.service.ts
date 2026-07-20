@@ -4305,6 +4305,17 @@ export class VouchersService {
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null);
 
+        // Arrear heads = heads carried on this voucher from earlier periods (fee_date
+        // before the current period) — everything not in currentHeads and not a
+        // split-paid row. STEP 7b below may need to unlock these if nothing else owns
+        // them once this voucher is gone.
+        const currentFeeIdSet = new Set<number>(
+            currentHeads.map((h: any) => h.student_fee_id).filter((fid: any): fid is number => fid !== null),
+        );
+        const arrearFeeIds: number[] = allFeeIds.filter(
+            (fid) => !currentFeeIdSet.has(fid) && !splitPaidFeeIds.includes(fid),
+        );
+
         for (const splitHead of splitPaidHeads) {
             const sfPaid = splitHead.student_fees;
             if (!sfPaid?.fee_type_id || !sfPaid?.fee_date) continue;
@@ -4437,6 +4448,35 @@ export class VouchersService {
                 where: { id: sv.id },
                 data: { status: svDue < today ? 'OVERDUE' : 'UNPAID' },
             });
+        }
+
+        // STEP 7b: Unlock orphaned arrear heads.
+        // Older-period ("arrear") heads carried on this voucher were left ISSUED on the
+        // assumption an earlier voucher still owns them. That fails when the admin
+        // generated THIS voucher directly with arrears baked in, without ever generating
+        // the earlier months' vouchers — after this voucher and its heads are gone,
+        // nothing owns those heads and they would stay ISSUED forever. Reset any such
+        // arrear head that no live (non-VOID) voucher still covers back to NOT_ISSUED.
+        // Runs after STEP 4 (this voucher's heads deleted) and STEP 7 (predecessor
+        // reactivated), so the coverage query excludes this voucher and counts any
+        // reactivated predecessor as a live owner. Only purely-locked ISSUED heads are
+        // touched — PARTIALLY_PAID/PAID heads keep their payment/ledger state.
+        if (arrearFeeIds.length > 0) {
+            const stillCovered = await tx.voucher_heads.findMany({
+                where: {
+                    student_fee_id: { in: arrearFeeIds },
+                    vouchers: { status: { not: 'VOID' } },
+                },
+                select: { student_fee_id: true },
+            });
+            const coveredSet = new Set<number>(stillCovered.map((h: any) => h.student_fee_id));
+            const orphanedArrearIds = arrearFeeIds.filter((fid) => !coveredSet.has(fid));
+            if (orphanedArrearIds.length > 0) {
+                await tx.student_fees.updateMany({
+                    where: { id: { in: orphanedArrearIds }, status: 'ISSUED' as any },
+                    data: { status: 'NOT_ISSUED', issue_date: null, due_date: null, validity_date: null } as any,
+                });
+            }
         }
 
         // STEP 8: Delete the voucher (cascades to voucher_arrear_surcharges automatically).
