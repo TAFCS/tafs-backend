@@ -245,7 +245,9 @@ export class LeaveRequestsService {
       old_value: 'PENDING',
       new_value: dto.status,
       changed_by: user.username,
-      note: dto.reviewReason?.trim() || undefined,
+      note: [`Leave request for ${this.employeeLabel(existing.employee_profiles)}.`, dto.reviewReason?.trim()]
+        .filter(Boolean)
+        .join(' '),
     });
 
     void this.notifyEmployeeReview(existing, dto.status, id);
@@ -286,7 +288,7 @@ export class LeaveRequestsService {
       old_value: 'APPROVED',
       new_value: 'REJECTED',
       changed_by: user.username,
-      note: reason,
+      note: `Leave request for ${this.employeeLabel(existing.employee_profiles)}. ${reason}`,
     });
 
     void this.notifyEmployeeReview(existing, LeaveRequestStatus.REJECTED, id, 'revoked');
@@ -392,6 +394,12 @@ export class LeaveRequestsService {
     if (user.campusId && employeeCampusId && user.campusId !== employeeCampusId) {
       throw new ForbiddenException('You do not have access to this leave request');
     }
+  }
+
+  private employeeLabel(profile: { full_name: string | null; employee_code: string | null }): string {
+    return profile.full_name
+      ? `${profile.full_name}${profile.employee_code ? ` (${profile.employee_code})` : ''}`
+      : profile.employee_code ?? 'Unknown employee';
   }
 
   private assertApprovePermission(user: IJwtStaffPayload) {

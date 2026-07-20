@@ -804,7 +804,12 @@ export class PayrollService {
         disbursed_by: user.sub,
         disbursement_notes: dto.notes ?? null,
       },
+      include: { employee_profiles: { select: { full_name: true, employee_code: true } } },
     });
+
+    const employeeLabel = line.employee_profiles.full_name
+      ? `${line.employee_profiles.full_name}${line.employee_profiles.employee_code ? ` (${line.employee_profiles.employee_code})` : ''}`
+      : line.employee_profiles.employee_code ?? `Employee #${employeeId}`;
 
     void this.auditLogs.log({
       entity_type: 'PAYROLL_RUN',
@@ -813,7 +818,7 @@ export class PayrollService {
       field: 'employee_id',
       new_value: String(employeeId),
       changed_by: user.username,
-      note: dto.notes ?? undefined,
+      note: [`Disbursement for ${employeeLabel}.`, dto.notes].filter(Boolean).join(' '),
     });
 
     return line;

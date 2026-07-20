@@ -141,6 +141,10 @@ export class AttendanceObjectionsService {
       });
     }
 
+    const employeeLabel = updated.employee.full_name
+      ? `${updated.employee.full_name}${updated.employee.employee_code ? ` (${updated.employee.employee_code})` : ''}`
+      : updated.employee.employee_code ?? 'Unknown employee';
+
     void this.auditLogs.log({
       entity_type: 'ATTENDANCE_OBJECTION',
       entity_id: String(id),
@@ -149,7 +153,7 @@ export class AttendanceObjectionsService {
       old_value: 'PENDING',
       new_value: dto.status,
       changed_by: user.username,
-      note: dto.admin_notes?.trim() || undefined,
+      note: [`Attendance objection for ${employeeLabel}.`, dto.admin_notes?.trim()].filter(Boolean).join(' '),
     });
 
     return updated;
