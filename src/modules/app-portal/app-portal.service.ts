@@ -25,7 +25,7 @@ export class AppPortalService {
         campuses: { select: { campus_name: true } },
         classes: { select: { description: true } },
         sections: { select: { description: true } },
-        houses: { select: { house_name: true } },
+        houses: { select: { house_name: true, house_color: true } },
         dob: true,
         gender: true,
         student_guardians: {
@@ -133,6 +133,7 @@ export class AppPortalService {
         class: student.classes?.description,
         section: student.sections?.description,
         house: student.houses?.house_name,
+        house_color: student.houses?.house_color,
         photograph_url: student.photograph_url,
         dob: student.dob,
         gender: student.gender,
