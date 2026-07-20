@@ -22,6 +22,7 @@ import {
   IJwtParentPayload,
   IJwtStaffPayload,
 } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { FcmService } from '../../common/fcm/fcm.service';
 import {
@@ -66,6 +67,7 @@ export class SupportTicketsService {
     private readonly fcmService: FcmService,
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   getOriginationOptions() {
@@ -375,6 +377,14 @@ export class SupportTicketsService {
       },
     });
 
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLAIMED,
+      changed_by: staff.username,
+      note: this.ticketContextLabel(ticket),
+    });
+
     await this.chatGateway.broadcastTicketClaimed(ticket);
     return ticket;
   }
@@ -430,6 +440,17 @@ export class SupportTicketsService {
         from_user_id: staff.sub,
         to_user_id: targetUserId,
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.TRANSFERRED,
+      field: 'current_assignee_id',
+      old_value: staff.username,
+      new_value: target.username,
+      changed_by: staff.username,
+      note: this.ticketContextLabel(ticket),
     });
 
     await this.chatGateway.broadcastTicketTransferred(ticket, staff.sub, targetUserId);
@@ -489,6 +510,17 @@ export class SupportTicketsService {
         from_user_id: staff.sub,
         to_user_id: targetUserId,
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.FORWARDED,
+      field: 'current_assignee_id',
+      old_value: staff.username,
+      new_value: target.username,
+      changed_by: staff.username,
+      note: this.ticketContextLabel(updated),
     });
 
     await this.chatGateway.broadcastTicketForwarded(updated, staff.sub, targetUserId);
@@ -670,7 +702,10 @@ export class SupportTicketsService {
 
     const message = await this.prisma.ticket_messages.findUnique({
       where: { id: messageId },
-      include: { ticket: true, sender_user: true },
+      include: {
+        ticket: { include: { families: { select: { household_name: true } } } },
+        sender_user: true,
+      },
     });
     if (!message) throw new NotFoundException('Message not found');
     if (message.status !== MessageStatus.PENDING) {
@@ -733,6 +768,27 @@ export class SupportTicketsService {
       return reviewed;
     });
 
+    const senderLabel = message.sender_user?.full_name
+      ? `${message.sender_user.full_name} (@${message.sender_user.username})`
+      : 'Unknown staff';
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: message.ticket_id,
+      action:
+        dto.status === MessageStatus.APPROVED
+          ? TicketEventType.REPLY_APPROVED
+          : TicketEventType.REPLY_REJECTED,
+      changed_by: superAdmin.username,
+      note: [
+        this.ticketContextLabel(message.ticket),
+        `Reply submitted by ${senderLabel}: "${this.messageSnippet(message.message_type, message.content)}".`,
+        dto.comment?.trim() ? `Decision: ${dto.comment.trim()}` : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    });
+
     if (dto.status === MessageStatus.APPROVED) {
       await this.deliverApprovedStaffMessage(message.ticket, updated);
     } else {
@@ -766,6 +822,15 @@ export class SupportTicketsService {
       { userId: staff.sub },
       dto.note,
     );
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLOSED_BY_STAFF,
+      changed_by: staff.username,
+      note: [this.ticketContextLabel(updated), dto.note].filter(Boolean).join(' — '),
+    });
+
     await this.chatGateway.broadcastTicketClosed(updated);
     await this.notifyParentTicketClosed(updated, dto.note);
     return updated;
@@ -800,6 +865,15 @@ export class SupportTicketsService {
       { guardianId: guardian?.id ?? null },
       dto.note,
     );
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.CLOSED_BY_PARENT,
+      changed_by: guardian?.full_name ?? `Guardian (Family #${parent.familyId})`,
+      note: [this.ticketContextLabel(updated), dto.note].filter(Boolean).join(' — '),
+    });
+
     await this.chatGateway.broadcastTicketClosed(updated);
     return updated;
   }
@@ -1050,6 +1124,17 @@ export class SupportTicketsService {
     return messageType === ChatMessageType.TEXT
       ? content.slice(0, 50)
       : `[${messageType}]`;
+  }
+
+  private ticketContextLabel(ticket: {
+    subtopic: string | null;
+    category: TicketCategory;
+    created_at: Date;
+    families: { household_name: string } | null;
+  }): string {
+    const opened = ticket.created_at.toISOString().slice(0, 10);
+    const family = ticket.families?.household_name ?? 'Unknown family';
+    return `"${ticket.subtopic ?? 'No subtopic'}" (${ticket.category}) opened by ${family} on ${opened}`;
   }
 
   private async deliverApprovedStaffMessage(

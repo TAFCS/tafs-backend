@@ -92,6 +92,22 @@ export class ParentChangeRequestsService {
     return String(value);
   }
 
+  /**
+   * Renders all field-level diffs for one request as a single "field: old → new; ..."
+   * summary so they land in one audit_logs row instead of one row per changed field.
+   */
+  private formatDiffsSummary(diffs: FieldDiff[]): string {
+    return diffs
+      .map((diff) => {
+        const label = diff.field
+          .replace(/^\w+\./, '')
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        return `${label}: ${diff.old_value ?? '—'} → ${diff.new_value ?? '—'}`;
+      })
+      .join('; ');
+  }
+
   private uppercaseTextValues(data: Record<string, any>): Record<string, any> {
     const result = { ...data };
     for (const [key, val] of Object.entries(result)) {
@@ -195,19 +211,15 @@ export class ParentChangeRequestsService {
         note: contextNote,
       });
     } else {
-      for (const diff of diffs) {
-        await this.auditLogs.log({
-          entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: String(request.id),
-          action: 'REQUESTED',
-          field: diff.field,
-          old_value: diff.old_value,
-          new_value: diff.new_value,
-          changed_by: actorLabel,
-          student_id: diff.student_id ?? null,
-          note: contextNote,
-        });
-      }
+      const studentId = diffs.find((d) => d.student_id != null)?.student_id ?? null;
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: String(request.id),
+        action: 'REQUESTED',
+        changed_by: actorLabel,
+        student_id: studentId,
+        note: `${contextNote} Changes: ${this.formatDiffsSummary(diffs)}`,
+      });
     }
 
     return request;
@@ -574,6 +586,20 @@ export class ParentChangeRequestsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       if (isApproving && isPartial && remainingData) {
+        // Atomic guard: only proceed if the request is still PENDING. This closes
+        // the race where two concurrent requests both pass the pre-transaction
+        // status check and each end up applying the change + writing audit logs.
+        const guard = await tx.parent_change_requests.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            requested_data: remainingData as any,
+          },
+        });
+
+        if (guard.count === 0) {
+          throw new BadRequestException('Request has already been processed');
+        }
+
         // Apply selected fields, move them into a new History (APPROVED) row,
         // and leave the original request PENDING with only unselected fields.
         await this.applyApprovedData(tx, request, approvedData);
@@ -590,18 +616,15 @@ export class ParentChangeRequestsService {
           },
         });
 
-        const pendingRequest = await tx.parent_change_requests.update({
+        const pendingRequest = await tx.parent_change_requests.findUniqueOrThrow({
           where: { id },
-          data: {
-            requested_data: remainingData as any,
-          },
         });
 
         return { result: pendingRequest, historyId: historyRequest.id };
       }
 
-      const updatedRequest = await tx.parent_change_requests.update({
-        where: { id },
+      const guard = await tx.parent_change_requests.updateMany({
+        where: { id, status: 'PENDING' },
         data: {
           status: dto.status,
           comment: dto.comment,
@@ -613,9 +636,17 @@ export class ParentChangeRequestsService {
         },
       });
 
+      if (guard.count === 0) {
+        throw new BadRequestException('Request has already been processed');
+      }
+
       if (isApproving) {
         await this.applyApprovedData(tx, request, approvedData);
       }
+
+      const updatedRequest = await tx.parent_change_requests.findUniqueOrThrow({
+        where: { id },
+      });
 
       return { result: updatedRequest, historyId: id };
     });
@@ -630,19 +661,15 @@ export class ParentChangeRequestsService {
         note: contextNote,
       });
     } else {
-      for (const diff of diffs) {
-        await this.auditLogs.log({
-          entity_type: AUDIT_ENTITY_TYPE,
-          entity_id: logEntityId,
-          action: dto.status,
-          field: diff.field,
-          old_value: diff.old_value,
-          new_value: diff.new_value,
-          changed_by: actorLabel,
-          student_id: diff.student_id ?? null,
-          note: contextNote,
-        });
-      }
+      const studentId = diffs.find((d) => d.student_id != null)?.student_id ?? null;
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: logEntityId,
+        action: dto.status,
+        changed_by: actorLabel,
+        student_id: studentId,
+        note: `${contextNote} Changes: ${this.formatDiffsSummary(diffs)}`,
+      });
     }
 
     // Trigger notice board notification to the family

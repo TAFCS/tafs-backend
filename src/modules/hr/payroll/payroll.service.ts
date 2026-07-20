@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, StaffCategory, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
 import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
@@ -93,6 +94,7 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly expectedTimes: EmployeeExpectedTimesService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   // Fixed school payroll cycle — see payroll-period.util.ts
@@ -669,6 +671,21 @@ export class PayrollService {
       where: { id },
       data: { status: PayrollRunStatus.FINALIZED, finalized_at: new Date() },
     });
+
+    const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'FINALIZED',
+      field: 'status',
+      old_value: run.status,
+      new_value: PayrollRunStatus.FINALIZED,
+      changed_by: user.username,
+      note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, ${run.payroll_run_lines.length} employee line(s).`,
+    });
+
     return this.getRun(id, user);
   }
 
@@ -680,6 +697,17 @@ export class PayrollService {
       throw new BadRequestException('Finalized payroll runs cannot be deleted.');
     }
     await this.prisma.payroll_runs.delete({ where: { id } });
+
+    const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: user.username,
+      note: `Deleted payroll run for ${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, status was ${run.status}.`,
+    });
+
     return { id };
   }
 
@@ -781,7 +809,23 @@ export class PayrollService {
         disbursed_by: user.sub,
         disbursement_notes: dto.notes ?? null,
       },
+      include: { employee_profiles: { select: { full_name: true, employee_code: true } } },
     });
+
+    const employeeLabel = line.employee_profiles.full_name
+      ? `${line.employee_profiles.full_name}${line.employee_profiles.employee_code ? ` (${line.employee_profiles.employee_code})` : ''}`
+      : line.employee_profiles.employee_code ?? `Employee #${employeeId}`;
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'DISBURSED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: user.username,
+      note: [`Disbursement for ${employeeLabel}.`, dto.notes].filter(Boolean).join(' '),
+    });
+
     return line;
   }
 
@@ -798,7 +842,7 @@ export class PayrollService {
       throw new BadRequestException('Invalid disbursed_at');
     }
 
-    await this.prisma.payroll_run_lines.updateMany({
+    const { count } = await this.prisma.payroll_run_lines.updateMany({
       where: { payroll_run_id: runId, disbursed_at: null },
       data: {
         disbursed_at: disbursedAt,
@@ -806,6 +850,16 @@ export class PayrollService {
         disbursement_notes: dto.notes ?? null,
       },
     });
+
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'DISBURSED_ALL',
+      changed_by: user.username,
+      note: `Disbursed ${count} line(s) for period ${periodLabel}.${dto.notes ? ` Notes: ${dto.notes}` : ''}`,
+    });
+
     return this.getRun(runId, user);
   }
 }

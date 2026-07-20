@@ -1714,7 +1714,7 @@ export class StudentsService {
     }
   }
 
-  async promoteSingle(dto: PromoteSingleStudentDto) {
+  async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string) {
     const result = await this.promoteBulk({
       from: dto.from,
       to: dto.to,
@@ -1726,7 +1726,7 @@ export class StudentsService {
       student_ids: [dto.student_id],
       reason: dto.reason,
       dry_run: dto.dry_run,
-    });
+    }, changedBy);
 
     return {
       ...result,
@@ -1734,7 +1734,7 @@ export class StudentsService {
     };
   }
 
-  async promoteBulk(dto: PromoteBulkStudentsDto) {
+  async promoteBulk(dto: PromoteBulkStudentsDto, changedBy: string) {
     // Validate: exactly one of `to`, `graduate`, `expel`, or `left` must be set
     const isGraduating = !!dto.graduate;
     const isExpelling = !!dto.expel;
@@ -1802,6 +1802,7 @@ export class StudentsService {
       where,
       select: {
         cc: true,
+        full_name: true,
         class_id: true,
         section_id: true,
         campus_id: true,
@@ -1856,6 +1857,7 @@ export class StudentsService {
             classActiveCache,
             sectionActiveCache,
             grOverrideMap.get(studentId),
+            changedBy,
           );
           results.push(outcome);
         }));
@@ -1879,6 +1881,7 @@ export class StudentsService {
             classActiveCache,
             sectionActiveCache,
             grOverrideMap.get(student.cc),
+            changedBy,
           );
           results.push(outcome);
         }));
@@ -1914,6 +1917,7 @@ export class StudentsService {
   private async processPromotionForStudent(
     student: {
       cc: number;
+      full_name: string | null;
       class_id: number | null;
       section_id: number | null;
       campus_id: number | null;
@@ -1934,7 +1938,8 @@ export class StudentsService {
     dryRun: boolean,
     classActiveCache: Map<string, boolean>,
     sectionActiveCache: Map<string, boolean>,
-    grOverride?: string,
+    grOverride: string | undefined,
+    changedBy: string,
   ): Promise<PromotionOutcome> {
     // ── Already expelled guard ───────────────────────────────────────────────
     if (student.status === StudentStatus.EXPELLED) {
@@ -2198,6 +2203,21 @@ export class StudentsService {
             },
           });
         });
+
+        void this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(student.cc),
+          action: 'GRADUATED',
+          field: 'status',
+          old_value: student.status,
+          new_value: StudentStatus.GRADUATED,
+          changed_by: changedBy,
+          student_id: student.cc,
+          note: [`${student.full_name ?? `Student CC ${student.cc}`} graduated from class #${student.class_id ?? 'N/A'}.`, reason?.trim()]
+            .filter(Boolean)
+            .join(' '),
+        });
+
         return {
           student_id: student.cc,
           status: 'graduated',
@@ -2230,6 +2250,18 @@ export class StudentsService {
               work_done: true,
             },
           });
+        });
+
+        void this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(student.cc),
+          action: 'EXPELLED',
+          field: 'status',
+          old_value: student.status,
+          new_value: StudentStatus.EXPELLED,
+          changed_by: changedBy,
+          student_id: student.cc,
+          note: [`${student.full_name ?? `Student CC ${student.cc}`} expelled.`, expulsionReason].filter(Boolean).join(' '),
         });
 
         return {
@@ -2347,6 +2379,23 @@ export class StudentsService {
           },
           { maxWait: 5000, timeout: 15000 },
         );
+
+        void this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(student.cc),
+          action: 'PROMOTED',
+          field: 'class_id',
+          old_value: student.class_id != null ? String(student.class_id) : null,
+          new_value: String(toClass!.id),
+          changed_by: changedBy,
+          student_id: student.cc,
+          note: [
+            `${student.full_name ?? `Student CC ${student.cc}`} promoted from ${student.academic_year ?? 'N/A'} to ${nextAcademicYear}.`,
+            reason?.trim(),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        });
 
         return {
           student_id: student.cc,
