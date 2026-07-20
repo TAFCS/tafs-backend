@@ -1016,6 +1016,7 @@ model employee_profiles {
   attendance_staff_daily             attendance_staff_daily[]
   device_user_mappings               device_user_mappings[]
   employee_class_section_assignments employee_class_section_assignments[]
+  employee_notice_posts              employee_notice_posts[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
   designations                       designations?                        @relation(fields: [designation_id], references: [id])
@@ -1560,28 +1561,35 @@ model class_check_in_schedules {
 }
 
 model employee_notice_posts {
-  id           Int                          @id @default(autoincrement())
-  posted_by    String                       @db.VarChar(255)
-  title        String?                      @db.VarChar(255)
-  body         String
-  target_roles StaffRole[]                  @default([])
-  campus_ids   Int[]                        @default([])
-  media_urls   Json?                        @default("[]")
-  media_types  Json?                        @default("[]")
-  is_pinned    Boolean                      @default(false)
-  posted_at    DateTime                     @default(now()) @db.Timestamp(6)
-  expires_at   DateTime?                    @db.Timestamp(6)
-  deleted_at   DateTime?                    @db.Timestamp(6)
-  class_ids    Int[]                        @default([])
-  section_ids  Int[]                        @default([])
-  post_reads   employee_notice_post_reads[]
-  users        users                        @relation(fields: [posted_by], references: [id])
+  id                Int                          @id @default(autoincrement())
+  posted_by         String                       @db.VarChar(255)
+  title             String?                      @db.VarChar(255)
+  body              String
+  target_roles      StaffRole[]                  @default([])
+  campus_ids        Int[]                        @default([])
+  media_urls        Json?                        @default("[]")
+  media_types       Json?                        @default("[]")
+  is_pinned         Boolean                      @default(false)
+  posted_at         DateTime                     @default(now()) @db.Timestamp(6)
+  expires_at        DateTime?                    @db.Timestamp(6)
+  deleted_at        DateTime?                    @db.Timestamp(6)
+  class_ids         Int[]                        @default([])
+  section_ids       Int[]                        @default([])
+  // Set only for system-generated, single-recipient posts (e.g. a check-in/
+  // check-out ping) — visible only to this employee, bypassing target_roles/
+  // campus_ids/class_ids/section_ids entirely, and excluded from the admin
+  // composer's manage list.
+  employee_id       Int?
+  post_reads        employee_notice_post_reads[]
+  users             users                        @relation(fields: [posted_by], references: [id])
+  employee_profiles employee_profiles?           @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@index([posted_at(sort: Desc)])
   @@index([target_roles], type: Gin)
   @@index([campus_ids], type: Gin)
   @@index([class_ids], type: Gin)
   @@index([section_ids], type: Gin)
+  @@index([employee_id])
 }
 
 model employee_notice_post_reads {

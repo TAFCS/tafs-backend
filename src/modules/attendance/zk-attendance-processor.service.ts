@@ -15,6 +15,7 @@ import { AttendancePolicyResolverService } from './attendance-policy-resolver.se
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
+import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-notice-board.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -39,7 +40,8 @@ export type NotificationSkipReason =
   | 'duplicate_scan'
   | 'not_live'
   | 'no_direction'
-  | 'no_family_id';
+  | 'no_family_id'
+  | 'no_user_account';
 
 export interface ScanProcessResult {
   scanId: number;
@@ -72,6 +74,7 @@ export class ZkAttendanceProcessorService {
     private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
+    private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
   ) {}
 
   async processPush(
@@ -295,7 +298,30 @@ export class ZkAttendanceProcessorService {
 
     if (personType === DevicePersonType.STAFF) {
       await this.upsertStaffDaily(employeeId!, attendanceDate, seg);
-      return undefined;
+
+      const staffScanDirection = this.scanDirectionFromSegment(seg);
+      const staffShouldNotify = (isLive || options?.forceNotify) && staffScanDirection;
+      if (!staffShouldNotify) {
+        const skipReason: NotificationSkipReason = !staffScanDirection ? 'no_direction' : 'not_live';
+        this.logger.debug(
+          `Notification skipped for employee ${employeeId} (scan ${scanRow.id}): ${skipReason}`,
+        );
+        return { scanId: scanRow.id, notified: false, skipReason };
+      }
+
+      const staffNotified = await this.sendStaffScanNotification(employeeId!, scanRow, staffScanDirection);
+      if (staffNotified) {
+        await this.prisma.zk_attendance_scans.update({
+          where: { id: scanRow.id },
+          data: { notified_at: new Date() },
+        });
+        return { scanId: scanRow.id, notified: true };
+      }
+
+      this.logger.warn(
+        `Notification skipped for employee ${employeeId} (scan ${scanRow.id}): no_user_account`,
+      );
+      return { scanId: scanRow.id, notified: false, skipReason: 'no_user_account' };
     }
 
     const scanDirection = this.scanDirectionFromSegment(seg);
@@ -615,6 +641,65 @@ export class ZkAttendanceProcessorService {
       body,
     });
 
+    return true;
+  }
+
+  // Posts to the employee's own Notices feed (employee_notice_posts,
+  // employee_id-scoped) and pushes via FCM — mirrors sendScanNotification's
+  // arrived/late/left template selection, but self-addressed rather than
+  // family-addressed since staff don't have a family_id.
+  private async sendStaffScanNotification(
+    employeeId: number,
+    scanRow: { scan_time: Date },
+    direction: ScanDirection,
+  ): Promise<boolean> {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { user_id: true },
+    });
+    if (!employee?.user_id) return false;
+
+    const time = scanRow.scan_time.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC',
+    });
+
+    const attendanceDate = new Date(scanRow.scan_time);
+    attendanceDate.setUTCHours(0, 0, 0, 0);
+
+    const dailyRow = await this.prisma.attendance_staff_daily.findUnique({
+      where: { employee_id_date: { employee_id: employeeId, date: attendanceDate } },
+    });
+
+    const isLate = direction === ScanDirection.IN && dailyRow?.status === StaffAttendanceStatus.LATE;
+    const vars = { time };
+
+    let templateTitleKey: string;
+    if (direction === ScanDirection.IN && isLate) {
+      templateTitleKey = 'notif_staff_attend_late_title';
+    } else if (direction === ScanDirection.IN) {
+      templateTitleKey = 'notif_staff_attend_arrived_title';
+    } else {
+      templateTitleKey = 'notif_staff_attend_left_title';
+    }
+
+    if (await isTemplateDisabled(this.prisma, templateTitleKey)) return false;
+
+    let title: string;
+    let body: string;
+    if (direction === ScanDirection.IN && isLate) {
+      title = await resolveTemplate(this.prisma, 'notif_staff_attend_late_title', 'Checked In Late', vars);
+      body = await resolveTemplate(this.prisma, 'notif_staff_attend_late_body', 'You checked in late at {time}', vars);
+    } else if (direction === ScanDirection.IN) {
+      title = await resolveTemplate(this.prisma, 'notif_staff_attend_arrived_title', 'Checked In', vars);
+      body = await resolveTemplate(this.prisma, 'notif_staff_attend_arrived_body', 'You checked in at {time}', vars);
+    } else {
+      title = await resolveTemplate(this.prisma, 'notif_staff_attend_left_title', 'Checked Out', vars);
+      body = await resolveTemplate(this.prisma, 'notif_staff_attend_left_body', 'You checked out at {time}', vars);
+    }
+
+    await this.employeeNoticeBoard.createAttendanceNotice(employeeId, employee.user_id, title, body);
     return true;
   }
 }
