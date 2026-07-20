@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
-import { StaffRole } from '@prisma/client';
+import { Prisma, StaffRole } from '@prisma/client';
 import { CreateEmployeeNoticeDto } from './dto/create-employee-notice.dto';
 import { UpdateEmployeeNoticeDto } from './dto/update-employee-notice.dto';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -20,14 +20,16 @@ export class EmployeeNoticeBoardService {
   async getFeedForUser(user: IJwtStaffPayload) {
     const profile = await this.prisma.employee_profiles.findFirst({
       where: { user_id: user.sub },
-      select: { employee_class_section_assignments: { select: { class_id: true, section_id: true } } },
+      select: { id: true, employee_class_section_assignments: { select: { class_id: true, section_id: true } } },
     });
     const assignedClassIds = [...new Set(profile?.employee_class_section_assignments.map(a => a.class_id) ?? [])];
     const assignedSectionIds = [...new Set(profile?.employee_class_section_assignments.map(a => a.section_id) ?? [])];
 
-    return this.prisma.employee_notice_posts.findMany({
-      where: {
-        deleted_at: null,
+    // Personal posts (e.g. a check-in/check-out ping) are always visible to
+    // their addressee, independent of the broadcast targeting below.
+    const orConditions: Prisma.employee_notice_postsWhereInput[] = [
+      {
+        employee_id: null,
         AND: [
           {
             OR: [
@@ -63,6 +65,13 @@ export class EmployeeNoticeBoardService {
           },
         ],
       },
+    ];
+    if (profile?.id != null) {
+      orConditions.push({ employee_id: profile.id });
+    }
+
+    return this.prisma.employee_notice_posts.findMany({
+      where: { deleted_at: null, OR: orConditions },
       include: {
         users: { select: { full_name: true } },
         post_reads: {
@@ -87,8 +96,10 @@ export class EmployeeNoticeBoardService {
   // ── Admin-facing ─────────────────────────────────────────────────────────
 
   async getAdminList() {
+    // System-generated personal posts (e.g. check-in/check-out pings) aren't
+    // admin-authored content — they don't belong in the composer's manage list.
     const posts = await this.prisma.employee_notice_posts.findMany({
-      where: { deleted_at: null },
+      where: { deleted_at: null, employee_id: null },
       orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
       include: {
         users: { select: { full_name: true } },
@@ -190,6 +201,26 @@ export class EmployeeNoticeBoardService {
     });
     this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(id), action: 'DELETED', section: 'communication', old_value: post.title ?? undefined, changed_by: deletedBy ?? 'system' });
     return result;
+  }
+
+  // ── System-generated (e.g. biometric check-in/check-out) ───────────────────
+
+  /**
+   * Posts a personal, single-recipient notice — visible only to `employeeId`
+   * via the employee_id branch in getFeedForUser, and excluded from the admin
+   * composer's manage list. Self-authored (posted_by = the employee's own
+   * user id) since there's no dedicated "system" user account.
+   */
+  async createAttendanceNotice(employeeId: number, userId: string, title: string, body: string) {
+    const post = await this.prisma.employee_notice_posts.create({
+      data: { posted_by: userId, employee_id: employeeId, title, body },
+    });
+
+    void this.fcmService
+      .sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE', postId: String(post.id) })
+      .catch((err) => console.error('[EmployeeNoticeBoard] Attendance notice FCM send failed:', err?.message));
+
+    return post;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────

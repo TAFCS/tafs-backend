@@ -4,6 +4,7 @@ import { HrModule } from '../hr/hr.module';
 import { ChatModule } from '../chat/chat.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { TimetablesModule } from '../timetables/timetables.module';
+import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-notice-board.module';
 import { AttendanceNotificationsController } from './attendance-notifications.controller';
 import { AttendanceNotificationsService } from './attendance-notifications.service';
 import { RollSessionsController } from './roll-sessions.controller';
@@ -33,6 +34,7 @@ import { RecomputeLateController } from './recompute-late.controller';
     forwardRef(() => ChatModule),
     FcmModule,
     TimetablesModule,
+    EmployeeNoticeBoardModule,
   ],
   controllers: [
     RollSessionsController,
