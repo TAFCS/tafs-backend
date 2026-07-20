@@ -85,6 +85,31 @@ export class MediaController {
     return this.mediaService.uploadGuardianPhoto(id, file, isTemp);
   }
 
+  @Post('guardian/:id/cnic')
+  @ApiOperation({ summary: 'Upload guardian CNIC card image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadGuardianCnic(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+    @Query('temp') temp?: string,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const isTemp = temp === 'true';
+    return this.mediaService.uploadGuardianCnic(id, file, isTemp);
+  }
+
   @Post('employee/:id/photo')
   @ApiOperation({ summary: 'Upload employee profile photo' })
   @ApiConsumes('multipart/form-data')

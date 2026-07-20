@@ -326,6 +326,52 @@ export class ParentChangeRequestsService {
         } else {
           const rawData = request.requested_data as Record<string, any>;
           const dataToUpdate = this.uppercaseTextValues(rawData);
+          
+          if ('home_phone' in dataToUpdate) {
+            const homePhone = dataToUpdate.home_phone;
+            delete dataToUpdate.home_phone;
+            if (request.family_id) {
+              await tx.families.update({
+                where: { id: request.family_id },
+                data: { home_phone: homePhone },
+              });
+              await tx.students.updateMany({
+                where: { family_id: request.family_id },
+                data: { home_phone: homePhone },
+              });
+            }
+          }
+
+          // If any structured address fields are being updated
+          const addressFields = ['house_appt_name', 'area_block', 'city', 'province', 'country', 'postal_code'];
+          const hasAddressUpdates = addressFields.some(field => field in dataToUpdate);
+
+          if (hasAddressUpdates) {
+            const currentGuardian = await tx.guardians.findUnique({
+              where: { id: request.guardian_id },
+              select: {
+                house_appt_name: true,
+                area_block: true,
+                city: true,
+                province: true,
+                country: true,
+                postal_code: true,
+              }
+            });
+
+            const houseApptName = 'house_appt_name' in dataToUpdate ? dataToUpdate.house_appt_name : (currentGuardian?.house_appt_name || '');
+            const areaBlock = 'area_block' in dataToUpdate ? dataToUpdate.area_block : (currentGuardian?.area_block || '');
+            const city = 'city' in dataToUpdate ? dataToUpdate.city : (currentGuardian?.city || '');
+            const province = 'province' in dataToUpdate ? dataToUpdate.province : (currentGuardian?.province || '');
+            const country = 'country' in dataToUpdate ? dataToUpdate.country : (currentGuardian?.country || '');
+            const postalCode = 'postal_code' in dataToUpdate ? dataToUpdate.postal_code : (currentGuardian?.postal_code || '');
+
+            const addressParts = [houseApptName, areaBlock, city, province, country, postalCode].map(p => p?.toString().trim()).filter(Boolean);
+            const mailingAddress = addressParts.join(', ');
+
+            dataToUpdate.mailing_address = mailingAddress;
+          }
+
           await tx.guardians.update({
             where: { id: request.guardian_id },
             data: dataToUpdate as Prisma.InputJsonValue,
@@ -339,7 +385,30 @@ export class ParentChangeRequestsService {
             });
 
             // Parse and sync to all family guardians' structured fields
-            const parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
+            let parsed = {};
+            if (hasAddressUpdates) {
+              const currentG = await tx.guardians.findUnique({
+                where: { id: request.guardian_id },
+                select: {
+                  house_appt_name: true,
+                  area_block: true,
+                  city: true,
+                  province: true,
+                  country: true,
+                  postal_code: true,
+                }
+              });
+              parsed = {
+                house_appt_name: currentG?.house_appt_name || null,
+                area_block: currentG?.area_block || null,
+                city: currentG?.city || null,
+                province: currentG?.province || null,
+                country: currentG?.country || null,
+                postal_code: currentG?.postal_code || null,
+              };
+            } else {
+              parsed = this.parseMailingAddress(dataToUpdate.mailing_address);
+            }
             
             const studentIds = await tx.students.findMany({
               where: { family_id: request.family_id, deleted_at: null },

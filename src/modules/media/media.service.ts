@@ -49,6 +49,25 @@ export class MediaService {
     return { url };
   }
 
+  async uploadGuardianCnic(id: number, file: Express.Multer.File, isTemp = false) {
+    const guardian = await this.prisma.guardians.findUnique({ where: { id } });
+    if (!guardian) throw new NotFoundException(`Guardian with ID ${id} not found`);
+
+    const extension = file.originalname.split('.').pop() || 'jpg';
+    const key = `media/guardians/${id}/cnic-${Date.now()}.${extension}`;
+
+    const url = await this.storage.upload(key, file.buffer, file.mimetype);
+
+    if (!isTemp) {
+      await this.prisma.guardians.update({
+        where: { id },
+        data: { cnic_pic_url: url },
+      });
+    }
+
+    return { url };
+  }
+
   async uploadEmployeePhoto(id: number, file: Express.Multer.File) {
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
     if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);

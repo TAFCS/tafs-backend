@@ -263,6 +263,7 @@ export class AuthService {
         id: family.id,
         email: family.email ?? '',
         householdName: family.household_name,
+        homePhone: family.home_phone || null,
         photographUrl: primaryGuardian?.guardians?.photo_url ?? null,
         guardians: uniqueGuardians.map((g: any) => {
           const guardian = g.guardians;
@@ -285,6 +286,12 @@ export class AuthService {
             cnic: guardian.cnic || null,
             whatsapp: guardian.whatsapp_number || null,
             address: guardian.mailing_address || null,
+            houseApptName: guardian.house_appt_name || null,
+            areaBlock: guardian.area_block || null,
+            city: guardian.city || null,
+            province: guardian.province || null,
+            country: guardian.country || null,
+            postalCode: guardian.postal_code || null,
             jobPosition: guardian.job_position || null,
             isEmergencyContact: g.is_emergency_contact ?? false,
           };
