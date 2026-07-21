@@ -96,6 +96,19 @@ const VOUCHER_INCLUDE = {
     },
 };
 
+// An audit-log entry queued during a transaction and flushed after it commits.
+// `changed_by` is intentionally omitted here — it's supplied by flushAuditEvents().
+type VoucherAuditEvent = {
+    entity_type: string;
+    entity_id: string;
+    action: string;
+    field?: string | null;
+    old_value?: string | null;
+    new_value?: string | null;
+    student_id?: number | null;
+    note: string;
+};
+
 @Injectable()
 export class VouchersService {
     private readonly logger = new Logger(VouchersService.name);
@@ -119,6 +132,64 @@ export class VouchersService {
         return p.startsWith('PARTIAL PAYMENT OF') || p.startsWith('BALANCE PAYMENT OF');
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Audit-logging helpers.
+    //
+    // Every data-mutating operation in this service must leave a descriptive
+    // audit trail so an admin can reconstruct exactly what happened. Side effects
+    // that occur INSIDE a $transaction (voiding/reactivating other vouchers,
+    // unlocking fee heads, etc.) are collected into a `VoucherAuditEvent[]` sink
+    // during the transaction and flushed via `flushAuditEvents()` AFTER it commits
+    // — so nothing is logged for work that ends up rolled back, and no write goes
+    // through the transaction client.
+    // ─────────────────────────────────────────────────────────────────────────
+    private static readonly MONTH_NAMES = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+
+    private monthName(month?: number | null): string | null {
+        if (!month || month < 1 || month > 12) return null;
+        return VouchersService.MONTH_NAMES[month - 1];
+    }
+
+    private fmtDate(d: Date | string | null | undefined): string {
+        if (!d) return 'N/A';
+        return new Date(d).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    private fmtMoney(amount: Prisma.Decimal | number | string | null | undefined): string {
+        if (amount === null || amount === undefined) return 'N/A';
+        return `Rs. ${Number(amount).toLocaleString()}`;
+    }
+
+    // Human label for a fee head's billing period, e.g. "Aug 2025" — falls back to
+    // the fee_date, then the target/month number, then the raw id.
+    private feeHeadPeriodLabel(sf: any): string {
+        if (sf?.fee_date) {
+            return new Date(sf.fee_date).toLocaleDateString('en-PK', { month: 'short', year: 'numeric' });
+        }
+        const m = this.monthName(sf?.target_month ?? sf?.month);
+        if (m) return sf?.academic_year ? `${m} ${sf.academic_year}` : m;
+        return sf?.id != null ? `fee #${sf.id}` : 'fee';
+    }
+
+    private async flushAuditEvents(events: VoucherAuditEvent[], changedBy: string): Promise<void> {
+        for (const e of events) {
+            await this.auditLogs.log({
+                entity_type: e.entity_type,
+                entity_id: e.entity_id,
+                action: e.action,
+                field: e.field ?? null,
+                old_value: e.old_value ?? null,
+                new_value: e.new_value ?? null,
+                changed_by: changedBy,
+                student_id: e.student_id ?? null,
+                note: e.note,
+            });
+        }
+    }
+
     async create(dto: CreateVoucherDto, pdfBuffer?: Buffer, changedBy: string = 'system') {
         // --- Temporary Debug Check for orderedFeeIds ---
         if (!dto.orderedFeeIds || dto.orderedFeeIds.length === 0) {
@@ -134,6 +205,10 @@ export class VouchersService {
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
         const feeDate = dto.fee_date ? new Date(dto.fee_date) : null;
+
+        // Audit events for side effects (superseded vouchers voided) collected inside
+        // the transaction and flushed after it commits.
+        const sideEffectEvents: VoucherAuditEvent[] = [];
 
         const voucher = await this.prisma.$transaction(async (tx) => {
             // 1.a Compute arrears to discover surcharge groups (no student_fees rows written)
@@ -407,6 +482,17 @@ export class VouchersService {
                     }
 
                     if (completelySupersededIds.length > 0) {
+                        // Capture the vouchers that will actually transition (the updateMany's
+                        // status filter excludes already PAID/VOID ones) so each can be audited.
+                        const toVoid = await tx.vouchers.findMany({
+                            where: {
+                                id: { in: completelySupersededIds },
+                                student_id: dto.student_id,
+                                status: { notIn: ['PAID', 'VOID'] },
+                            },
+                            select: { id: true, voucher_number: true, status: true },
+                        });
+
                         await tx.vouchers.updateMany({
                             where: {
                                 id: { in: completelySupersededIds },
@@ -418,6 +504,19 @@ export class VouchersService {
                         this.logger.log(
                             `[Voucher ${newVoucher.id}] Voided ${completelySupersededIds.length} completely superseded voucher(s): [${completelySupersededIds.join(', ')}]`,
                         );
+
+                        for (const v of toVoid) {
+                            sideEffectEvents.push({
+                                entity_type: 'VOUCHER',
+                                entity_id: String(v.id),
+                                action: 'UPDATED',
+                                field: 'status',
+                                old_value: v.status ?? null,
+                                new_value: 'VOID',
+                                student_id: dto.student_id,
+                                note: `Voucher #${v.id} (no. ${v.voucher_number || 'N/A'}) voided — every one of its fee heads was absorbed into newly created Voucher #${newVoucher.id}.`,
+                            });
+                        }
                     }
                 }
             }
@@ -475,6 +574,9 @@ export class VouchersService {
             student_id: dto.student_id,
             note: logNote,
         });
+
+        // Log any previous vouchers this creation superseded/voided.
+        await this.flushAuditEvents(sideEffectEvents, changedBy);
 
         this.voucherNotificationService
             .sendVoucherIssuedNotification(finalVoucher.id)
@@ -1557,8 +1659,8 @@ export class VouchersService {
         };
     }
 
-    async update(id: number, dto: UpdateVoucherDto) {
-        await this.findOne(id); // ensure it exists
+    async update(id: number, dto: UpdateVoucherDto, changedBy: string = 'system') {
+        const before = await this.findOne(id); // ensure it exists + capture prior values
 
         const needsPdfInvalidation =
             dto.issue_date ||
@@ -1569,7 +1671,7 @@ export class VouchersService {
             dto.bank_account_id ||
             dto.section_id !== undefined;
 
-        return this.prisma.vouchers.update({
+        const updated = await this.prisma.vouchers.update({
             where: { id },
             data: {
                 ...(dto.issue_date ? { issue_date: new Date(dto.issue_date) } : {}),
@@ -1583,6 +1685,34 @@ export class VouchersService {
             },
             include: VOUCHER_INCLUDE,
         });
+
+        // Audit each field that actually changed, one entry per field, plus a
+        // summary note so the admin sees exactly what was edited.
+        const fieldChecks: Array<{ field: string; before: string | null; after: string | null; label: string }> = [
+            { field: 'issue_date', before: this.fmtDate((before as any).issue_date), after: this.fmtDate((updated as any).issue_date), label: 'Issue date' },
+            { field: 'due_date', before: this.fmtDate((before as any).due_date), after: this.fmtDate((updated as any).due_date), label: 'Due date' },
+            { field: 'validity_date', before: this.fmtDate((before as any).validity_date), after: this.fmtDate((updated as any).validity_date), label: 'Validity date' },
+            { field: 'status', before: (before as any).status ?? null, after: (updated as any).status ?? null, label: 'Status' },
+            { field: 'late_fee_charge', before: String((before as any).late_fee_charge), after: String((updated as any).late_fee_charge), label: 'Late-fee charge' },
+            { field: 'bank_account_id', before: (before as any).bank_account_id != null ? String((before as any).bank_account_id) : null, after: (updated as any).bank_account_id != null ? String((updated as any).bank_account_id) : null, label: 'Bank account' },
+            { field: 'section_id', before: (before as any).section_id != null ? String((before as any).section_id) : null, after: (updated as any).section_id != null ? String((updated as any).section_id) : null, label: 'Section' },
+        ];
+        const changes = fieldChecks.filter((c) => c.before !== c.after);
+        for (const c of changes) {
+            await this.auditLogs.log({
+                entity_type: 'VOUCHER',
+                entity_id: String(id),
+                action: 'UPDATED',
+                field: c.field,
+                old_value: c.before,
+                new_value: c.after,
+                changed_by: changedBy,
+                student_id: (updated as any).student_id,
+                note: `Voucher #${id} (no. ${(updated as any).voucher_number || 'N/A'}) ${c.label} changed from "${c.before ?? '—'}" to "${c.after ?? '—'}".`,
+            });
+        }
+
+        return updated;
     }
 
     async recordDeposit(voucherId: number, dto: RecordVoucherDepositDto, changedBy: string = 'system') {
@@ -2278,6 +2408,9 @@ export class VouchersService {
             });
 
         let fullUndoHandled = false;
+        // Side-effect audit events (voucher deleted, heads reset, predecessors
+        // reactivated, split reversed) collected in-tx and flushed after commit.
+        const auditEvents: VoucherAuditEvent[] = [];
 
         await this.prisma.$transaction(async (tx) => {
             // ── Step 0: Full split-undo. If this voucher is a marked split child and the
@@ -2285,7 +2418,7 @@ export class VouchersService {
             //    entirely — reactivate the original (VOID) voucher with its fees ISSUED + unpaid
             //    and delete both split children. Otherwise fall through to the existing flow.
             if ((voucher as any).split_parent_id != null) {
-                const handled = await this._reverseSplitFamilyInTx(voucher as any, depositId, tx);
+                const handled = await this._reverseSplitFamilyInTx(voucher as any, depositId, tx, auditEvents);
                 if (handled) {
                     fullUndoHandled = true;
                     return;
@@ -2335,7 +2468,7 @@ export class VouchersService {
                 // hard-deleted. Reached for legacy splits (no split_parent_id, so Step 0 never
                 // runs) and for marker splits whose full-undo bailed for a non-independent-deposit
                 // reason (multi-level / re-split / unexpected shape).
-                await this._destroyVoucherInTx(voucherId, voucher as any, tx, true);
+                await this._destroyVoucherInTx(voucherId, voucher as any, tx, true, auditEvents);
             } else {
                 // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from the
                 // remaining allocations and re-derive the voucher status (the exact inverse of
@@ -2487,6 +2620,10 @@ export class VouchersService {
             });
         }
 
+        // Flush voucher-level side effects (PAID voucher deleted, heads reset,
+        // predecessors reactivated, or a split fully reversed).
+        await this.flushAuditEvents(auditEvents, changedBy);
+
         // The PAID + split delete path and the full split-undo both remove this voucher —
         // nothing to fetch back in either case.
         if (fullUndoHandled || (isPaidVoucher && isSplitVoucher)) return null;
@@ -2509,7 +2646,7 @@ export class VouchersService {
      * remotely complex (multi-level splits, children with independent deposits,
      * re-split children) bails safely to the proven existing behavior.
      */
-    private async _reverseSplitFamilyInTx(child: any, depositId: number, tx: any): Promise<boolean> {
+    private async _reverseSplitFamilyInTx(child: any, depositId: number, tx: any, auditEvents?: VoucherAuditEvent[]): Promise<boolean> {
         const parentId = child.split_parent_id;
         if (parentId == null) return false;
 
@@ -2724,6 +2861,18 @@ export class VouchersService {
         this.logger.log(
             `clearDeposit: full split-undo — reactivated voucher #${parent.id}, deleted split children [${childIds.join(', ')}], reversed deposit #${depositId}.`,
         );
+
+        const reactivatedStatus = due < today ? 'OVERDUE' : 'UNPAID';
+        auditEvents?.push({
+            entity_type: 'VOUCHER',
+            entity_id: String(parent.id),
+            action: 'UPDATED',
+            field: 'status',
+            old_value: 'VOID',
+            new_value: reactivatedStatus,
+            student_id: parent.student_id,
+            note: `Split fully reversed after clearing deposit #${depositId}: original Voucher #${parent.id} (no. ${parent.voucher_number || 'N/A'}) reactivated (status → ${reactivatedStatus}) with its fees restored to Issued/unpaid, and its two split children [#${childIds.join(', #')}] deleted.`,
+        });
         return true;
     }
 
@@ -4108,13 +4257,13 @@ export class VouchersService {
             rows,
         };
     }
-    async bulkRemove(ids: number[], force = false) {
+    async bulkRemove(ids: number[], force = false, changedBy: string = 'system') {
         let deleted = 0, skipped = 0;
         const errors: { id: number; reason: string }[] = [];
 
         for (const id of ids) {
             try {
-                force ? await this.forceRemove(id) : await this.remove(id);
+                force ? await this.forceRemove(id, changedBy) : await this.remove(id, changedBy);
                 deleted++;
             } catch (e: any) {
                 skipped++;
@@ -4130,7 +4279,7 @@ export class VouchersService {
      * Resets linked student_fees back to NOT_ISSUED.
      * Deletes deposit_allocations (severs link from underlying deposit).
      */
-    async forceRemove(id: number) {
+    async forceRemove(id: number, changedBy: string = 'system') {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
             include: {
@@ -4146,7 +4295,7 @@ export class VouchersService {
 
         // No status guard — allows deleting PAID/PARTIALLY_PAID
 
-        return await this.prisma.$transaction(async (tx) => {
+        const result = await this.prisma.$transaction(async (tx) => {
             const heads = voucher.voucher_heads || [];
             const regularFeeIds = heads.map(h => h.student_fee_id);
 
@@ -4181,6 +4330,27 @@ export class VouchersService {
             maxWait: 5000,
             timeout: 15000,
         });
+
+        // Force-delete resets ALL of the voucher's heads (current + arrears) and does
+        // NOT reactivate any superseded voucher — record exactly that.
+        const forcedHeadPeriods = (voucher.voucher_heads || [])
+            .filter((h: any) => h.student_fee_id != null)
+            .map((h: any) => this.feeHeadPeriodLabel(h.student_fees ?? { id: h.student_fee_id }))
+            .join(', ') || 'none';
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(id),
+            action: 'DELETED',
+            changed_by: changedBy,
+            student_id: voucher.student_id,
+            note: [
+                `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) FORCE-deleted (status guard bypassed; prior status: ${voucher.status ?? 'N/A'}).`,
+                `Reset ${(voucher.voucher_heads || []).length} fee head(s) to Not Issued: ${forcedHeadPeriods}`,
+                `No superseded voucher was reactivated.`,
+            ].join(' | '),
+        });
+
+        return result;
     }
     /**
      * Core voucher deletion logic shared by remove() and the PAID path of clearDeposit().
@@ -4190,11 +4360,19 @@ export class VouchersService {
      * @param reactivate - Whether to reactivate superseded VOID vouchers.
      *   Pass true for UNPAID/OVERDUE/PAID deletions; false for VOID cleanup.
      */
-    private async _destroyVoucherInTx(id: number, voucher: any, tx: any, reactivate: boolean): Promise<any> {
+    private async _destroyVoucherInTx(id: number, voucher: any, tx: any, reactivate: boolean, auditEvents?: VoucherAuditEvent[]): Promise<any> {
         const heads: any[] = voucher.voucher_heads || [];
         const allFeeIds: number[] = heads
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null);
+
+        // Lookup so side-effect audit notes can name each head's billing period.
+        const sfById = new Map<number, any>();
+        for (const h of heads) {
+            if (h.student_fee_id != null && h.student_fees) sfById.set(h.student_fee_id, h.student_fees);
+        }
+        const periodsFor = (ids: number[]): string =>
+            ids.map((fid) => this.feeHeadPeriodLabel(sfById.get(fid) ?? { id: fid })).join(', ') || 'none';
 
         // Derive current-period fee_date = max of all head fee_dates.
         const headFeeDates: Date[] = heads
@@ -4444,9 +4622,21 @@ export class VouchersService {
         for (const sv of supersededVouchers) {
             const svDue = new Date(sv.due_date);
             svDue.setHours(0, 0, 0, 0);
-            await tx.vouchers.update({
+            const newStatus = svDue < today ? 'OVERDUE' : 'UNPAID';
+            const svRow = await tx.vouchers.update({
                 where: { id: sv.id },
-                data: { status: svDue < today ? 'OVERDUE' : 'UNPAID' },
+                data: { status: newStatus },
+                select: { id: true, voucher_number: true },
+            });
+            auditEvents?.push({
+                entity_type: 'VOUCHER',
+                entity_id: String(sv.id),
+                action: 'UPDATED',
+                field: 'status',
+                old_value: 'VOID',
+                new_value: newStatus,
+                student_id: voucher.student_id,
+                note: `Voucher #${sv.id} (no. ${svRow.voucher_number || 'N/A'}) reactivated (status → ${newStatus}) — it was the previously-made voucher, restored because the voucher that had superseded it (#${id}) was deleted.`,
             });
         }
 
@@ -4472,15 +4662,57 @@ export class VouchersService {
             const coveredSet = new Set<number>(stillCovered.map((h: any) => h.student_fee_id));
             const orphanedArrearIds = arrearFeeIds.filter((fid) => !coveredSet.has(fid));
             if (orphanedArrearIds.length > 0) {
-                await tx.student_fees.updateMany({
+                // Only rows still purely-locked (ISSUED) are reset; capture which ones
+                // actually transitioned so the audit note is accurate.
+                const trulyOrphaned = await tx.student_fees.findMany({
                     where: { id: { in: orphanedArrearIds }, status: 'ISSUED' as any },
-                    data: { status: 'NOT_ISSUED', issue_date: null, due_date: null, validity_date: null } as any,
+                    select: { id: true },
                 });
+                const trulyOrphanedIds = trulyOrphaned.map((r: any) => r.id);
+                if (trulyOrphanedIds.length > 0) {
+                    await tx.student_fees.updateMany({
+                        where: { id: { in: trulyOrphanedIds } },
+                        data: { status: 'NOT_ISSUED', issue_date: null, due_date: null, validity_date: null } as any,
+                    });
+                    auditEvents?.push({
+                        entity_type: 'VOUCHER',
+                        entity_id: String(id),
+                        action: 'UPDATED',
+                        field: 'orphaned_arrears',
+                        old_value: 'ISSUED',
+                        new_value: 'NOT_ISSUED',
+                        student_id: voucher.student_id,
+                        note: `Unlocked ${trulyOrphanedIds.length} orphaned arrear fee head(s) back to Not Issued after deleting Voucher #${id}: ${periodsFor(trulyOrphanedIds)}. These older-period heads had been baked into this voucher as arrears with no earlier voucher of their own, so nothing else covered them once it was deleted.`,
+                    });
+                }
             }
         }
 
+        // Record the current-period heads that this deletion resets, for the audit note.
+        const resetCurrentFeeIds: number[] = currentHeads
+            .map((h: any) => h.student_fee_id)
+            .filter((fid: any): fid is number => fid !== null)
+            .filter((fid: number) => !splitPaidFeeIds.includes(fid));
+
         // STEP 8: Delete the voucher (cascades to voucher_arrear_surcharges automatically).
-        return tx.vouchers.delete({ where: { id } });
+        const deleted = await tx.vouchers.delete({ where: { id } });
+
+        auditEvents?.push({
+            entity_type: 'VOUCHER',
+            entity_id: String(id),
+            action: 'DELETED',
+            student_id: voucher.student_id,
+            note: [
+                `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) ${reactivate ? 'deleted' : 'deleted (void/expired cleanup)'}.`,
+                `Prior status: ${voucher.status ?? 'N/A'}`,
+                voucher.total_payable_before_due != null ? `Amount: ${this.fmtMoney(voucher.total_payable_before_due)}` : null,
+                resetCurrentFeeIds.length > 0
+                    ? `Reset ${resetCurrentFeeIds.length} current-period fee head(s) to Not Issued: ${periodsFor(resetCurrentFeeIds)}`
+                    : null,
+            ].filter(Boolean).join(' | '),
+        });
+
+        return deleted;
     }
 
     async remove(id: number, changedBy: string = 'system') {
@@ -4517,19 +4749,15 @@ export class VouchersService {
             );
         }
 
+        const auditEvents: VoucherAuditEvent[] = [];
         const result = await this.prisma.$transaction(
-            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID' && voucher.status !== 'EXPIRED'),
+            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID' && voucher.status !== 'EXPIRED', auditEvents),
             { maxWait: 5000, timeout: 15000 },
         );
 
-        await this.auditLogs.log({
-            entity_type: 'VOUCHER',
-            entity_id: String(id),
-            action: 'DELETED',
-            changed_by: changedBy,
-            student_id: voucher.student_id,
-            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) deleted/voided.`,
-        });
+        // Flush the deletion + every side effect (heads reset, predecessors
+        // reactivated, orphaned arrears unlocked) now that the tx has committed.
+        await this.flushAuditEvents(auditEvents, changedBy);
 
         return result;
     }

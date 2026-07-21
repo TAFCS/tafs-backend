@@ -271,8 +271,10 @@ export class VouchersController {
     async update(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: UpdateVoucherDto,
+        @Req() req: any,
     ) {
-        const voucher = await this.vouchersService.update(id, dto);
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.update(id, dto, changedBy);
         return {
             success: true,
             message: 'Voucher updated successfully',
@@ -420,8 +422,9 @@ export class VouchersController {
     @Delete('bulk')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async bulkRemove(@Body() dto: BulkDeleteVouchersDto) {
-        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false);
+    async bulkRemove(@Body() dto: BulkDeleteVouchersDto, @Req() req: any) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false, changedBy);
         return {
             success: true,
             message: `${results.deleted} deleted, ${results.skipped} skipped.`,
