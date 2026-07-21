@@ -336,6 +336,19 @@ export class SupportTicketsService {
       return created;
     });
 
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticket.id,
+      action: TicketEventType.CREATED,
+      changed_by: `family:${parent.familyId}`,
+      student_id: dto.studentId ?? null,
+      note: [
+        this.ticketContextLabel(ticket),
+        `status ${ticket.status}`,
+        dto.description ? `description: ${dto.description.slice(0, 120)}${dto.description.length > 120 ? '…' : ''}` : null,
+      ].filter(Boolean).join(' — '),
+    });
+
     await this.chatGateway.broadcastTicketCreated(ticket);
     await this.notifyStaffTicketCreated(ticket);
     return ticket;
@@ -585,6 +598,15 @@ export class SupportTicketsService {
       });
 
       await this.deliverApprovedStaffMessage(ticket, message);
+
+      void this.auditLogs.log({
+        entity_type: 'SUPPORT_TICKET',
+        entity_id: ticketId,
+        action: TicketEventType.REPLY_APPROVED,
+        changed_by: staff.username,
+        note: `Staff message #${message.id} auto-approved on ticket "${ticket.subtopic ?? 'No subtopic'}" (${ticket.category}): ${snippet}`,
+      });
+
       return message;
     }
 
@@ -613,6 +635,17 @@ export class SupportTicketsService {
       });
 
       return created;
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.REPLY_SUBMITTED,
+      changed_by: staff.username,
+      note: [
+        `"${ticket.subtopic ?? 'No subtopic'}" (${ticket.category})`,
+        `Staff message #${message.id} submitted for approval (${dto.messageType}): ${this.messageSnippet(dto.messageType, dto.content)}`,
+      ].join(' — '),
     });
 
     await this.chatGateway.broadcastReplyPendingApproval(message, ticket);
@@ -682,6 +715,19 @@ export class SupportTicketsService {
       result.ticket,
       result.message,
     );
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: 'MESSAGE_CREATED',
+      changed_by: `family:${parent.familyId}`,
+      student_id: ticket.student_id,
+      note: [
+        this.ticketContextLabel(result.ticket),
+        `Parent message #${result.message.id} (${dto.messageType}): ${snippet}`,
+      ].join(' — '),
+    });
+
     return result.message;
   }
 

@@ -74,8 +74,9 @@ export class CampusesController {
     @Patch('bulk')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async bulkUpdate(@Body() dto: BulkUpdateCampusesDto) {
-        const updated = await this.campusesService.bulkUpdate(dto);
+    async bulkUpdate(@Body() dto: BulkUpdateCampusesDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const updated = await this.campusesService.bulkUpdate(dto, changedBy);
         return createApiResponse(
             updated,
             HttpStatus.OK,
@@ -101,8 +102,10 @@ export class CampusesController {
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Body('is_active') isActive?: boolean,
+        @Req() req?: Request,
     ) {
-        const campus = await this.campusesService.upsertCampusClass(id, classId, isActive);
+        const changedBy = (req?.user as any)?.username || (req?.user as any)?.id || 'system';
+        const campus = await this.campusesService.upsertCampusClass(id, classId, isActive, changedBy);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_UPDATED);
     }
 
@@ -112,8 +115,10 @@ export class CampusesController {
     async removeClassFromCampus(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
+        @Req() req: Request,
     ) {
-        const campus = await this.campusesService.removeClassFromCampus(id, classId);
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const campus = await this.campusesService.removeClassFromCampus(id, classId, changedBy);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
     }
 
@@ -127,8 +132,10 @@ export class CampusesController {
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
         @Body() dto: UpsertCampusSectionDto,
+        @Req() req: Request,
     ) {
-        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, dto);
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, dto, changedBy);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
     }
 
@@ -139,8 +146,10 @@ export class CampusesController {
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
+        @Req() req: Request,
     ) {
-        const campus = await this.campusesService.removeSectionFromCampus(id, classId, sectionId);
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const campus = await this.campusesService.removeSectionFromCampus(id, classId, sectionId, changedBy);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_REMOVED);
     }
 }

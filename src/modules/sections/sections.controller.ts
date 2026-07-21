@@ -55,8 +55,9 @@ export class SectionsController {
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Section'))
-  async bulkUpdate(@Body() dto: BulkUpdateSectionsDto) {
-    const updated = await this.sectionsService.bulkUpdate(dto);
+  async bulkUpdate(@Body() dto: BulkUpdateSectionsDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const updated = await this.sectionsService.bulkUpdate(dto, changedBy);
     return createApiResponse(
       updated,
       HttpStatus.OK,

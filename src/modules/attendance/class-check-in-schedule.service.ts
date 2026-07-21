@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
+const fmtTime = (d: Date | null) => (d ? d.toISOString().slice(11, 16) : '—');
 
 import { IsDateString, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
@@ -40,7 +42,10 @@ export class UpdateClassScheduleDto {
 
 @Injectable()
 export class ClassCheckInScheduleService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async findAll(campusId: number) {
     return this.prisma.class_check_in_schedules.findMany({
@@ -86,7 +91,7 @@ export class ClassCheckInScheduleService {
       throw new BadRequestException('Invalid expected_check_in format');
     }
 
-    return this.prisma.class_check_in_schedules.create({
+    const record = await this.prisma.class_check_in_schedules.create({
       data: {
         class_id: dto.class_id,
         campus_id: dto.campus_id,
@@ -99,9 +104,22 @@ export class ClassCheckInScheduleService {
         classes: { select: { id: true, description: true, class_code: true } },
       },
     });
+
+    const classLabel = record.classes
+      ? `${record.classes.class_code} – ${record.classes.description}`
+      : `#${dto.class_id}`;
+    await this.auditLogs.log({
+      entity_type: 'CLASS_CHECK_IN_SCHEDULE',
+      entity_id: String(record.id),
+      action: 'CREATED',
+      changed_by: createdBy ?? 'system',
+      note: `Check-in schedule #${record.id} for class ${classLabel} at campus #${dto.campus_id}: check-in ${dto.expected_check_in}, grace ${dto.late_grace_minutes}m, effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
+    });
+
+    return record;
   }
 
-  async update(id: number, dto: UpdateClassScheduleDto) {
+  async update(id: number, dto: UpdateClassScheduleDto, changedBy?: string) {
     const existing = await this.findOne(id);
 
     const data: any = {};
@@ -132,19 +150,59 @@ export class ClassCheckInScheduleService {
       data.effective_from = effectiveFrom;
     }
 
-    return this.prisma.class_check_in_schedules.update({
+    const updated = await this.prisma.class_check_in_schedules.update({
       where: { id },
       data,
       include: {
         classes: { select: { id: true, description: true, class_code: true } },
       },
     });
+
+    const changes: string[] = [];
+    if (dto.expected_check_in !== undefined && fmtTime(existing.expected_check_in) !== fmtTime(updated.expected_check_in)) {
+      changes.push(`check-in ${fmtTime(existing.expected_check_in)} → ${fmtTime(updated.expected_check_in)}`);
+    }
+    if (dto.late_grace_minutes !== undefined && existing.late_grace_minutes !== updated.late_grace_minutes) {
+      changes.push(`grace ${existing.late_grace_minutes}m → ${updated.late_grace_minutes}m`);
+    }
+    if (dto.effective_from !== undefined) {
+      const oldEff = existing.effective_from.toISOString().slice(0, 10);
+      const newEff = updated.effective_from.toISOString().slice(0, 10);
+      if (oldEff !== newEff) {
+        changes.push(`effective ${oldEff} → ${newEff}`);
+      }
+    }
+
+    if (changes.length > 0) {
+      await this.auditLogs.log({
+        entity_type: 'CLASS_CHECK_IN_SCHEDULE',
+        entity_id: String(id),
+        action: 'UPDATED',
+        changed_by: changedBy ?? 'system',
+        note: `Check-in schedule #${id} updated: ${changes.join(', ')}.`,
+      });
+    }
+
+    return updated;
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
-    return this.prisma.class_check_in_schedules.delete({
+  async remove(id: number, changedBy?: string) {
+    const existing = await this.findOne(id);
+    await this.prisma.class_check_in_schedules.delete({
       where: { id },
     });
+
+    const classLabel = existing.classes
+      ? `${existing.classes.class_code} – ${existing.classes.description}`
+      : `#${existing.class_id}`;
+    await this.auditLogs.log({
+      entity_type: 'CLASS_CHECK_IN_SCHEDULE',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: changedBy ?? 'system',
+      note: `Check-in schedule #${id} for class ${classLabel} (effective ${existing.effective_from.toISOString().slice(0, 10)}, check-in ${fmtTime(existing.expected_check_in)}) deleted.`,
+    });
+
+    return existing;
   }
 }

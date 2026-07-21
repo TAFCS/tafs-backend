@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VoucherNotificationService } from './voucher-notification.service';
 import { dateFromPktKey, pktDateKey } from './voucher-notification.service';
 
@@ -11,6 +12,7 @@ export class VouchersSchedulerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly voucherNotificationService: VoucherNotificationService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   /**
@@ -48,6 +50,16 @@ export class VouchersSchedulerService {
       if (overdueResult.count > 0) {
         this.logger.log(`[Voucher Scheduler] Marked ${overdueResult.count} voucher(s) as OVERDUE`);
         await this.voucherNotificationService.sendBecameOverdueForVoucherIds(overdueIds);
+        await this.auditLogs.log({
+          entity_type: 'VOUCHER',
+          entity_id: 'scheduler-overdue',
+          action: 'UPDATED',
+          field: 'status',
+          old_value: 'UNPAID',
+          new_value: 'OVERDUE',
+          changed_by: 'system',
+          note: `Scheduler marked ${overdueResult.count} voucher(s) OVERDUE (todayKey=${todayKey}).`,
+        });
       }
 
       const expiredResult = await this.prisma.vouchers.updateMany({
@@ -60,6 +72,16 @@ export class VouchersSchedulerService {
 
       if (expiredResult.count > 0) {
         this.logger.log(`[Voucher Scheduler] Marked ${expiredResult.count} voucher(s) as EXPIRED due to expired validity_date`);
+        await this.auditLogs.log({
+          entity_type: 'VOUCHER',
+          entity_id: 'scheduler-expired',
+          action: 'UPDATED',
+          field: 'status',
+          old_value: 'UNPAID/OVERDUE',
+          new_value: 'EXPIRED',
+          changed_by: 'system',
+          note: `Scheduler marked ${expiredResult.count} voucher(s) EXPIRED (todayKey=${todayKey}).`,
+        });
       }
 
       this.logger.log(`[Voucher Scheduler] Daily status update completed successfully`);

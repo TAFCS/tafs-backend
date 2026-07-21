@@ -234,7 +234,7 @@ export class FamiliesService {
 
   // ── Create ────────────────────────────────────────────────────────────────
 
-  async createFamily(dto: CreateFamilyDto) {
+  async createFamily(dto: CreateFamilyDto, changedBy?: string) {
     const password_hash = dto.password
       ? await bcrypt.hash(dto.password, 10)
       : null;
@@ -257,13 +257,29 @@ export class FamiliesService {
       },
     });
 
+    const noteParts = [
+      `Created family #${family.id} ("${family.household_name}")`,
+      family.email ? `email ${family.email}` : null,
+      family.legacy_pid ? `legacy_pid ${family.legacy_pid}` : null,
+      password_hash ? 'password set' : null,
+    ].filter(Boolean);
+
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: String(family.id),
+      action: 'CREATED',
+      new_value: family.household_name,
+      changed_by: changedBy ?? 'system',
+      note: noteParts.join(' | '),
+    });
+
     return family;
   }
 
   // ── Update ────────────────────────────────────────────────────────────────
 
-  async updateFamily(id: number, dto: UpdateFamilyDto) {
-    await this._assertExists(id);
+  async updateFamily(id: number, dto: UpdateFamilyDto, changedBy?: string) {
+    const before = await this._assertExists(id);
 
     let password_hash: string | null | undefined = undefined;
     if (dto.password !== undefined) {
@@ -299,6 +315,33 @@ export class FamiliesService {
       return family;
     });
 
+    const fieldChanges: string[] = [];
+    if (dto.household_name !== undefined && before.household_name !== updated.household_name) {
+      fieldChanges.push(`household_name "${before.household_name ?? '—'}" → "${updated.household_name ?? '—'}"`);
+    }
+    if (dto.primary_address !== undefined && before.primary_address !== updated.primary_address) {
+      fieldChanges.push(`address "${before.primary_address ?? '—'}" → "${updated.primary_address ?? '—'}"`);
+    }
+    if (dto.email !== undefined && before.email !== updated.email) {
+      fieldChanges.push(`email "${before.email ?? '—'}" → "${updated.email ?? '—'}"`);
+    }
+    if (dto.legacy_pid !== undefined && before.legacy_pid !== updated.legacy_pid) {
+      fieldChanges.push(`legacy_pid "${before.legacy_pid ?? '—'}" → "${updated.legacy_pid ?? '—'}"`);
+    }
+    if (password_hash !== undefined) {
+      fieldChanges.push(password_hash ? 'password set/changed (tokens revoked)' : 'password cleared (tokens revoked)');
+    }
+
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: String(id),
+      action: 'UPDATED',
+      changed_by: changedBy ?? 'system',
+      note: fieldChanges.length > 0
+        ? `Family #${id} ("${before.household_name}") updated: ${fieldChanges.join(', ')}.`
+        : `Family #${id} ("${before.household_name}") update submitted with no effective changes.`,
+    });
+
     return updated;
   }
 
@@ -324,17 +367,6 @@ export class FamiliesService {
       );
     }
 
-    // Log the family assignment change
-    await this.auditLogs.log({
-      entity_type: 'FAMILY',
-      entity_id: String(familyId),
-      action: 'UPDATED',
-      field: 'family.student_assignment',
-      new_value: `Assigned student #${studentId} to family #${familyId}`,
-      changed_by: changedBy,
-      student_id: studentId,
-    });
-
     // Fetch target family siblings and the incoming student's current guardians
     const [targetSiblings, incomingGuardians] = await Promise.all([
       this.prisma.students.findMany({
@@ -347,7 +379,10 @@ export class FamiliesService {
       }),
     ]);
 
-    const allSiblingIds = [...targetSiblings.map((s) => s.cc), studentId];
+    const previousFamilyId = student.family_id;
+    const siblingSummary = targetSiblings.length > 0
+      ? targetSiblings.map((s) => `#${s.cc} (${s.full_name ?? 'unnamed'})`).join(', ')
+      : 'none';
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // 1. Update the incoming student's family link
@@ -436,10 +471,24 @@ export class FamiliesService {
       return s;
     });
 
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: String(familyId),
+      action: 'UPDATED',
+      field: 'family.student_assignment',
+      old_value: previousFamilyId != null ? String(previousFamilyId) : null,
+      new_value: String(familyId),
+      changed_by: changedBy,
+      student_id: studentId,
+      note: `Assigned student #${studentId} (${student.full_name ?? 'unnamed'}) to family #${familyId} ("${family.household_name}")` +
+        (previousFamilyId != null ? ` from family #${previousFamilyId}` : ' (was unassigned)') +
+        `. Existing siblings: ${siblingSummary}.`,
+    });
+
     return updated;
   }
 
-  async initializeFamilyFromStudent(studentId: number) {
+  async initializeFamilyFromStudent(studentId: number, changedBy?: string) {
     const student = await this.prisma.students.findFirst({
       where: { cc: studentId, deleted_at: null },
       include: {
@@ -473,7 +522,7 @@ export class FamiliesService {
       : [];
     const address = addressChunks.filter(Boolean).join(', ') || null;
 
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Create Family
       const family = await tx.families.create({
         data: {
@@ -491,6 +540,20 @@ export class FamiliesService {
 
       return { ...family, students: [student] };
     });
+
+    await this.auditLogs.log({
+      entity_type: 'FAMILY',
+      entity_id: String(result.id),
+      action: 'CREATED',
+      new_value: householdName,
+      changed_by: changedBy ?? 'system',
+      student_id: studentId,
+      note: `Initialized family #${result.id} ("${householdName}") from student #${studentId} (${student.full_name ?? 'unnamed'})` +
+        (primaryGuardian?.full_name ? ` via primary guardian ${primaryGuardian.full_name}` : '') +
+        (address ? ` | address ${address}` : '') + '.',
+    });
+
+    return result;
   }
 
   // ── Remove child from family ──────────────────────────────────────────────
@@ -509,6 +572,7 @@ export class FamiliesService {
 
     // family_id is a required non-nullable FK — we cannot null it out.
     // Instead we prevent accidental removal without a destination.
+    // No audit log: this path always throws before mutating state.
     throw new BadRequestException(
       'Use the assign endpoint to move the student to another family first.',
     );

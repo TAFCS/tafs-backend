@@ -27,10 +27,16 @@ export class SectionsService {
     return record;
   }
 
-  async bulkUpdate(dto: BulkUpdateSectionsDto) {
+  async bulkUpdate(dto: BulkUpdateSectionsDto, changedBy?: string) {
     if (!dto.items || dto.items.length === 0) {
       return [];
     }
+
+    const beforeRows = await this.prisma.sections.findMany({
+      where: { id: { in: dto.items.map((i) => i.id) } },
+      select: { id: true, description: true },
+    });
+    const beforeMap = new Map(beforeRows.map((r) => [r.id, r]));
 
     const updated = await this.prisma.$transaction(
       dto.items.map((item) =>
@@ -47,6 +53,25 @@ export class SectionsService {
 
     if (!updated || updated.length !== dto.items.length) {
       throw new NotFoundException('One or more sections not found');
+    }
+
+    const actor = changedBy ?? 'system';
+    for (const record of updated) {
+      const before = beforeMap.get(record.id);
+      if (!before) continue;
+      if (before.description !== record.description) {
+        await this.auditLogs.log({
+          entity_type: 'SECTION',
+          entity_id: String(record.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          field: 'description',
+          old_value: before.description,
+          new_value: record.description,
+          changed_by: actor,
+          note: `Section #${record.id} description changed from "${before.description}" to "${record.description}".`,
+        });
+      }
     }
 
     return updated;

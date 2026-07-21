@@ -10,7 +10,9 @@ import {
   ParseIntPipe,
   UseGuards,
   HttpStatus,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -40,8 +42,9 @@ export class SubjectsController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
-  async create(@Body() dto: CreateSubjectDto) {
-    const data = await this.service.create(dto);
+  async create(@Body() dto: CreateSubjectDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const data = await this.service.create(dto, changedBy);
     return createApiResponse(data, HttpStatus.CREATED, 'Subject created');
   }
 
@@ -50,15 +53,18 @@ export class SubjectsController {
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateSubjectDto,
+    @Req() req: Request,
   ) {
-    const data = await this.service.update(id, dto);
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const data = await this.service.update(id, dto, changedBy);
     return createApiResponse(data, HttpStatus.OK, 'Subject updated');
   }
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.service.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const data = await this.service.remove(id, changedBy);
     return createApiResponse(data, HttpStatus.OK, 'Subject deleted');
   }
 }

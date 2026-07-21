@@ -67,8 +67,11 @@ export class StaffEditingController {
   }
  
   @Delete('students/:id/hard-delete')
-  async hardDeleteStudent(@Param('id', ParseIntPipe) id: number) {
-    const result = await this.staffEditingService.hardDeleteStudent(id);
+  async hardDeleteStudent(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const result = await this.staffEditingService.hardDeleteStudent(id, user.username);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -219,55 +222,87 @@ export class StaffEditingController {
   // ─── Sub-table CRUD ──────────────────────────────────────────────────────
 
   @Post('students/:id/admissions')
-  async upsertAdmission(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-    return createApiResponse(await this.staffEditingService.upsertAdmission(id, dto), HttpStatus.OK, 'Saved');
+  async upsertAdmission(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(await this.staffEditingService.upsertAdmission(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('admissions/:id')
   @HttpCode(HttpStatus.OK)
-  async deleteAdmission(@Param('id', ParseIntPipe) id: number) {
-    await this.staffEditingService.deleteAdmission(id);
+  async deleteAdmission(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.staffEditingService.deleteAdmission(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/activities')
-  async upsertActivity(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-    return createApiResponse(await this.staffEditingService.upsertActivity(id, dto), HttpStatus.OK, 'Saved');
+  async upsertActivity(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(await this.staffEditingService.upsertActivity(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('activities/:id')
   @HttpCode(HttpStatus.OK)
-  async deleteActivity(@Param('id', ParseIntPipe) id: number) {
-    await this.staffEditingService.deleteActivity(id);
+  async deleteActivity(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.staffEditingService.deleteActivity(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/languages')
-  async upsertLanguage(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-    return createApiResponse(await this.staffEditingService.upsertLanguage(id, dto), HttpStatus.OK, 'Saved');
+  async upsertLanguage(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(await this.staffEditingService.upsertLanguage(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('languages/:id')
   @HttpCode(HttpStatus.OK)
-  async deleteLanguage(@Param('id', ParseIntPipe) id: number) {
-    await this.staffEditingService.deleteLanguage(id);
+  async deleteLanguage(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.staffEditingService.deleteLanguage(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/schools')
-  async upsertPreviousSchool(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-    return createApiResponse(await this.staffEditingService.upsertPreviousSchool(id, dto), HttpStatus.OK, 'Saved');
+  async upsertPreviousSchool(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(await this.staffEditingService.upsertPreviousSchool(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('schools/:id')
   @HttpCode(HttpStatus.OK)
-  async deletePreviousSchool(@Param('id', ParseIntPipe) id: number) {
-    await this.staffEditingService.deletePreviousSchool(id);
+  async deletePreviousSchool(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.staffEditingService.deletePreviousSchool(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/alevel-details')
-  async upsertALevelDetails(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-    return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto), HttpStatus.OK, 'Saved');
+  async upsertALevelDetails(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 }

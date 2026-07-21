@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import {
   CreateSubjectDto,
   ListSubjectsQueryDto,
@@ -13,7 +14,10 @@ import {
 
 @Injectable()
 export class SubjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async list(query: ListSubjectsQueryDto) {
     const where: Prisma.subjectsWhereInput = {};
@@ -29,10 +33,10 @@ export class SubjectsService {
     });
   }
 
-  async create(dto: CreateSubjectDto) {
+  async create(dto: CreateSubjectDto, changedBy?: string) {
     const name = dto.name.trim().toUpperCase();
     try {
-      return await this.prisma.subjects.create({
+      const record = await this.prisma.subjects.create({
         data: {
           name,
           code: dto.code?.trim() || null,
@@ -40,6 +44,19 @@ export class SubjectsService {
           is_active: true,
         },
       });
+
+      await this.auditLogs.log({
+        entity_type: 'SUBJECT',
+        entity_id: String(record.id),
+        action: 'CREATED',
+        new_value: record.name,
+        changed_by: changedBy ?? 'system',
+        note: `Created subject #${record.id} ("${record.name}"` +
+          (record.code ? `, code ${record.code}` : '') +
+          `, system ${record.academic_system ?? '—'}).`,
+      });
+
+      return record;
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException(
@@ -50,12 +67,12 @@ export class SubjectsService {
     }
   }
 
-  async update(id: number, dto: UpdateSubjectDto) {
+  async update(id: number, dto: UpdateSubjectDto, changedBy?: string) {
     const existing = await this.prisma.subjects.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Subject not found');
 
     try {
-      return await this.prisma.subjects.update({
+      const record = await this.prisma.subjects.update({
         where: { id },
         data: {
           ...(dto.name !== undefined ? { name: dto.name.trim().toUpperCase() } : {}),
@@ -66,6 +83,32 @@ export class SubjectsService {
           ...(dto.is_active !== undefined ? { is_active: dto.is_active } : {}),
         },
       });
+
+      const changes: string[] = [];
+      if (existing.name !== record.name) {
+        changes.push(`name "${existing.name}" → "${record.name}"`);
+      }
+      if ((existing.code ?? null) !== (record.code ?? null)) {
+        changes.push(`code "${existing.code ?? '—'}" → "${record.code ?? '—'}"`);
+      }
+      if ((existing.academic_system ?? null) !== (record.academic_system ?? null)) {
+        changes.push(`system "${existing.academic_system ?? '—'}" → "${record.academic_system ?? '—'}"`);
+      }
+      if (existing.is_active !== record.is_active) {
+        changes.push(`is_active ${existing.is_active} → ${record.is_active}`);
+      }
+
+      await this.auditLogs.log({
+        entity_type: 'SUBJECT',
+        entity_id: String(id),
+        action: 'UPDATED',
+        changed_by: changedBy ?? 'system',
+        note: changes.length > 0
+          ? `Subject #${id} ("${existing.name}") updated: ${changes.join(', ')}.`
+          : `Subject #${id} ("${existing.name}") update submitted with no effective changes.`,
+      });
+
+      return record;
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException(
@@ -76,7 +119,7 @@ export class SubjectsService {
     }
   }
 
-  async remove(id: number) {
+  async remove(id: number, changedBy?: string) {
     const existing = await this.prisma.subjects.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Subject not found');
 
@@ -85,12 +128,32 @@ export class SubjectsService {
     });
 
     if (slotCount > 0) {
-      return this.prisma.subjects.update({
+      const record = await this.prisma.subjects.update({
         where: { id },
         data: { is_active: false },
       });
+      await this.auditLogs.log({
+        entity_type: 'SUBJECT',
+        entity_id: String(id),
+        action: 'DELETED',
+        field: 'is_active',
+        old_value: String(existing.is_active),
+        new_value: 'false',
+        changed_by: changedBy ?? 'system',
+        note: `Subject #${id} ("${existing.name}") soft-deactivated (still used by ${slotCount} timetable slot(s)).`,
+      });
+      return record;
     }
 
-    return this.prisma.subjects.delete({ where: { id } });
+    await this.prisma.subjects.delete({ where: { id } });
+    await this.auditLogs.log({
+      entity_type: 'SUBJECT',
+      entity_id: String(id),
+      action: 'DELETED',
+      old_value: existing.name,
+      changed_by: changedBy ?? 'system',
+      note: `Subject #${id} ("${existing.name}") permanently deleted.`,
+    });
+    return { id, deleted: true };
   }
 }

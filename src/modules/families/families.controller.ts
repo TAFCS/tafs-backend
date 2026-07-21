@@ -74,8 +74,11 @@ export class FamiliesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Family'))
-  async createFamily(@Body() dto: CreateFamilyDto) {
-    const family = await this.familiesService.createFamily(dto);
+  async createFamily(
+    @Body() dto: CreateFamilyDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const family = await this.familiesService.createFamily(dto, user.username);
     return {
       success: true,
       message: 'Family created successfully',
@@ -90,8 +93,9 @@ export class FamiliesController {
   async updateFamily(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateFamilyDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const family = await this.familiesService.updateFamily(id, dto);
+    const family = await this.familiesService.updateFamily(id, dto, user.username);
     return {
       success: true,
       message: 'Family updated successfully',
@@ -128,8 +132,9 @@ export class FamiliesController {
   @CheckPolicies((ability) => ability.can(Action.Create, 'Family'))
   async initializeFromStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.familiesService.initializeFamilyFromStudent(studentId);
+    const student = await this.familiesService.initializeFamilyFromStudent(studentId, user.username);
     return {
       success: true,
       message: 'Family initialized successfully from student data',

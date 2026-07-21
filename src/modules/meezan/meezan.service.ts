@@ -3,12 +3,16 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MeezanBillInquiryDto } from './dto/bill-inquiry.dto';
 import { MeezanBillPaymentDto } from './dto/bill-payment.dto';
 import { fee_status_enum } from '@prisma/client';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class MeezanService {
   private readonly logger = new Logger(MeezanService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   private validateAuth(serviceUserId: string, userPassword: string, billCompanyCode?: string) {
     if (
@@ -242,6 +246,24 @@ export class MeezanService {
           where: { id: voucher.id },
           data: { status: 'PAID' },
         });
+      });
+
+      await this.auditLogs.log({
+        entity_type: 'VOUCHER',
+        entity_id: String(voucher.id),
+        action: 'UPDATED',
+        field: 'status',
+        old_value: voucher.status,
+        new_value: 'PAID',
+        changed_by: 'meezan-bank',
+        student_id: voucher.student_id,
+        note: [
+          `Meezan bill payment posted for voucher #${voucher.id}.`,
+          `Amount=Rs. ${dto.TransAmount}`,
+          `Consumer/voucher no=${dto.VoucherNumber}`,
+          `Payment ref=${dto.TransAuthenticationCode}`,
+          `Mode=${dto.PaymentMode}`,
+        ].join(' | '),
       });
 
       return { StatusCode: '00', StatusDesc: 'Success' };

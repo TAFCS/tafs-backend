@@ -55,15 +55,19 @@ export class ClassCheckInScheduleController {
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateClassScheduleDto,
+    @Req() req: { user: IJwtStaffPayload },
   ) {
-    const data = await this.service.update(id, dto);
+    const data = await this.service.update(id, dto, req.user.username || req.user.sub);
     return createApiResponse(data, HttpStatus.OK, 'Class schedule updated successfully');
   }
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.service.remove(id);
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.service.remove(id, req.user.username || req.user.sub);
     return createApiResponse(data, HttpStatus.OK, 'Class schedule deleted successfully');
   }
 }

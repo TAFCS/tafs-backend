@@ -3,12 +3,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import * as path from 'path';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async getAdminInbox() {
@@ -255,6 +257,13 @@ export class ChatService {
       conversation = await this.prisma.chat_conversations.create({
         data: { family_id: familyId },
       });
+      await this.auditLogs.log({
+        entity_type: 'CHAT_CONVERSATION',
+        entity_id: conversation.id,
+        action: 'CREATED',
+        changed_by: 'system',
+        note: `Chat conversation created for family #${familyId}.`,
+      });
     }
 
     return conversation;
@@ -337,6 +346,11 @@ export class ChatService {
 
     const conv = await this.getOrCreateConversation(familyId);
 
+    const snippet =
+      data.messageType === 'TEXT'
+        ? data.content.substring(0, 50)
+        : `[${data.messageType}]`;
+
     const [newMessage, updatedConv] = await this.prisma.$transaction([
       this.prisma.chat_messages.create({
         data: {
@@ -352,10 +366,7 @@ export class ChatService {
         where: { id: conv.id },
         data: {
           last_message_at: new Date(),
-          last_message_snippet:
-            data.messageType === 'TEXT'
-              ? data.content.substring(0, 50)
-              : `[${data.messageType}]`,
+          last_message_snippet: snippet,
           unread_by_admin:
             data.senderType === 'GUARDIAN' ? { increment: 1 } : undefined,
           unread_by_parent:
@@ -364,6 +375,14 @@ export class ChatService {
         include: this.conversationInclude,
       }),
     ]);
+
+    await this.auditLogs.log({
+      entity_type: 'CHAT_MESSAGE',
+      entity_id: newMessage.id,
+      action: 'CREATED',
+      changed_by: data.senderName || data.senderType,
+      note: `Chat message created in conversation ${conv.id} (family #${familyId}) by ${data.senderType}: "${snippet}".`,
+    });
 
     return { newMessage, updatedConv, isDuplicate: false };
   }

@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AppPlatform } from './dto/app-config.dto';
 
 @Injectable()
 export class AppConfigService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async getAppStatus(platform: AppPlatform, build: number) {
     const configs = await this.prisma.app_config.findMany({
@@ -59,7 +63,9 @@ export class AppConfigService {
   }
 
   async setConfig(key: string, value: string, userId: string) {
-    return this.prisma.app_config.upsert({
+    const existing = await this.prisma.app_config.findUnique({ where: { key } });
+
+    const record = await this.prisma.app_config.upsert({
       where: { key },
       update: {
         value,
@@ -72,5 +78,20 @@ export class AppConfigService {
         updated_at: new Date(),
       },
     });
+
+    await this.auditLogs.log({
+      entity_type: 'APP_CONFIG',
+      entity_id: key,
+      action: existing ? 'UPDATED' : 'CREATED',
+      field: 'value',
+      old_value: existing?.value ?? null,
+      new_value: value,
+      changed_by: userId,
+      note: existing
+        ? `App config "${key}" changed from "${existing.value}" to "${value}".`
+        : `App config "${key}" created with value "${value}".`,
+    });
+
+    return record;
   }
 }

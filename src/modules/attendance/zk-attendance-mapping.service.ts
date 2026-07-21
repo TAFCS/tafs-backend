@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { device_user_mappings, DevicePersonType } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
 
@@ -9,6 +10,7 @@ export class ZkAttendanceMappingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async getMappings(employeeId?: number) {
@@ -24,6 +26,10 @@ export class ZkAttendanceMappingService {
 
   async createMapping(dto: CreateDeviceMappingDto, userId: string) {
     this.validatePersonRefs(dto.person_type, dto.employee_id, dto.student_cc);
+
+    const before = await this.prisma.device_user_mappings.findUnique({
+      where: { device_sn_device_pin: { device_sn: dto.device_sn, device_pin: dto.device_pin } },
+    });
 
     const mapping = await this.prisma.device_user_mappings.upsert({
       where: { device_sn_device_pin: { device_sn: dto.device_sn, device_pin: dto.device_pin } },
@@ -47,12 +53,30 @@ export class ZkAttendanceMappingService {
       },
     });
 
+    const personRef =
+      mapping.person_type === DevicePersonType.STAFF
+        ? `employee #${mapping.employee_id}`
+        : `student #${mapping.student_cc}`;
+
+    await this.auditLogs.log({
+      entity_type: 'ZK_ATTENDANCE_MAPPING',
+      entity_id: String(mapping.id),
+      action: before ? 'UPDATED' : 'CREATED',
+      changed_by: userId,
+      student_id: mapping.student_cc ?? null,
+      note: before
+        ? `Device mapping #${mapping.id} upserted for ${mapping.device_sn}/${mapping.device_pin} → ${personRef}` +
+          (mapping.display_name ? ` ("${mapping.display_name}")` : '') + '.'
+        : `Device mapping #${mapping.id} created: ${mapping.device_sn}/${mapping.device_pin} → ${personRef}` +
+          (mapping.display_name ? ` ("${mapping.display_name}")` : '') + '.',
+    });
+
     await this.reprocessOrphanScans(mapping);
 
     return mapping;
   }
 
-  async updateMapping(id: number, dto: UpdateDeviceMappingDto) {
+  async updateMapping(id: number, dto: UpdateDeviceMappingDto, changedBy?: string) {
     const existing = await this.prisma.device_user_mappings.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Mapping not found');
 
@@ -76,6 +100,34 @@ export class ZkAttendanceMappingService {
         is_active: dto.is_active,
       },
     });
+
+    const changes: string[] = [];
+    if (existing.person_type !== updated.person_type) {
+      changes.push(`person_type ${existing.person_type} → ${updated.person_type}`);
+    }
+    if ((existing.employee_id ?? null) !== (updated.employee_id ?? null)) {
+      changes.push(`employee_id ${existing.employee_id ?? '—'} → ${updated.employee_id ?? '—'}`);
+    }
+    if ((existing.student_cc ?? null) !== (updated.student_cc ?? null)) {
+      changes.push(`student_cc ${existing.student_cc ?? '—'} → ${updated.student_cc ?? '—'}`);
+    }
+    if ((existing.display_name ?? null) !== (updated.display_name ?? null)) {
+      changes.push(`display_name "${existing.display_name ?? '—'}" → "${updated.display_name ?? '—'}"`);
+    }
+    if (existing.is_active !== updated.is_active) {
+      changes.push(`is_active ${existing.is_active} → ${updated.is_active}`);
+    }
+
+    if (changes.length > 0) {
+      await this.auditLogs.log({
+        entity_type: 'ZK_ATTENDANCE_MAPPING',
+        entity_id: String(id),
+        action: 'UPDATED',
+        changed_by: changedBy ?? 'system',
+        student_id: updated.student_cc ?? null,
+        note: `Device mapping #${id} (${existing.device_sn}/${existing.device_pin}) updated: ${changes.join(', ')}.`,
+      });
+    }
 
     if (updated.is_active) {
       await this.reprocessOrphanScans(updated);
@@ -113,7 +165,7 @@ export class ZkAttendanceMappingService {
 
   // Builds a synthetic ATTLOG line and feeds it through the same processPush()
   // path a real device push uses — for dev/testing without physical hardware.
-  async simulateScan(dto: SimulateScanDto) {
+  async simulateScan(dto: SimulateScanDto, changedBy?: string) {
     const scanTime = dto.scan_time ? new Date(dto.scan_time) : new Date();
     const line = `${dto.device_pin}\t${this.formatDeviceDateTime(scanTime)}\t1\t1\t0`;
 
@@ -144,6 +196,17 @@ export class ZkAttendanceMappingService {
     }
 
     const lastResult = processResults[processResults.length - 1];
+
+    await this.auditLogs.log({
+      entity_type: scan?.person_type === DevicePersonType.STAFF ? 'STAFF_ATTENDANCE' : 'STUDENT_ATTENDANCE',
+      entity_id: scan ? String(scan.id) : `${dto.device_sn}:${dto.device_pin}`,
+      action: 'CREATED',
+      changed_by: changedBy ?? 'system',
+      student_id: scan?.student_cc ?? null,
+      note: `Simulated scan on ${dto.device_sn}/${dto.device_pin} at ${scanTime.toISOString()}` +
+        (scan?.person_type ? ` → ${scan.person_type}` : ' (unmapped)') +
+        (lastResult?.notified ? ', notified' : lastResult?.skipReason ? `, skipped: ${lastResult.skipReason}` : '') + '.',
+    });
 
     return {
       scan,

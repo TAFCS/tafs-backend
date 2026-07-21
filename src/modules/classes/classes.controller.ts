@@ -40,8 +40,9 @@ export class ClassesController {
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Class'))
-  async bulkUpdate(@Body() dto: BulkUpdateClassesDto) {
-    const updated = await this.classesService.bulkUpdate(dto);
+  async bulkUpdate(@Body() dto: BulkUpdateClassesDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const updated = await this.classesService.bulkUpdate(dto, changedBy);
     return {
       success: true,
       message: 'Classes updated successfully',

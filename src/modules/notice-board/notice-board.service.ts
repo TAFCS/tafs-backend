@@ -344,7 +344,7 @@ export class NoticeBoardService {
     return families.map((f) => f.id);
   }
 
-  async updatePost(id: string | number, dto: UpdatePostDto) {
+  async updatePost(id: string | number, dto: UpdatePostDto, changedBy?: string) {
     if (String(id).startsWith('holiday-')) {
       const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
       const h = await this.prisma.academic_calendar_days.findUnique({ where: { id: holidayId } });
@@ -367,6 +367,19 @@ export class NoticeBoardService {
         },
       });
 
+      if (h.description !== newDesc || dto.is_pinned !== undefined) {
+        await this.auditLogs.log({
+          entity_type: 'NOTICE',
+          entity_id: `holiday-${holidayId}`,
+          action: 'UPDATED',
+          section: 'communication',
+          changed_by: changedBy ?? 'system',
+          note: `Holiday notice #${holidayId} updated` +
+            (dto.is_pinned !== undefined ? `: is_pinned → ${dto.is_pinned}` : '') +
+            (h.description !== newDesc ? `, description "${h.description ?? '—'}" → "${newDesc}"` : '') + '.',
+        });
+      }
+
       return {
         id: `holiday-${updated.id}`,
         is_pinned: dto.is_pinned,
@@ -379,7 +392,7 @@ export class NoticeBoardService {
     });
     if (!post) throw new NotFoundException('Post not found');
 
-    return this.prisma.notice_board_posts.update({
+    const updated = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
@@ -390,6 +403,37 @@ export class NoticeBoardService {
         }),
       },
     });
+
+    const changes: string[] = [];
+    if (dto.title !== undefined && post.title !== updated.title) {
+      changes.push(`title "${post.title ?? '—'}" → "${updated.title ?? '—'}"`);
+    }
+    if (dto.body !== undefined && post.body !== updated.body) {
+      changes.push(`body "${(post.body ?? '').slice(0, 60)}" → "${(updated.body ?? '').slice(0, 60)}"`);
+    }
+    if (dto.is_pinned !== undefined && post.is_pinned !== updated.is_pinned) {
+      changes.push(`is_pinned ${post.is_pinned} → ${updated.is_pinned}`);
+    }
+    if (dto.expires_at !== undefined) {
+      const oldExp = post.expires_at?.toISOString() ?? null;
+      const newExp = updated.expires_at?.toISOString() ?? null;
+      if (oldExp !== newExp) {
+        changes.push(`expires_at "${oldExp ?? '—'}" → "${newExp ?? '—'}"`);
+      }
+    }
+
+    if (changes.length > 0) {
+      await this.auditLogs.log({
+        entity_type: 'NOTICE',
+        entity_id: String(numericId),
+        action: 'UPDATED',
+        section: 'communication',
+        changed_by: changedBy ?? 'system',
+        note: `Notice #${numericId} ("${post.title ?? 'untitled'}") updated: ${changes.join(', ')}.`,
+      });
+    }
+
+    return updated;
   }
 
   async deletePost(id: string | number, deletedBy?: string) {

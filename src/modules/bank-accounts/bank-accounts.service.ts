@@ -51,6 +51,7 @@ export class BankAccountsService {
 
     async update(id: number, updateBankAccountDto: UpdateBankAccountDto, changedBy?: string) {
         try {
+            const before = await this.findOne(id);
             const record = await this.prisma.$transaction(async (tx) => {
                 if (updateBankAccountDto.is_default) {
                     await tx.bank_accounts.updateMany({
@@ -63,7 +64,30 @@ export class BankAccountsService {
                     data: updateBankAccountDto,
                 });
             });
-            this.auditLogs.log({ entity_type: 'BANK', entity_id: String(id), action: 'UPDATED', section: 'school-setup', changed_by: changedBy ?? 'system' });
+
+            const fields: Array<{ key: keyof typeof before; label: string }> = [
+                { key: 'account_title', label: 'title' },
+                { key: 'account_number', label: 'account_number' },
+                { key: 'bank_name', label: 'bank_name' },
+                { key: 'branch_code', label: 'branch_code' },
+                { key: 'bank_address', label: 'bank_address' },
+                { key: 'iban', label: 'iban' },
+                { key: 'is_default', label: 'is_default' },
+            ];
+            const changes = fields
+                .filter((f) => String(before[f.key] ?? '') !== String(record[f.key] ?? ''))
+                .map((f) => `${f.label} "${before[f.key] ?? '—'}" → "${record[f.key] ?? '—'}"`);
+
+            this.auditLogs.log({
+                entity_type: 'BANK',
+                entity_id: String(id),
+                action: 'UPDATED',
+                section: 'school-setup',
+                changed_by: changedBy ?? 'system',
+                note: changes.length > 0
+                    ? `Bank account #${id} ("${before.account_title}") updated: ${changes.join(', ')}.`
+                    : `Bank account #${id} ("${before.account_title}") update submitted with no effective changes.`,
+            });
             return record;
         } catch (error) {
             if (error.code === 'P2025') {

@@ -9,6 +9,7 @@ import { StudentFlagsService } from '../student-flags/student-flags.service';
 import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 import { CcAllocatorService } from './cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -18,10 +19,11 @@ export class IdentityService {
     private readonly prisma: PrismaService,
     private readonly flagsSvc: StudentFlagsService,
     private readonly ccAllocator: CcAllocatorService,
+    private readonly auditLogs: AuditLogsService,
   ) { }
 
   async registerAdmission(dto: CreateAdmissionDto, changedBy: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const student = await this.prisma.$transaction(async (tx) => {
       // ── 1. Resolve or create family ──────────────────────────────────────
       let familyId: number | null = null;
 
@@ -322,10 +324,30 @@ export class IdentityService {
         maxWait: 5000,
         timeout: 15000,
       });
+
+    if (student) {
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(student.cc),
+        action: 'CREATED',
+        changed_by: changedBy || 'system',
+        student_id: student.cc,
+        note: [
+          `Admission registered for CC ${student.cc} (${student.full_name || dto.full_name}).`,
+          `Status=${student.status ?? 'SOFT_ADMISSION'}`,
+          `Campus=${dto.admission.campus_id ?? 'N/A'}`,
+          `Grade=${dto.admission.requested_grade ?? 'N/A'}`,
+          `Class=${dto.admission.class_id ?? student.class_id ?? 'N/A'}`,
+          `Family=${student.family_id ?? 'none'}`,
+        ].join(' | '),
+      });
+    }
+
+    return student;
   }
 
   async submitAdmissionForm(dto: SubmitAdmissionFormDto) {
-    return this.prisma.$transaction(
+    const student = await this.prisma.$transaction(
       async (tx) => {
         // 1. Find existing student (quick-reg now creates students with QUICK_ADMISSION)
         let student = await tx.students.findUnique({
@@ -570,6 +592,25 @@ export class IdentityService {
         timeout: 20000,
       }
     );
+
+    if (student) {
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(student.cc),
+        action: 'UPDATED',
+        changed_by: 'system',
+        student_id: student.cc,
+        note: [
+          `Admission form submitted for CC ${student.cc} (${student.full_name || 'N/A'}).`,
+          `Status=${student.status ?? 'N/A'}`,
+          `GR=${dto.gr_number || student.gr_number || 'N/A'}`,
+          `Grade=${dto.admission?.requested_grade ?? 'N/A'}`,
+          `Academic year=${dto.admission?.academic_year ?? student.academic_year ?? 'N/A'}`,
+        ].join(' | '),
+      });
+    }
+
+    return student;
   }
 
   async getAdmissionByCC(cc: number) {

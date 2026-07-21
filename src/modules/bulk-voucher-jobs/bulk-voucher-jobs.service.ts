@@ -14,6 +14,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { deriveAcademicYear } from '../../common/utils/academic-labels';
 import { BulkVoucherLogicService } from '../vouchers/bulk-voucher-logic.service';
 import { getMonthlyFeeDates } from './utils/bulk-date.utils';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -47,6 +48,7 @@ export class BulkVoucherJobsService {
         private readonly voucherPdfService: VoucherPdfService,
         private readonly storage: StorageService,
         private readonly bulkLogic: BulkVoucherLogicService,
+        private readonly auditLogs: AuditLogsService,
     ) {}
 
     // ── Preview ─────────────────────────────────────────────────────────────
@@ -218,6 +220,20 @@ export class BulkVoucherJobsService {
 
         // 2. Fire-and-forget async pipeline (no external queue needed)
         setImmediate(() => this.processJob(job.id, dto, feeDates, createdBy));
+
+        await this.auditLogs.log({
+            entity_type: 'BULK_VOUCHER',
+            entity_id: String(job.id),
+            action: 'CREATED',
+            changed_by: createdBy || 'system',
+            note: [
+                `Bulk voucher job #${job.id} started.`,
+                `Students=${dto.student_ccs.length}`,
+                `Period=${dto.fee_date_from}→${dto.fee_date_to}`,
+                `Total items=${totalCount}`,
+                `Academic year=${academicYear}`,
+            ].join(' | '),
+        });
 
         return { job_id: job.id };
     }
@@ -469,6 +485,22 @@ export class BulkVoucherJobsService {
             this.logger.log(
                 `[Job #${jobId}] Complete → status=${finalStatus} success=${successCount} skip=${skipCountTotal} fail=${failCountTotal}`,
             );
+
+            await this.auditLogs.log({
+                entity_type: 'BULK_VOUCHER',
+                entity_id: String(jobId),
+                action: 'UPDATED',
+                field: 'status',
+                new_value: finalStatus,
+                changed_by: createdBy || 'system',
+                note: [
+                    `Bulk voucher job #${jobId} completed with status ${finalStatus}.`,
+                    `Success=${successCount}`,
+                    `Skip=${skipCountTotal}`,
+                    `Fail=${failCountTotal}`,
+                    `Period=${dto.fee_date_from}→${dto.fee_date_to}`,
+                ].join(' | '),
+            });
         } catch (fatalError) {
             this.logger.error(`[Job #${jobId}] Fatal error in job processing: ${(fatalError as Error).message}`, (fatalError as Error).stack);
             
@@ -488,6 +520,23 @@ export class BulkVoucherJobsService {
                         },
                     ] as any,
                 },
+            });
+
+            await this.auditLogs.log({
+                entity_type: 'BULK_VOUCHER',
+                entity_id: String(jobId),
+                action: 'UPDATED',
+                field: 'status',
+                new_value: finalStatus,
+                changed_by: createdBy || 'system',
+                note: [
+                    `Bulk voucher job #${jobId} ended with status ${finalStatus} after fatal error.`,
+                    `Success=${successCount}`,
+                    `Skip=${skipCountTotal}`,
+                    `Fail=${failCountTotal}`,
+                    `Period=${dto.fee_date_from}→${dto.fee_date_to}`,
+                    `Error=${(fatalError as Error).message}`,
+                ].join(' | '),
             });
         }
     }

@@ -162,13 +162,13 @@ export class EmployeeNoticeBoardService {
     return post;
   }
 
-  async updatePost(id: number, dto: UpdateEmployeeNoticeDto) {
+  async updatePost(id: number, dto: UpdateEmployeeNoticeDto, changedBy?: string) {
     const post = await this.prisma.employee_notice_posts.findFirst({
       where: { id, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Employee notice not found');
 
-    return this.prisma.employee_notice_posts.update({
+    const updated = await this.prisma.employee_notice_posts.update({
       where: { id },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
@@ -187,6 +187,43 @@ export class EmployeeNoticeBoardService {
         _count: { select: { post_reads: true } },
       },
     });
+
+    const changes: string[] = [];
+    if (dto.title !== undefined && post.title !== updated.title) {
+      changes.push(`title "${post.title ?? '—'}" → "${updated.title ?? '—'}"`);
+    }
+    if (dto.body !== undefined && post.body !== updated.body) {
+      changes.push(`body changed`);
+    }
+    if (dto.is_pinned !== undefined && post.is_pinned !== updated.is_pinned) {
+      changes.push(`is_pinned ${post.is_pinned} → ${updated.is_pinned}`);
+    }
+    if (dto.target_roles !== undefined) {
+      changes.push(`roles [${(post.target_roles as any[])?.join(', ') ?? ''}] → [${(dto.target_roles ?? []).join(', ')}]`);
+    }
+    if (dto.campus_ids !== undefined) {
+      changes.push(`campuses [${(post.campus_ids as any[])?.join(', ') ?? ''}] → [${(dto.campus_ids ?? []).join(', ')}]`);
+    }
+    if (dto.expires_at !== undefined) {
+      const oldExp = post.expires_at?.toISOString() ?? null;
+      const newExp = updated.expires_at?.toISOString() ?? null;
+      if (oldExp !== newExp) {
+        changes.push(`expires_at "${oldExp ?? '—'}" → "${newExp ?? '—'}"`);
+      }
+    }
+
+    if (changes.length > 0) {
+      await this.auditLogs.log({
+        entity_type: 'EMPLOYEE_NOTICE',
+        entity_id: String(id),
+        action: 'UPDATED',
+        section: 'communication',
+        changed_by: changedBy ?? 'system',
+        note: `Employee notice #${id} ("${post.title ?? 'untitled'}") updated: ${changes.join(', ')}.`,
+      });
+    }
+
+    return updated;
   }
 
   async deletePost(id: number, deletedBy?: string) {
@@ -214,6 +251,15 @@ export class EmployeeNoticeBoardService {
   async createAttendanceNotice(employeeId: number, userId: string, title: string, body: string) {
     const post = await this.prisma.employee_notice_posts.create({
       data: { posted_by: userId, employee_id: employeeId, title, body },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'EMPLOYEE_NOTICE',
+      entity_id: String(post.id),
+      action: 'CREATED',
+      section: 'communication',
+      changed_by: 'system',
+      note: `Attendance notice #${post.id} created for employee #${employeeId}: "${title}" — ${body.slice(0, 120)}${body.length > 120 ? '…' : ''}.`,
     });
 
     void this.fcmService

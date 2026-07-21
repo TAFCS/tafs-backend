@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class MediaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async uploadStudentPhoto(cc: number, file: Express.Multer.File, type: 'standard' | 'blue_bg', isTemp = false) {
@@ -24,6 +26,17 @@ export class MediaService {
       await this.prisma.students.update({
         where: { cc },
         data: { [field]: url },
+      });
+
+      const label = type === 'blue_bg' ? 'blue-background photo' : 'standard photo';
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(cc),
+        action: 'UPDATED',
+        field,
+        changed_by: 'system',
+        student_id: cc,
+        note: `Uploaded student ${label} for CC ${cc} (${student.full_name || 'N/A'}).`,
       });
     }
 
@@ -44,6 +57,15 @@ export class MediaService {
         where: { id },
         data: { photo_url: url },
       });
+
+      await this.auditLogs.log({
+        entity_type: 'GUARDIAN',
+        entity_id: String(id),
+        action: 'UPDATED',
+        field: 'photo_url',
+        changed_by: 'system',
+        note: `Uploaded guardian profile photo for #${id} (${guardian.full_name || 'N/A'}).`,
+      });
     }
 
     return { url };
@@ -62,6 +84,15 @@ export class MediaService {
       await this.prisma.guardians.update({
         where: { id },
         data: { cnic_pic_url: url },
+      });
+
+      await this.auditLogs.log({
+        entity_type: 'GUARDIAN',
+        entity_id: String(id),
+        action: 'UPDATED',
+        field: 'cnic_pic_url',
+        changed_by: 'system',
+        note: `Uploaded guardian CNIC image for #${id} (${guardian.full_name || 'N/A'}).`,
       });
     }
 
@@ -82,6 +113,15 @@ export class MediaService {
       data: { photo_url: url },
     });
 
+    await this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: 'photo_url',
+      changed_by: 'system',
+      note: `Uploaded employee profile photo for #${id} (${employee.full_name || 'N/A'}).`,
+    });
+
     return { url };
   }
 
@@ -99,10 +139,20 @@ export class MediaService {
     const extension = file.originalname.split('.').pop() || (isPdf ? 'pdf' : 'jpg');
     const key = `media/employees/${id}/leave-${Date.now()}.${extension}`;
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
+    const attachmentType = isImage ? 'image' : 'document';
+
+    await this.auditLogs.log({
+      entity_type: 'LEAVE_REQUEST',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: 'attachment',
+      changed_by: 'system',
+      note: `Uploaded leave ${attachmentType} attachment for employee #${id} (${employee.full_name || 'N/A'}, file: ${file.originalname}).`,
+    });
 
     return {
       url,
-      type: isImage ? 'image' : 'document',
+      type: attachmentType,
     };
   }
 

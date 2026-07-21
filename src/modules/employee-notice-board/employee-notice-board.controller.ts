@@ -60,8 +60,9 @@ export class EmployeeNoticeBoardController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmployeeNoticeDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.service.updatePost(id, dto);
+    return this.service.updatePost(id, dto, user.username || user.sub);
   }
 
   @Delete('admin/employee-notices/:id')

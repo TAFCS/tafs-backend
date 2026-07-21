@@ -15,6 +15,7 @@ import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { otp_purpose } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -34,6 +35,7 @@ export class AuthService {
     private prisma: PrismaService,
     private otpService: OtpService,
     private fcmService: FcmService,
+    private auditLogs: AuditLogsService,
   ) {}
 
   // ─── Staff ─────────────────────────────────────────────────────────────────
@@ -434,6 +436,14 @@ export class AuthService {
         },
       });
     });
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: String(familyId),
+      action: 'DELETED',
+      changed_by: `family:${familyId}`,
+      note: `Parent account deleted for family #${familyId} (credentials cleared, tokens revoked).`,
+    });
   }
 
   // ─── Signup/Registration ───────────────────────────────────────────────────
@@ -568,6 +578,14 @@ export class AuthService {
       }).catch(e => console.error('Failed to save FCM token on registration:', e.message));
     }
 
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: String(family.id),
+      action: 'CREATED',
+      changed_by: `family:${family.id}`,
+      note: `Parent account registered for family #${family.id} (email ${normalizedEmail}, guardian ${guardian.full_name || guardian.id}, CNIC verified).`,
+    });
+
     return {
       accessToken,
       refreshToken,
@@ -696,6 +714,15 @@ export class AuthService {
     await this.prisma.fcm_device_tokens.deleteMany({
       where: { family_id: otpResult.familyId },
     });
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: String(otpResult.familyId),
+      action: 'UPDATED',
+      field: 'password',
+      changed_by: `family:${otpResult.familyId}`,
+      note: `Parent password reset via OTP for family #${otpResult.familyId} (email ${dto.email.toLowerCase().trim()}); sessions revoked.`,
+    });
   }
 
   async resetPasswordStaff(dto: ResetPasswordDto) {
@@ -720,6 +747,15 @@ export class AuthService {
     await this.logoutStaff(otpResult.userId);
     await this.prisma.fcm_device_tokens.deleteMany({
       where: { user_id: otpResult.userId },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: otpResult.userId,
+      action: 'UPDATED',
+      field: 'password',
+      changed_by: otpResult.userId,
+      note: `Staff password reset via OTP for user ${otpResult.userId} (email ${dto.email.toLowerCase().trim()}); sessions revoked.`,
     });
   }
 
@@ -747,6 +783,15 @@ export class AuthService {
       where: { id: familyId },
       data: { password_hash: passwordHash },
     });
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: String(familyId),
+      action: 'UPDATED',
+      field: 'password',
+      changed_by: `family:${familyId}`,
+      note: `Parent changed password for family #${familyId}.`,
+    });
   }
 
   async changePasswordStaff(userId: string, dto: ChangePasswordDto) {
@@ -772,6 +817,15 @@ export class AuthService {
     await this.prisma.users.update({
       where: { id: userId },
       data: { password_hash: passwordHash },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: userId,
+      action: 'UPDATED',
+      field: 'password',
+      changed_by: userId,
+      note: `Staff changed password for user ${userId}.`,
     });
   }
 

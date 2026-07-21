@@ -58,10 +58,16 @@ export class ClassesService {
     return record;
   }
 
-  async bulkUpdate(dto: BulkUpdateClassesDto) {
+  async bulkUpdate(dto: BulkUpdateClassesDto, changedBy?: string) {
     if (!dto.items || dto.items.length === 0) {
       return [];
     }
+
+    const beforeRows = await this.prisma.classes.findMany({
+      where: { id: { in: dto.items.map((i) => i.id) } },
+      select: { id: true, description: true, class_code: true, academic_system: true },
+    });
+    const beforeMap = new Map(beforeRows.map((r) => [r.id, r]));
 
     const updated = await this.prisma.$transaction(
       dto.items.map((item) =>
@@ -86,6 +92,32 @@ export class ClassesService {
     // throw a not found to indicate bad IDs.
     if (!updated || updated.length !== dto.items.length) {
       throw new NotFoundException('One or more classes not found');
+    }
+
+    const actor = changedBy ?? 'system';
+    for (const record of updated) {
+      const before = beforeMap.get(record.id);
+      if (!before) continue;
+      const changes: string[] = [];
+      if (before.class_code !== record.class_code) {
+        changes.push(`code "${before.class_code}" → "${record.class_code}"`);
+      }
+      if (before.description !== record.description) {
+        changes.push(`description "${before.description}" → "${record.description}"`);
+      }
+      if (before.academic_system !== record.academic_system) {
+        changes.push(`academic_system "${before.academic_system ?? '—'}" → "${record.academic_system ?? '—'}"`);
+      }
+      if (changes.length > 0) {
+        await this.auditLogs.log({
+          entity_type: 'CLASS',
+          entity_id: String(record.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          changed_by: actor,
+          note: `Class #${record.id} ("${before.class_code} – ${before.description}") bulk-updated: ${changes.join(', ')}.`,
+        });
+      }
     }
 
     return updated;

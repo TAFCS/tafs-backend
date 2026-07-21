@@ -455,14 +455,28 @@ export class ZkAttendanceProcessorService {
       },
     });
 
-    this.auditLogs.log({
-      entity_type: 'STAFF_ATTENDANCE',
-      entity_id: String(employeeId),
-      action: 'CREATED',
-      section: 'attendance',
-      note: `Biometric scan — ${status} on ${date.toISOString().slice(0, 10)}`,
-      changed_by: 'zk-device',
-    });
+    const dateKey = date.toISOString().slice(0, 10);
+    const isCreate = !existing;
+    const changed =
+      isCreate ||
+      existing.status !== status ||
+      existing.check_in_at?.getTime() !== seg.checkInAt.getTime() ||
+      existing.check_out_at?.getTime() !== (seg.checkOutAt?.getTime() ?? undefined) ||
+      existing.last_scan_at?.getTime() !== (seg.lastScanAt?.getTime() ?? undefined);
+
+    if (changed) {
+      void this.auditLogs.log({
+        entity_type: 'STAFF_ATTENDANCE',
+        entity_id: String(employeeId),
+        action: isCreate ? 'CREATED' : 'UPDATED',
+        section: 'attendance',
+        field: 'status',
+        old_value: existing?.status ?? null,
+        new_value: status,
+        note: `Biometric scan ${isCreate ? 'created' : 'updated'} staff attendance for employee #${employeeId} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        changed_by: 'zk-device',
+      });
+    }
   }
 
   private computeStaffStatus(
@@ -529,15 +543,29 @@ export class ZkAttendanceProcessorService {
       },
     });
 
-    this.auditLogs.log({
-      entity_type: 'STUDENT_ATTENDANCE',
-      entity_id: String(studentCc),
-      action: 'CREATED',
-      section: 'attendance',
-      note: `Biometric scan — ${status} on ${date.toISOString().slice(0, 10)}`,
-      changed_by: 'zk-device',
-      student_id: studentCc,
-    });
+    const dateKey = date.toISOString().slice(0, 10);
+    const isCreate = !existing;
+    const changed =
+      isCreate ||
+      existing.status !== status ||
+      existing.check_in_at?.getTime() !== (seg.checkInAt?.getTime() ?? undefined) ||
+      existing.check_out_at?.getTime() !== (seg.checkOutAt?.getTime() ?? undefined) ||
+      existing.last_scan_at?.getTime() !== (seg.lastScanAt?.getTime() ?? undefined);
+
+    if (changed) {
+      void this.auditLogs.log({
+        entity_type: 'STUDENT_ATTENDANCE',
+        entity_id: String(studentCc),
+        action: isCreate ? 'CREATED' : 'UPDATED',
+        section: 'attendance',
+        field: 'status',
+        old_value: existing?.status ?? null,
+        new_value: status,
+        note: `Biometric scan ${isCreate ? 'created' : 'updated'} student attendance for CC ${studentCc} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        changed_by: 'zk-device',
+        student_id: studentCc,
+      });
+    }
 
     return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;
   }

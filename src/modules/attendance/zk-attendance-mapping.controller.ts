@@ -51,7 +51,7 @@ export class ZkAttendanceMappingController {
   @Post('simulate-scan')
   async simulateScan(@Body() dto: SimulateScanDto, @CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
-    return this.mappingService.simulateScan(dto);
+    return this.mappingService.simulateScan(dto, user.username || user.sub);
   }
 
   @Patch(':id')
@@ -60,8 +60,9 @@ export class ZkAttendanceMappingController {
   async updateMapping(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateDeviceMappingDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.mappingService.updateMapping(id, dto);
+    return this.mappingService.updateMapping(id, dto, user.username || user.sub);
   }
 
   private assertSuperAdmin(user: IJwtStaffPayload) {

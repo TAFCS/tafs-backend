@@ -1469,7 +1469,7 @@ export class StaffEditingService {
 
   // ─── Sub-table CRUD ────────────────────────────────────────────────────────
 
-  async upsertAdmission(studentId: number, dto: any) {
+  async upsertAdmission(studentId: number, dto: any, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       academic_system: dto.academic_system,
@@ -1478,7 +1478,11 @@ export class StaffEditingService {
       application_date: dto.application_date ? new Date(dto.application_date) : new Date(),
     };
 
-    return await this.prisma.$transaction(async (tx) => {
+    const before = dto.id
+      ? await this.prisma.student_admissions.findUnique({ where: { id: dto.id } })
+      : null;
+
+    const result = await this.prisma.$transaction(async (tx) => {
       if (dto.id) {
         return tx.student_admissions.update({ where: { id: dto.id }, data });
       }
@@ -1489,19 +1493,50 @@ export class StaffEditingService {
         },
       });
     });
+
+    const detail = [
+      result.academic_system ? `system ${result.academic_system}` : null,
+      result.requested_grade ? `grade ${result.requested_grade}` : null,
+      result.academic_year ? `year ${result.academic_year}` : null,
+    ].filter(Boolean).join(', ');
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(studentId),
+      action: before ? 'UPDATED' : 'CREATED',
+      field: 'admission',
+      changed_by: changedBy ?? 'system',
+      student_id: studentId,
+      note: before
+        ? `Admission #${result.id} for student #${studentId} updated: ${detail || 'fields changed'}.`
+        : `Admission #${result.id} created for student #${studentId}: ${detail || 'new admission'}.`,
+    });
+
+    return result;
   }
 
-  async deleteAdmission(id: number) {
+  async deleteAdmission(id: number, changedBy?: string) {
     const admission = await this.prisma.student_admissions.findUnique({ where: { id } });
     if (!admission) return null;
 
-    return this.prisma.student_admissions
-      .delete({ where: { id } })
-      .then(() => ({ success: true }))
-      .catch(() => null);
+    await this.prisma.student_admissions.delete({ where: { id } });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(admission.student_id),
+      action: 'DELETED',
+      field: 'admission',
+      old_value: String(id),
+      changed_by: changedBy ?? 'system',
+      student_id: admission.student_id,
+      note: `Admission #${id} deleted for student #${admission.student_id}` +
+        (admission.requested_grade ? ` (grade ${admission.requested_grade}, year ${admission.academic_year ?? '—'})` : '') + '.',
+    });
+
+    return { success: true };
   }
 
-  async upsertActivity(studentId: number, dto: any) {
+  async upsertActivity(studentId: number, dto: any, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       activity_name: dto.activity_name,
@@ -1509,17 +1544,48 @@ export class StaffEditingService {
       honors_awards: dto.honors_awards,
       continue_at_tafs: dto.continue_at_tafs ?? true,
     };
-    if (dto.id) {
-      return this.prisma.student_activities.update({ where: { id: dto.id }, data });
-    }
-    return this.prisma.student_activities.create({ data });
+    const before = dto.id
+      ? await this.prisma.student_activities.findUnique({ where: { id: dto.id } })
+      : null;
+    const result = dto.id
+      ? await this.prisma.student_activities.update({ where: { id: dto.id }, data })
+      : await this.prisma.student_activities.create({ data });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(studentId),
+      action: before ? 'UPDATED' : 'CREATED',
+      field: 'activity',
+      changed_by: changedBy ?? 'system',
+      student_id: studentId,
+      note: before
+        ? `Activity #${result.id} for student #${studentId}: "${before.activity_name ?? '—'}" → "${result.activity_name ?? '—'}"` +
+          (before.grade !== result.grade ? `, grade "${before.grade ?? '—'}" → "${result.grade ?? '—'}"` : '') + '.'
+        : `Activity #${result.id} added for student #${studentId}: "${result.activity_name}"` +
+          (result.grade ? ` (grade ${result.grade})` : '') + '.',
+    });
+
+    return result;
   }
 
-  async deleteActivity(id: number) {
-    return this.prisma.student_activities.delete({ where: { id } }).catch(() => null);
+  async deleteActivity(id: number, changedBy?: string) {
+    const existing = await this.prisma.student_activities.findUnique({ where: { id } });
+    if (!existing) return null;
+    await this.prisma.student_activities.delete({ where: { id } });
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(existing.student_id),
+      action: 'DELETED',
+      field: 'activity',
+      old_value: existing.activity_name,
+      changed_by: changedBy ?? 'system',
+      student_id: existing.student_id,
+      note: `Activity #${id} ("${existing.activity_name}") deleted for student #${existing.student_id}.`,
+    });
+    return { success: true };
   }
 
-  async upsertLanguage(studentId: number, dto: any) {
+  async upsertLanguage(studentId: number, dto: any, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       language_name: dto.language_name,
@@ -1527,17 +1593,52 @@ export class StaffEditingService {
       can_read: dto.can_read ?? false,
       can_write: dto.can_write ?? false,
     };
-    if (dto.id) {
-      return this.prisma.student_languages.update({ where: { id: dto.id }, data });
-    }
-    return this.prisma.student_languages.create({ data });
+    const before = dto.id
+      ? await this.prisma.student_languages.findUnique({ where: { id: dto.id } })
+      : null;
+    const result = dto.id
+      ? await this.prisma.student_languages.update({ where: { id: dto.id }, data })
+      : await this.prisma.student_languages.create({ data });
+
+    const skills = [
+      result.can_speak ? 'speak' : null,
+      result.can_read ? 'read' : null,
+      result.can_write ? 'write' : null,
+    ].filter(Boolean).join('/') || 'none';
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(studentId),
+      action: before ? 'UPDATED' : 'CREATED',
+      field: 'language',
+      changed_by: changedBy ?? 'system',
+      student_id: studentId,
+      note: before
+        ? `Language #${result.id} for student #${studentId}: "${before.language_name}" → "${result.language_name}" (skills ${skills}).`
+        : `Language #${result.id} ("${result.language_name}", skills ${skills}) added for student #${studentId}.`,
+    });
+
+    return result;
   }
 
-  async deleteLanguage(id: number) {
-    return this.prisma.student_languages.delete({ where: { id } }).catch(() => null);
+  async deleteLanguage(id: number, changedBy?: string) {
+    const existing = await this.prisma.student_languages.findUnique({ where: { id } });
+    if (!existing) return null;
+    await this.prisma.student_languages.delete({ where: { id } });
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(existing.student_id),
+      action: 'DELETED',
+      field: 'language',
+      old_value: existing.language_name,
+      changed_by: changedBy ?? 'system',
+      student_id: existing.student_id,
+      note: `Language #${id} ("${existing.language_name}") deleted for student #${existing.student_id}.`,
+    });
+    return { success: true };
   }
 
-  async upsertPreviousSchool(studentId: number, dto: any) {
+  async upsertPreviousSchool(studentId: number, dto: any, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       school_name: dto.school_name,
@@ -1546,18 +1647,50 @@ export class StaffEditingService {
       class_studied_to: dto.class_studied_to,
       reason_for_leaving: dto.reason_for_leaving,
     };
-    if (dto.id) {
-      return this.prisma.student_previous_schools.update({ where: { id: dto.id }, data });
-    }
-    return this.prisma.student_previous_schools.create({ data });
+    const before = dto.id
+      ? await this.prisma.student_previous_schools.findUnique({ where: { id: dto.id } })
+      : null;
+    const result = dto.id
+      ? await this.prisma.student_previous_schools.update({ where: { id: dto.id }, data })
+      : await this.prisma.student_previous_schools.create({ data });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(studentId),
+      action: before ? 'UPDATED' : 'CREATED',
+      field: 'previous_school',
+      changed_by: changedBy ?? 'system',
+      student_id: studentId,
+      note: before
+        ? `Previous school #${result.id} for student #${studentId}: "${before.school_name}" → "${result.school_name}".`
+        : `Previous school #${result.id} ("${result.school_name}"${result.location ? `, ${result.location}` : ''}) added for student #${studentId}.`,
+    });
+
+    return result;
   }
 
-  async deletePreviousSchool(id: number) {
-    return this.prisma.student_previous_schools.delete({ where: { id } }).catch(() => null);
+  async deletePreviousSchool(id: number, changedBy?: string) {
+    const existing = await this.prisma.student_previous_schools.findUnique({ where: { id } });
+    if (!existing) return null;
+    await this.prisma.student_previous_schools.delete({ where: { id } });
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(existing.student_id),
+      action: 'DELETED',
+      field: 'previous_school',
+      old_value: existing.school_name,
+      changed_by: changedBy ?? 'system',
+      student_id: existing.student_id,
+      note: `Previous school #${id} ("${existing.school_name}") deleted for student #${existing.student_id}.`,
+    });
+    return { success: true };
   }
 
-  async upsertALevelDetails(studentCc: number, dto: any) {
-    return this.prisma.student_alevel_details.upsert({
+  async upsertALevelDetails(studentCc: number, dto: any, changedBy?: string) {
+    const existing = await this.prisma.student_alevel_details.findUnique({
+      where: { student_id: studentCc },
+    });
+    const result = await this.prisma.student_alevel_details.upsert({
       where: { student_id: studentCc },
       update: {
         details: {
@@ -1579,9 +1712,23 @@ export class StaffEditingService {
         },
       },
     });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(studentCc),
+      action: existing ? 'UPDATED' : 'CREATED',
+      field: 'alevel_details',
+      changed_by: changedBy ?? 'system',
+      student_id: studentCc,
+      note: existing
+        ? `A-Level details updated for student #${studentCc}.`
+        : `A-Level details created for student #${studentCc}.`,
+    });
+
+    return result;
   }
 
-  async hardDeleteStudent(cc: number) {
+  async hardDeleteStudent(cc: number, changedBy?: string) {
     // 1. Verify student exists
     const student = await this.prisma.students.findUnique({
       where: { cc },
@@ -1590,7 +1737,7 @@ export class StaffEditingService {
     if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
 
     // 2. Comprehensive Transactional Wipe
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // A. Clear Financial Linked Tables (Order: Allocations -> Heads -> Vouchers/Fees/Deposits)
       // These tables don't have student_id directly, so we use subqueries or relation filters
       
@@ -1633,5 +1780,16 @@ export class StaffEditingService {
 
       return { success: true, message: `Student ${student.full_name} (${cc}) permanently deleted.` };
     });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'DELETED',
+      changed_by: changedBy ?? 'system',
+      student_id: cc,
+      note: `Permanently hard-deleted student #${cc} (${student.full_name ?? 'unnamed'}) including vouchers, deposits, admissions, activities, languages, previous schools, and guardian links.`,
+    });
+
+    return result;
   }
 }

@@ -74,8 +74,9 @@ export class NoticeBoardController {
   update(
     @Param('id') id: string,
     @Body() dto: UpdatePostDto,
+    @CurrentUser() user: any,
   ) {
-    return this.service.updatePost(id, dto);
+    return this.service.updatePost(id, dto, user?.username || user?.sub || 'system');
   }
 
   @Delete('admin/notice-board/:id')

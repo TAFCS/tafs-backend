@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { BundleNamesService } from './bundle-names.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -35,8 +37,9 @@ export class BundleNamesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
-  async create(@Body() dto: CreateBundleNameDto) {
-    const name = await this.bundleNamesService.create(dto);
+  async create(@Body() dto: CreateBundleNameDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const name = await this.bundleNamesService.create(dto, changedBy);
     return createApiResponse(name, HttpStatus.CREATED, 'Bundle name created successfully');
   }
 
@@ -46,16 +49,19 @@ export class BundleNamesController {
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateBundleNameDto,
+    @Req() req: Request,
   ) {
-    const updated = await this.bundleNamesService.update(id, dto);
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const updated = await this.bundleNamesService.update(id, dto, changedBy);
     return createApiResponse(updated, HttpStatus.OK, 'Bundle name updated successfully');
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee'))
-  async delete(@Param('id', ParseIntPipe) id: number) {
-    await this.bundleNamesService.delete(id);
+  async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    await this.bundleNamesService.delete(id, changedBy);
     return createApiResponse(null, HttpStatus.OK, 'Bundle name deactivated successfully');
   }
 }
