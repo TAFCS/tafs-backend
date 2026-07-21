@@ -410,7 +410,7 @@ export class PayrollService {
     const netPay = monthlyPay.minus(totalDeductions);
 
     return {
-      has_salary: employee.monthly_pay != null,
+      has_salary: employee.monthly_pay != null && !employee.monthly_pay.isZero(),
       is_mapped: isMapped,
       has_punches: scans.length > 0,
       scheduled_working_days: scheduledWorkingDays,
