@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Delete, Body, Param, Query, ParseIntPipe, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, Query, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { InstallmentsService } from './installments.service';
 import { CreateInstallmentDto } from './dto/create-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
@@ -7,6 +7,8 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { AppAbility } from '../auth/casl/casl-ability.factory';
 import { Action } from '../auth/casl/actions';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('installments')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -15,9 +17,8 @@ export class InstallmentsController {
 
   @Post()
   @CheckPolicies((ability: AppAbility) => ability.can(Action.Create, 'Fee'))
-  async create(@Body() dto: CreateInstallmentDto, @Request() req) {
-    const userId = req.user.username || req.user.id;
-    return this.installmentsService.create(dto, userId);
+  async create(@Body() dto: CreateInstallmentDto, @CurrentUser() user: IJwtStaffPayload) {
+    return this.installmentsService.create(dto, user.username);
   }
 
   @Get('student/:studentId')
@@ -34,8 +35,9 @@ export class InstallmentsController {
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateInstallmentDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.installmentsService.update(id, dto);
+    return this.installmentsService.update(id, dto, user.username);
   }
 
   @Delete(':id/heads/:headId')
@@ -43,13 +45,14 @@ export class InstallmentsController {
   async removeHead(
     @Param('id', ParseIntPipe) id: number,
     @Param('headId', ParseIntPipe) headId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.installmentsService.removeHead(id, headId);
+    return this.installmentsService.removeHead(id, headId, user.username);
   }
 
   @Delete(':id')
   @CheckPolicies((ability: AppAbility) => ability.can(Action.Delete, 'Fee'))
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    return this.installmentsService.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    return this.installmentsService.remove(id, user.username);
   }
 }

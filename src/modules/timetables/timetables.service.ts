@@ -10,10 +10,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
 import { UpsertSlotDto } from './dto/timetables.dto';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class TimetablesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
@@ -212,7 +216,7 @@ export class TimetablesService {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    return this.prisma.timetables.create({
+    const created = await this.prisma.timetables.create({
       data: {
         campus_id: campusId,
         class_id: classId,
@@ -224,6 +228,16 @@ export class TimetablesService {
       },
       include: this.timetableInclude(),
     });
+
+    void this.auditLogs.log({
+      entity_type: 'TIMETABLE',
+      entity_id: String(created.id),
+      action: 'CREATED',
+      changed_by: user.username,
+      note: `Timetable for ${created.classes?.description ?? `class #${classId}`} / ${created.sections?.description ?? `section #${sectionId}`} at ${created.campuses?.campus_name ?? `campus #${campusId}`}, academic year ${academicYear}.`,
+    });
+
+    return created;
   }
 
   async upsertSlot(timetableId: number, dto: UpsertSlotDto, user: IJwtStaffPayload) {
@@ -288,7 +302,18 @@ export class TimetablesService {
       );
     }
 
-    return this.prisma.timetable_slots.upsert({
+    const existingSlot = await this.prisma.timetable_slots.findUnique({
+      where: {
+        timetable_id_day_of_week_block_number_slot_order: {
+          timetable_id: timetableId,
+          day_of_week: dto.day_of_week,
+          block_number: dto.block_number,
+          slot_order: dto.slot_order,
+        },
+      },
+    });
+
+    const result = await this.prisma.timetable_slots.upsert({
       where: {
         timetable_id_day_of_week_block_number_slot_order: {
           timetable_id: timetableId,
@@ -313,17 +338,35 @@ export class TimetablesService {
       },
       include: this.slotInclude(),
     });
+
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayLabel = dayNames[dto.day_of_week] ?? `Day ${dto.day_of_week}`;
+    const subjectLabel = result.subjects?.name ?? `Subject #${dto.subject_id}`;
+    const employeeLabel = result.employee_profiles?.full_name ?? `Employee #${dto.employee_id}`;
+    void this.auditLogs.log({
+      entity_type: 'TIMETABLE_SLOT',
+      entity_id: String(result.id),
+      action: existingSlot ? 'UPDATED' : 'CREATED',
+      changed_by: user.username,
+      note: `Timetable #${timetableId}, ${dayLabel} block ${dto.block_number}${dto.slot_order === 2 ? ' (split)' : ''}: ${subjectLabel} with ${employeeLabel}${result.room ? ` in ${result.room}` : ''}.`,
+    });
+
+    return result;
   }
 
   async deleteSlot(slotId: number, user: IJwtStaffPayload) {
     const slot = await this.prisma.timetable_slots.findUnique({
       where: { id: slotId },
-      include: { timetables: true },
+      include: { timetables: true, ...this.slotInclude() },
     });
     if (!slot) throw new NotFoundException('Slot not found');
 
     this.assertCampusAccess(user, slot.timetables.campus_id);
     assertClassInScope(user, slot.timetables.class_id);
+
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayLabel = dayNames[slot.day_of_week] ?? `Day ${slot.day_of_week}`;
+    const subjectLabel = slot.subjects?.name ?? `Subject #${slot.subject_id}`;
 
     if (slot.slot_order === 1) {
       await this.prisma.timetable_slots.deleteMany({
@@ -333,10 +376,24 @@ export class TimetablesService {
           block_number: slot.block_number,
         },
       });
+      void this.auditLogs.log({
+        entity_type: 'TIMETABLE_SLOT',
+        entity_id: String(slotId),
+        action: 'DELETED',
+        changed_by: user.username,
+        note: `Timetable #${slot.timetable_id}, ${dayLabel} block ${slot.block_number}: removed ${subjectLabel} slot (cascaded any split slot).`,
+      });
       return { deleted: true, cascaded: true };
     }
 
     await this.prisma.timetable_slots.delete({ where: { id: slotId } });
+    void this.auditLogs.log({
+      entity_type: 'TIMETABLE_SLOT',
+      entity_id: String(slotId),
+      action: 'DELETED',
+      changed_by: user.username,
+      note: `Timetable #${slot.timetable_id}, ${dayLabel} block ${slot.block_number} (split): removed ${subjectLabel} slot.`,
+    });
     return { deleted: true, cascaded: false };
   }
 

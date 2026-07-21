@@ -1,15 +1,19 @@
 import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateInstallmentDto } from './dto/create-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
 
 @Injectable()
 export class InstallmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async create(dto: CreateInstallmentDto, userId: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const installmentGroup = await tx.student_fee_installments.create({
           data: {
             student_id: dto.student_id,
@@ -79,6 +83,21 @@ export class InstallmentsService {
 
         return installmentGroup;
       }, { maxWait: 5000, timeout: 30000 });
+
+      const feeType = await this.prisma.fee_types.findUnique({
+        where: { id: dto.fee_type_id },
+        select: { description: true },
+      });
+      void this.auditLogs.log({
+        entity_type: 'STUDENT_FEE_INSTALLMENT',
+        entity_id: String(result.id),
+        action: 'CREATED',
+        changed_by: userId,
+        student_id: dto.student_id,
+        note: `${feeType?.description ?? `Fee type #${dto.fee_type_id}`} plan for ${dto.academic_year}, ${dto.installment_count} installment(s) totaling ${dto.total_amount}.`,
+      });
+
+      return result;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       console.error('Error creating installment:', error);
@@ -135,9 +154,13 @@ export class InstallmentsService {
     }));
   }
 
-  async update(id: number, dto: UpdateInstallmentDto) {
+  async update(id: number, dto: UpdateInstallmentDto, changedBy: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const existingPlan = await this.prisma.student_fee_installments.findUnique({
+        where: { id },
+        select: { student_id: true, total_amount: true },
+      });
+      const updated = await this.prisma.$transaction(async (tx) => {
         for (const head of dto.heads) {
           const fee = await tx.student_fees.findUnique({
             where: { id: head.student_fee_id },
@@ -172,15 +195,33 @@ export class InstallmentsService {
           data: { total_amount: newTotal },
         });
       }, { maxWait: 5000, timeout: 30000 });
+
+      void this.auditLogs.log({
+        entity_type: 'STUDENT_FEE_INSTALLMENT',
+        entity_id: String(id),
+        action: 'UPDATED',
+        changed_by: changedBy,
+        student_id: existingPlan?.student_id ?? null,
+        field: 'total_amount',
+        old_value: existingPlan ? String(existingPlan.total_amount) : null,
+        new_value: String(updated.total_amount),
+        note: `Updated ${dto.heads.length} installment head(s).`,
+      });
+
+      return updated;
     } catch (error) {
       console.error('Error updating installment:', error);
       throw new InternalServerErrorException('Failed to update installment plan');
     }
   }
 
-  async removeHead(planId: number, headId: number) {
+  async removeHead(planId: number, headId: number, changedBy: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const planStudent = await this.prisma.student_fee_installments.findUnique({
+        where: { id: planId },
+        select: { student_id: true },
+      });
+      const result = await this.prisma.$transaction(async (tx) => {
         const head = await tx.student_fees.findUnique({
           where: { id: headId },
           select: { status: true, installment_id: true, amount: true, installment_amount: true },
@@ -222,6 +263,17 @@ export class InstallmentsService {
           data: { total_amount: newTotal, installment_count: remaining.length },
         });
       }, { maxWait: 5000, timeout: 30000 });
+
+      void this.auditLogs.log({
+        entity_type: 'STUDENT_FEE_INSTALLMENT',
+        entity_id: String(planId),
+        action: 'DELETED',
+        changed_by: changedBy,
+        student_id: planStudent?.student_id ?? null,
+        note: `Removed installment head #${headId} from plan #${planId}.`,
+      });
+
+      return result;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       console.error('Error deleting installment head:', error);
@@ -229,9 +281,13 @@ export class InstallmentsService {
     }
   }
 
-  async remove(id: number) {
+  async remove(id: number, changedBy: string) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const existingPlan = await this.prisma.student_fee_installments.findUnique({
+        where: { id },
+        select: { student_id: true, academic_year: true, total_amount: true },
+      });
+      const result = await this.prisma.$transaction(async (tx) => {
         const heads = await tx.student_fees.findMany({
           where: { installment_id: id },
           select: { id: true, status: true, amount: true, installment_amount: true },
@@ -271,6 +327,17 @@ export class InstallmentsService {
 
         return tx.student_fee_installments.delete({ where: { id } });
       }, { maxWait: 5000, timeout: 30000 });
+
+      void this.auditLogs.log({
+        entity_type: 'STUDENT_FEE_INSTALLMENT',
+        entity_id: String(id),
+        action: 'DELETED',
+        changed_by: changedBy,
+        student_id: existingPlan?.student_id ?? null,
+        note: `Deleted installment plan for ${existingPlan?.academic_year ?? 'unknown year'}, total ${existingPlan?.total_amount ?? '—'}.`,
+      });
+
+      return result;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       console.error('Error deleting installment:', error);

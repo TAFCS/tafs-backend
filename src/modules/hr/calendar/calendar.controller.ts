@@ -61,7 +61,7 @@ export class CalendarController {
     @Req() req: { user: IJwtStaffPayload },
   ) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.createBulk(dto, req.user.sub);
+    const data = await this.calendarService.createBulk(dto, req.user.sub, req.user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar days created for all campuses');
   }
 
@@ -76,7 +76,7 @@ export class CalendarController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
   async create(@Body() dto: CreateCalendarDayDto, @Req() req: { user: IJwtStaffPayload }) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.create(dto, req.user.sub);
+    const data = await this.calendarService.create(dto, req.user.sub, req.user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar day created successfully');
   }
 
@@ -88,7 +88,7 @@ export class CalendarController {
     @Req() req: { user: IJwtStaffPayload },
   ) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.update(id, dto);
+    const data = await this.calendarService.update(id, dto, req.user.username);
     return createApiResponse(data, HttpStatus.OK, 'Calendar day updated successfully');
   }
 
@@ -96,7 +96,7 @@ export class CalendarController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: { user: IJwtStaffPayload }) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.remove(id);
+    const data = await this.calendarService.remove(id, req.user.username);
     return createApiResponse(data, HttpStatus.OK, 'Calendar day deleted successfully');
   }
 }

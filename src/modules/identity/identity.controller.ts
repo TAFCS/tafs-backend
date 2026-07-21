@@ -16,6 +16,8 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../../modules/auth/casl/actions';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('admissions')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -25,9 +27,9 @@ export class IdentityController {
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Student'))
-  async register(@Body() dto: any) {
+  async register(@Body() dto: any, @CurrentUser() user: IJwtStaffPayload) {
     console.log('[DEBUG] Register Admission DTO:', JSON.stringify(dto, null, 2));
-    const student = await this.identityService.registerAdmission(dto);
+    const student = await this.identityService.registerAdmission(dto, user.username);
     return {
       success: true,
       message: 'Admission registered successfully',

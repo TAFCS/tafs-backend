@@ -82,7 +82,7 @@ export class UnconfirmedAdmissionsController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    const data = await this.service.uploadPhoto(cc, file);
+    const data = await this.service.uploadPhoto(cc, file, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Photograph uploaded successfully');
   }
 
@@ -111,7 +111,7 @@ export class UnconfirmedAdmissionsController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    const data = await this.service.uploadGuardianPhoto(cc, index, file);
+    const data = await this.service.uploadGuardianPhoto(cc, index, file, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Guardian photograph uploaded successfully');
   }
 

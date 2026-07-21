@@ -3,12 +3,14 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class EnrollmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly allocation: StudentAllocationService,
+    private readonly auditLogs: AuditLogsService,
   ) { }
 
   async getCandidates() {
@@ -30,14 +32,14 @@ export class EnrollmentService {
     });
   }
 
-  async updatePursuitStatus(cc: number, notPursuing: boolean) {
+  async updatePursuitStatus(cc: number, notPursuing: boolean, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
     });
     if (!student || student.status !== 'SOFT_ADMISSION') {
       throw new NotFoundException(`Valid candidate with CC #${cc} not found`);
     }
-    return this.prisma.students.update({
+    const updated = await this.prisma.students.update({
       where: { cc },
       data: { not_pursuing: notPursuing },
       include: {
@@ -50,6 +52,20 @@ export class EnrollmentService {
         }
       },
     });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'PURSUIT_STATUS_UPDATED',
+      field: 'not_pursuing',
+      old_value: String(student.not_pursuing),
+      new_value: String(notPursuing),
+      changed_by: changedBy,
+      student_id: cc,
+      note: `${updated.full_name ?? `Student CC ${cc}`} marked as ${notPursuing ? 'not pursuing' : 'pursuing'} admission.`,
+    });
+
+    return updated;
   }
 
   async getSuggestions(cc: number, sectionId?: number) {
@@ -408,7 +424,7 @@ export class EnrollmentService {
     };
   }
 
-  async enroll(cc: number, dto: EnrollStudentDto) {
+  async enroll(cc: number, dto: EnrollStudentDto, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -540,6 +556,15 @@ export class EnrollmentService {
           },
         });
 
+        void this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(cc),
+          action: 'ENROLLED',
+          changed_by: changedBy,
+          student_id: cc,
+          note: `${enrolled.full_name ?? `Student CC ${cc}`} enrolled with GR ${enrolled.gr_number ?? '—'}, class ${enrolled.classes?.description ?? '—'}, section ${enrolled.sections?.description ?? '—'}.`,
+        });
+
         return enrolled;
       });
     }
@@ -572,6 +597,15 @@ export class EnrollmentService {
         gr_number: enrolled.gr_number,
         change_type: 'ENROLLED',
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'ENROLLED',
+      changed_by: changedBy,
+      student_id: cc,
+      note: `${enrolled.full_name ?? `Student CC ${cc}`} enrolled with GR ${enrolled.gr_number ?? '—'}, class ${enrolled.classes?.description ?? '—'}, section ${enrolled.sections?.description ?? '—'}.`,
     });
 
     return enrolled;

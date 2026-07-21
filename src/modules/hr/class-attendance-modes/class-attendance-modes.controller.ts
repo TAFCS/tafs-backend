@@ -6,6 +6,8 @@ import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
+import { CurrentUser } from '../../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('Class Attendance Modes')
 @ApiBearerAuth()
@@ -30,15 +32,15 @@ export class ClassAttendanceModesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'ClassAttendanceMode'))
-  async setMode(@Body() dto: SetClassAttendanceModeDto) {
-    const data = await this.modesService.setMode(dto);
+  async setMode(@Body() dto: SetClassAttendanceModeDto, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.modesService.setMode(dto, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance mode set successfully');
   }
 
   @Delete(':classId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'ClassAttendanceMode'))
-  async remove(@Param('classId', ParseIntPipe) classId: number) {
-    const data = await this.modesService.remove(classId);
+  async remove(@Param('classId', ParseIntPipe) classId: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.modesService.remove(classId, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance mode configuration removed successfully');
   }
 }

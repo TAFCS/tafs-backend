@@ -1,11 +1,16 @@
-import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, HttpStatus, Query, UseGuards } from '@nestjs/common';
 import { EnrollmentService } from './enrollment.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('enrollments')
+@ApiBearerAuth()
 @Controller('enrollments')
+@UseGuards(JwtStaffGuard)
 export class EnrollmentController {
   constructor(private readonly enrollmentService: EnrollmentService) {}
 
@@ -39,8 +44,9 @@ export class EnrollmentController {
   async enroll(
     @Param('cc', ParseIntPipe) cc: number,
     @Body() dto: EnrollStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.enrollmentService.enroll(cc, dto);
+    const student = await this.enrollmentService.enroll(cc, dto, user.username);
     return createApiResponse(
       student,
       HttpStatus.OK,
@@ -53,8 +59,9 @@ export class EnrollmentController {
   async updatePursuitStatus(
     @Param('cc', ParseIntPipe) cc: number,
     @Body('not_pursuing') notPursuing: boolean,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.enrollmentService.updatePursuitStatus(cc, notPursuing);
+    const student = await this.enrollmentService.updatePursuitStatus(cc, notPursuing, user.username);
     return createApiResponse(
       student,
       HttpStatus.OK,

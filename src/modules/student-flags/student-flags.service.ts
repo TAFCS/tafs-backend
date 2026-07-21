@@ -1,9 +1,13 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
 export class StudentFlagsService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async onModuleInit() {
     await this.setupTrigger();
@@ -45,17 +49,25 @@ export class StudentFlagsService implements OnModuleInit {
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
 
-  async addFlag(studentId: number, flag: string, reminderDate?: Date) {
-    return this.prisma.student_flags.upsert({
+  async addFlag(studentId: number, flag: string, reminderDate: Date | undefined, changedBy: string) {
+    const existing = await this.prisma.student_flags.findUnique({
       where: {
         student_id_flag: {
           student_id: studentId,
           flag: flag,
         },
       },
-      create: { 
-        student_id: studentId, 
-        flag, 
+    });
+    const result = await this.prisma.student_flags.upsert({
+      where: {
+        student_id_flag: {
+          student_id: studentId,
+          flag: flag,
+        },
+      },
+      create: {
+        student_id: studentId,
+        flag,
         reminder_date: reminderDate,
         work_done: false
       },
@@ -64,10 +76,21 @@ export class StudentFlagsService implements OnModuleInit {
         work_done: false
       },
     });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_FLAG',
+      entity_id: `${studentId}:${flag}`,
+      action: existing ? 'UPDATED' : 'CREATED',
+      changed_by: changedBy,
+      student_id: studentId,
+      note: `Flag "${flag}"${reminderDate ? ` with reminder ${reminderDate.toISOString().slice(0, 10)}` : ''} for student CC ${studentId}.`,
+    });
+
+    return result;
   }
 
-  async markWorkDone(studentId: number, flag: string) {
-    return this.prisma.student_flags.update({
+  async markWorkDone(studentId: number, flag: string, changedBy: string) {
+    const result = await this.prisma.student_flags.update({
       where: {
         student_id_flag: {
           student_id: studentId,
@@ -76,12 +99,34 @@ export class StudentFlagsService implements OnModuleInit {
       },
       data: { work_done: true },
     });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_FLAG',
+      entity_id: `${studentId}:${flag}`,
+      action: 'RESOLVED',
+      changed_by: changedBy,
+      student_id: studentId,
+      note: `Flag "${flag}" marked as done for student CC ${studentId}.`,
+    });
+
+    return result;
   }
 
-  async removeFlag(studentId: number, flag: string) {
-    return this.prisma.student_flags.deleteMany({
+  async removeFlag(studentId: number, flag: string, changedBy: string) {
+    const result = await this.prisma.student_flags.deleteMany({
       where: { student_id: studentId, flag },
     });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_FLAG',
+      entity_id: `${studentId}:${flag}`,
+      action: 'DELETED',
+      changed_by: changedBy,
+      student_id: studentId,
+      note: `Flag "${flag}" removed for student CC ${studentId}.`,
+    });
+
+    return result;
   }
 
   async getFlags(studentId: number) {

@@ -20,7 +20,7 @@ export class IdentityService {
     private readonly ccAllocator: CcAllocatorService,
   ) { }
 
-  async registerAdmission(dto: CreateAdmissionDto) {
+  async registerAdmission(dto: CreateAdmissionDto, changedBy: string) {
     return this.prisma.$transaction(async (tx) => {
       // ── 1. Resolve or create family ──────────────────────────────────────
       let familyId: number | null = null;
@@ -306,7 +306,8 @@ export class IdentityService {
           await this.flagsSvc.addFlag(
             student.cc,
             f.description,
-            f.reminder_date ? new Date(f.reminder_date) : undefined
+            f.reminder_date ? new Date(f.reminder_date) : undefined,
+            changedBy,
           );
         }
       }

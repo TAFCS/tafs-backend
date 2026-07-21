@@ -8,6 +8,7 @@ import { DepositSlipPDF } from './DepositSlipPDF';
 import { StorageService } from '../../common/storage/storage.service';
 import { CcAllocatorService } from '../identity/cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -26,6 +27,7 @@ export class UnconfirmedAdmissionsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly ccAllocator: CcAllocatorService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private calculateAge(dob: Date): string {
@@ -217,6 +219,15 @@ export class UnconfirmedAdmissionsService {
       });
     });
 
+    void this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(student.cc),
+      action: 'QUICK_ADMISSION_CREATED',
+      changed_by: createdBy ?? 'system',
+      student_id: student.cc,
+      note: `${student.full_name} quick-admitted${student.campuses?.campus_name ? ` at ${student.campuses.campus_name}` : ''}.`,
+    });
+
     return this.toLegacyResponse(student);
   }
 
@@ -237,7 +248,7 @@ export class UnconfirmedAdmissionsService {
     return admission;
   }
 
-  async uploadPhoto(cc: number, file: Express.Multer.File) {
+  async uploadPhoto(cc: number, file: Express.Multer.File, changedBy: string) {
     const student = await this.prisma.students.findFirst({
       where: { cc, status: StudentStatus.QUICK_ADMISSION, deleted_at: null },
     });
@@ -254,10 +265,20 @@ export class UnconfirmedAdmissionsService {
       data: { photograph_url: url },
     });
 
+    void this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'PHOTO_UPDATED',
+      field: 'photo',
+      changed_by: changedBy,
+      student_id: cc,
+      note: `${student.full_name ?? `Student CC ${cc}`} photograph updated.`,
+    });
+
     return { url };
   }
 
-  async uploadGuardianPhoto(cc: number, guardianIndex: number, file: Express.Multer.File) {
+  async uploadGuardianPhoto(cc: number, guardianIndex: number, file: Express.Multer.File, changedBy: string) {
     const student = await this.findQuickStudent(cc);
     if (!student) {
       throw new NotFoundException(`Quick admission with CC ${cc} not found`);
@@ -276,6 +297,16 @@ export class UnconfirmedAdmissionsService {
     await this.prisma.guardians.update({
       where: { id: guardianId },
       data: { photo_url: url },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'PHOTO_UPDATED',
+      field: 'guardian_photo',
+      changed_by: changedBy,
+      student_id: cc,
+      note: `Guardian photo updated for ${student.full_name ?? `Student CC ${cc}`} (guardian index ${guardianIndex}).`,
     });
 
     return { url };

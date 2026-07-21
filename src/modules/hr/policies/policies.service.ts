@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
 import { IsInt, IsOptional, IsString, IsObject } from 'class-validator';
 
@@ -36,7 +37,10 @@ export class CreatePolicyRuleDto {
 
 @Injectable()
 export class PoliciesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async findAllSets(campusId: number) {
     return this.prisma.hr_policy_sets.findMany({
@@ -57,8 +61,8 @@ export class PoliciesService {
     return set;
   }
 
-  async createSet(dto: CreatePolicySetDto) {
-    return this.prisma.hr_policy_sets.create({
+  async createSet(dto: CreatePolicySetDto, changedBy: string) {
+    const created = await this.prisma.hr_policy_sets.create({
       data: {
         campus_id: dto.campus_id,
         academic_year: dto.academic_year,
@@ -66,11 +70,19 @@ export class PoliciesService {
         description: dto.description || null
       }
     });
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_SET',
+      entity_id: String(created.id),
+      action: 'CREATED',
+      changed_by: changedBy,
+      note: `Policy set for academic year ${created.academic_year}, effective ${created.effective_from.toISOString().slice(0, 10)}.${created.description ? ` ${created.description}` : ''}`,
+    });
+    return created;
   }
 
-  async updateSet(id: number, dto: Partial<CreatePolicySetDto>) {
-    await this.findOneSet(id);
-    return this.prisma.hr_policy_sets.update({
+  async updateSet(id: number, dto: Partial<CreatePolicySetDto>, changedBy: string) {
+    const existing = await this.findOneSet(id);
+    const updated = await this.prisma.hr_policy_sets.update({
       where: { id },
       data: {
         campus_id: dto.campus_id,
@@ -79,19 +91,52 @@ export class PoliciesService {
         description: dto.description
       }
     });
+
+    const changes: string[] = [];
+    if (dto.academic_year !== undefined && dto.academic_year !== existing.academic_year) {
+      changes.push(`Academic Year: ${existing.academic_year} → ${dto.academic_year}`);
+    }
+    if (dto.effective_from !== undefined) {
+      const newDate = new Date(dto.effective_from).toISOString().slice(0, 10);
+      const oldDate = existing.effective_from.toISOString().slice(0, 10);
+      if (newDate !== oldDate) changes.push(`Effective From: ${oldDate} → ${newDate}`);
+    }
+    if (dto.description !== undefined && dto.description !== existing.description) {
+      changes.push(`Description: ${existing.description ?? '—'} → ${dto.description ?? '—'}`);
+    }
+    if (dto.campus_id !== undefined && dto.campus_id !== existing.campus_id) {
+      changes.push(`Campus: ${existing.campus_id} → ${dto.campus_id}`);
+    }
+
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_SET',
+      entity_id: String(id),
+      action: 'UPDATED',
+      changed_by: changedBy,
+      note: changes.length > 0 ? changes.join('; ') : 'No field changes detected.',
+    });
+    return updated;
   }
 
-  async removeSet(id: number) {
-    await this.findOneSet(id);
-    return this.prisma.hr_policy_sets.delete({
+  async removeSet(id: number, changedBy: string) {
+    const existing = await this.findOneSet(id);
+    const deleted = await this.prisma.hr_policy_sets.delete({
       where: { id }
     });
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_SET',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: changedBy,
+      note: `Deleted policy set for academic year ${existing.academic_year}, effective ${existing.effective_from.toISOString().slice(0, 10)}.`,
+    });
+    return deleted;
   }
 
   // Rules CRUD
-  async createRule(setId: number, dto: CreatePolicyRuleDto) {
+  async createRule(setId: number, dto: CreatePolicyRuleDto, changedBy: string) {
     await this.findOneSet(setId);
-    return this.prisma.hr_policy_rules.create({
+    const created = await this.prisma.hr_policy_rules.create({
       data: {
         policy_set_id: setId,
         rule_type: dto.rule_type,
@@ -100,16 +145,24 @@ export class PoliciesService {
         description: dto.description || null
       }
     });
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_RULE',
+      entity_id: String(created.id),
+      action: 'CREATED',
+      changed_by: changedBy,
+      note: `Rule "${created.rule_type}" on policy set #${setId}${created.applies_to ? `, applies to ${created.applies_to}` : ''}.${created.description ? ` ${created.description}` : ''}`,
+    });
+    return created;
   }
 
-  async updateRule(setId: number, ruleId: number, dto: Partial<CreatePolicyRuleDto>) {
+  async updateRule(setId: number, ruleId: number, dto: Partial<CreatePolicyRuleDto>, changedBy: string) {
     const rule = await this.prisma.hr_policy_rules.findUnique({
       where: { id: ruleId }
     });
     if (!rule || rule.policy_set_id !== setId) {
       throw new NotFoundException(`Rule with ID ${ruleId} not found in policy set ${setId}`);
     }
-    return this.prisma.hr_policy_rules.update({
+    const updated = await this.prisma.hr_policy_rules.update({
       where: { id: ruleId },
       data: {
         rule_type: dto.rule_type,
@@ -118,17 +171,48 @@ export class PoliciesService {
         description: dto.description
       }
     });
+
+    const changes: string[] = [];
+    if (dto.rule_type !== undefined && dto.rule_type !== rule.rule_type) {
+      changes.push(`Rule Type: ${rule.rule_type} → ${dto.rule_type}`);
+    }
+    if (dto.applies_to !== undefined && dto.applies_to !== rule.applies_to) {
+      changes.push(`Applies To: ${rule.applies_to ?? '—'} → ${dto.applies_to ?? '—'}`);
+    }
+    if (dto.description !== undefined && dto.description !== rule.description) {
+      changes.push(`Description: ${rule.description ?? '—'} → ${dto.description ?? '—'}`);
+    }
+    if (dto.value_json !== undefined) {
+      changes.push(`Value: ${JSON.stringify(rule.value_json)} → ${JSON.stringify(dto.value_json)}`);
+    }
+
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_RULE',
+      entity_id: String(ruleId),
+      action: 'UPDATED',
+      changed_by: changedBy,
+      note: changes.length > 0 ? changes.join('; ') : 'No field changes detected.',
+    });
+    return updated;
   }
 
-  async removeRule(setId: number, ruleId: number) {
+  async removeRule(setId: number, ruleId: number, changedBy: string) {
     const rule = await this.prisma.hr_policy_rules.findUnique({
       where: { id: ruleId }
     });
     if (!rule || rule.policy_set_id !== setId) {
       throw new NotFoundException(`Rule with ID ${ruleId} not found in policy set ${setId}`);
     }
-    return this.prisma.hr_policy_rules.delete({
+    const deleted = await this.prisma.hr_policy_rules.delete({
       where: { id: ruleId }
     });
+    void this.auditLogs.log({
+      entity_type: 'HR_POLICY_RULE',
+      entity_id: String(ruleId),
+      action: 'DELETED',
+      changed_by: changedBy,
+      note: `Deleted rule "${rule.rule_type}" from policy set #${setId}.`,
+    });
+    return deleted;
   }
 }

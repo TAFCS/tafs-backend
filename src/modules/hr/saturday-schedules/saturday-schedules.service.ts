@@ -8,6 +8,7 @@ import { Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
 import { resolveTemplate, isTemplateDisabled } from '../../../utils/notification-templates.util';
@@ -38,6 +39,7 @@ export class SaturdaySchedulesService {
     private readonly prisma: PrismaService,
     private readonly noticeBoard: EmployeeNoticeBoardService,
     private readonly fcmService: FcmService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async create(dto: CreateSaturdayScheduleDto, user: IJwtStaffPayload) {
@@ -133,6 +135,19 @@ export class SaturdaySchedulesService {
 
     void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date);
 
+    if (created.length > 0) {
+      const employeeNames = created
+        .map((row) => row.employee_profiles.full_name ?? `Employee #${row.employee_profiles.id}`)
+        .join(', ');
+      void this.auditLogs.log({
+        entity_type: 'SATURDAY_SCHEDULE',
+        entity_id: this.dateKey(date),
+        action: 'CREATED',
+        changed_by: user.username,
+        note: `Assigned mandatory Saturday ${this.dateKey(date)} to ${created.length} employee(s): ${employeeNames}.`,
+      });
+    }
+
     return created;
   }
 
@@ -178,12 +193,21 @@ export class SaturdaySchedulesService {
 
     const existing = await this.prisma.teacher_saturday_schedules.findUnique({
       where: { id },
-      include: { employee_profiles: { select: { campus_id: true } } },
+      include: { employee_profiles: { select: { campus_id: true, full_name: true } } },
     });
     if (!existing) throw new NotFoundException('Saturday schedule not found');
 
     this.assertCampusAccess(user, existing.employee_profiles.campus_id);
     await this.prisma.teacher_saturday_schedules.delete({ where: { id } });
+
+    void this.auditLogs.log({
+      entity_type: 'SATURDAY_SCHEDULE',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: user.username,
+      note: `Removed Saturday schedule for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
+    });
+
     return { id };
   }
 
@@ -201,6 +225,10 @@ export class SaturdaySchedulesService {
     if (user.campusId && user.campusId !== employeeCampusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+  }
+
+  private dateKey(date: Date): string {
+    return date.toISOString().slice(0, 10);
   }
 
   private parseDate(dateStr: string): Date {

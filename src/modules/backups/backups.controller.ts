@@ -2,6 +2,8 @@ import { Controller, Get, Post, Delete, Param, UseGuards, HttpStatus, Res, Query
 import { BackupsService } from './backups.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { createApiResponse } from '../../utils/serializer.util';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('backups')
 @UseGuards(JwtStaffGuard)
@@ -15,8 +17,8 @@ export class BackupsController {
     }
 
     @Post('trigger')
-    async triggerBackup() {
-        const result = await this.backupsService.createBackup();
+    async triggerBackup(@CurrentUser() user: IJwtStaffPayload) {
+        const result = await this.backupsService.createBackup(user.username);
         return createApiResponse(result, HttpStatus.CREATED, 'Dual-mode backup (SQL + JSON) triggered successfully');
     }
 
@@ -41,10 +43,10 @@ export class BackupsController {
     }
 
     @Delete('delete/*key')
-    async deleteBackup(@Param('key') key: string | string[]) {
+    async deleteBackup(@Param('key') key: string | string[], @CurrentUser() user: IJwtStaffPayload) {
         const rawKey = Array.isArray(key) ? key.join('/') : key;
         const decodedKey = decodeURIComponent(rawKey).replace(/,/g, '/');
-        await this.backupsService.deleteBackup(decodedKey);
+        await this.backupsService.deleteBackup(decodedKey, user.username);
         return createApiResponse(null, HttpStatus.OK, 'Backup deleted successfully');
     }
 }

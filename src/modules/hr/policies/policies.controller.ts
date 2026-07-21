@@ -6,6 +6,8 @@ import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
+import { CurrentUser } from '../../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('HR Policies')
 @ApiBearerAuth()
@@ -30,30 +32,38 @@ export class PoliciesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async createSet(@Body() dto: CreatePolicySetDto) {
-    const data = await this.policiesService.createSet(dto);
+  async createSet(@Body() dto: CreatePolicySetDto, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.policiesService.createSet(dto, user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Policy set created successfully');
   }
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async updateSet(@Param('id', ParseIntPipe) id: number, @Body() dto: Partial<CreatePolicySetDto>) {
-    const data = await this.policiesService.updateSet(id, dto);
+  async updateSet(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: Partial<CreatePolicySetDto>,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.policiesService.updateSet(id, dto, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Policy set updated successfully');
   }
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async removeSet(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.policiesService.removeSet(id);
+  async removeSet(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.policiesService.removeSet(id, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Policy set deleted successfully');
   }
 
   // Rules
   @Post(':id/rules')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async createRule(@Param('id', ParseIntPipe) id: number, @Body() dto: CreatePolicyRuleDto) {
-    const data = await this.policiesService.createRule(id, dto);
+  async createRule(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreatePolicyRuleDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.policiesService.createRule(id, dto, user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Policy rule created successfully');
   }
 
@@ -62,9 +72,10 @@ export class PoliciesController {
   async updateRule(
     @Param('id', ParseIntPipe) id: number,
     @Param('ruleId', ParseIntPipe) ruleId: number,
-    @Body() dto: Partial<CreatePolicyRuleDto>
+    @Body() dto: Partial<CreatePolicyRuleDto>,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.updateRule(id, ruleId, dto);
+    const data = await this.policiesService.updateRule(id, ruleId, dto, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Policy rule updated successfully');
   }
 
@@ -72,9 +83,10 @@ export class PoliciesController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
   async removeRule(
     @Param('id', ParseIntPipe) id: number,
-    @Param('ruleId', ParseIntPipe) ruleId: number
+    @Param('ruleId', ParseIntPipe) ruleId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.removeRule(id, ruleId);
+    const data = await this.policiesService.removeRule(id, ruleId, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Policy rule deleted successfully');
   }
 }

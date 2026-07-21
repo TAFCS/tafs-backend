@@ -6,6 +6,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync, createReadStream, unlinkSync } from 'fs';
 import { StorageService } from '../../common/storage/storage.service';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { 
     S3Client, 
     ListObjectsV2Command, 
@@ -24,6 +25,7 @@ export class BackupsService implements OnModuleInit {
         private readonly config: ConfigService,
         private readonly storage: StorageService,
         private readonly prisma: PrismaService,
+        private readonly auditLogs: AuditLogsService,
     ) {}
 
     onModuleInit() {
@@ -32,16 +34,24 @@ export class BackupsService implements OnModuleInit {
         }
     }
 
-    async createBackup() {
+    async createBackup(changedBy?: string) {
         const now = new Date();
         const timestamp = this.formatTimestamp(now);
-        
+
         this.logger.log(`Starting dual-mode database backup (SQL + JSON) - ${timestamp}`);
 
         const [sql, json] = await Promise.all([
             this.createSqlBackup(timestamp),
             this.createJsonBackup(timestamp)
         ]);
+
+        void this.auditLogs.log({
+            entity_type: 'BACKUP',
+            entity_id: sql.storageKey,
+            action: 'CREATED',
+            changed_by: changedBy ?? 'scheduled-job',
+            note: `Backup created: ${sql.fileName} and ${json.fileName}.`,
+        });
 
         return { sql, json };
     }
@@ -237,16 +247,24 @@ export class BackupsService implements OnModuleInit {
         return this.storage.getFile(sanitizedKey);
     }
 
-    async deleteBackup(key: string) {
+    async deleteBackup(key: string, changedBy: string) {
         const sanitizedKey = key.startsWith('/') ? key.slice(1) : key;
         const client = (this.storage as any).client as any;
         const bucket = (this.storage as any).bucket;
-        
+
         const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
         await client.send(new DeleteObjectCommand({
             Bucket: bucket,
             Key: sanitizedKey,
         }));
         this.logger.log(`Backup deleted from storage: ${sanitizedKey}`);
+
+        void this.auditLogs.log({
+            entity_type: 'BACKUP',
+            entity_id: sanitizedKey,
+            action: 'DELETED',
+            changed_by: changedBy,
+            note: `Deleted backup ${sanitizedKey.split('/').pop() ?? sanitizedKey}.`,
+        });
     }
 }

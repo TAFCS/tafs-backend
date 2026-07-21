@@ -3,6 +3,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import { isWeekendDate, parseCalendarDateKey } from './student-calendar-day.util';
 import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service';
 import { CalendarNotificationService } from './calendar-notification.service';
+import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
 import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -100,6 +101,7 @@ export class CalendarService {
     private readonly prisma: PrismaService,
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly notificationService: CalendarNotificationService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   async findAll(campusId: number, appliesTo?: string) {
@@ -196,7 +198,7 @@ export class CalendarService {
     return row.date.toISOString().slice(0, 10);
   }
 
-  async create(dto: CreateCalendarDayDto, createdBy?: string) {
+  async create(dto: CreateCalendarDayDto, createdBy?: string, changedBy?: string) {
     this.validateScope(dto);
     this.validateStudentDayType(dto);
 
@@ -232,10 +234,18 @@ export class CalendarService {
       }
     }
 
+    void this.auditLogs.log({
+      entity_type: 'ACADEMIC_CALENDAR_DAY',
+      entity_id: String(day.id),
+      action: 'CREATED',
+      changed_by: changedBy ?? createdBy ?? 'system',
+      note: `${day.day_type} on ${this.dateKeyFromRow(day)} for ${day.applies_to}, campus #${day.campus_id}.${day.description ? ` ${day.description}` : ''}`,
+    });
+
     return day;
   }
 
-  async createBulk(dto: CreateBulkCalendarDayDto, createdBy?: string): Promise<BulkCalendarCreateResult> {
+  async createBulk(dto: CreateBulkCalendarDayDto, createdBy?: string, changedBy?: string): Promise<BulkCalendarCreateResult> {
     const template: Omit<CreateCalendarDayDto, 'campus_id'> = {
       date: dto.date,
       day_type: dto.day_type,
@@ -255,7 +265,7 @@ export class CalendarService {
 
     for (const campus of campuses) {
       try {
-        await this.create({ ...template, campus_id: campus.id }, createdBy);
+        await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy);
         result.created++;
       } catch (err) {
         const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
@@ -277,7 +287,7 @@ export class CalendarService {
     return result;
   }
 
-  async update(id: number, dto: Partial<CreateCalendarDayDto>) {
+  async update(id: number, dto: Partial<CreateCalendarDayDto>, changedBy: string) {
     const existing = await this.findOne(id);
     const merged: CreateCalendarDayDto = {
       campus_id: dto.campus_id ?? existing.campus_id,
@@ -335,10 +345,33 @@ export class CalendarService {
       }
     }
 
+    const changes: string[] = [];
+    if (dto.day_type !== undefined && dto.day_type !== existing.day_type) {
+      changes.push(`Day Type: ${existing.day_type} → ${dto.day_type}`);
+    }
+    if (dto.date !== undefined) {
+      const newDate = new Date(dto.date).toISOString().slice(0, 10);
+      const oldDate = this.dateKeyFromRow(existing);
+      if (newDate !== oldDate) changes.push(`Date: ${oldDate} → ${newDate}`);
+    }
+    if (dto.description !== undefined && dto.description !== existing.description) {
+      changes.push(`Description: ${existing.description ?? '—'} → ${dto.description ?? '—'}`);
+    }
+    if (dto.applies_to !== undefined && dto.applies_to !== existing.applies_to) {
+      changes.push(`Applies To: ${existing.applies_to} → ${dto.applies_to}`);
+    }
+    void this.auditLogs.log({
+      entity_type: 'ACADEMIC_CALENDAR_DAY',
+      entity_id: String(id),
+      action: 'UPDATED',
+      changed_by: changedBy,
+      note: changes.length > 0 ? changes.join('; ') : 'No field changes detected.',
+    });
+
     return day;
   }
 
-  async remove(id: number) {
+  async remove(id: number, changedBy: string) {
     const existing = await this.findOne(id);
     const campusId = existing.campus_id;
     const dateKey = this.dateKeyFromRow(existing);
@@ -348,6 +381,15 @@ export class CalendarService {
     });
 
     await this.holidaySync.syncAfterCalendarChange(campusId, dateKey);
+
+    void this.auditLogs.log({
+      entity_type: 'ACADEMIC_CALENDAR_DAY',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: changedBy,
+      note: `Deleted ${existing.day_type} on ${dateKey} for ${existing.applies_to}, campus #${campusId}.`,
+    });
+
     return deleted;
   }
 }

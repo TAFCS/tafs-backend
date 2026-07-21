@@ -1,10 +1,15 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, HttpStatus, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, HttpStatus, Query, UseGuards } from '@nestjs/common';
 import { StudentFlagsService } from './student-flags.service';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('student-flags')
+@ApiBearerAuth()
 @Controller('student-flags')
+@UseGuards(JwtStaffGuard)
 export class StudentFlagsController {
   constructor(private readonly svc: StudentFlagsService) {}
 
@@ -17,30 +22,33 @@ export class StudentFlagsController {
   @Post(':cc')
   @ApiOperation({ summary: 'Add a flag with optional reminder date' })
   async addFlag(
-    @Param('cc', ParseIntPipe) cc: number, 
+    @Param('cc', ParseIntPipe) cc: number,
     @Body('flag') flag: string,
-    @Body('reminder_date') reminderDate?: string
+    @Body('reminder_date') reminderDate: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     const date = reminderDate ? new Date(reminderDate) : undefined;
-    return createApiResponse(await this.svc.addFlag(cc, flag, date), HttpStatus.OK, 'Flag added');
+    return createApiResponse(await this.svc.addFlag(cc, flag, date, user.username), HttpStatus.OK, 'Flag added');
   }
 
   @Patch(':cc/:flag/done')
   @ApiOperation({ summary: 'Mark a flag as work done' })
   async markDone(
     @Param('cc', ParseIntPipe) cc: number,
-    @Param('flag') flag: string
+    @Param('flag') flag: string,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return createApiResponse(await this.svc.markWorkDone(cc, flag), HttpStatus.OK, 'Status updated');
+    return createApiResponse(await this.svc.markWorkDone(cc, flag, user.username), HttpStatus.OK, 'Status updated');
   }
 
   @Delete(':cc/:flag')
   @ApiOperation({ summary: 'Remove a flag' })
   async removeFlag(
-    @Param('cc', ParseIntPipe) cc: number, 
-    @Param('flag') flag: string
+    @Param('cc', ParseIntPipe) cc: number,
+    @Param('flag') flag: string,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return createApiResponse(await this.svc.removeFlag(cc, flag), HttpStatus.OK, 'Flag removed');
+    return createApiResponse(await this.svc.removeFlag(cc, flag, user.username), HttpStatus.OK, 'Flag removed');
   }
 
   @Get('all/notifications')
