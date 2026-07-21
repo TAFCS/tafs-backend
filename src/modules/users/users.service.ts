@@ -131,7 +131,17 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
-    this.auditLogs.log({ entity_type: 'USER', entity_id: record.id, action: 'CREATED', section: 'system', new_value: `${dto.username} (${dto.role})`, changed_by: createdById });
+    this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: record.id,
+      action: 'CREATED',
+      section: 'system',
+      new_value: `${dto.username} (${dto.role})`,
+      changed_by: createdById,
+      note: `Created user ${dto.username} (#${record.id}) with role ${dto.role}` +
+        (dto.campus_id ? `, campus #${dto.campus_id}` : '') +
+        (dto.full_name ? `, name "${dto.full_name}"` : '') + '.',
+    });
     return record;
   }
 
@@ -161,24 +171,85 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
-    this.auditLogs.log({ entity_type: 'USER', entity_id: id, action: 'UPDATED', section: 'system', old_value: (existing as any).username, changed_by: changedBy ?? 'system' });
+
+    const changes: string[] = [];
+    if (dto.full_name !== undefined && existing.full_name !== record.full_name) {
+      changes.push(`full_name "${existing.full_name ?? '—'}" → "${record.full_name ?? '—'}"`);
+    }
+    if (dto.role !== undefined && existing.role !== record.role) {
+      changes.push(`role ${existing.role} → ${record.role}`);
+    }
+    if (dto.campus_id !== undefined && existing.campus_id !== record.campus_id) {
+      changes.push(`campus_id ${existing.campus_id ?? '—'} → ${record.campus_id ?? '—'}`);
+    }
+    if (dto.allowed_class_ids !== undefined) {
+      const before = JSON.stringify(existing.allowed_class_ids ?? []);
+      const after = JSON.stringify(record.allowed_class_ids ?? []);
+      if (before !== after) {
+        changes.push(`allowed_class_ids ${before} → ${after}`);
+      }
+    }
+    if (dto.is_active !== undefined && existing.is_active !== record.is_active) {
+      changes.push(`is_active ${existing.is_active} → ${record.is_active}`);
+    }
+    if (dto.password) {
+      changes.push('password changed');
+    }
+
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: id,
+      action: dto.role !== undefined && existing.role !== record.role ? 'ROLE_CHANGED' : 'UPDATED',
+      section: 'system',
+      field: dto.role !== undefined && existing.role !== record.role ? 'role' : null,
+      old_value: dto.role !== undefined && existing.role !== record.role ? existing.role : existing.username,
+      new_value: dto.role !== undefined && existing.role !== record.role ? record.role : record.username,
+      changed_by: changedBy ?? 'system',
+      note: changes.length > 0
+        ? `User ${existing.username} (#${id}) updated: ${changes.join(', ')}.`
+        : `User ${existing.username} (#${id}) update submitted with no effective changes.`,
+    });
     return record;
   }
 
-  async deactivateUser(id: string) {
-    await this.findUserById(id);
-    return this.prisma.users.update({
+  async deactivateUser(id: string, changedBy?: string) {
+    const existing = await this.findUserById(id);
+    const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: false, updated_at: new Date() },
     });
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: id,
+      action: 'UPDATED',
+      section: 'system',
+      field: 'is_active',
+      old_value: 'true',
+      new_value: 'false',
+      changed_by: changedBy ?? 'system',
+      note: `User ${existing.username} (#${id}) deactivated.`,
+    });
+    return record;
   }
 
-  async reactivateUser(id: string) {
-    await this.findUserById(id);
-    return this.prisma.users.update({
+  async reactivateUser(id: string, changedBy?: string) {
+    const existing = await this.findUserById(id);
+    const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: true, updated_at: new Date() },
     });
+    await this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: id,
+      action: 'UPDATED',
+      section: 'system',
+      field: 'is_active',
+      old_value: 'false',
+      new_value: 'true',
+      changed_by: changedBy ?? 'system',
+      note: `User ${existing.username} (#${id}) reactivated.`,
+    });
+    return record;
   }
 
   // ─── Permission Management ───────────────────────────────────────────────────
@@ -244,15 +315,23 @@ export class UsersService {
     });
   }
 
-  async setPermission(userId: string, dto: SetPermissionDto, grantedById: string) {
+  async setPermission(userId: string, dto: SetPermissionDto, grantedById: string, changedBy?: string) {
     const permission = await this.prisma.permissions.findUnique({
       where: { key: dto.permission_key },
     });
     if (!permission) throw new NotFoundException(`Permission key "${dto.permission_key}" not found`);
 
-    await this.findUserById(userId);
+    const user = await this.findUserById(userId);
+    const existing = await this.prisma.user_permissions.findUnique({
+      where: {
+        user_id_permission_id: {
+          user_id: userId,
+          permission_id: permission.id,
+        },
+      },
+    });
 
-    return this.prisma.user_permissions.upsert({
+    const result = await this.prisma.user_permissions.upsert({
       where: {
         user_id_permission_id: {
           user_id: userId,
@@ -274,17 +353,57 @@ export class UsersService {
         note: dto.note ?? null,
       },
     });
+
+    await this.auditLogs.log({
+      entity_type: 'PERMISSION',
+      entity_id: `${userId}:${dto.permission_key}`,
+      action: existing ? 'UPDATED' : 'CREATED',
+      section: 'system',
+      field: 'user_permission_override',
+      old_value: existing ? String(existing.granted) : null,
+      new_value: String(dto.granted),
+      changed_by: changedBy ?? grantedById,
+      note: `Permission override "${dto.permission_key}" for user ${user.username} (#${userId}): ` +
+        (existing ? `granted ${existing.granted} → ${dto.granted}` : `set granted=${dto.granted}`) +
+        (dto.note ? ` (note: ${dto.note})` : '') + '.',
+    });
+
+    return result;
   }
 
-  async removePermissionOverride(userId: string, permissionKey: string) {
+  async removePermissionOverride(userId: string, permissionKey: string, changedBy?: string) {
     const permission = await this.prisma.permissions.findUnique({
       where: { key: permissionKey },
     });
     if (!permission) throw new NotFoundException(`Permission key "${permissionKey}" not found`);
 
+    const user = await this.findUserById(userId);
+    const existing = await this.prisma.user_permissions.findUnique({
+      where: {
+        user_id_permission_id: {
+          user_id: userId,
+          permission_id: permission.id,
+        },
+      },
+    });
+
     await this.prisma.user_permissions.deleteMany({
       where: { user_id: userId, permission_id: permission.id },
     });
+
+    if (existing) {
+      await this.auditLogs.log({
+        entity_type: 'PERMISSION',
+        entity_id: `${userId}:${permissionKey}`,
+        action: 'DELETED',
+        section: 'system',
+        field: 'user_permission_override',
+        old_value: String(existing.granted),
+        new_value: null,
+        changed_by: changedBy ?? 'system',
+        note: `Removed permission override "${permissionKey}" (was granted=${existing.granted}) for user ${user.username} (#${userId}); role defaults apply again.`,
+      });
+    }
 
     return { removed: true };
   }
@@ -296,9 +415,24 @@ export class UsersService {
     });
   }
 
-  async updateRolePermission(dto: UpdateRolePermissionDto) {
+  async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string) {
+    const permission = await this.prisma.permissions.findUnique({
+      where: { id: dto.permission_id },
+      select: { id: true, key: true },
+    });
+    if (!permission) throw new NotFoundException(`Permission id ${dto.permission_id} not found`);
+
+    const existing = await this.prisma.role_permissions.findUnique({
+      where: {
+        role_permission_id: {
+          role: dto.role,
+          permission_id: dto.permission_id,
+        },
+      },
+    });
+
     if (dto.granted) {
-      return this.prisma.role_permissions.upsert({
+      const result = await this.prisma.role_permissions.upsert({
         where: {
           role_permission_id: {
             role: dto.role,
@@ -311,13 +445,43 @@ export class UsersService {
           permission_id: dto.permission_id,
         },
       });
+
+      if (!existing) {
+        await this.auditLogs.log({
+          entity_type: 'PERMISSION',
+          entity_id: `${dto.role}:${permission.key}`,
+          action: 'CREATED',
+          section: 'system',
+          field: 'role_permission',
+          new_value: permission.key,
+          changed_by: changedBy ?? 'system',
+          note: `Granted role-default permission "${permission.key}" to role ${dto.role}.`,
+        });
+      }
+
+      return result;
     } else {
-      return this.prisma.role_permissions.deleteMany({
+      const result = await this.prisma.role_permissions.deleteMany({
         where: {
           role: dto.role,
           permission_id: dto.permission_id,
         },
       });
+
+      if (existing) {
+        await this.auditLogs.log({
+          entity_type: 'PERMISSION',
+          entity_id: `${dto.role}:${permission.key}`,
+          action: 'DELETED',
+          section: 'system',
+          field: 'role_permission',
+          old_value: permission.key,
+          changed_by: changedBy ?? 'system',
+          note: `Revoked role-default permission "${permission.key}" from role ${dto.role}.`,
+        });
+      }
+
+      return result;
     }
   }
 }

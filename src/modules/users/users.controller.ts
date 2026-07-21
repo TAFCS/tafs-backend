@@ -73,14 +73,27 @@ export class UsersController {
     @Body() dto: SetPermissionDto,
     @CurrentUser() grantor: IJwtStaffPayload,
   ) {
-    const result = await this.usersService.setPermission(id, dto, grantor.sub);
+    const result = await this.usersService.setPermission(
+      id,
+      dto,
+      grantor.sub,
+      grantor.username || grantor.sub,
+    );
     return createApiResponse(result, HttpStatus.OK, 'Permission override set successfully');
   }
 
   @Delete(':id/permissions/:key')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  async removePermissionOverride(@Param('id') id: string, @Param('key') key: string) {
-    const result = await this.usersService.removePermissionOverride(id, key);
+  async removePermissionOverride(
+    @Param('id') id: string,
+    @Param('key') key: string,
+    @CurrentUser() editor: IJwtStaffPayload,
+  ) {
+    const result = await this.usersService.removePermissionOverride(
+      id,
+      key,
+      editor.username || editor.sub,
+    );
     return createApiResponse(result, HttpStatus.OK, 'Permission override removed successfully');
   }
 
@@ -100,8 +113,14 @@ export class UsersController {
 
   @Post('roles/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  async updateRolePermission(@Body() dto: UpdateRolePermissionDto) {
-    const result = await this.usersService.updateRolePermission(dto);
+  async updateRolePermission(
+    @Body() dto: UpdateRolePermissionDto,
+    @CurrentUser() editor: IJwtStaffPayload,
+  ) {
+    const result = await this.usersService.updateRolePermission(
+      dto,
+      editor.username || editor.sub,
+    );
     return createApiResponse(result, HttpStatus.OK, 'Role permission updated successfully');
   }
 }
