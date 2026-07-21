@@ -37,9 +37,12 @@ export class ListPayrollRunsQueryDto {
 }
 
 export class AttendanceMatrixQueryDto {
+  // Omitted -> all employees across every campus the caller can see (see
+  // PayrollService#resolveMatrixCampusIds).
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
-  campus_id: number;
+  campus_id?: number;
 
   @IsDateString()
   period_start: string;

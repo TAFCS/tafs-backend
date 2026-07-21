@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import ExcelJS from 'exceljs';
 import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, StaffCategory, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -8,6 +9,7 @@ import { EmployeeExpectedTimesService } from '../../timetables/employee-expected
 import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
+import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -570,68 +572,176 @@ export class PayrollService {
    * Lets HR see attendance for an arbitrary date range (e.g. the HR
    * dashboard) without first generating a payroll run for that period.
    */
-  async getAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload) {
-    this.assertCampusAccess(user, query.campus_id);
-
-    const periodStart = new Date(`${query.period_start}T00:00:00.000Z`);
-    const periodEnd = new Date(`${query.period_end}T00:00:00.000Z`);
+  private parseMatrixPeriod(periodStartStr: string, periodEndStr: string): { periodStart: Date; periodEnd: Date } {
+    const periodStart = new Date(`${periodStartStr}T00:00:00.000Z`);
+    const periodEnd = new Date(`${periodEndStr}T00:00:00.000Z`);
     if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
       throw new BadRequestException('Invalid period_start/period_end');
     }
+    return { periodStart, periodEnd };
+  }
 
-    const employees = await this.prisma.employee_profiles.findMany({
-      where: { campus_id: query.campus_id },
-      select: {
-        id: true,
-        full_name: true,
-        employee_code: true,
-        job_title: true,
-        photo_url: true,
-        monthly_pay: true,
-        reporting_time: true,
-        leaving_time: true,
-        late_relaxation_minutes: true,
-        department_id: true,
-        staff_category: true,
-        days_per_week: true,
-        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-      },
-    });
+  // campus_id omitted -> "all employees" view: a campus-scoped user (has
+  // user.campusId) is pinned to their own campus regardless; only a
+  // multi-campus user (SUPER_ADMIN, user.campusId null) actually sees
+  // every campus combined.
+  private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusId?: number): Promise<number[]> {
+    if (requestedCampusId != null) {
+      this.assertCampusAccess(user, requestedCampusId);
+      return [requestedCampusId];
+    }
+    if (user.campusId != null) return [user.campusId];
+    const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });
+    return campuses.map((c) => c.id);
+  }
 
-    const computedLines = await this.computeEmployeeLinesForRange(employees, query.campus_id, periodStart, periodEnd);
+  private async computeMatrixLinesForCampus(campusId: number, periodStart: Date, periodEnd: Date) {
+    const [campus, employees] = await Promise.all([
+      this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
+      this.prisma.employee_profiles.findMany({
+        where: { campus_id: campusId },
+        select: {
+          id: true,
+          full_name: true,
+          employee_code: true,
+          job_title: true,
+          photo_url: true,
+          monthly_pay: true,
+          reporting_time: true,
+          leaving_time: true,
+          late_relaxation_minutes: true,
+          department_id: true,
+          staff_category: true,
+          days_per_week: true,
+          employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+        },
+      }),
+    ]);
+
+    const computedLines = await this.computeEmployeeLinesForRange(employees, campusId, periodStart, periodEnd);
     const employeeById = new Map(employees.map((e) => [e.id, e]));
 
+    return computedLines.map((line) => {
+      const employee = employeeById.get(line.employee_id)!;
+      return {
+        employee_id: line.employee_id,
+        campus_id: campusId,
+        campus_name: campus?.campus_name ?? `Campus #${campusId}`,
+        employee_profiles: {
+          id: employee.id,
+          full_name: employee.full_name,
+          employee_code: employee.employee_code,
+          job_title: employee.job_title,
+          photo_url: employee.photo_url,
+        },
+        has_salary: line.has_salary,
+        is_mapped: line.is_mapped,
+        has_punches: line.has_punches,
+        present_days: line.present_days,
+        late_days: line.late_days,
+        half_days: line.half_days,
+        absent_days: line.absent_days,
+        excused_days: line.excused_days,
+        unpaid_leave_days: line.unpaid_leave_days,
+        unresolved_days: line.unresolved_days,
+        total_break_minutes: line.total_break_minutes,
+        total_late_minutes: line.total_late_minutes,
+        daily_breakdown: line.daily_breakdown,
+      };
+    });
+  }
+
+  async getAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload) {
+    const { periodStart, periodEnd } = this.parseMatrixPeriod(query.period_start, query.period_end);
+    const campusIds = await this.resolveMatrixCampusIds(user, query.campus_id);
+
+    const perCampusLines = await Promise.all(
+      campusIds.map((campusId) => this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd)),
+    );
+
     return {
-      campus_id: query.campus_id,
+      campus_id: query.campus_id ?? null,
       period_start: query.period_start,
       period_end: query.period_end,
-      lines: computedLines.map((line) => {
-        const employee = employeeById.get(line.employee_id)!;
-        return {
-          employee_id: line.employee_id,
-          employee_profiles: {
-            id: employee.id,
-            full_name: employee.full_name,
-            employee_code: employee.employee_code,
-            job_title: employee.job_title,
-            photo_url: employee.photo_url,
-          },
-          has_salary: line.has_salary,
-          is_mapped: line.is_mapped,
-          has_punches: line.has_punches,
-          present_days: line.present_days,
-          late_days: line.late_days,
-          half_days: line.half_days,
-          absent_days: line.absent_days,
-          excused_days: line.excused_days,
-          unpaid_leave_days: line.unpaid_leave_days,
-          unresolved_days: line.unresolved_days,
-          total_break_minutes: line.total_break_minutes,
-          total_late_minutes: line.total_late_minutes,
-          daily_breakdown: line.daily_breakdown,
-        };
-      }),
+      lines: perCampusLines.flat(),
     };
+  }
+
+  // Mirrors the webpage exactly: sheet 1 is the same columns as the
+  // Employee Lines table, sheet 2 is the same day-by-day punch card matrix,
+  // color-coded to match. Includes a Campus column only when the request
+  // spans more than one campus (i.e. no specific campus_id was requested).
+  async exportAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload): Promise<Buffer> {
+    const matrix = await this.getAttendanceMatrix(query, user);
+    const includeCampusColumn = query.campus_id == null;
+    type Line = (typeof matrix.lines)[number];
+
+    const columns: EmployeeLineColumn<Line>[] = [
+      { header: 'Employee', width: 26, getValue: (l) => l.employee_profiles?.full_name ?? `Employee #${l.employee_id}` },
+      { header: 'Code', width: 14, getValue: (l) => l.employee_profiles?.employee_code ?? '' },
+    ];
+    if (includeCampusColumn) {
+      columns.push({ header: 'Campus', width: 20, getValue: (l) => l.campus_name ?? '' });
+    }
+    columns.push(
+      { header: 'Present', width: 10, getValue: (l) => l.present_days },
+      { header: 'Absent / Unpaid', width: 16, getValue: (l) => l.absent_days + (l.unpaid_leave_days ?? 0) },
+      { header: 'Unresolved', width: 12, getValue: (l) => l.unresolved_days },
+      { header: 'Late (min)', width: 12, getValue: (l) => l.total_late_minutes },
+      { header: 'Break (min)', width: 12, getValue: (l) => l.total_break_minutes },
+      { header: 'Tags', width: 24, getValue: (l) => tagLabels(l) },
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    addEmployeeLinesSheet(workbook, matrix.lines, columns);
+    addMatrixSheet(workbook, matrix.lines, matrix.period_start, matrix.period_end, includeCampusColumn);
+
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }
+
+  // Same sheet layout as exportAttendanceMatrix, but with the full financial
+  // columns a persisted payroll run's Employee Lines table shows — single
+  // campus by construction (a run is always generated per-campus).
+  async exportRun(id: number, user: IJwtStaffPayload): Promise<Buffer> {
+    const run = await this.getRun(id, user);
+    // daily_breakdown is stored as Json — it's always a DayBreakdownEntry[]
+    // (written by computeEmployeeLine), just not typed that way by Prisma.
+    type Line = Omit<(typeof run.payroll_run_lines)[number], 'daily_breakdown'> & { daily_breakdown: DayBreakdownEntry[] };
+    const lines = run.payroll_run_lines as unknown as Line[];
+
+    const columns: EmployeeLineColumn<Line>[] = [
+      { header: 'Employee', width: 26, getValue: (l) => l.employee_profiles?.full_name ?? `Employee #${l.employee_id}` },
+      { header: 'Code', width: 14, getValue: (l) => l.employee_profiles?.employee_code ?? '' },
+      { header: 'Present', width: 10, getValue: (l) => l.present_days },
+      { header: 'Absent / Unpaid', width: 16, getValue: (l) => l.absent_days + (l.unpaid_leave_days ?? 0) },
+      { header: 'Unresolved', width: 12, getValue: (l) => l.unresolved_days },
+      { header: 'Late (min)', width: 12, getValue: (l) => l.total_late_minutes },
+      { header: 'Break (min)', width: 12, getValue: (l) => l.total_break_minutes },
+      { header: 'Daily Rate', width: 14, getValue: (l) => Number(l.daily_rate) },
+      { header: 'Total Pay', width: 14, getValue: (l) => Number(l.monthly_pay) },
+      { header: 'Deductions', width: 14, getValue: (l) => Number(l.total_deductions) },
+      { header: 'Net Pay', width: 14, getValue: (l) => Number(l.net_pay) },
+      { header: 'Tags', width: 24, getValue: (l) => tagLabels(l) },
+    ];
+    if (run.status === PayrollRunStatus.FINALIZED) {
+      columns.push({
+        header: 'Disbursed',
+        width: 16,
+        getValue: (l) => (l.disbursed_at ? l.disbursed_at.toISOString().slice(0, 10) : ''),
+      });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    addEmployeeLinesSheet(workbook, lines, columns);
+    addMatrixSheet(
+      workbook,
+      lines,
+      run.period_start.toISOString().slice(0, 10),
+      run.period_end.toISOString().slice(0, 10),
+      false,
+    );
+
+    return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
   async listRuns(query: ListPayrollRunsQueryDto, user: IJwtStaffPayload) {
