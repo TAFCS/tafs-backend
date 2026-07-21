@@ -12,6 +12,18 @@ import { CreateBundleDto } from './dto/create-bundle.dto';
 import { StudentsService } from '../students/students.service';
 import { isSpecial } from '../../common/utils/academic-labels';
 
+// An audit-log entry queued during a transaction/multi-step operation and
+// flushed once the whole operation has committed.
+type FeeAuditEvent = {
+    entity_type: string;
+    entity_id: string;
+    action: string;
+    field?: string | null;
+    old_value?: string | null;
+    new_value?: string | null;
+    note: string;
+};
+
 @Injectable()
 export class StudentFeesService {
     constructor(
@@ -19,6 +31,52 @@ export class StudentFeesService {
         private readonly auditLogs: AuditLogsService,
         private readonly studentsService: StudentsService,
     ) { }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Audit-logging helpers — every data-mutating method in this service must
+    // leave a descriptive trail (student, fee type/period, before/after values)
+    // so an admin can reconstruct exactly what happened to a student's fee
+    // schedule, deposits, and vouchers.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fmtDate(d: Date | string | null | undefined): string {
+        if (!d) return 'N/A';
+        return new Date(d).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    private fmtMoney(amount: Prisma.Decimal | number | string | null | undefined): string {
+        if (amount === null || amount === undefined) return 'N/A';
+        return `Rs. ${Number(amount).toLocaleString()}`;
+    }
+
+    // Human label for a fee head's billing period, e.g. "Aug 2025" — prefers the
+    // exact fee_date, falls back to the target month/academic year.
+    private periodLabel(targetMonth?: number | null, academicYear?: string | null, feeDate?: Date | null): string {
+        if (feeDate) {
+            return new Date(feeDate).toLocaleDateString('en-PK', { month: 'short', year: 'numeric' });
+        }
+        if (targetMonth) {
+            const m = this.getMonthLabel(targetMonth);
+            return academicYear ? `${m} ${academicYear}` : m;
+        }
+        return 'unscheduled';
+    }
+
+    private async flushAuditEvents(events: FeeAuditEvent[], studentId: number | null, changedBy: string) {
+        for (const e of events) {
+            await this.auditLogs.log({
+                entity_type: e.entity_type,
+                entity_id: e.entity_id,
+                action: e.action,
+                field: e.field ?? null,
+                old_value: e.old_value ?? null,
+                new_value: e.new_value ?? null,
+                changed_by: changedBy,
+                student_id: studentId,
+                note: e.note,
+            });
+        }
+    }
 
     async getMonthlyStatusForParent(studentCc: number, familyId: number) {
         const student = await this.prisma.students.findFirst({
@@ -516,6 +574,10 @@ export class StudentFeesService {
             return this.findByStudent(student_id);
         }
 
+        // Side-effect audit events collected during the transaction and flushed
+        // after it commits — nothing is logged for work that ends up rolled back.
+        const auditEvents: FeeAuditEvent[] = [];
+
         const result = await this.prisma.$transaction(
             async (tx) => {
                 const existingFees = await tx.student_fees.findMany({
@@ -529,7 +591,22 @@ export class StudentFeesService {
                     },
                 });
 
-
+                // Fee-type descriptions for readable audit notes (e.g. "Tuition Fee"
+                // instead of "fee type #4").
+                const feeTypeIds = Array.from(new Set([
+                    ...existingFees.map((f) => f.fee_type_id).filter((v): v is number => v != null),
+                    ...items.map((i) => i.fee_type_id).filter((v): v is number => v != null),
+                ]));
+                const feeTypesMap = new Map<number, string>();
+                if (feeTypeIds.length > 0) {
+                    const types = await tx.fee_types.findMany({
+                        where: { id: { in: feeTypeIds } },
+                        select: { id: true, description: true },
+                    });
+                    types.forEach((t) => feeTypesMap.set(t.id, t.description));
+                }
+                const feeTypeLabel = (id: number | null | undefined) =>
+                    id != null ? (feeTypesMap.get(id) ?? `fee type #${id}`) : 'fee';
 
                 const incomingKeys = new Set(
                     items.map((i) => {
@@ -555,6 +632,14 @@ export class StudentFeesService {
                         where: { id: { in: toDelete } },
                     });
 
+                    auditEvents.push({
+                        entity_type: 'STUDENT_FEE_SCHEDULE',
+                        entity_id: toDelete.join(','),
+                        action: 'DELETED',
+                        note: `Removed ${toDelete.length} fee row(s) from student #${student_id}'s schedule (no longer in the submitted list): ` +
+                            toDeleteRows.map((f) => `${feeTypeLabel(f.fee_type_id)} (${this.periodLabel(f.target_month, f.academic_year, f.fee_date)}, ${this.fmtMoney(f.amount)})`).join(', '),
+                    });
+
                     // This path can remove installment-linked heads directly (bypassing
                     // installments.service.removeHead), so replicate its bookkeeping here:
                     // recalc total_amount/installment_count for affected plans, or drop a
@@ -576,11 +661,25 @@ export class StudentFeesService {
 
                         if (remaining.length === 0) {
                             await tx.student_fee_installments.delete({ where: { id: planId } });
+                            auditEvents.push({
+                                entity_type: 'STUDENT_FEE_SCHEDULE',
+                                entity_id: String(planId),
+                                action: 'DELETED',
+                                note: `Installment plan #${planId} deleted — its last remaining fee row was removed from student #${student_id}'s schedule.`,
+                            });
                         } else {
                             const newTotal = remaining.reduce((sum, f) => sum + Number(f.amount || 0), 0);
                             await tx.student_fee_installments.update({
                                 where: { id: planId },
                                 data: { total_amount: newTotal, installment_count: remaining.length },
+                            });
+                            auditEvents.push({
+                                entity_type: 'STUDENT_FEE_SCHEDULE',
+                                entity_id: String(planId),
+                                action: 'UPDATED',
+                                field: 'total_amount',
+                                new_value: String(newTotal),
+                                note: `Installment plan #${planId} recalculated after a member fee row was removed — new total ${this.fmtMoney(newTotal)} across ${remaining.length} installment(s).`,
                             });
                         }
                     }
@@ -595,7 +694,11 @@ export class StudentFeesService {
                     feeKeyMap.set(key, f.id);
                 });
 
+                const existingFeeById = new Map(existingFees.map((f) => [f.id, f]));
+
                 // 3. Upsert items
+                const createdLabels: string[] = [];
+                const updatedLabels: string[] = [];
                 const upsertPromises = items.map((item) => {
                     const tm = item.target_month ?? item.month ?? 8;
                     const targetMonth = tm > 0 ? tm : 8;
@@ -606,6 +709,20 @@ export class StudentFeesService {
                     const existingId = feeKeyMap.get(key);
 
                     if (existingId) {
+                        const before = existingFeeById.get(existingId);
+                        const amountChanged = before && Number(before.amount ?? 0) !== Number(item.amount ?? 0);
+                        const beforeDateStr = before?.fee_date ? before.fee_date.toISOString().split('T')[0] : null;
+                        const afterDateStr = feeDate ? feeDate.toISOString().split('T')[0] : null;
+                        const dateChanged = before && beforeDateStr !== afterDateStr;
+                        if (before && (amountChanged || dateChanged)) {
+                            updatedLabels.push(
+                                `${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}): ` +
+                                [
+                                    amountChanged ? `amount ${this.fmtMoney(before.amount)} → ${this.fmtMoney(item.amount)}` : null,
+                                    dateChanged ? `date ${this.fmtDate(before.fee_date)} → ${this.fmtDate(feeDate)}` : null,
+                                ].filter(Boolean).join(', '),
+                            );
+                        }
                         return tx.student_fees.update({
                             where: { id: existingId },
                             data: {
@@ -619,6 +736,7 @@ export class StudentFeesService {
                         });
                     }
 
+                    createdLabels.push(`${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}, ${this.fmtMoney(item.amount)})`);
                     return tx.student_fees.create({
                         data: {
                             student_id,
@@ -634,6 +752,23 @@ export class StudentFeesService {
                     });
                 });
                 await Promise.all(upsertPromises);
+
+                if (createdLabels.length > 0) {
+                    auditEvents.push({
+                        entity_type: 'STUDENT_FEE_SCHEDULE',
+                        entity_id: String(student_id),
+                        action: 'CREATED',
+                        note: `Added ${createdLabels.length} fee row(s) to student #${student_id}'s schedule: ${createdLabels.join('; ')}.`,
+                    });
+                }
+                if (updatedLabels.length > 0) {
+                    auditEvents.push({
+                        entity_type: 'STUDENT_FEE_SCHEDULE',
+                        entity_id: String(student_id),
+                        action: 'UPDATED',
+                        note: `Updated ${updatedLabels.length} existing fee row(s) on student #${student_id}'s schedule: ${updatedLabels.join('; ')}.`,
+                    });
+                }
 
                 // 3. Process Bundles if provided
                 if (bundles && bundles.length > 0) {
@@ -686,6 +821,13 @@ export class StudentFeesService {
                                     bundle_id: bundle.id,
                                 },
                             });
+
+                            auditEvents.push({
+                                entity_type: 'STUDENT_FEE_SCHEDULE',
+                                entity_id: String(bundle.id),
+                                action: 'CREATED',
+                                note: `Bundle "${b.bundle_name}" created for student #${student_id}: grouped ${bundleFees.length} fee row(s), total ${this.fmtMoney(calculatedTotal)}.`,
+                            });
                         }
                     }
                 }
@@ -711,6 +853,12 @@ export class StudentFeesService {
                     const members = refreshedFees.filter(f => f.bundle_id === bId);
                     if (members.length === 0) {
                         await tx.student_fee_bundles.delete({ where: { id: bId } });
+                        auditEvents.push({
+                            entity_type: 'STUDENT_FEE_SCHEDULE',
+                            entity_id: String(bId),
+                            action: 'DELETED',
+                            note: `Bundle #${bId} deleted — all its member fee rows were removed from student #${student_id}'s schedule.`,
+                        });
                     } else {
                         const syncTotal = members.reduce(
                             (sum, f) => sum.add(new Prisma.Decimal(f.amount || f.amount_before_discount || 0)),
@@ -719,6 +867,14 @@ export class StudentFeesService {
                         await tx.student_fee_bundles.update({
                             where: { id: bId },
                             data: { total_amount: syncTotal },
+                        });
+                        auditEvents.push({
+                            entity_type: 'STUDENT_FEE_SCHEDULE',
+                            entity_id: String(bId),
+                            action: 'UPDATED',
+                            field: 'total_amount',
+                            new_value: syncTotal.toString(),
+                            note: `Bundle #${bId} total recalculated to ${this.fmtMoney(syncTotal)} for student #${student_id} after its member fees changed.`,
                         });
                     }
                 }
@@ -742,7 +898,15 @@ export class StudentFeesService {
                 timeout: 30000,
             },
         );
-        this.auditLogs.log({ entity_type: 'STUDENT_FEE_SCHEDULE', entity_id: String(student_id), action: 'UPDATED', section: 'finance', note: `Bulk saved ${items.length} fee rows`, changed_by: changedBy ?? 'system' });
+        // Overall summary entry, followed by every granular event (rows deleted,
+        // created, updated, installment plans and bundles touched) collected above.
+        auditEvents.unshift({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(student_id),
+            action: 'UPDATED',
+            note: `Bulk save completed for student #${student_id}: ${items.length} row(s) submitted.`,
+        });
+        await this.flushAuditEvents(auditEvents, student_id, changedBy ?? 'system');
         return result;
     }
 
@@ -750,8 +914,16 @@ export class StudentFeesService {
      * Explicitly update the fee_date for one or more student_fees records.
      * Called before bundle creation to persist any date changes the user made in the UI.
      */
-    async updateFeeDates(updates: { id: number; fee_date: string }[]) {
-        return this.prisma.$transaction(
+    async updateFeeDates(updates: { id: number; fee_date: string }[], changedBy: string = 'system') {
+        if (updates.length === 0) return [];
+
+        const before = await this.prisma.student_fees.findMany({
+            where: { id: { in: updates.map((u) => u.id) } },
+            select: { id: true, fee_date: true, student_id: true },
+        });
+        const beforeById = new Map(before.map((f) => [f.id, f]));
+
+        const result = await this.prisma.$transaction(
             updates.map(({ id, fee_date }) =>
                 this.prisma.student_fees.update({
                     where: { id },
@@ -759,7 +931,33 @@ export class StudentFeesService {
                 }),
             ),
         );
-    }    async createBundle(dto: CreateBundleDto) {
+
+        const changedNotes: string[] = [];
+        for (const { id, fee_date } of updates) {
+            const b = beforeById.get(id);
+            if (!b) continue;
+            const beforeStr = b.fee_date ? b.fee_date.toISOString().split('T')[0] : null;
+            if (beforeStr === fee_date) continue;
+            changedNotes.push(`fee #${id}: ${this.fmtDate(b.fee_date)} → ${this.fmtDate(fee_date)}`);
+        }
+
+        if (changedNotes.length > 0) {
+            const distinctStudents = new Set(before.map((f) => f.student_id));
+            await this.auditLogs.log({
+                entity_type: 'STUDENT_FEE_SCHEDULE',
+                entity_id: updates.map((u) => u.id).join(','),
+                action: 'UPDATED',
+                field: 'fee_date',
+                changed_by: changedBy,
+                student_id: distinctStudents.size === 1 ? [...distinctStudents][0] : null,
+                note: `Updated fee_date for ${changedNotes.length} fee row(s): ${changedNotes.join('; ')}.`,
+            });
+        }
+
+        return result;
+    }
+
+    async createBundle(dto: CreateBundleDto, changedBy: string = 'system') {
         const { student_id, bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
 
         // Build a lookup: fee_id → new fee_date (for fees that had their date changed in the UI)
@@ -776,7 +974,7 @@ export class StudentFeesService {
             throw new BadRequestException('One or more fees do not belong to the student');
         }
 
-        return this.prisma.$transaction(async (tx) => {
+        const bundle = await this.prisma.$transaction(async (tx) => {
             const feesForProcessing = await tx.student_fees.findMany({
                 where: { id: { in: fee_ids } },
                 select: { amount: true, amount_before_discount: true, month: true, target_month: true },
@@ -814,16 +1012,32 @@ export class StudentFeesService {
 
             return bundle;
         });
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(bundle.id),
+            action: 'CREATED',
+            changed_by: changedBy,
+            student_id,
+            note: `Bundle "${bundle_name}" created for student #${student_id}: grouped ${fee_ids.length} fee row(s), total ${this.fmtMoney(bundle.total_amount)}${dateOverrideMap.size > 0 ? `, ${dateOverrideMap.size} fee date(s) overridden` : ''}.`,
+        });
+
+        return bundle;
     }
 
-    async updateBundle(id: number, dto: Partial<CreateBundleDto>) {
+    async updateBundle(id: number, dto: Partial<CreateBundleDto>, changedBy: string = 'system') {
         const { bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
+
+        const before = await this.prisma.student_fee_bundles.findUnique({ where: { id } });
+        if (!before) {
+            throw new NotFoundException(`Bundle #${id} not found`);
+        }
 
         const dateOverrideMap = new Map<number, Date>(
             (fee_date_overrides ?? []).map(({ id: fid, fee_date }) => [fid, new Date(fee_date)])
         );
 
-        return this.prisma.$transaction(async (tx) => {
+        const bundle = await this.prisma.$transaction(async (tx) => {
             const bundle = await tx.student_fee_bundles.update({
                 where: { id },
                 data: {
@@ -866,10 +1080,48 @@ export class StudentFeesService {
 
             return bundle;
         });
+
+        const fieldChanges: string[] = [];
+        if (bundle_name !== undefined && bundle_name !== before.bundle_name) {
+            fieldChanges.push(`name "${before.bundle_name}" → "${bundle_name}"`);
+        }
+        if (total_amount !== undefined && Number(before.total_amount) !== Number(total_amount)) {
+            fieldChanges.push(`total ${this.fmtMoney(before.total_amount)} → ${this.fmtMoney(total_amount)}`);
+        }
+        if (academic_year !== undefined && academic_year !== before.academic_year) {
+            fieldChanges.push(`AY ${before.academic_year} → ${academic_year}`);
+        }
+        if (target_month !== undefined && target_month !== before.target_month) {
+            fieldChanges.push(`target month ${before.target_month} → ${target_month}`);
+        }
+        if (fee_ids) {
+            fieldChanges.push(`re-linked to ${fee_ids.length} fee row(s)${dateOverrideMap.size > 0 ? ` (${dateOverrideMap.size} date override(s))` : ''}`);
+        }
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(id),
+            action: 'UPDATED',
+            changed_by: changedBy,
+            student_id: before.student_id,
+            note: fieldChanges.length > 0
+                ? `Bundle #${id} ("${before.bundle_name}") updated: ${fieldChanges.join(', ')}.`
+                : `Bundle #${id} ("${before.bundle_name}") update submitted with no effective changes.`,
+        });
+
+        return bundle;
     }
 
-    async deleteBundle(id: number) {
-        return this.prisma.$transaction(async (tx) => {
+    async deleteBundle(id: number, changedBy: string = 'system') {
+        const before = await this.prisma.student_fee_bundles.findUnique({
+            where: { id },
+            include: { student_fees: { select: { id: true } } },
+        });
+        if (!before) {
+            throw new NotFoundException(`Bundle #${id} not found`);
+        }
+
+        await this.prisma.$transaction(async (tx) => {
             // Revert member fees' month to their target_month (original period)
             await tx.$executeRaw`
                 UPDATE public.student_fees
@@ -880,6 +1132,15 @@ export class StudentFeesService {
             return tx.student_fee_bundles.delete({
                 where: { id },
             });
+        });
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(id),
+            action: 'DELETED',
+            changed_by: changedBy,
+            student_id: before.student_id,
+            note: `Bundle #${id} ("${before.bundle_name}") deleted — its ${before.student_fees.length} member fee row(s) reverted to their original target month; bundle total was ${this.fmtMoney(before.total_amount)}.`,
         });
     }
 
@@ -972,7 +1233,7 @@ export class StudentFeesService {
 
     // ─── Tab 1: Confirm ───────────────────────────────────────────────────────
 
-    async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto) {
+    async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto, changedBy: string = 'system') {
         const { academic_year, fee_type_id, month, fee_date, amount, student_ids } = dto;
         const targetDate = new Date(fee_date);
 
@@ -995,6 +1256,15 @@ export class StudentFeesService {
 
         const added = result.count;
         const skipped = student_ids.length - added;
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: `bulk-add:${fee_type_id}:${fee_date}`,
+            action: 'CREATED',
+            section: 'finance',
+            changed_by: changedBy,
+            note: `Bulk-added fee (type #${fee_type_id}, ${academic_year}, due ${this.fmtDate(targetDate)}, ${this.fmtMoney(amount)}) targeting ${student_ids.length} student(s): ${added} row(s) created, ${skipped} already existed and were skipped.`,
+        });
 
         return { added, skipped, skipped_reasons: [] };
     }
@@ -1071,7 +1341,7 @@ export class StudentFeesService {
 
     // ─── Tab 2: Confirm ───────────────────────────────────────────────────────
 
-    async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto) {
+    async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto, changedBy: string = 'system') {
         const { academic_year, fee_type_id, start_month, end_month, day, amount, student_ids } = dto;
 
         const monthSummary: any[] = [];
@@ -1118,6 +1388,15 @@ export class StudentFeesService {
             totalSkippedNum += skipped;
             monthSummary.push({ month, added, skipped });
         }
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: `bulk-add-range:${fee_type_id}:${start_month}-${end_month}`,
+            action: 'CREATED',
+            section: 'finance',
+            changed_by: changedBy,
+            note: `Bulk-added fee (type #${fee_type_id}, ${academic_year}, ${this.fmtMoney(amount)}) across months ${start_month}–${end_month} (day ${day}) targeting ${student_ids.length} student(s): ${totalAddedNum} row(s) created, ${totalSkippedNum} skipped. Per-month: ${monthSummary.map((m) => m.skipped_reason ? `month ${m.month} invalid day` : `month ${m.month} +${m.added}/-${m.skipped}`).join(', ')}.`,
+        });
 
         return {
             summary: monthSummary,
@@ -1278,17 +1557,37 @@ export class StudentFeesService {
         // Re-validate — check if any voucher was added since preview
         const fees = await this.prisma.student_fees.findMany({
             where: { id: { in: student_fee_ids } },
-            include: { voucher_heads: { select: { id: true }, take: 1 } },
+            include: {
+                voucher_heads: { select: { id: true }, take: 1 },
+                fee_types: { select: { description: true } },
+            },
         });
 
-        const canDelete = fees.filter((f: any) => f.voucher_heads.length === 0).map((f: any) => f.id);
-        const blocked = fees.filter((f: any) => f.voucher_heads.length > 0).map((f: any) => f.id);
+        const canDeleteRows = fees.filter((f: any) => f.voucher_heads.length === 0);
+        const blockedRows = fees.filter((f: any) => f.voucher_heads.length > 0);
+        const canDelete = canDeleteRows.map((f: any) => f.id);
+        const blocked = blockedRows.map((f: any) => f.id);
 
         if (canDelete.length > 0) {
             await this.prisma.student_fees.deleteMany({
                 where: { id: { in: canDelete } },
             });
-            this.auditLogs.log({ entity_type: 'STUDENT_FEE_SCHEDULE', entity_id: canDelete.join(','), action: 'DELETED', section: 'finance', note: `Bulk deleted ${canDelete.length} fee rows`, changed_by: changedBy ?? 'system' });
+            const distinctStudents = new Set(canDeleteRows.map((f: any) => f.student_id));
+            const detailLimit = 20;
+            const details = canDeleteRows.slice(0, detailLimit).map((f: any) =>
+                `${f.fee_types?.description ?? 'fee'} (${this.periodLabel(f.target_month, f.academic_year, f.fee_date)}, ${this.fmtMoney(f.amount)})`,
+            ).join(', ');
+            this.auditLogs.log({
+                entity_type: 'STUDENT_FEE_SCHEDULE',
+                entity_id: canDelete.join(','),
+                action: 'DELETED',
+                section: 'finance',
+                changed_by: changedBy ?? 'system',
+                student_id: distinctStudents.size === 1 ? [...distinctStudents][0] as number : null,
+                note: `Bulk deleted ${canDelete.length} fee row(s) across ${distinctStudents.size} student(s): ${details}` +
+                    (canDeleteRows.length > detailLimit ? `, and ${canDeleteRows.length - detailLimit} more` : '') +
+                    (blocked.length > 0 ? `. ${blocked.length} row(s) were blocked (already on a voucher).` : '.'),
+            });
         }
 
         return { deleted: canDelete.length, blocked: blocked.length };
@@ -1309,7 +1608,7 @@ export class StudentFeesService {
         fee_date?: string;
         target_month: number;
         academic_year: string;
-    }) {
+    }, changedBy: string = 'system') {
         const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
         if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
 
@@ -1343,7 +1642,7 @@ export class StudentFeesService {
             feeDate = parsed;
         }
 
-        return this.prisma.student_fees.create({
+        const created = await this.prisma.student_fees.create({
             data: {
                 student_id: dto.student_id,
                 fee_type_id: null,
@@ -1360,6 +1659,18 @@ export class StudentFeesService {
                 discount_presets: true,
             },
         });
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(created.id),
+            action: 'CREATED',
+            section: 'finance',
+            changed_by: changedBy,
+            student_id: dto.student_id,
+            note: `Discount of ${this.fmtMoney(dto.amount)} created for student #${dto.student_id} (${created.discount_presets?.title ?? dto.custom_title ?? 'custom'}), period ${this.periodLabel(dto.target_month, dto.academic_year, feeDate)}.`,
+        });
+
+        return created;
     }
 
     /**
@@ -1382,9 +1693,26 @@ export class StudentFeesService {
      *   3. Reset every student_fee back to NOT_ISSUED (status, dates, amount_paid)
      * Runs inside a single transaction so either everything rolls back or everything commits.
      */
-    async resetAllHeads(studentId: number) {
-        const student = await this.prisma.students.findUnique({ where: { cc: studentId }, select: { cc: true } });
+    async resetAllHeads(studentId: number, changedBy: string = 'system') {
+        const student = await this.prisma.students.findUnique({ where: { cc: studentId }, select: { cc: true, full_name: true } });
         if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+
+        // Capture full detail before the irreversible wipe — this is the only
+        // record of exactly what existed once the transaction below commits.
+        const [depositsBefore, vouchersBefore, feesBefore] = await Promise.all([
+            this.prisma.deposits.findMany({
+                where: { student_id: studentId },
+                select: { id: true, total_amount: true },
+            }),
+            this.prisma.vouchers.findMany({
+                where: { student_id: studentId },
+                select: { id: true, voucher_number: true, status: true, total_payable_before_due: true },
+            }),
+            this.prisma.student_fees.findMany({
+                where: { student_id: studentId, status: { not: 'NOT_ISSUED' } },
+                select: { id: true, status: true, target_month: true, academic_year: true, fee_date: true },
+            }),
+        ]);
 
         const [deletedDeposits, deletedVouchers, resetFees] = await this.prisma.$transaction([
             this.prisma.deposits.deleteMany({ where: { student_id: studentId } }),
@@ -1401,6 +1729,21 @@ export class StudentFeesService {
             }),
         ]);
 
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(studentId),
+            action: 'DELETED',
+            section: 'finance',
+            changed_by: changedBy,
+            student_id: studentId,
+            note: [
+                `FULL FEE HISTORY RESET for student #${studentId}${student.full_name ? ` (${student.full_name})` : ''} — irreversible, super-admin-only action.`,
+                `Deleted ${deletedDeposits.count} deposit(s): ${depositsBefore.map((d) => this.fmtMoney(d.total_amount)).join(', ') || 'none'}.`,
+                `Deleted ${deletedVouchers.count} voucher(s): ${vouchersBefore.map((v) => `#${v.id} (${v.voucher_number || 'N/A'}, ${v.status}, ${this.fmtMoney(v.total_payable_before_due)})`).join(', ') || 'none'}.`,
+                `Reset ${resetFees.count} fee head(s) to Not Issued: ${feesBefore.map((f) => `${this.periodLabel(f.target_month, f.academic_year, f.fee_date)} (was ${f.status})`).join(', ') || 'none'}.`,
+            ].join(' | '),
+        });
+
         return {
             deletedDeposits: deletedDeposits.count,
             deletedVouchers: deletedVouchers.count,
@@ -1412,10 +1755,13 @@ export class StudentFeesService {
      * Delete a discount row. Discount rows are safe to delete unless they appear
      * on a non-VOID voucher (same protection as regular fee rows).
      */
-    async deleteDiscount(id: number) {
+    async deleteDiscount(id: number, changedBy: string = 'system') {
         const fee = await this.prisma.student_fees.findUnique({
             where: { id },
-            include: { voucher_heads: { select: { voucher_id: true } } },
+            include: {
+                voucher_heads: { select: { voucher_id: true } },
+                discount_presets: { select: { title: true } },
+            },
         });
 
         if (!fee) throw new NotFoundException(`Discount row #${id} not found`);
@@ -1428,6 +1774,17 @@ export class StudentFeesService {
         }
 
         await this.prisma.student_fees.delete({ where: { id } });
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(id),
+            action: 'DELETED',
+            section: 'finance',
+            changed_by: changedBy,
+            student_id: fee.student_id,
+            note: `Discount row #${id} deleted for student #${fee.student_id}: ${this.fmtMoney(fee.amount)} (${fee.discount_presets?.title ?? 'custom'}), period ${this.periodLabel(fee.target_month, fee.academic_year, fee.fee_date)}.`,
+        });
+
         return { deleted: id };
     }
 }

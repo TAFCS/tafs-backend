@@ -121,8 +121,9 @@ export class StudentFeesController {
             ability.can(Action.Update, 'StudentFee') ||
             ability.can(Action.Manage, 'all'),
     )
-    async updateFeeDates(@Body() body: { updates: { id: number; fee_date: string }[] }) {
-        const updated = await this.studentFeesService.updateFeeDates(body.updates);
+    async updateFeeDates(@Body() body: { updates: { id: number; fee_date: string }[] }, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const updated = await this.studentFeesService.updateFeeDates(body.updates, changedBy);
         return {
             success: true,
             message: 'Fee dates updated successfully',
@@ -132,8 +133,9 @@ export class StudentFeesController {
 
     @Post('bundles')
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee'))
-    async createBundle(@Body() dto: any) {
-        const bundle = await this.studentFeesService.createBundle(dto);
+    async createBundle(@Body() dto: any, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const bundle = await this.studentFeesService.createBundle(dto, changedBy);
         return {
             success: true,
             message: 'Bundle created successfully',
@@ -143,8 +145,9 @@ export class StudentFeesController {
 
     @Patch('bundles/:id')
     @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee'))
-    async updateBundle(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
-        const bundle = await this.studentFeesService.updateBundle(id, dto);
+    async updateBundle(@Param('id', ParseIntPipe) id: number, @Body() dto: any, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const bundle = await this.studentFeesService.updateBundle(id, dto, changedBy);
         return {
             success: true,
             message: 'Bundle updated successfully',
@@ -154,8 +157,9 @@ export class StudentFeesController {
 
     @Delete('bundles/:id')
     @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee'))
-    async deleteBundle(@Param('id', ParseIntPipe) id: number) {
-        await this.studentFeesService.deleteBundle(id);
+    async deleteBundle(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        await this.studentFeesService.deleteBundle(id, changedBy);
         return {
             success: true,
             message: 'Bundle deleted successfully',
@@ -195,8 +199,9 @@ export class StudentFeesController {
     @Post('bulk-add')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async bulkAdd(@Body() dto: any) {
-        const data = await this.studentFeesService.bulkAdd(dto);
+    async bulkAdd(@Body() dto: any, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.bulkAdd(dto, changedBy);
         return { success: true, data };
     }
 
@@ -223,8 +228,9 @@ export class StudentFeesController {
     @Post('bulk-add-range')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async bulkAddRange(@Body() dto: any) {
-        const data = await this.studentFeesService.bulkAddRange(dto);
+    async bulkAddRange(@Body() dto: any, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.bulkAddRange(dto, changedBy);
         return { success: true, data };
     }
 
@@ -282,24 +288,27 @@ export class StudentFeesController {
     @Post('discount')
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async createDiscount(@Body() body: CreateDiscountDto) {
-        const data = await this.studentFeesService.createDiscount(body);
+    async createDiscount(@Body() body: CreateDiscountDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.createDiscount(body, changedBy);
         return { success: true, data };
     }
 
     @Delete('discount/:id')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee') || ability.can(Action.Manage, 'all'))
-    async deleteDiscount(@Param('id', ParseIntPipe) id: number) {
-        const data = await this.studentFeesService.deleteDiscount(id);
+    async deleteDiscount(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.deleteDiscount(id, changedBy);
         return { success: true, data };
     }
 
     @Delete('reset/:studentId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Manage, 'all'))
-    async resetAllHeads(@Param('studentId', ParseIntPipe) studentId: number) {
-        const data = await this.studentFeesService.resetAllHeads(studentId);
+    async resetAllHeads(@Param('studentId', ParseIntPipe) studentId: number, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.resetAllHeads(studentId, changedBy);
         return { success: true, data };
     }
 }
