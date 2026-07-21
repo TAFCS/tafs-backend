@@ -41,6 +41,9 @@ export interface DayBreakdownEntry {
 }
 
 interface ComputedLine {
+  has_salary: boolean;
+  is_mapped: boolean;
+  has_punches: boolean;
   scheduled_working_days: number;
   present_days: number;
   late_days: number;
@@ -220,6 +223,7 @@ export class PayrollService {
     calendarRows: StaffCalendarRows,
     attendanceRecords: AttendanceStaffDailyRow[],
     scans: zk_attendance_scans[],
+    isMapped: boolean,
     mandatorySaturdayDates?: Set<string>,
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
@@ -404,6 +408,9 @@ export class PayrollService {
     const netPay = monthlyPay.minus(totalDeductions);
 
     return {
+      has_salary: employee.monthly_pay != null,
+      is_mapped: isMapped,
+      has_punches: scans.length > 0,
       scheduled_working_days: scheduledWorkingDays,
       present_days: presentDays,
       late_days: lateDays,
@@ -439,7 +446,7 @@ export class PayrollService {
     periodEnd: Date,
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
-    const [calendarRows, mandatoryByEmployee, allAttendanceRecords, allScans] = await Promise.all([
+    const [calendarRows, mandatoryByEmployee, allAttendanceRecords, allScans, mappedRows] = await Promise.all([
       this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd),
       this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
       this.prisma.attendance_staff_daily.findMany({
@@ -454,7 +461,14 @@ export class PayrollService {
         },
         orderBy: { scan_time: 'asc' },
       }),
+      // Mapping isn't date-scoped (a device_user_mappings row either exists or
+      // doesn't) — used for the "Not Mapped" / "No Punches" tags.
+      this.prisma.device_user_mappings.findMany({
+        where: { employee_id: { in: employeeIds }, person_type: 'STAFF', is_active: true },
+        select: { employee_id: true },
+      }),
     ]);
+    const mappedEmployeeIds = new Set(mappedRows.map((m) => m.employee_id));
 
     const attendanceByEmployee = new Map<number, AttendanceStaffDailyRow[]>();
     for (const r of allAttendanceRecords) {
@@ -481,6 +495,7 @@ export class PayrollService {
           calendarRows,
           attendanceByEmployee.get(employee.id) ?? [],
           scansByEmployee.get(employee.id) ?? [],
+          mappedEmployeeIds.has(employee.id),
           mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
         )),
       })),
@@ -601,6 +616,9 @@ export class PayrollService {
             job_title: employee.job_title,
             photo_url: employee.photo_url,
           },
+          has_salary: line.has_salary,
+          is_mapped: line.is_mapped,
+          has_punches: line.has_punches,
           present_days: line.present_days,
           late_days: line.late_days,
           half_days: line.half_days,

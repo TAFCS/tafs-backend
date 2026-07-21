@@ -1183,6 +1183,9 @@ model payroll_run_lines {
   id                     Int               @id @default(autoincrement())
   payroll_run_id         Int
   employee_id            Int
+  has_salary             Boolean           @default(true)
+  is_mapped              Boolean           @default(true)
+  has_punches            Boolean           @default(true)
   scheduled_working_days Int
   present_days           Int
   late_days              Int
