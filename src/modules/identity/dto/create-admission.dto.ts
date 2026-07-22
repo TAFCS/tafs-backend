@@ -306,6 +306,13 @@ export class AdmissionDetailsDto {
 // ─── Root DTO ─────────────────────────────────────────────────────────────────
 
 export class CreateAdmissionDto {
+  // ── Existing Quick Admission record to complete in place, instead of ──
+  // ── allocating a brand-new CC. Must currently be in QUICK_ADMISSION status. ──
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  existing_cc?: number;
+
   // ── Existing family (sibling re-registration) ──
   @IsInt()
   @Min(1)

@@ -24,8 +24,26 @@ export class IdentityService {
 
   async registerAdmission(dto: CreateAdmissionDto, changedBy: string) {
     const student = await this.prisma.$transaction(async (tx) => {
+      // ── 0. If completing an existing Quick Admission, validate it ─────────
+      let existingQuickStudent: { cc: number; family_id: number | null } | null = null;
+      if (dto.existing_cc) {
+        const existing = await tx.students.findUnique({
+          where: { cc: dto.existing_cc },
+          select: { cc: true, family_id: true, status: true },
+        });
+        if (!existing) {
+          throw new NotFoundException(`Student with CC ${dto.existing_cc} not found`);
+        }
+        if (existing.status !== StudentStatus.QUICK_ADMISSION) {
+          throw new BadRequestException(
+            `CC ${dto.existing_cc} is not a pending Quick Admission (status: ${existing.status}). Cannot overwrite an existing student record.`,
+          );
+        }
+        existingQuickStudent = existing;
+      }
+
       // ── 1. Resolve or create family ──────────────────────────────────────
-      let familyId: number | null = null;
+      let familyId: number | null = existingQuickStudent?.family_id ?? null;
 
       if (dto.existing_family_id) {
         // Admin explicitly chose to link to an existing family
@@ -127,11 +145,13 @@ export class IdentityService {
       // If should_create_family === true: familyId stays null → no family is linked.
       // The admin can then use "Create New Family" in the student profile modal.
 
-      // ── 2. Create student ────────────────────────────────────────────────
+      // ── 2. Create (or complete an existing Quick Admission) student ──────
       const dob = new Date(dto.dob);
 
-      // Shared CC allocator (students + leftover unconfirmed max)
-      const nextCC = await this.ccAllocator.next(tx);
+      // Reuse the Quick Admission's CC when completing one; otherwise allocate a new one.
+      const nextCC = existingQuickStudent
+        ? existingQuickStudent.cc
+        : await this.ccAllocator.next(tx);
 
       let classId = dto.admission.class_id || undefined;
       if (!classId && dto.admission.requested_grade) {
@@ -152,60 +172,67 @@ export class IdentityService {
         }
       }
 
-      const student = await tx.students.create({
-        data: {
-          cc: nextCC,
-          gr_number: dto.gr_number,
-          cnic: dto.cnic,
-          family_id: familyId,
-          full_name: dto.full_name,
-          dob,
-          gender: dto.gender,
-          nationality: dto.nationality,
-          religion: dto.religion,
-          country: dto.country,
-          province: dto.province,
-          city: dto.city,
-          identification_marks: dto.identification_marks,
-          medical_info: dto.medical_info,
-          primary_phone_country_code: dto.primary_phone_country_code ?? '+92',
-          primary_phone: dto.primary_phone,
-          whatsapp_country_code: dto.whatsapp_country_code ?? '+92',
-          whatsapp_number: dto.whatsapp_number,
-          email: dto.email,
-          home_phone: dto.home_phone,
-          academic_year: dto.admission.academic_year,
-          admission_age_years: this.calcAge(dob),
-          status: 'SOFT_ADMISSION',
-          campus_id: dto.admission.campus_id || undefined,
-          class_id: classId,
-          section_id: dto.admission.section_id || undefined,
-        },
-      });
+      const studentData = {
+        gr_number: dto.gr_number,
+        cnic: dto.cnic,
+        family_id: familyId,
+        full_name: dto.full_name,
+        dob,
+        gender: dto.gender,
+        nationality: dto.nationality,
+        religion: dto.religion,
+        country: dto.country,
+        province: dto.province,
+        city: dto.city,
+        identification_marks: dto.identification_marks,
+        medical_info: dto.medical_info,
+        primary_phone_country_code: dto.primary_phone_country_code ?? '+92',
+        primary_phone: dto.primary_phone,
+        whatsapp_country_code: dto.whatsapp_country_code ?? '+92',
+        whatsapp_number: dto.whatsapp_number,
+        email: dto.email,
+        home_phone: dto.home_phone,
+        academic_year: dto.admission.academic_year,
+        admission_age_years: this.calcAge(dob),
+        status: StudentStatus.SOFT_ADMISSION,
+        campus_id: dto.admission.campus_id || undefined,
+        class_id: classId,
+        section_id: dto.admission.section_id || undefined,
+      };
+
+      const student = existingQuickStudent
+        ? await tx.students.update({ where: { cc: nextCC }, data: studentData })
+        : await tx.students.create({ data: { cc: nextCC, ...studentData } });
 
       // ── 3. Upsert father ─────────────────────────────────────────────────
+      // Upsert (not create) so re-linking the same guardian on an existing
+      // Quick Admission student doesn't collide with a link created earlier.
       const father = await this.upsertGuardian(tx, dto.father);
-      await tx.student_guardians.create({
-        data: {
+      await tx.student_guardians.upsert({
+        where: { student_id_guardian_id: { student_id: student.cc, guardian_id: father.id } },
+        create: {
           student_id: student.cc,
           guardian_id: father.id,
           relationship: 'Father',
           is_primary_contact: true,
           is_emergency_contact: false,
         },
+        update: { relationship: 'Father', is_primary_contact: true },
       });
 
       // ── 4. Upsert mother ─────────────────────────────────────────────────
       const mother = await this.upsertGuardian(tx, dto.mother);
       if (mother.id !== father.id) {
-        await tx.student_guardians.create({
-          data: {
+        await tx.student_guardians.upsert({
+          where: { student_id_guardian_id: { student_id: student.cc, guardian_id: mother.id } },
+          create: {
             student_id: student.cc,
             guardian_id: mother.id,
             relationship: 'Mother',
             is_primary_contact: false,
             is_emergency_contact: false,
           },
+          update: { relationship: 'Mother' },
         });
       }
 
@@ -281,24 +308,35 @@ export class IdentityService {
       }
 
       // ── 7. Admission record ──────────────────────────────────────────────
+      // A Quick Admission already has one admission row from quick-registration —
+      // update it in place rather than creating a duplicate.
       const resolvedGrade = await this.resolveGradeCode(tx, dto.admission.requested_grade);
-      await tx.student_admissions.create({
-        data: {
-          student_id: student.cc,
-          academic_system: dto.admission.academic_system,
-          requested_grade: resolvedGrade,
-          academic_year: new Date().getFullYear().toString(),
-          discipline: dto.admission.discipline,
-        },
-      });
+      const admissionData = {
+        academic_system: dto.admission.academic_system,
+        requested_grade: resolvedGrade,
+        academic_year: new Date().getFullYear().toString(),
+        discipline: dto.admission.discipline,
+      };
+      const existingAdmission = existingQuickStudent
+        ? await tx.student_admissions.findFirst({ where: { student_id: student.cc } })
+        : null;
+      if (existingAdmission) {
+        await tx.student_admissions.update({
+          where: { id: existingAdmission.id },
+          data: admissionData,
+        });
+      } else {
+        await tx.student_admissions.create({
+          data: { student_id: student.cc, ...admissionData },
+        });
+      }
 
       // ── 7.5 A-Level Details ──────────────────────────────────────────────
       if (dto.alevel_details) {
-        await tx.student_alevel_details.create({
-          data: {
-            student_id: student.cc,
-            details: dto.alevel_details as any,
-          },
+        await tx.student_alevel_details.upsert({
+          where: { student_id: student.cc },
+          create: { student_id: student.cc, details: dto.alevel_details as any },
+          update: { details: dto.alevel_details as any },
         });
       }
 
@@ -329,11 +367,13 @@ export class IdentityService {
       await this.auditLogs.log({
         entity_type: 'STUDENT',
         entity_id: String(student.cc),
-        action: 'CREATED',
+        action: dto.existing_cc ? 'UPDATED' : 'CREATED',
         changed_by: changedBy || 'system',
         student_id: student.cc,
         note: [
-          `Admission registered for CC ${student.cc} (${student.full_name || dto.full_name}).`,
+          dto.existing_cc
+            ? `Registration form completed for Quick Admission CC ${student.cc} (${student.full_name || dto.full_name}).`
+            : `Admission registered for CC ${student.cc} (${student.full_name || dto.full_name}).`,
           `Status=${student.status ?? 'SOFT_ADMISSION'}`,
           `Campus=${dto.admission.campus_id ?? 'N/A'}`,
           `Grade=${dto.admission.requested_grade ?? 'N/A'}`,
