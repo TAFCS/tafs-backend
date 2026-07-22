@@ -5,7 +5,7 @@ import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service'
 import { CalendarNotificationService } from './calendar-notification.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
-import { IsInt, IsDateString, IsString, IsOptional, IsIn } from 'class-validator';
+import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsArray, ArrayMinSize } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCalendarDayDto {
@@ -69,6 +69,36 @@ export class CreateBulkCalendarDayDto {
   @IsString()
   @IsIn(['STUDENT', 'STAFF'])
   applies_to: string;
+}
+
+export class CreateEmployeeCalendarDaysDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  @Type(() => Number)
+  employee_ids: number[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsDateString({}, { each: true })
+  dates: string[];
+
+  @IsString()
+  @IsIn(['WORKDAY', 'HOLIDAY'])
+  day_type: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
+export interface EmployeeCalendarDaysResult {
+  employees_total: number;
+  dates_total: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  errors: { employee_id: number; date: string; message: string }[];
 }
 
 export class SyncCalendarAttendanceDto {
@@ -284,6 +314,79 @@ export class CalendarService {
     if (result.created === 0 && result.failed > 0) {
       throw new BadRequestException(
         `Failed to create calendar entry on all campuses (${result.failed} failed, ${result.skipped} skipped).`,
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Per-employee day override (e.g. a one-off holiday for specific staff) —
+   * `employee_id` scope already outranks every other STAFF calendar scope
+   * (campus/department/staff_category) in CalendarDayResolverService's
+   * specificity ranking, so this always wins for the employees it targets.
+   */
+  async createForEmployees(
+    dto: CreateEmployeeCalendarDaysDto,
+    createdBy?: string,
+    changedBy?: string,
+  ): Promise<EmployeeCalendarDaysResult> {
+    const uniqueEmployeeIds = [...new Set(dto.employee_ids)];
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: uniqueEmployeeIds } },
+      select: { id: true, full_name: true, campus_id: true },
+    });
+    if (employees.length !== uniqueEmployeeIds.length) {
+      throw new BadRequestException('One or more employee IDs were not found');
+    }
+    const missingCampus = employees.filter((e) => e.campus_id == null);
+    if (missingCampus.length > 0) {
+      throw new BadRequestException(
+        `Employee(s) with no campus assigned cannot have a calendar override: ${missingCampus.map((e) => e.full_name ?? `#${e.id}`).join(', ')}`,
+      );
+    }
+
+    const uniqueDates = [...new Set(dto.dates)];
+    const result: EmployeeCalendarDaysResult = {
+      employees_total: employees.length,
+      dates_total: uniqueDates.length,
+      created: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const employee of employees) {
+      for (const date of uniqueDates) {
+        try {
+          await this.create(
+            {
+              campus_id: employee.campus_id!,
+              date,
+              day_type: dto.day_type,
+              description: dto.description,
+              applies_to: 'STAFF',
+              employee_id: employee.id,
+            },
+            createdBy,
+            changedBy,
+          );
+          result.created++;
+        } catch (err) {
+          const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
+          if (message.includes('same scope already exists')) {
+            result.skipped++;
+          } else {
+            result.failed++;
+            result.errors.push({ employee_id: employee.id, date, message });
+          }
+        }
+      }
+    }
+
+    if (result.created === 0 && result.failed > 0) {
+      throw new BadRequestException(
+        `Failed to create any calendar override (${result.failed} failed, ${result.skipped} skipped).`,
       );
     }
 

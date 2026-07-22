@@ -13,7 +13,13 @@ import {
   ForbiddenException,
   Req,
 } from '@nestjs/common';
-import { CalendarService, CreateCalendarDayDto, CreateBulkCalendarDayDto, SyncCalendarAttendanceDto } from './calendar.service';
+import {
+  CalendarService,
+  CreateCalendarDayDto,
+  CreateBulkCalendarDayDto,
+  CreateEmployeeCalendarDaysDto,
+  SyncCalendarAttendanceDto,
+} from './calendar.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -63,6 +69,17 @@ export class CalendarController {
     this.assertSuperAdmin(req.user);
     const data = await this.calendarService.createBulk(dto, req.user.sub, req.user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar days created for all campuses');
+  }
+
+  @Post('bulk-employees')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
+  async createForEmployees(
+    @Body() dto: CreateEmployeeCalendarDaysDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    this.assertSuperAdmin(req.user);
+    const data = await this.calendarService.createForEmployees(dto, req.user.sub, req.user.username);
+    return createApiResponse(data, HttpStatus.CREATED, 'Calendar overrides created for selected employees');
   }
 
   @Get(':id')
