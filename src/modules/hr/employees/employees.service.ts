@@ -111,6 +111,27 @@ export class CreateEmployeeDto {
   photo_url?: string | null;
 
   @IsOptional() @IsString()
+  father_photo_url?: string | null;
+
+  @IsOptional() @IsString()
+  father_cnic?: string | null;
+
+  @IsOptional() @IsString()
+  mother_photo_url?: string | null;
+
+  @IsOptional() @IsString()
+  mother_cnic?: string | null;
+
+  @IsOptional() @IsString()
+  spouse_name?: string | null;
+
+  @IsOptional() @IsString()
+  spouse_cnic?: string | null;
+
+  @IsOptional() @IsString()
+  spouse_photo_url?: string | null;
+
+  @IsOptional() @IsString()
   account_number?: string;
 
   @IsOptional() @IsString()
@@ -350,6 +371,14 @@ export class EmployeesService {
         staff_type_id: rest.staff_type_id || null,
         campus_id: rest.campus_id || null,
         days_per_week: rest.days_per_week ?? null,
+        photo_url: rest.photo_url || null,
+        father_photo_url: rest.father_photo_url || null,
+        father_cnic: rest.father_cnic || null,
+        mother_photo_url: rest.mother_photo_url || null,
+        mother_cnic: rest.mother_cnic || null,
+        spouse_name: rest.spouse_name || null,
+        spouse_cnic: rest.spouse_cnic || null,
+        spouse_photo_url: rest.spouse_photo_url || null,
         account_number: rest.account_number || null,
         bank_name: rest.bank_name || null,
         emergency_contact_name: rest.emergency_contact_name || null,
@@ -465,6 +494,13 @@ export class EmployeesService {
           campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
           days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
           photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
+          father_photo_url: rest.father_photo_url !== undefined ? rest.father_photo_url : undefined,
+          father_cnic: rest.father_cnic !== undefined ? nullIfEmpty(rest.father_cnic) : undefined,
+          mother_photo_url: rest.mother_photo_url !== undefined ? rest.mother_photo_url : undefined,
+          mother_cnic: rest.mother_cnic !== undefined ? nullIfEmpty(rest.mother_cnic) : undefined,
+          spouse_name: rest.spouse_name !== undefined ? nullIfEmpty(rest.spouse_name) : undefined,
+          spouse_cnic: rest.spouse_cnic !== undefined ? nullIfEmpty(rest.spouse_cnic) : undefined,
+          spouse_photo_url: rest.spouse_photo_url !== undefined ? rest.spouse_photo_url : undefined,
           account_number: rest.account_number !== undefined ? nullIfEmpty(rest.account_number) : undefined,
           bank_name: rest.bank_name !== undefined ? nullIfEmpty(rest.bank_name) : undefined,
           emergency_contact_name: rest.emergency_contact_name !== undefined ? nullIfEmpty(rest.emergency_contact_name) : undefined,
@@ -596,6 +632,7 @@ export class EmployeesService {
           OR: [
             { employee_code_dep: depCode },
             { employee_code: { startsWith: `${depCode}-`, mode: 'insensitive' } },
+            { employee_code: { contains: `-${depCode}-`, mode: 'insensitive' } },
           ],
         },
       });

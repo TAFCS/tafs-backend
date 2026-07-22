@@ -99,30 +99,43 @@ export class MediaService {
     return { url };
   }
 
-  async uploadEmployeePhoto(id: number, file: Express.Multer.File) {
+  async uploadEmployeePhoto(
+    id: number,
+    file: Express.Multer.File,
+    slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile',
+  ) {
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
     if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
 
     const extension = file.originalname.split('.').pop() || 'jpg';
-    const key = `media/employees/${id}/profile-${Date.now()}.${extension}`;
+    const key = `media/employees/${id}/${slot}-${Date.now()}.${extension}`;
 
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
 
+    const columnMap: Record<string, string> = {
+      profile: 'photo_url',
+      father: 'father_photo_url',
+      mother: 'mother_photo_url',
+      spouse: 'spouse_photo_url',
+    };
+
+    const targetColumn = columnMap[slot] || 'photo_url';
+
     await this.prisma.employee_profiles.update({
       where: { id },
-      data: { photo_url: url },
+      data: { [targetColumn]: url },
     });
 
     await this.auditLogs.log({
       entity_type: 'EMPLOYEE',
       entity_id: String(id),
       action: 'UPDATED',
-      field: 'photo_url',
+      field: targetColumn,
       changed_by: 'system',
-      note: `Uploaded employee profile photo for #${id} (${employee.full_name || 'N/A'}).`,
+      note: `Uploaded employee ${slot} photo for #${id} (${employee.full_name || 'N/A'}).`,
     });
 
-    return { url };
+    return { url, slot };
   }
 
   async uploadLeaveAttachment(id: number, file: Express.Multer.File) {

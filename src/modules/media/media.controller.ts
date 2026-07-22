@@ -111,7 +111,7 @@ export class MediaController {
   }
 
   @Post('employee/:id/photo')
-  @ApiOperation({ summary: 'Upload employee profile photo' })
+  @ApiOperation({ summary: 'Upload employee photo for slot (profile, father, mother, spouse)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -127,10 +127,11 @@ export class MediaController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadEmployeePhoto(
     @Param('id', ParseIntPipe) id: number,
+    @Query('slot') slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile',
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.mediaService.uploadEmployeePhoto(id, file);
+    return this.mediaService.uploadEmployeePhoto(id, file, slot);
   }
 
   @Post('employee/:id/leave-attachment')

@@ -47,6 +47,11 @@ export class CreateStaffCategoryDto {
   @IsString()
   @MaxLength(255)
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  employee_code_dep?: string;
 }
 
 @Injectable()
@@ -252,6 +257,7 @@ export class DepartmentsService {
           code,
           name: dto.name.trim(),
           description: dto.description?.trim() || null,
+          employee_code_dep: dto.employee_code_dep?.trim() || null,
         },
         include: { _count: { select: { employee_profiles: true } } },
       });
@@ -287,10 +293,11 @@ export class DepartmentsService {
       );
     }
 
-    const data: { code?: string; name?: string; description?: string | null } = {};
+    const data: { code?: string; name?: string; description?: string | null; employee_code_dep?: string | null } = {};
     if (dto.code !== undefined) data.code = this.normalizeCategoryCode(dto.code);
     if (dto.name !== undefined) data.name = dto.name.trim();
     if (dto.description !== undefined) data.description = dto.description?.trim() || null;
+    if (dto.employee_code_dep !== undefined) data.employee_code_dep = dto.employee_code_dep?.trim() || null;
 
     try {
       const record = await this.prisma.staff_categories.update({

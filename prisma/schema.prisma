@@ -1019,6 +1019,7 @@ model staff_categories {
   code                   String                   @db.VarChar(50)
   name                   String                   @db.VarChar(100)
   description            String?                  @db.VarChar(255)
+  employee_code_dep      String?                  @db.VarChar(2)
   departments            departments              @relation(fields: [department_id], references: [id], onDelete: Restrict)
   employee_profiles      employee_profiles[]
   academic_calendar_days academic_calendar_days[]
@@ -1056,6 +1057,13 @@ model employee_profiles {
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
+  father_photo_url                   String?
+  father_cnic                        String?                              @db.VarChar(50)
+  mother_photo_url                   String?
+  mother_cnic                        String?                              @db.VarChar(50)
+  spouse_name                        String?                              @db.VarChar(100)
+  spouse_cnic                        String?                              @db.VarChar(50)
+  spouse_photo_url                   String?
   account_number                     String?                              @db.VarChar(50)
   bank_name                          String?                              @db.VarChar(100)
   emergency_contact_name             String?                              @db.VarChar(100)
