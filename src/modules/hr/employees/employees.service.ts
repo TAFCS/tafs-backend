@@ -9,7 +9,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
-import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields } from './employee-code.util';
+import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields, campusPrefixForId } from './employee-code.util';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -307,7 +307,10 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto, changedBy?: string) {
     const { class_section_assignments, ...rest } = dto;
-    const codeFields = resolveEmployeeCodeFields(rest);
+    const codeFields = resolveEmployeeCodeFields({
+      ...rest,
+      campusPrefix: campusPrefixForId(rest.campus_id ?? null),
+    });
 
     if (codeFields.employee_code) {
       await this.assertCodeAvailable(codeFields.employee_code);
@@ -375,15 +378,25 @@ export class EmployeesService {
     const existing = await this.findOne(id);
 
     const { class_section_assignments, ...rest } = dto;
+    const nextCampusId = rest.campus_id !== undefined ? rest.campus_id : existing.campus_id;
     const hasCodeInput =
       rest.employee_code !== undefined ||
       rest.employee_code_dep !== undefined ||
       rest.employee_code_number !== undefined;
-    const codeFields = hasCodeInput
+    // If campus changes but code fields weren't touched, still recompose with the new prefix
+    const campusChanged =
+      rest.campus_id !== undefined && rest.campus_id !== existing.campus_id;
+    const shouldResolveCode = hasCodeInput || campusChanged;
+    const codeFields = shouldResolveCode
       ? resolveEmployeeCodeFields({
-          employee_code: rest.employee_code,
-          employee_code_dep: rest.employee_code_dep,
-          employee_code_number: rest.employee_code_number,
+          employee_code: hasCodeInput ? rest.employee_code : existing.employee_code,
+          employee_code_dep: hasCodeInput
+            ? rest.employee_code_dep
+            : existing.employee_code_dep,
+          employee_code_number: hasCodeInput
+            ? rest.employee_code_number
+            : existing.employee_code_number,
+          campusPrefix: campusPrefixForId(nextCampusId),
         })
       : null;
 
