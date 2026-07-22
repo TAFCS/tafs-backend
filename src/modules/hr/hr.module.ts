@@ -26,10 +26,11 @@ import { PayrollService } from './payroll/payroll.service';
 import { EmployeeProfileResolverService } from './employee-profile-resolver.service';
 import { LeavesModule } from './leaves/leaves.module';
 import { SaturdaySchedulesModule } from './saturday-schedules/saturday-schedules.module';
+import { ShiftOverridesModule } from './shift-overrides/shift-overrides.module';
 import { TimetablesModule } from '../timetables/timetables.module';
 
 @Module({
-  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, TimetablesModule],
+  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, ShiftOverridesModule, TimetablesModule],
   controllers: [
     EmployeesSelfController,
     EmployeesController,

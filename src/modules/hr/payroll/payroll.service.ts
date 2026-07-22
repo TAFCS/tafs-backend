@@ -48,6 +48,7 @@ interface ComputedLine {
   is_mapped: boolean;
   has_punches: boolean;
   scheduled_working_days: number;
+  total_calendar_days: number;
   present_days: number;
   late_days: number;
   half_days: number;
@@ -86,8 +87,11 @@ const runInclude = {
  * attendance records are corrected afterwards. Re-generating a DRAFT run for
  * the same period recomputes everything from current attendance data.
  *
- * Absence deduction = prorated daily rate (monthly_pay / scheduled working
- * days in the period). Break deduction = every OUT->IN gap between scan
+ * Absence deduction = prorated daily rate (monthly_pay / total calendar days
+ * in the period — weekends and holidays are paid days off, not a proration
+ * base, so every day in the cycle counts toward the divisor even though only
+ * working days can ever be marked absent/late). Break deduction = every
+ * OUT->IN gap between scan
  * pairs (mirrors the pairing logic in zk-attendance-processor.service.ts /
  * staff-attendance.service.ts#buildDaySegments) at a per-minute rate derived
  * from the employee's own reporting_time/leaving_time window. Both formulas
@@ -228,6 +232,7 @@ export class PayrollService {
     scans: zk_attendance_scans[],
     isMapped: boolean,
     mandatorySaturdayDates?: Set<string>,
+    shiftOverridesForEmployee?: Map<string, { start: Date | null; end: Date | null }>,
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -281,11 +286,23 @@ export class PayrollService {
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
       const breakMinutes = Math.round(this.sumBreakMinutes(dayScans));
-      const expected = expectedByDow.get(d.getUTCDay()) ?? {
+      const dowDefault = expectedByDow.get(d.getUTCDay()) ?? {
         expectedCheckIn: employee.reporting_time,
         expectedCheckOut: employee.leaving_time,
         graceMinutes: employee.late_relaxation_minutes ?? 0,
       };
+      // Date-specific shift override wins over the weekly-template cache above
+      // (which only knows about day-of-week, not this exact date) — merged
+      // per-field since a start-only or end-only override still falls
+      // through to the normal schedule for the other side of the day.
+      const dateOverride = shiftOverridesForEmployee?.get(key);
+      const expected = dateOverride
+        ? {
+            expectedCheckIn: dateOverride.start ?? dowDefault.expectedCheckIn,
+            expectedCheckOut: dateOverride.end ?? dowDefault.expectedCheckOut,
+            graceMinutes: dowDefault.graceMinutes,
+          }
+        : dowDefault;
 
       let classification: DayClassification;
       if (!resolved.isWorkingDay) {
@@ -369,6 +386,7 @@ export class PayrollService {
     }
 
     const scheduledWorkingDays = dailyBreakdown.filter((d) => d.is_working_day).length;
+    const totalCalendarDays = dailyBreakdown.length;
     const presentDays = dailyBreakdown.filter((d) => d.classification === 'PRESENT' || d.classification === 'LATE').length;
     const lateDays = dailyBreakdown.filter((d) => d.classification === 'LATE').length;
     const halfDays = dailyBreakdown.filter((d) => d.classification === 'HALF_DAY').length;
@@ -385,7 +403,7 @@ export class PayrollService {
     const totalLateMinutes = dailyBreakdown.reduce((sum, d) => sum + d.late_minutes, 0);
 
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
-    const dailyRate = scheduledWorkingDays > 0 ? monthlyPay.dividedBy(scheduledWorkingDays) : new Prisma.Decimal(0);
+    const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
 
     // Prefer Mon–Fri derived window average; fall back to profile FIXED times.
     let scheduledMinutes = 0;
@@ -416,6 +434,7 @@ export class PayrollService {
       is_mapped: isMapped,
       has_punches: scans.length > 0,
       scheduled_working_days: scheduledWorkingDays,
+      total_calendar_days: totalCalendarDays,
       present_days: presentDays,
       late_days: lateDays,
       half_days: halfDays,
@@ -450,9 +469,10 @@ export class PayrollService {
     periodEnd: Date,
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
-    const [calendarRows, mandatoryByEmployee, allAttendanceRecords, allScans, mappedRows] = await Promise.all([
+    const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows] = await Promise.all([
       this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd),
       this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
+      this.expectedTimes.loadShiftOverridesForEmployees(employeeIds, periodStart, periodEnd),
       this.prisma.attendance_staff_daily.findMany({
         where: { employee_id: { in: employeeIds }, date: { gte: periodStart, lte: periodEnd } },
       }),
@@ -501,6 +521,7 @@ export class PayrollService {
           scansByEmployee.get(employee.id) ?? [],
           mappedEmployeeIds.has(employee.id),
           mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
+          shiftOverridesByEmployee.get(employee.id),
         )),
       })),
     );
