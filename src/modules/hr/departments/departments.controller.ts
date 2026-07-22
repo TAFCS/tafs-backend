@@ -1,5 +1,10 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, UseGuards, HttpStatus } from '@nestjs/common';
-import { DepartmentsService, CreateDepartmentDto, CreateDesignationDto } from './departments.service';
+import {
+  DepartmentsService,
+  CreateDepartmentDto,
+  CreateDesignationDto,
+  CreateStaffCategoryDto,
+} from './departments.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -76,5 +81,34 @@ export class DepartmentsController {
   ) {
     const data = await this.departmentsService.removeDesignation(id, designationId);
     return createApiResponse(data, HttpStatus.OK, 'Designation deleted successfully');
+  }
+
+  // Staff categories (subcategories)
+  @Post(':id/staff-categories')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async createStaffCategory(@Param('id', ParseIntPipe) id: number, @Body() dto: CreateStaffCategoryDto) {
+    const data = await this.departmentsService.createStaffCategory(id, dto);
+    return createApiResponse(data, HttpStatus.CREATED, 'Staff category created successfully');
+  }
+
+  @Patch(':id/staff-categories/:categoryId')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateStaffCategory(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('categoryId', ParseIntPipe) categoryId: number,
+    @Body() dto: Partial<CreateStaffCategoryDto>
+  ) {
+    const data = await this.departmentsService.updateStaffCategory(id, categoryId, dto);
+    return createApiResponse(data, HttpStatus.OK, 'Staff category updated successfully');
+  }
+
+  @Delete(':id/staff-categories/:categoryId')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async removeStaffCategory(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('categoryId', ParseIntPipe) categoryId: number
+  ) {
+    const data = await this.departmentsService.removeStaffCategory(id, categoryId);
+    return createApiResponse(data, HttpStatus.OK, 'Staff category deleted successfully');
   }
 }

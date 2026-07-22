@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { StaffCategory } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { isWeekendDate } from './student-calendar-day.util';
 
@@ -12,13 +11,15 @@ export interface ResolvedCalendarDay {
   source: 'CALENDAR' | 'SCHEDULE' | 'DEFAULT';
 }
 
+const TEACHER_CATEGORY_CODES = new Set(['TEACHER', 'ASSISTANT_TEACHER']);
+
 type CalendarRow = {
   day_type: string;
   description: string | null;
   class_id: number | null;
   section_id: number | null;
   department_id: number | null;
-  staff_category: StaffCategory | null;
+  staff_category_id: number | null;
   employee_id: number | null;
 };
 
@@ -29,9 +30,9 @@ export class CalendarDayResolverService {
   private calendarSpecificity(row: CalendarRow, audience: 'STUDENT' | 'STAFF'): number {
     if (audience === 'STAFF') {
       if (row.employee_id) return 5;
-      if (row.department_id && row.staff_category) return 4;
+      if (row.department_id && row.staff_category_id) return 4;
       if (row.department_id) return 3;
-      if (row.staff_category) return 2;
+      if (row.staff_category_id) return 2;
       return 1;
     }
     if (row.section_id) return 3;
@@ -53,15 +54,15 @@ export class CalendarDayResolverService {
     row: CalendarRow,
     employeeId: number,
     departmentId: number | null,
-    staffCategory: StaffCategory | null,
+    staffCategoryId: number | null,
   ): boolean {
     if (row.employee_id != null) return row.employee_id === employeeId;
-    if (row.department_id != null && row.staff_category != null) {
-      return row.department_id === departmentId && row.staff_category === staffCategory;
+    if (row.department_id != null && row.staff_category_id != null) {
+      return row.department_id === departmentId && row.staff_category_id === staffCategoryId;
     }
     if (row.department_id != null) return row.department_id === departmentId;
-    if (row.staff_category != null) return row.staff_category === staffCategory;
-    return row.employee_id == null && row.department_id == null && row.staff_category == null;
+    if (row.staff_category_id != null) return row.staff_category_id === staffCategoryId;
+    return row.employee_id == null && row.department_id == null && row.staff_category_id == null;
   }
 
   private pickBestCalendarRow(rows: CalendarRow[], audience: 'STUDENT' | 'STAFF'): CalendarRow | null {
@@ -129,7 +130,7 @@ export class CalendarDayResolverService {
         class_id: true,
         section_id: true,
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
         employee_id: true,
       },
     });
@@ -146,7 +147,8 @@ export class CalendarDayResolverService {
       where: { id: employeeId },
       select: {
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
+        staff_categories: { select: { code: true } },
         days_per_week: true,
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
       },
@@ -174,7 +176,7 @@ export class CalendarDayResolverService {
         class_id: true,
         section_id: true,
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
         employee_id: true,
       },
     });
@@ -184,7 +186,7 @@ export class CalendarDayResolverService {
         row,
         employeeId,
         employee?.department_id ?? null,
-        employee?.staff_category ?? null,
+        employee?.staff_category_id ?? null,
       ),
     );
     const best = this.pickBestCalendarRow(matching, 'STAFF');
@@ -202,25 +204,27 @@ export class CalendarDayResolverService {
       resolved = { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' };
     }
 
-    return this.applyMandatorySaturday(resolved, employeeId, date, employee?.staff_category ?? null);
+    return this.applyMandatorySaturday(
+      resolved,
+      employeeId,
+      date,
+      employee?.staff_categories?.code ?? null,
+    );
   }
 
-  private isTeacherCategory(staffCategory: StaffCategory | null): boolean {
-    return (
-      staffCategory === StaffCategory.TEACHER ||
-      staffCategory === StaffCategory.ASSISTANT_TEACHER
-    );
+  private isTeacherCategory(staffCategoryCode: string | null): boolean {
+    return staffCategoryCode != null && TEACHER_CATEGORY_CODES.has(staffCategoryCode);
   }
 
   private applyMandatorySaturdayFromSet(
     resolved: ResolvedCalendarDay,
     date: Date,
-    staffCategory: StaffCategory | null,
+    staffCategoryCode: string | null,
     saturdayDates: Set<string>,
   ): ResolvedCalendarDay {
     if (resolved.isWorkingDay) return resolved;
     if (date.getUTCDay() !== 6) return resolved;
-    if (!this.isTeacherCategory(staffCategory)) return resolved;
+    if (!this.isTeacherCategory(staffCategoryCode)) return resolved;
     const key = date.toISOString().slice(0, 10);
     if (!saturdayDates.has(key)) return resolved;
     return {
@@ -235,11 +239,11 @@ export class CalendarDayResolverService {
     resolved: ResolvedCalendarDay,
     employeeId: number,
     date: Date,
-    staffCategory: StaffCategory | null,
+    staffCategoryCode: string | null,
   ): Promise<ResolvedCalendarDay> {
     if (resolved.isWorkingDay) return resolved;
     if (date.getUTCDay() !== 6) return resolved;
-    if (!this.isTeacherCategory(staffCategory)) return resolved;
+    if (!this.isTeacherCategory(staffCategoryCode)) return resolved;
 
     const row = await this.prisma.teacher_saturday_schedules.findUnique({
       where: { employee_id_date: { employee_id: employeeId, date } },
@@ -300,7 +304,8 @@ export class CalendarDayResolverService {
     date: Date,
     employeeId: number,
     departmentId: number | null,
-    staffCategory: StaffCategory | null,
+    staffCategoryId: number | null,
+    staffCategoryCode: string | null,
     daysPerWeek: number | null,
     workSchedules: { day_of_week: number; is_working: boolean }[],
     mandatorySaturdayDates?: Set<string>,
@@ -313,7 +318,7 @@ export class CalendarDayResolverService {
     const matching = rows.filter(
       (row) =>
         row.date.getTime() === date.getTime() &&
-        this.matchesStaffScope(row, employeeId, departmentId, staffCategory),
+        this.matchesStaffScope(row, employeeId, departmentId, staffCategoryId),
     );
     const best = this.pickBestCalendarRow(matching, 'STAFF');
     let resolved: ResolvedCalendarDay;
@@ -331,7 +336,7 @@ export class CalendarDayResolverService {
     }
 
     if (mandatorySaturdayDates) {
-      return this.applyMandatorySaturdayFromSet(resolved, date, staffCategory, mandatorySaturdayDates);
+      return this.applyMandatorySaturdayFromSet(resolved, date, staffCategoryCode, mandatorySaturdayDates);
     }
     return resolved;
   }
@@ -347,7 +352,7 @@ export class CalendarDayResolverService {
         class_id: true,
         section_id: true,
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
         employee_id: true,
       },
     });
@@ -374,7 +379,7 @@ export class CalendarDayResolverService {
         class_id: true,
         section_id: true,
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
         employee_id: true,
       },
     });

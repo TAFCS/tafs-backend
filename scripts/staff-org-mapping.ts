@@ -1,4 +1,17 @@
-import { StaffCategory } from '@prisma/client';
+/** Stable category codes (match staff_categories.code seed values). */
+export type StaffCategoryCode =
+  | 'TEACHER'
+  | 'ASSISTANT_TEACHER'
+  | 'SPORTS_COACH'
+  | 'SCOUT_LEADER'
+  | 'ACADEMIC_COORDINATOR'
+  | 'ACADEMIC_ADMINISTRATOR'
+  | 'SENIOR_LEADERSHIP'
+  | 'ADMINISTRATIVE_STAFF'
+  | 'IT_STAFF'
+  | 'CREATIVE_STAFF'
+  | 'FINANCE_STAFF'
+  | 'SUPPORT_STAFF';
 
 export const DEPARTMENT_SEED = [
   { name: 'ACADEMICS', description: 'Teachers + academic admin/coordinators + campus principals/headmistresses' },
@@ -6,13 +19,14 @@ export const DEPARTMENT_SEED = [
   { name: 'FINANCE', description: 'Directress Finance, Accounts/VAN Coordinator' },
   { name: 'IT & TECHNOLOGY', description: 'IT Manager, Computer Operators, Graphic Designers' },
   { name: 'ADMINISTRATION', description: 'Office Assistants, FDOs, Admin Assistants, Outdoor Rider' },
+  { name: 'SUPPORT SERVICES', description: 'Facility and domestic staff' },
 ] as const;
 
 export type DepartmentName = (typeof DEPARTMENT_SEED)[number]['name'];
 
 export interface StaffOrgResult {
   role: string | null;
-  staffCategory: StaffCategory | null;
+  staffCategory: StaffCategoryCode | null;
   departmentName: DepartmentName | null;
 }
 
@@ -122,7 +136,7 @@ function resolveRole(jobTitle: string | null, designation: string | null): strin
   return null;
 }
 
-function resolveCategory(role: string | null, designation: string | null): StaffCategory | null {
+function resolveCategory(role: string | null, designation: string | null): StaffCategoryCode | null {
   const r = norm(role);
   const des = norm(designation);
   const combined = `${r} ${des}`.trim();
@@ -162,7 +176,7 @@ function resolveCategory(role: string | null, designation: string | null): Staff
   return null;
 }
 
-function resolveDepartment(category: StaffCategory | null, role: string | null): DepartmentName | null {
+function resolveDepartment(category: StaffCategoryCode | null, role: string | null): DepartmentName | null {
   if (!category && !role) return null;
   const r = norm(role);
 

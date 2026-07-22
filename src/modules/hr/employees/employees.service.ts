@@ -74,8 +74,8 @@ export class CreateEmployeeDto {
   @IsOptional() @IsString()
   job_title?: string;
 
-  @IsOptional() @IsString()
-  staff_category?: string;
+  @IsOptional() @IsInt()
+  staff_category_id?: number | null;
 
   @IsOptional() @IsString()
   job_description?: string;
@@ -199,6 +199,7 @@ const includeRelations = {
   },
   departments: true,
   designations: true,
+  staff_categories: true,
   staff_types: true,
   campuses: true,
   reporting_manager: {
@@ -217,6 +218,29 @@ export class EmployeesService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
   ) {}
+
+  /** Ensure staff category belongs to the employee's department. */
+  private async assertCategoryMatchesDepartment(
+    departmentId: number | null | undefined,
+    staffCategoryId: number | null | undefined,
+  ) {
+    if (staffCategoryId == null) return;
+    const category = await this.prisma.staff_categories.findUnique({
+      where: { id: staffCategoryId },
+      select: { id: true, department_id: true, name: true },
+    });
+    if (!category) {
+      throw new BadRequestException(`Staff category ${staffCategoryId} not found`);
+    }
+    if (departmentId == null) {
+      throw new BadRequestException('department_id is required when assigning a staff category');
+    }
+    if (category.department_id !== departmentId) {
+      throw new BadRequestException(
+        `Staff category "${category.name}" does not belong to the selected department`,
+      );
+    }
+  }
 
   /** Throws ConflictException if employee_code is already taken by another record */
   private async assertCodeAvailable(code: string, excludeId?: number) {
@@ -262,7 +286,7 @@ export class EmployeesService {
         employee_code_number: true,
         full_name: true,
         job_title: true,
-        staff_category: true,
+        staff_category_id: true,
         join_date: true,
         personal_phone: true,
         personal_email: true,
@@ -271,6 +295,7 @@ export class EmployeesService {
         campuses: { select: { id: true, campus_name: true } },
         departments: { select: { id: true, name: true } },
         designations: { select: { id: true, title: true } },
+        staff_categories: { select: { id: true, code: true, name: true, department_id: true } },
         users: { select: { id: true, username: true, full_name: true, role: true } },
       },
     });
@@ -287,6 +312,7 @@ export class EmployeesService {
     if (codeFields.employee_code) {
       await this.assertCodeAvailable(codeFields.employee_code);
     }
+    await this.assertCategoryMatchesDepartment(rest.department_id ?? null, rest.staff_category_id ?? null);
     const record = await this.prisma.employee_profiles.create({
       data: {
         user_id: rest.user_id || null,
@@ -307,7 +333,7 @@ export class EmployeesService {
         personal_phone: rest.personal_phone || null,
         personal_email: rest.personal_email || null,
         job_title: rest.job_title || null,
-        staff_category: (rest.staff_category as any) || null,
+        staff_category_id: rest.staff_category_id ?? null,
         job_description: rest.job_description || null,
         notes: rest.notes || null,
         reporting_time: toTime(rest.reporting_time),
@@ -365,6 +391,12 @@ export class EmployeesService {
       await this.assertCodeAvailable(codeFields.employee_code, id);
     }
 
+    const nextDepartmentId =
+      rest.department_id !== undefined ? rest.department_id : existing.department_id;
+    const nextCategoryId =
+      rest.staff_category_id !== undefined ? rest.staff_category_id : existing.staff_category_id;
+    await this.assertCategoryMatchesDepartment(nextDepartmentId, nextCategoryId);
+
     const result = await this.prisma.$transaction(async (tx) => {
       if (class_section_assignments !== undefined) {
         await tx.employee_class_section_assignments.deleteMany({ where: { employee_id: id } });
@@ -405,7 +437,7 @@ export class EmployeesService {
           personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
           personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
           job_title: rest.job_title !== undefined ? nullIfEmpty(rest.job_title) : undefined,
-          staff_category: rest.staff_category !== undefined ? (rest.staff_category as any) : undefined,
+          staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
           job_description: rest.job_description !== undefined ? nullIfEmpty(rest.job_description) : undefined,
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
           reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,

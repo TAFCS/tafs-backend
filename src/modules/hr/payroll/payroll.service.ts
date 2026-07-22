@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, StaffCategory, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
@@ -21,7 +21,8 @@ interface EmployeeLineInput {
   leaving_time: Date | null;
   late_relaxation_minutes: number | null;
   department_id: number | null;
-  staff_category: StaffCategory | null;
+  staff_category_id: number | null;
+  staff_categories: { code: string } | null;
   days_per_week: number | null;
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
 }
@@ -271,7 +272,8 @@ export class PayrollService {
         new Date(d),
         employee.id,
         employee.department_id,
-        employee.staff_category,
+        employee.staff_category_id,
+        employee.staff_categories?.code ?? null,
         employee.days_per_week,
         employee.employee_work_schedules,
         mandatorySaturdayDates,
@@ -518,7 +520,8 @@ export class PayrollService {
         leaving_time: true,
         late_relaxation_minutes: true,
         department_id: true,
-        staff_category: true,
+        staff_category_id: true,
+        staff_categories: { select: { code: true } },
         days_per_week: true,
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
       },
@@ -611,7 +614,8 @@ export class PayrollService {
           leaving_time: true,
           late_relaxation_minutes: true,
           department_id: true,
-          staff_category: true,
+          staff_category_id: true,
+          staff_categories: { select: { code: true } },
           days_per_week: true,
           employee_work_schedules: { select: { day_of_week: true, is_working: true } },
         },

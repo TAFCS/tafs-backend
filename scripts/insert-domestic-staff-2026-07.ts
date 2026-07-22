@@ -19,7 +19,7 @@
  *   DRY_RUN=false npx ts-node scripts/insert-domestic-staff-2026-07.ts
  */
 
-import { PrismaClient, StaffCategory } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const prisma = new PrismaClient();
@@ -191,6 +191,15 @@ async function main() {
   }
   const staffTypeCodeByTitle: Record<string, string> = { PEON: 'peon', 'CARE TAKER': 'care_taker' };
 
+  const supportServicesDept = await prisma.departments.findFirst({
+    where: { name: 'SUPPORT SERVICES' },
+  });
+  const supportStaffCategory = await prisma.staff_categories.findFirst({
+    where: { code: 'SUPPORT_STAFF' },
+  });
+  const supportServicesDeptId = supportServicesDept?.id ?? null;
+  const supportStaffCategoryId = supportStaffCategory?.id ?? null;
+
   let created = 0;
   let skipped = 0;
 
@@ -216,8 +225,8 @@ async function main() {
         personal_phone: e.personal_phone,
         designation_id: designationIdByTitle.get(e.designationTitle) ?? null,
         staff_type_id: staffTypeIdByCode.get(staffTypeCodeByTitle[e.designationTitle]) ?? null,
-        staff_category: StaffCategory.SUPPORT_STAFF,
-        department_id: null,
+        staff_category_id: supportStaffCategoryId,
+        department_id: supportServicesDeptId,
         reporting_time: null,
         leaving_time: null,
         late_relaxation_minutes: null,

@@ -1,7 +1,7 @@
 /**
  * migrate-and-clean-data.ts
  *
- * Re-applies staff org mapping (role, staff_category, department) to all
+ * Re-applies staff org mapping (role, staff_category_id, department) to all
  * existing employee_profiles using staff-org-mapping.ts rules.
  *
  * Usage: npx ts-node scripts/migrate-and-clean-data.ts
@@ -27,6 +27,10 @@ async function main() {
 
   const departmentIdByName = new Map(
     (await prisma.departments.findMany()).map((d) => [d.name, d.id]),
+  );
+
+  const categoryIdByCode = new Map(
+    (await prisma.staff_categories.findMany()).map((c) => [c.code, c.id]),
   );
 
   const employees = await prisma.employee_profiles.findMany({
@@ -55,7 +59,7 @@ async function main() {
       where: { id: emp.id },
       data: {
         job_title: role,
-        staff_category: staffCategory,
+        staff_category_id: staffCategory ? categoryIdByCode.get(staffCategory) ?? null : null,
         department_id: departmentName ? departmentIdByName.get(departmentName) ?? null : null,
       },
     });

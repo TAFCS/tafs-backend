@@ -287,6 +287,9 @@ async function main() {
 
   const departmentIdByName = await seedDepartments();
   console.log(`Departments seeded: ${departmentIdByName.size}`);
+  const categoryIdByCode = new Map(
+    (await prisma.staff_categories.findMany()).map((c) => [c.code, c.id]),
+  );
 
   let created = 0;
   let updated = 0;
@@ -320,7 +323,7 @@ async function main() {
       personal_phone: phone || null,
       personal_email: email || null,
       job_title: role,
-      staff_category: staffCategory,
+      staff_category_id: staffCategory ? categoryIdByCode.get(staffCategory) ?? null : null,
       job_description: jobDescription || null,
       notes: notes || null,
       designation_id: null,
