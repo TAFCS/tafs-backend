@@ -206,7 +206,10 @@ const includeRelations = {
     include: { users: { select: { full_name: true } } }
   },
   employee_class_section_assignments: {
-    include: { classes: true, sections: true }
+    include: {
+      classes: { include: { segments: true } },
+      sections: true,
+    },
   }
 };
 

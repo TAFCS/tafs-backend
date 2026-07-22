@@ -36,6 +36,7 @@ export class ClassesService {
   async findAll() {
     const rows = await this.prisma.classes.findMany({
       orderBy: { id: 'asc' },
+      include: { segments: { select: { id: true, code: true, name: true, display_order: true } } },
     });
 
     return rows

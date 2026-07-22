@@ -146,6 +146,7 @@ model classes {
   class_code                         String                               @db.VarChar(10)
   academic_system                    String                               @db.VarChar(20)
   term_start_month                   Int                                  @default(8)
+  segment_id                         Int?
   academic_calendar_days             academic_calendar_days[]
   attendance_roll_sessions           attendance_roll_sessions[]
   campus_classes                     campus_classes[]
@@ -153,6 +154,7 @@ model classes {
   class_attendance_modes             class_attendance_modes?
   class_check_in_schedules           class_check_in_schedules[]
   class_fee_schedule                 class_fee_schedule[]
+  segments                           segments?                            @relation(fields: [segment_id], references: [id])
   employee_class_section_assignments employee_class_section_assignments[]
   student_academic_history           student_academic_history[]
   student_progression_periods        student_progression_periods[]
@@ -160,6 +162,14 @@ model classes {
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   timetables                         timetables[]
   vouchers                           vouchers[]
+}
+
+model segments {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(30)
+  name          String    @db.VarChar(50)
+  display_order Int       @default(0)
+  classes       classes[]
 }
 
 model deposit_allocations {
@@ -734,6 +744,7 @@ model users {
   employee_notice_post_reads                                               employee_notice_post_reads[]
   employee_notice_posts                                                    employee_notice_posts[]
   employee_profile                                                         employee_profiles?
+  employee_shift_overrides_created                                         employee_shift_overrides[]   @relation("ShiftOverrideCreatedBy")
   fcm_device_tokens                                                        fcm_device_tokens[]
   leave_requests_reviewed                                                  leave_requests[]             @relation("LeaveRequestReviewedBy")
   notice_board_posts                                                       notice_board_posts[]
@@ -744,7 +755,6 @@ model users {
   tickets_closed                                                           support_tickets[]            @relation("TicketClosedByUser")
   tickets_assigned                                                         support_tickets[]            @relation("TicketCurrentAssignee")
   teacher_saturday_schedules_marked                                        teacher_saturday_schedules[] @relation("SaturdayScheduleMarkedBy")
-  employee_shift_overrides_created                                         employee_shift_overrides[]   @relation("ShiftOverrideCreatedBy")
   ticket_events_actor                                                      ticket_events[]              @relation("TicketEventActorUser")
   ticket_events_from                                                       ticket_events[]              @relation("TicketEventFromUser")
   ticket_events_to                                                         ticket_events[]              @relation("TicketEventToUser")
@@ -992,6 +1002,7 @@ model departments {
   designations           designations[]
   employee_profiles      employee_profiles[]
   staff_categories       staff_categories[]
+  staff_categories       staff_categories[]
 }
 
 model designations {
@@ -1046,7 +1057,7 @@ model employee_profiles {
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
-  staff_category_id                  Int?
+  staff_category                     StaffCategory?
   account_number                     String?                              @db.VarChar(50)
   bank_name                          String?                              @db.VarChar(100)
   emergency_contact_name             String?                              @db.VarChar(100)
@@ -1056,6 +1067,7 @@ model employee_profiles {
   check_in_source                    CheckInSource                        @default(FIXED)
   employee_code_dep                  String?                              @db.VarChar(10)
   employee_code_number               String?                              @db.VarChar(20)
+  staff_category_id                  Int?
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_staff_daily             attendance_staff_daily[]
@@ -1070,8 +1082,8 @@ model employee_profiles {
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
-  employee_work_schedules            employee_work_schedules[]
   employee_shift_overrides           employee_shift_overrides[]
+  employee_work_schedules            employee_work_schedules[]
   leave_requests                     leave_requests[]
   payroll_run_lines                  payroll_run_lines[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
@@ -1101,24 +1113,23 @@ model employee_class_section_assignments {
 }
 
 model academic_calendar_days {
-  id                 Int                @id @default(autoincrement())
-  campus_id          Int
-  date               DateTime           @db.Date
-  day_type           String             @db.VarChar(20)
-  description        String?            @db.VarChar(255)
-  applies_to         String             @default("STUDENT") @db.VarChar(20)
-  class_id           Int?
-  section_id         Int?
-  department_id      Int?
-  employee_id        Int?
-  created_by         String?
-  staff_category_id  Int?
-  campuses           campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes            classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  departments        departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
-  employee           employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  sections           sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
-  staff_categories   staff_categories?  @relation(fields: [staff_category_id], references: [id])
+  id             Int                @id @default(autoincrement())
+  campus_id      Int
+  date           DateTime           @db.Date
+  day_type       String             @db.VarChar(20)
+  description    String?            @db.VarChar(255)
+  applies_to     String             @default("STUDENT") @db.VarChar(20)
+  class_id       Int?
+  section_id     Int?
+  department_id  Int?
+  employee_id    Int?
+  created_by     String?
+  staff_category StaffCategory?
+  campuses       campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes        classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  departments    departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  employee       employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  sections       sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, date, applies_to, class_id, section_id, department_id, staff_category_id, employee_id], map: "academic_calendar_days_scope_key")
   @@index([campus_id, date, applies_to])
@@ -1220,8 +1231,8 @@ model employee_shift_overrides {
   reason              String?           @db.VarChar(255)
   created_by          String            @db.VarChar(255)
   created_at          DateTime          @default(now()) @db.Timestamp(6)
-  employee_profiles   employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   users               users             @relation("ShiftOverrideCreatedBy", fields: [created_by], references: [id])
+  employee_profiles   employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@unique([employee_id, date])
   @@index([employee_id, date])
@@ -1248,7 +1259,6 @@ model payroll_run_lines {
   payroll_run_id         Int
   employee_id            Int
   scheduled_working_days Int
-  total_calendar_days    Int               @default(0)
   present_days           Int
   late_days              Int
   half_days              Int
@@ -1276,6 +1286,7 @@ model payroll_run_lines {
   has_salary             Boolean           @default(true)
   is_mapped              Boolean           @default(true)
   has_punches            Boolean           @default(true)
+  total_calendar_days    Int               @default(0)
   disbursed_by_user      users?            @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles      employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs           payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
@@ -1702,6 +1713,21 @@ model unconfirmed_admissions {
   requested_grade String?   @db.VarChar(20)
   admin_notes     String?
   campuses        campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
+}
+
+model staff_categories {
+  id                     Int                      @id @default(autoincrement())
+  department_id          Int
+  code                   String                   @db.VarChar(50)
+  name                   String                   @db.VarChar(100)
+  description            String?                  @db.VarChar(255)
+  academic_calendar_days academic_calendar_days[]
+  employee_profiles      employee_profiles[]
+  departments            departments              @relation(fields: [department_id], references: [id])
+
+  @@unique([department_id, code])
+  @@unique([department_id, name])
+  @@index([department_id])
 }
 
 enum BulkJobStatus {

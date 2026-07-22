@@ -25,7 +25,14 @@ const scheduleInclude = {
           section_id: true,
           class_id: true,
           sections: { select: { description: true } },
-          classes: { select: { description: true, class_code: true } },
+          classes: {
+            select: {
+              description: true,
+              class_code: true,
+              segment_id: true,
+              segments: { select: { id: true, code: true, name: true, display_order: true } },
+            },
+          },
         },
       },
     },
