@@ -1,32 +1,29 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import Mailjet from 'node-mailjet';
+import { Resend } from 'resend';
 
 type OtpEmailPurpose = 'signup' | 'forgot-password';
 
 @Injectable()
 export class MailerService implements OnModuleInit {
-  private client: Mailjet | null = null;
+  private client: Resend | null = null;
   private fromEmail: string;
   private fromName: string;
 
   onModuleInit() {
-    const apiKey = process.env.MAILJET_API_KEY;
-    const apiSecret = process.env.MAILJET_API_SECRET;
-    this.fromEmail = process.env.MAILJET_FROM_EMAIL || 'noreply@tafs.edu.pk';
-    this.fromName = process.env.MAILJET_FROM_NAME || 'TAFS';
+    const apiKey = process.env.RESEND_API_KEY;
+    this.fromEmail = process.env.RESEND_FROM_EMAIL || 'noreply@tafs.edu.pk';
+    this.fromName = process.env.RESEND_FROM_NAME || 'TAFS';
 
-    if (!apiKey || !apiSecret) {
-      console.warn(
-        '[Mailer] MAILJET_API_KEY / MAILJET_API_SECRET not set — email sending disabled.',
-      );
+    if (!apiKey) {
+      console.warn('[Mailer] RESEND_API_KEY not set — email sending disabled.');
       return;
     }
 
     try {
-      this.client = Mailjet.apiConnect(apiKey, apiSecret);
-      console.log('[Mailer] Mailjet client initialized');
+      this.client = new Resend(apiKey);
+      console.log('[Mailer] Resend client initialized');
     } catch (e) {
-      console.warn('[Mailer] Failed to initialize Mailjet client:', e.message);
+      console.warn('[Mailer] Failed to initialize Resend client:', e.message);
     }
   }
 
@@ -37,7 +34,7 @@ export class MailerService implements OnModuleInit {
   ): Promise<void> {
     if (!this.client) {
       console.error(
-        `[Mailer] Mailjet not initialized — cannot send OTP to ${to}`,
+        `[Mailer] Resend not initialized — cannot send OTP to ${to}`,
       );
       return;
     }
@@ -65,16 +62,13 @@ export class MailerService implements OnModuleInit {
     `;
 
     try {
-      await this.client.post('send', { version: 'v3.1' }).request({
-        Messages: [
-          {
-            From: { Email: this.fromEmail, Name: this.fromName },
-            To: [{ Email: to }],
-            Subject: subject,
-            HTMLPart: htmlBody,
-          },
-        ],
+      const { error } = await this.client.emails.send({
+        from: `${this.fromName} <${this.fromEmail}>`,
+        to: [to],
+        subject,
+        html: htmlBody,
       });
+      if (error) throw new Error(error.message);
       console.log(`[Mailer] OTP email sent to ${to} (purpose=${purpose})`);
     } catch (e) {
       console.error(`[Mailer] Failed to send OTP email to ${to}:`, e.message);
