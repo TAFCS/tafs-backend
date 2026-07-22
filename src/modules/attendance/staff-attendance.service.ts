@@ -468,6 +468,9 @@ export class StaffAttendanceService {
       status: StaffAttendanceStatus | null;
       check_in_at: string | null;
       check_out_at: string | null;
+      expected_check_in: string | null;
+      expected_check_out: string | null;
+      is_override: boolean;
       scans: { id: number; scan_time: string; direction: string | null }[];
       is_working_day: boolean;
       day_type: string | null;
@@ -495,6 +498,10 @@ export class StaffAttendanceService {
           )
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 
+      const expected = campusId
+        ? await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d))
+        : { expectedCheckIn: null as Date | null, expectedCheckOut: null as Date | null, source: 'NONE' as const };
+
       const dayScans = scansByDate.get(key) ?? [];
       days.push({
         date: key,
@@ -505,6 +512,9 @@ export class StaffAttendanceService {
           (dayScans.length > 0 && dayScans.length % 2 === 0
             ? dayScans[dayScans.length - 1].scan_time.toISOString()
             : null),
+        expected_check_in: expected.expectedCheckIn?.toISOString() ?? null,
+        expected_check_out: expected.expectedCheckOut?.toISOString() ?? null,
+        is_override: expected.source === 'OVERRIDE',
         scans: dayScans.map((s) => ({
           id: s.id,
           scan_time: s.scan_time.toISOString(),
