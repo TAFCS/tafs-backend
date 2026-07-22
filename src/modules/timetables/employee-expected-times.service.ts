@@ -3,7 +3,7 @@ import { CheckInSource } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TeacherCheckinDerivationService } from './teacher-checkin-derivation.service';
 
-export type ExpectedTimesSource = 'TIMETABLE' | 'FIXED' | 'POLICY' | 'NONE';
+export type ExpectedTimesSource = 'OVERRIDE' | 'TIMETABLE' | 'FIXED' | 'POLICY' | 'NONE';
 
 export type ExpectedTimesResult = {
   expectedCheckIn: Date | null;
@@ -57,6 +57,39 @@ export class EmployeeExpectedTimesService {
 
     const effectiveCampusId = campusId || employee.campus_id || 0;
 
+    const override = await this.prisma.employee_shift_overrides.findUnique({
+      where: { employee_id_date: { employee_id: employeeId, date } },
+    });
+
+    // An override on only one side (start XOR end) still needs the normal
+    // chain's value for the other side, so the base chain always has to run —
+    // it can't be short-circuited just because an override row exists.
+    const base = await this.resolveBaseChain(employee, employeeId, effectiveCampusId, date);
+
+    if (!override || (override.override_start_time == null && override.override_end_time == null)) {
+      return base;
+    }
+
+    return {
+      expectedCheckIn: override.override_start_time ?? base.expectedCheckIn,
+      expectedCheckOut: override.override_end_time ?? base.expectedCheckOut,
+      graceMinutes: base.graceMinutes,
+      source: 'OVERRIDE',
+    };
+  }
+
+  private async resolveBaseChain(
+    employee: {
+      check_in_source: CheckInSource;
+      reporting_time: Date | null;
+      leaving_time: Date | null;
+      late_relaxation_minutes: number | null;
+      campus_id: number | null;
+    },
+    employeeId: number,
+    effectiveCampusId: number,
+    date: Date,
+  ): Promise<ExpectedTimesResult> {
     if (employee.check_in_source === CheckInSource.TIMETABLE) {
       const derived = await this.derivation.resolveForDate(employeeId, date);
       if (derived) {
@@ -187,5 +220,32 @@ export class EmployeeExpectedTimesService {
       return Number.isNaN(n) ? 0 : n;
     }
     return 0;
+  }
+
+  /**
+   * Batched equivalent of the per-date override lookup in resolveExpectedTimes(),
+   * for callers (payroll) that walk many employees x many days and can't afford
+   * one query per employee per day. Keyed by employee then YYYY-MM-DD.
+   */
+  async loadShiftOverridesForEmployees(
+    employeeIds: number[],
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<Map<number, Map<string, { start: Date | null; end: Date | null }>>> {
+    const map = new Map<number, Map<string, { start: Date | null; end: Date | null }>>();
+    if (employeeIds.length === 0) return map;
+
+    const rows = await this.prisma.employee_shift_overrides.findMany({
+      where: { employee_id: { in: employeeIds }, date: { gte: dateFrom, lte: dateTo } },
+      select: { employee_id: true, date: true, override_start_time: true, override_end_time: true },
+    });
+
+    for (const row of rows) {
+      const key = row.date.toISOString().slice(0, 10);
+      const inner = map.get(row.employee_id) ?? new Map();
+      inner.set(key, { start: row.override_start_time, end: row.override_end_time });
+      map.set(row.employee_id, inner);
+    }
+    return map;
   }
 }

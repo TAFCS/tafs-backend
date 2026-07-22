@@ -275,6 +275,7 @@ export class EnrollmentService {
         campuses: true,
         classes: true,
         sections: true,
+        houses: true,
         families: {
           include: {
             students: {
@@ -411,6 +412,8 @@ export class EnrollmentService {
       campus_name: student.campuses?.campus_name,
       class_name: student.classes?.description,
       section_name: student.sections?.description,
+      house_name: student.houses?.house_name,
+      house_color: student.houses?.house_color,
       segment_head: segmentHead,
       address: address,
       home_phone: student.families?.home_phone,
