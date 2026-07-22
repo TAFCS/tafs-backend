@@ -27,47 +27,55 @@ export class ShiftOverridesService {
       throw new BadRequestException('Set at least one of override_start_time or override_end_time');
     }
 
-    const employee = await this.prisma.employee_profiles.findUnique({
-      where: { id: dto.employee_id },
+    const uniqueEmployeeIds = [...new Set(dto.employee_ids)];
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: uniqueEmployeeIds } },
       select: { id: true, full_name: true, campus_id: true },
     });
-    if (!employee) throw new BadRequestException('Employee not found');
-    this.assertCampusAccess(user, employee.campus_id);
+    if (employees.length !== uniqueEmployeeIds.length) {
+      throw new BadRequestException('One or more employee IDs were not found');
+    }
+    for (const employee of employees) {
+      this.assertCampusAccess(user, employee.campus_id);
+    }
 
     const startTime = toTime(dto.override_start_time);
     const endTime = toTime(dto.override_end_time);
     const uniqueDates = [...new Set(dto.dates)];
 
     const rows = await Promise.all(
-      uniqueDates.map((dateStr) => {
-        const date = this.parseDate(dateStr);
-        return this.prisma.employee_shift_overrides.upsert({
-          where: { employee_id_date: { employee_id: dto.employee_id, date } },
-          create: {
-            employee_id: dto.employee_id,
-            date,
-            override_start_time: startTime,
-            override_end_time: endTime,
-            reason: dto.reason,
-            created_by: user.sub,
-          },
-          update: {
-            override_start_time: startTime,
-            override_end_time: endTime,
-            reason: dto.reason,
-            created_by: user.sub,
-          },
-          include: overrideInclude,
-        });
-      }),
+      employees.flatMap((employee) =>
+        uniqueDates.map((dateStr) => {
+          const date = this.parseDate(dateStr);
+          return this.prisma.employee_shift_overrides.upsert({
+            where: { employee_id_date: { employee_id: employee.id, date } },
+            create: {
+              employee_id: employee.id,
+              date,
+              override_start_time: startTime,
+              override_end_time: endTime,
+              reason: dto.reason,
+              created_by: user.sub,
+            },
+            update: {
+              override_start_time: startTime,
+              override_end_time: endTime,
+              reason: dto.reason,
+              created_by: user.sub,
+            },
+            include: overrideInclude,
+          });
+        }),
+      ),
     );
 
+    const employeeNames = employees.map((e) => e.full_name ?? `employee #${e.id}`).join(', ');
     void this.auditLogs.log({
       entity_type: 'EMPLOYEE_SHIFT_OVERRIDE',
-      entity_id: String(dto.employee_id),
+      entity_id: uniqueEmployeeIds.join(','),
       action: 'CREATED',
       changed_by: user.username,
-      note: `Set shift override for ${employee.full_name ?? `employee #${employee.id}`} on ${uniqueDates.length} day(s): ${uniqueDates.join(', ')}.`,
+      note: `Set shift override for ${employeeNames} on ${uniqueDates.length} day(s): ${uniqueDates.join(', ')}.`,
     });
 
     return rows;

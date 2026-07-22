@@ -3,10 +3,12 @@ import { ArrayMinSize, IsArray, IsDateString, IsInt, IsOptional, IsString, Match
 import { Type } from 'class-transformer';
 
 export class CreateShiftOverridesDto {
-  @ApiProperty({ description: 'Employee profile ID this override applies to' })
-  @IsInt()
+  @ApiProperty({ type: [Number], description: 'Employee profile IDs this override applies to' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
   @Type(() => Number)
-  employee_id: number;
+  employee_ids: number[];
 
   @ApiProperty({ type: [String], example: ['2026-03-03', '2026-03-09', '2026-03-17'] })
   @IsArray()
