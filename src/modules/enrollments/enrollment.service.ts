@@ -4,6 +4,7 @@ import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ProgressionHistoryService } from '../students/progression-history.service';
 
 @Injectable()
 export class EnrollmentService {
@@ -11,6 +12,7 @@ export class EnrollmentService {
     private readonly prisma: PrismaService,
     private readonly allocation: StudentAllocationService,
     private readonly auditLogs: AuditLogsService,
+    private readonly progressionHistory: ProgressionHistoryService,
   ) { }
 
   async getCandidates() {
@@ -544,16 +546,16 @@ export class EnrollmentService {
           },
         });
 
-        await tx.student_academic_history.create({
-          data: {
-            student_cc: cc,
-            class_id: enrolled.class_id,
-            section_id: enrolled.section_id,
-            campus_id: enrolled.campus_id,
-            academic_year: enrolled.academic_year,
-            gr_number: enrolled.gr_number,
-            change_type: 'ENROLLED',
-          },
+        await this.progressionHistory.recordProgressionChange(tx, {
+          studentCc: cc,
+          campusId: enrolled.campus_id,
+          classId: enrolled.class_id,
+          sectionId: enrolled.section_id,
+          houseId: enrolled.house_id,
+          academicYear: enrolled.academic_year,
+          grNumber: enrolled.gr_number,
+          changeType: 'ENROLLED',
+          changedBy,
         });
 
         void this.auditLogs.log({
@@ -569,46 +571,48 @@ export class EnrollmentService {
       });
     }
 
-    const enrolled = await this.prisma.students.update({
-      where: { cc },
-      data: {
-        status: 'ENROLLED',
-        gr_number: dto.gr_number,
-        house_id: dto.house_id,
-        section_id: dto.section_id || undefined,
-        class_id: resolvedClassId ?? undefined,
-        doa: new Date(),
-      },
-      include: {
-        campuses: true,
-        classes: true,
-        sections: true,
-        houses: true,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const enrolled = await tx.students.update({
+        where: { cc },
+        data: {
+          status: 'ENROLLED',
+          gr_number: dto.gr_number,
+          house_id: dto.house_id,
+          section_id: dto.section_id || undefined,
+          class_id: resolvedClassId ?? undefined,
+          doa: new Date(),
+        },
+        include: {
+          campuses: true,
+          classes: true,
+          sections: true,
+          houses: true,
+        },
+      });
 
-    await this.prisma.student_academic_history.create({
-      data: {
-        student_cc: cc,
-        class_id: enrolled.class_id,
-        section_id: enrolled.section_id,
-        campus_id: enrolled.campus_id,
-        academic_year: enrolled.academic_year,
-        gr_number: enrolled.gr_number,
-        change_type: 'ENROLLED',
-      },
-    });
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: cc,
+        campusId: enrolled.campus_id,
+        classId: enrolled.class_id,
+        sectionId: enrolled.section_id,
+        houseId: enrolled.house_id,
+        academicYear: enrolled.academic_year,
+        grNumber: enrolled.gr_number,
+        changeType: 'ENROLLED',
+        changedBy,
+      });
 
-    void this.auditLogs.log({
-      entity_type: 'STUDENT',
-      entity_id: String(cc),
-      action: 'ENROLLED',
-      changed_by: changedBy,
-      student_id: cc,
-      note: `${enrolled.full_name ?? `Student CC ${cc}`} enrolled with GR ${enrolled.gr_number ?? '—'}, class ${enrolled.classes?.description ?? '—'}, section ${enrolled.sections?.description ?? '—'}.`,
-    });
+      void this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(cc),
+        action: 'ENROLLED',
+        changed_by: changedBy,
+        student_id: cc,
+        note: `${enrolled.full_name ?? `Student CC ${cc}`} enrolled with GR ${enrolled.gr_number ?? '—'}, class ${enrolled.classes?.description ?? '—'}, section ${enrolled.sections?.description ?? '—'}.`,
+      });
 
-    return enrolled;
+      return enrolled;
+    });
   }
 
   private async computeNextGr(campusId: number | null, isALevel = false): Promise<string> {

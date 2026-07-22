@@ -203,6 +203,17 @@ export class StudentsController {
     );
   }
 
+  @Get(':id/progression')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  async getProgression(@Param('id', ParseIntPipe) id: number) {
+    const periods = await this.studentsService.getProgressionPeriods(id);
+    return createApiResponse(
+      periods,
+      HttpStatus.OK,
+      'Progression periods retrieved successfully',
+    );
+  }
+
   @Get(':id/house-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   async getHouseHistory(@Param('id', ParseIntPipe) id: number) {

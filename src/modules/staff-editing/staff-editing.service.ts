@@ -12,6 +12,7 @@ import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { StudentStatus } from '../../constants/student-status.constant';
+import { ProgressionHistoryService } from '../students/progression-history.service';
 
 @Injectable()
 export class StaffEditingService {
@@ -19,6 +20,7 @@ export class StaffEditingService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
+    private readonly progressionHistory: ProgressionHistoryService,
   ) { }
 
   // ─── Date Helpers ─────────────────────────────────────────────────────────
@@ -327,7 +329,8 @@ export class StaffEditingService {
           throw new NotFoundException(`Student #${cc} not found`);
         }
 
-        // Log student field changes
+        // Log student field changes (placement FKs go to progression periods, not audit_logs)
+        const PLACEMENT_FIELDS = new Set(['campus_id', 'class_id', 'section_id', 'house_id']);
         const TRACKED_STUDENT_FIELDS = [
           'full_name', 'cnic', 'gender', 'nationality', 'religion',
           'place_of_birth', 'identification_marks', 'medical_info',
@@ -338,6 +341,7 @@ export class StaffEditingService {
         ];
 
         for (const field of TRACKED_STUDENT_FIELDS) {
+          if (PLACEMENT_FIELDS.has(field)) continue;
           if ((dto as any)[field] !== undefined) {
             let oldVal: string | null = null;
             let newVal: string | null = null;
@@ -382,6 +386,8 @@ export class StaffEditingService {
             dto.class_id !== undefined ? dto.class_id : existing.class_id;
           const nextSectionId =
             dto.section_id !== undefined ? dto.section_id : existing.section_id;
+          const nextHouseId =
+            dto.house_id !== undefined ? dto.house_id : existing.house_id;
           const nextGender =
             dto.gender !== undefined ? dto.gender : existing.gender;
           const nextStatus =
@@ -418,23 +424,42 @@ export class StaffEditingService {
             where: { cc },
             data: studentData as any,
           });
-        }
 
-        // Write academic history if class or section changed
-        const classChanged = dto.class_id !== undefined && existing.class_id !== dto.class_id;
-        const sectionChanged = dto.section_id !== undefined && existing.section_id !== dto.section_id;
-        if (classChanged || sectionChanged) {
-          await tx.student_academic_history.create({
-            data: {
-              student_cc: cc,
-              class_id: dto.class_id !== undefined ? dto.class_id : existing.class_id,
-              section_id: dto.section_id !== undefined ? dto.section_id : existing.section_id,
-              campus_id: dto.campus_id !== undefined ? dto.campus_id : existing.campus_id,
-              academic_year: (dto as any).academic_year ?? existing.academic_year,
-              gr_number: (dto as any).gr_number ?? existing.gr_number,
-              change_type: 'REASSIGNED',
-              changed_by: changedBy,
+          const nextAcademicYear =
+            (dto as any).academic_year !== undefined
+              ? (dto as any).academic_year
+              : existing.academic_year;
+          const nextGrNumber =
+            (dto as any).gr_number !== undefined
+              ? (dto as any).gr_number
+              : existing.gr_number;
+
+          const changeType = this.progressionHistory.resolveChangeType({
+            prior: {
+              campus_id: existing.campus_id,
+              class_id: existing.class_id,
+              section_id: existing.section_id,
+              house_id: existing.house_id,
             },
+            next: {
+              campusId: nextCampusId,
+              classId: nextClassId,
+              sectionId: nextSectionId,
+              houseId: nextHouseId,
+            },
+            defaultType: 'REASSIGNED',
+          });
+
+          await this.progressionHistory.recordProgressionChange(tx, {
+            studentCc: cc,
+            campusId: nextCampusId,
+            classId: nextClassId,
+            sectionId: nextSectionId,
+            houseId: nextHouseId,
+            academicYear: nextAcademicYear,
+            grNumber: nextGrNumber,
+            changeType,
+            changedBy,
           });
         }
 

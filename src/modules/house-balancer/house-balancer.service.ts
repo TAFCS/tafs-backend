@@ -14,13 +14,19 @@ import {
   CampusHouseBalancePreviewDto,
 } from './dto/campus-house-balance.dto';
 import { HouseBalancerScopeDto } from './dto/house-balancer-scope.dto';
+import { ProgressionHistoryService } from '../students/progression-history.service';
 
 type TxClient = Prisma.TransactionClient;
 
 type ScopedStudent = {
   cc: number;
   full_name: string;
+  campus_id: number | null;
+  class_id: number | null;
+  section_id: number | null;
   house_id: number | null;
+  academic_year: string | null;
+  gr_number: string | null;
   houses: { id: number; house_name: string | null; house_color: string | null } | null;
 };
 
@@ -35,6 +41,7 @@ export class HouseBalancerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly progressionHistory: ProgressionHistoryService,
   ) {}
 
   private lockKey(campusId: number, classId: number, sectionId: number): number {
@@ -170,7 +177,12 @@ export class HouseBalancerService {
       select: {
         cc: true,
         full_name: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
         house_id: true,
+        academic_year: true,
+        gr_number: true,
         houses: {
           select: { id: true, house_name: true, house_color: true },
         },
@@ -332,11 +344,26 @@ export class HouseBalancerService {
       );
 
       const previousHouseByCc = new Map(students.map((s) => [s.cc, s.house_id]));
+      const studentByCc = new Map(students.map((s) => [s.cc, s]));
 
       for (const item of dto.assignments) {
         await tx.students.update({
           where: { cc: item.student_id },
           data: { house_id: item.house_id },
+        });
+        const prior = studentByCc.get(item.student_id);
+        if (!prior || prior.house_id === item.house_id) continue;
+        await this.progressionHistory.recordProgressionChange(tx, {
+          studentCc: item.student_id,
+          campusId: prior.campus_id,
+          classId: prior.class_id,
+          sectionId: prior.section_id,
+          houseId: item.house_id,
+          academicYear: prior.academic_year,
+          grNumber: prior.gr_number,
+          changeType: 'HOUSE_CHANGED',
+          changedBy: changedBy ?? 'system',
+          notes: 'Reassigned via house balancer',
         });
       }
 
@@ -366,22 +393,6 @@ export class HouseBalancerService {
       changed_by: changedBy ?? 'system',
       note: `Rebalanced ${result.student_count} students for campus=${dto.campus_id} class=${dto.class_id} section=${dto.section_id}. before=${JSON.stringify(result.before_counts)} after=${JSON.stringify(result.after_counts)}`,
     });
-
-    for (const item of result.assignments) {
-      const oldHouseId = result.previousHouseByCc.get(item.student_id) ?? null;
-      if (oldHouseId === item.house_id) continue;
-      await this.auditLogs.log({
-        entity_type: 'STUDENT',
-        entity_id: String(item.student_id),
-        action: 'REBALANCED',
-        field: 'student.house_id',
-        old_value: oldHouseId !== null ? String(oldHouseId) : null,
-        new_value: String(item.house_id),
-        changed_by: changedBy ?? 'system',
-        student_id: item.student_id,
-        note: 'Reassigned via house balancer',
-      });
-    }
 
     const { previousHouseByCc, ...publicResult } = result;
     return publicResult;
@@ -423,9 +434,12 @@ export class HouseBalancerService {
         select: {
           cc: true,
           full_name: true,
+          campus_id: true,
           class_id: true,
           section_id: true,
           house_id: true,
+          academic_year: true,
+          gr_number: true,
           houses: {
             select: { id: true, house_name: true, house_color: true },
           },
@@ -658,19 +672,32 @@ export class HouseBalancerService {
         const previousHouseByCc = new Map(
           students.map((student) => [student.cc, student.house_id]),
         );
+        const studentByCc = new Map(students.map((student) => [student.cc, student]));
         for (const assignment of group.assignments) {
           await tx.students.update({
             where: { cc: assignment.student_id },
             data: { house_id: assignment.house_id },
           });
+          const prior = studentByCc.get(assignment.student_id);
           const oldHouseId = previousHouseByCc.get(assignment.student_id) ?? null;
-          if (oldHouseId !== assignment.house_id) {
-            houseChanges.push({
-              student_id: assignment.student_id,
-              old_house_id: oldHouseId,
-              new_house_id: assignment.house_id,
-            });
-          }
+          if (!prior || oldHouseId === assignment.house_id) continue;
+          houseChanges.push({
+            student_id: assignment.student_id,
+            old_house_id: oldHouseId,
+            new_house_id: assignment.house_id,
+          });
+          await this.progressionHistory.recordProgressionChange(tx, {
+            studentCc: assignment.student_id,
+            campusId: prior.campus_id,
+            classId: prior.class_id,
+            sectionId: prior.section_id,
+            houseId: assignment.house_id,
+            academicYear: prior.academic_year,
+            grNumber: prior.gr_number,
+            changeType: 'HOUSE_CHANGED',
+            changedBy: changedBy ?? 'system',
+            notes: 'Reassigned via campus-wide house balancer',
+          });
         }
         const afterCounts = this.countByHouse(
           houses.map((house) => house.id),
@@ -705,20 +732,6 @@ export class HouseBalancerService {
       changed_by: changedBy ?? 'system',
       note: `Rebalanced ${result.total_students} students across ${result.group_count} class/section groups at campus=${dto.campus_id}`,
     });
-
-    for (const change of result.houseChanges) {
-      await this.auditLogs.log({
-        entity_type: 'STUDENT',
-        entity_id: String(change.student_id),
-        action: 'REBALANCED',
-        field: 'student.house_id',
-        old_value: change.old_house_id !== null ? String(change.old_house_id) : null,
-        new_value: String(change.new_house_id),
-        changed_by: changedBy ?? 'system',
-        student_id: change.student_id,
-        note: 'Reassigned via campus-wide house balancer',
-      });
-    }
 
     const { houseChanges, ...publicResult } = result;
     return publicResult;

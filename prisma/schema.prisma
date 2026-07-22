@@ -100,29 +100,30 @@ model campus_sections {
 }
 
 model campuses {
-  id                       Int                        @id @default(autoincrement())
-  campus_code              String                     @unique @db.VarChar(10)
-  campus_name              String                     @db.VarChar(100)
-  address                  String?
-  campus_prefix            String?                    @db.VarChar(10)
-  is_active                Boolean                    @default(true)
-  academic_calendar_days   academic_calendar_days[]
-  attendance_roll_sessions attendance_roll_sessions[]
-  attendance_staff_daily   attendance_staff_daily[]
-  attendance_student_daily attendance_student_daily[]
-  campus_classes           campus_classes[]
-  campus_sections          campus_sections[]
-  class_check_in_schedules class_check_in_schedules[]
-  class_fee_schedule       class_fee_schedule[]
-  employee_profiles        employee_profiles[]
-  hr_policy_sets           hr_policy_sets[]
-  payroll_runs             payroll_runs[]
-  student_academic_history student_academic_history[]
-  students                 students[]
-  timetables               timetables[]
-  unconfirmed_admissions   unconfirmed_admissions[]
-  users                    users[]
-  vouchers                 vouchers[]
+  id                          Int                           @id @default(autoincrement())
+  campus_code                 String                        @unique @db.VarChar(10)
+  campus_name                 String                        @db.VarChar(100)
+  address                     String?
+  campus_prefix               String?                       @db.VarChar(10)
+  is_active                   Boolean                       @default(true)
+  academic_calendar_days      academic_calendar_days[]
+  attendance_roll_sessions    attendance_roll_sessions[]
+  attendance_staff_daily      attendance_staff_daily[]
+  attendance_student_daily    attendance_student_daily[]
+  campus_classes              campus_classes[]
+  campus_sections             campus_sections[]
+  class_check_in_schedules    class_check_in_schedules[]
+  class_fee_schedule          class_fee_schedule[]
+  employee_profiles           employee_profiles[]
+  hr_policy_sets              hr_policy_sets[]
+  payroll_runs                payroll_runs[]
+  student_academic_history    student_academic_history[]
+  student_progression_periods student_progression_periods[]
+  students                    students[]
+  timetables                  timetables[]
+  unconfirmed_admissions      unconfirmed_admissions[]
+  users                       users[]
+  vouchers                    vouchers[]
 }
 
 model class_fee_schedule {
@@ -154,6 +155,7 @@ model classes {
   class_fee_schedule                 class_fee_schedule[]
   employee_class_section_assignments employee_class_section_assignments[]
   student_academic_history           student_academic_history[]
+  student_progression_periods        student_progression_periods[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   timetables                         timetables[]
@@ -298,10 +300,11 @@ model parent_change_requests {
 }
 
 model houses {
-  id          Int        @id @default(autoincrement())
-  house_name  String?    @db.VarChar(100)
-  house_color String?    @db.VarChar(50)
-  students    students[]
+  id                          Int                           @id @default(autoincrement())
+  house_name                  String?                       @db.VarChar(100)
+  house_color                 String?                       @db.VarChar(50)
+  student_progression_periods student_progression_periods[]
+  students                    students[]
 }
 
 model relatives_attending_tafs {
@@ -321,6 +324,7 @@ model sections {
   campus_sections                    campus_sections[]
   employee_class_section_assignments employee_class_section_assignments[]
   student_academic_history           student_academic_history[]
+  student_progression_periods        student_progression_periods[]
   students                           students[]
   timetables                         timetables[]
   vouchers                           vouchers[]
@@ -427,6 +431,29 @@ model student_academic_history {
   students      students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
 
   @@index([student_cc, changed_at(sort: Desc)])
+}
+
+model student_progression_periods {
+  id            Int       @id @default(autoincrement())
+  student_cc    Int
+  campus_id     Int?
+  class_id      Int?
+  section_id    Int?
+  house_id      Int?
+  academic_year String?   @db.VarChar(10)
+  gr_number     String?   @db.VarChar(50)
+  change_type   String    @db.VarChar(30)
+  changed_by    String?   @db.VarChar(255)
+  notes         String?   @db.VarChar(255)
+  valid_from    DateTime  @default(now()) @db.Timestamp(6)
+  valid_to      DateTime? @db.Timestamp(6)
+  campuses      campuses? @relation(fields: [campus_id], references: [id])
+  classes       classes?  @relation(fields: [class_id], references: [id])
+  houses        houses?   @relation(fields: [house_id], references: [id])
+  sections      sections? @relation(fields: [section_id], references: [id])
+  students      students  @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+
+  @@index([student_cc, valid_from])
 }
 
 model student_fee_bundles {
@@ -549,80 +576,81 @@ model student_siblings {
 }
 
 model students {
-  cc                         Int                        @id @default(autoincrement())
-  family_id                  Int?
-  campus_id                  Int?
-  gr_number                  String?                    @db.VarChar(50)
-  dob                        DateTime?                  @db.Date
-  gender                     String?                    @db.VarChar(10)
-  nationality                String?                    @db.VarChar(50)
-  religion                   String?                    @db.VarChar(50)
-  identification_marks       String?
-  medical_info               String?
-  interests                  String?
-  admission_age_years        Int?
-  status                     student_status
-  created_at                 DateTime?                  @default(now()) @db.Timestamp(6)
-  deleted_at                 DateTime?                  @db.Timestamp(6)
-  photograph_url             String?
-  country                    String?                    @db.VarChar(50)
-  province                   String?                    @db.VarChar(50)
-  city                       String?                    @db.VarChar(50)
-  physical_impairment        String?
-  consent_publicity          Boolean?                   @default(false)
-  school_leaving_cert_url    String?
-  achievements_cert_url      String?
-  photo_blue_bg_url          String?
-  whatsapp_number            String?                    @db.VarChar(20)
-  primary_phone              String?                    @db.VarChar(20)
-  email                      String?                    @db.VarChar(100)
-  class_id                   Int?
-  section_id                 Int?
-  house_id                   Int?
-  doa                        DateTime?                  @db.Date
-  full_name                  String                     @db.VarChar(100)
-  place_of_birth             String?                    @db.VarChar(100)
-  primary_phone_country_code String?                    @default("+92") @db.VarChar(10)
-  whatsapp_country_code      String?                    @default("+92") @db.VarChar(10)
-  academic_year              String?                    @db.VarChar(10)
-  home_phone                 String?                    @db.VarChar(20)
-  is_complementary           Boolean                    @default(false)
-  is_fee_endowment           Boolean                    @default(false)
-  fee_start_term             String?                    @db.VarChar(10)
-  graduated_from_class_id    Int?
-  cnic                       String?                    @unique @db.VarChar(15)
-  not_pursuing               Boolean                    @default(false)
-  quick_admission_meta       Json?
-  attendance_notifications   attendance_notifications[]
-  attendance_roll_records    attendance_roll_records[]
-  attendance_student_daily   attendance_student_daily[]
-  audit_logs                 audit_logs[]
-  calendar_notifications     calendar_notifications[]
-  deposits                   deposits[]
-  device_user_mappings       device_user_mappings[]
-  postdated_cheques          postdated_cheques[]
-  relatives_attending_tafs   relatives_attending_tafs[]
-  student_academic_history   student_academic_history[]
-  student_activities         student_activities[]
-  student_admissions         student_admissions[]
-  student_alevel_details     student_alevel_details?
-  student_fee_bundles        student_fee_bundles[]
-  student_fee_installments   student_fee_installments[]
-  student_fees               student_fees[]
-  student_flags              student_flags[]
-  student_guardians          student_guardians[]
-  student_languages          student_languages[]
-  student_previous_schools   student_previous_schools[]
-  campuses                   campuses?                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                    classes?                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  families                   families?                  @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  graduated_from_class       classes?                   @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
-  houses                     houses?                    @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                   sections?                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  support_tickets            support_tickets[]
-  voucher_notifications      voucher_notifications[]
-  vouchers                   vouchers[]
-  zk_attendance_scans        zk_attendance_scans[]
+  cc                          Int                           @id @default(autoincrement())
+  family_id                   Int?
+  campus_id                   Int?
+  gr_number                   String?                       @db.VarChar(50)
+  dob                         DateTime?                     @db.Date
+  gender                      String?                       @db.VarChar(10)
+  nationality                 String?                       @db.VarChar(50)
+  religion                    String?                       @db.VarChar(50)
+  identification_marks        String?
+  medical_info                String?
+  interests                   String?
+  admission_age_years         Int?
+  status                      student_status
+  created_at                  DateTime?                     @default(now()) @db.Timestamp(6)
+  deleted_at                  DateTime?                     @db.Timestamp(6)
+  photograph_url              String?
+  country                     String?                       @db.VarChar(50)
+  province                    String?                       @db.VarChar(50)
+  city                        String?                       @db.VarChar(50)
+  physical_impairment         String?
+  consent_publicity           Boolean?                      @default(false)
+  school_leaving_cert_url     String?
+  achievements_cert_url       String?
+  photo_blue_bg_url           String?
+  whatsapp_number             String?                       @db.VarChar(20)
+  primary_phone               String?                       @db.VarChar(20)
+  email                       String?                       @db.VarChar(100)
+  class_id                    Int?
+  section_id                  Int?
+  house_id                    Int?
+  doa                         DateTime?                     @db.Date
+  full_name                   String                        @db.VarChar(100)
+  place_of_birth              String?                       @db.VarChar(100)
+  primary_phone_country_code  String?                       @default("+92") @db.VarChar(10)
+  whatsapp_country_code       String?                       @default("+92") @db.VarChar(10)
+  academic_year               String?                       @db.VarChar(10)
+  home_phone                  String?                       @db.VarChar(20)
+  is_complementary            Boolean                       @default(false)
+  is_fee_endowment            Boolean                       @default(false)
+  fee_start_term              String?                       @db.VarChar(10)
+  graduated_from_class_id     Int?
+  cnic                        String?                       @unique @db.VarChar(15)
+  not_pursuing                Boolean                       @default(false)
+  quick_admission_meta        Json?
+  attendance_notifications    attendance_notifications[]
+  attendance_roll_records     attendance_roll_records[]
+  attendance_student_daily    attendance_student_daily[]
+  audit_logs                  audit_logs[]
+  calendar_notifications      calendar_notifications[]
+  deposits                    deposits[]
+  device_user_mappings        device_user_mappings[]
+  postdated_cheques           postdated_cheques[]
+  relatives_attending_tafs    relatives_attending_tafs[]
+  student_academic_history    student_academic_history[]
+  student_activities          student_activities[]
+  student_admissions          student_admissions[]
+  student_alevel_details      student_alevel_details?
+  student_fee_bundles         student_fee_bundles[]
+  student_fee_installments    student_fee_installments[]
+  student_fees                student_fees[]
+  student_flags               student_flags[]
+  student_guardians           student_guardians[]
+  student_languages           student_languages[]
+  student_previous_schools    student_previous_schools[]
+  student_progression_periods student_progression_periods[]
+  campuses                    campuses?                     @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                     classes?                      @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                    families?                     @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class        classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
+  houses                      houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                    sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  support_tickets             support_tickets[]
+  voucher_notifications       voucher_notifications[]
+  vouchers                    vouchers[]
+  zk_attendance_scans         zk_attendance_scans[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -1183,9 +1211,6 @@ model payroll_run_lines {
   id                     Int               @id @default(autoincrement())
   payroll_run_id         Int
   employee_id            Int
-  has_salary             Boolean           @default(true)
-  is_mapped              Boolean           @default(true)
-  has_punches            Boolean           @default(true)
   scheduled_working_days Int
   present_days           Int
   late_days              Int
@@ -1211,6 +1236,9 @@ model payroll_run_lines {
   total_late_minutes     Int               @default(0)
   late_deduction         Decimal           @default(0) @db.Decimal(12, 2)
   unpaid_leave_days      Int               @default(0)
+  has_salary             Boolean           @default(true)
+  is_mapped              Boolean           @default(true)
+  has_punches            Boolean           @default(true)
   disbursed_by_user      users?            @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles      employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs           payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
@@ -1578,14 +1606,10 @@ model employee_notice_posts {
   deleted_at        DateTime?                    @db.Timestamp(6)
   class_ids         Int[]                        @default([])
   section_ids       Int[]                        @default([])
-  // Set only for system-generated, single-recipient posts (e.g. a check-in/
-  // check-out ping) — visible only to this employee, bypassing target_roles/
-  // campus_ids/class_ids/section_ids entirely, and excluded from the admin
-  // composer's manage list.
   employee_id       Int?
   post_reads        employee_notice_post_reads[]
-  users             users                        @relation(fields: [posted_by], references: [id])
   employee_profiles employee_profiles?           @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  users             users                        @relation(fields: [posted_by], references: [id])
 
   @@index([posted_at(sort: Desc)])
   @@index([target_roles], type: Gin)

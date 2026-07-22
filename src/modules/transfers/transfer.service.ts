@@ -7,6 +7,7 @@ import { TransferOrderPDF } from './TransferOrderPDF';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { StudentStatus } from '../../constants/student-status.constant';
+import { ProgressionHistoryService } from '../students/progression-history.service';
 
 @Injectable()
 export class TransferService {
@@ -17,6 +18,7 @@ export class TransferService {
     private readonly storage: StorageService,
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
+    private readonly progressionHistory: ProgressionHistoryService,
   ) {}
   async searchStudents(q: string) {
     if (!q?.trim()) return [];
@@ -264,17 +266,17 @@ export class TransferService {
           academic_year: nextYear || currentYear || undefined,
         },
       });
-      await tx.student_academic_history.create({
-        data: {
-          student_cc: cc,
-          class_id: dto.to_class_id,
-          section_id: dto.to_section_id ?? student.section_id,
-          campus_id: dto.to_campus_id ?? student.campus_id,
-          academic_year: nextYear || currentYear || undefined,
-          gr_number: student.gr_number,
-          change_type: 'TRANSFERRED',
-          changed_by: changedBy || null,
-        },
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: cc,
+        campusId: dto.to_campus_id ?? student.campus_id,
+        classId: dto.to_class_id,
+        sectionId: dto.to_section_id ?? student.section_id,
+        houseId: student.house_id,
+        academicYear: nextYear || currentYear || null,
+        grNumber: student.gr_number,
+        changeType: 'TRANSFERRED',
+        changedBy: changedBy || null,
+        notes: dto.remarks || null,
       });
     });
 

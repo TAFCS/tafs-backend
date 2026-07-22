@@ -29,7 +29,8 @@
     "verify:support-tickets": "ts-node scripts/verify-support-tickets.ts",
     "verify:voucher-notifications": "ts-node scripts/verify-voucher-notifications.ts",
     "verify:split-reversal": "ts-node scripts/verify-split-deposit-reversal.ts",
-    "seed:notification-templates": "ts-node scripts/seed-notification-templates.ts"
+    "seed:notification-templates": "ts-node scripts/seed-notification-templates.ts",
+    "backfill:progression-periods": "ts-node scripts/backfill-progression-periods.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

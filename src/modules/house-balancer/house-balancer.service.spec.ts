@@ -10,10 +10,10 @@ describe('HouseBalancerService', () => {
     const students =
       opts?.students ??
       [
-        { cc: 1, full_name: 'A', class_id: 2, section_id: 3, house_id: 10, houses: { id: 10, house_name: 'Red', house_color: '#f00' } },
-        { cc: 2, full_name: 'B', class_id: 2, section_id: 3, house_id: 10, houses: { id: 10, house_name: 'Red', house_color: '#f00' } },
-        { cc: 3, full_name: 'C', class_id: 2, section_id: 3, house_id: 11, houses: { id: 11, house_name: 'Blue', house_color: '#00f' } },
-        { cc: 4, full_name: 'D', class_id: 2, section_id: 3, house_id: null, houses: null },
+        { cc: 1, full_name: 'A', campus_id: 1, class_id: 2, section_id: 3, house_id: 10, academic_year: '2025-26', gr_number: '1', houses: { id: 10, house_name: 'Red', house_color: '#f00' } },
+        { cc: 2, full_name: 'B', campus_id: 1, class_id: 2, section_id: 3, house_id: 10, academic_year: '2025-26', gr_number: '2', houses: { id: 10, house_name: 'Red', house_color: '#f00' } },
+        { cc: 3, full_name: 'C', campus_id: 1, class_id: 2, section_id: 3, house_id: 11, academic_year: '2025-26', gr_number: '3', houses: { id: 11, house_name: 'Blue', house_color: '#00f' } },
+        { cc: 4, full_name: 'D', campus_id: 1, class_id: 2, section_id: 3, house_id: null, academic_year: '2025-26', gr_number: '4', houses: null },
       ];
     const houses =
       opts?.houses ??
@@ -80,10 +80,15 @@ describe('HouseBalancerService', () => {
     };
 
     const auditLogs = { log: jest.fn().mockResolvedValue(undefined) };
+    const progressionHistory = {
+      recordProgressionChange: jest.fn().mockResolvedValue(undefined),
+      resolveChangeType: jest.fn().mockReturnValue('HOUSE_CHANGED'),
+    };
     return {
-      service: new HouseBalancerService(prisma, auditLogs as any),
+      service: new HouseBalancerService(prisma, auditLogs as any, progressionHistory as any),
       prisma,
       auditLogs,
+      progressionHistory,
       students,
       houses,
     };

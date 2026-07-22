@@ -5,9 +5,10 @@ import { PrismaModule } from '../../../prisma/prisma.module';
 import { StorageModule } from '../../common/storage/storage.module';
 import { VoucherPdfModule } from '../voucher-pdf/voucher-pdf.module';
 import { StudentAllocationModule } from '../student-allocation/student-allocation.module';
+import { ProgressionHistoryModule } from '../students/progression-history.module';
 
 @Module({
-  imports: [PrismaModule, StorageModule, VoucherPdfModule, StudentAllocationModule],
+  imports: [PrismaModule, StorageModule, VoucherPdfModule, StudentAllocationModule, ProgressionHistoryModule],
   controllers: [TransferController],
   providers: [TransferService],
 })

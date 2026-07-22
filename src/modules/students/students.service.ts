@@ -58,6 +58,7 @@ type ResolvedClass = {
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
+import { ProgressionHistoryService } from './progression-history.service';
 
 @Injectable()
 export class StudentsService {
@@ -65,6 +66,7 @@ export class StudentsService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
+    private readonly progressionHistory: ProgressionHistoryService,
   ) { }
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
@@ -1319,30 +1321,10 @@ export class StudentsService {
         throw new NotFoundException(`Student #${id} not found`);
     }
 
-    const fields = ['campus_id', 'class_id', 'section_id', 'house_id'];
-    for (const field of fields) {
-      const newVal = dto[field];
-      const oldVal = (student as any)[field];
-      if (newVal !== undefined && String(oldVal ?? '') !== String(newVal ?? '')) {
-        await this.auditLogs.log({
-          entity_type: 'STUDENT',
-          entity_id: String(id),
-          action: 'UPDATED',
-          field: `student.${field}`,
-          old_value: oldVal !== null && oldVal !== undefined ? String(oldVal) : null,
-          new_value: newVal !== null && newVal !== undefined ? String(newVal) : null,
-          changed_by: changedBy,
-          student_id: id,
-        });
-      }
-    }
-
-    const classChanged = dto.class_id !== undefined && student.class_id !== dto.class_id;
-    const sectionChanged = dto.section_id !== undefined && student.section_id !== dto.section_id;
-
     const nextCampusId = dto.campus_id !== undefined ? dto.campus_id : student.campus_id;
     const nextClassId = dto.class_id !== undefined ? dto.class_id : student.class_id;
     const nextSectionId = dto.section_id !== undefined ? dto.section_id : student.section_id;
+    const nextHouseId = dto.house_id !== undefined ? dto.house_id : student.house_id;
     const countsTowardCapacity = student.status === StudentStatus.ENROLLED;
 
     const runUpdate = async (tx: any) => {
@@ -1379,20 +1361,33 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
-      if (classChanged || sectionChanged) {
-        await tx.student_academic_history.create({
-          data: {
-            student_cc: id,
-            class_id: dto.class_id !== undefined ? dto.class_id : student.class_id,
-            section_id: dto.section_id !== undefined ? dto.section_id : student.section_id,
-            campus_id: dto.campus_id !== undefined ? dto.campus_id : student.campus_id,
-            academic_year: student.academic_year,
-            gr_number: student.gr_number,
-            change_type: 'REASSIGNED',
-            changed_by: changedBy,
-          },
-        });
-      }
+      const changeType = this.progressionHistory.resolveChangeType({
+        prior: {
+          campus_id: student.campus_id,
+          class_id: student.class_id,
+          section_id: student.section_id,
+          house_id: student.house_id,
+        },
+        next: {
+          campusId: nextCampusId,
+          classId: nextClassId,
+          sectionId: nextSectionId,
+          houseId: nextHouseId,
+        },
+        defaultType: 'REASSIGNED',
+      });
+
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: id,
+        campusId: nextCampusId,
+        classId: nextClassId,
+        sectionId: nextSectionId,
+        houseId: nextHouseId,
+        academicYear: student.academic_year,
+        grNumber: student.gr_number,
+        changeType,
+        changedBy,
+      });
 
       return updated;
     };
@@ -1629,6 +1624,19 @@ export class StudentsService {
     });
   }
 
+  async getProgressionPeriods(cc: number) {
+    return this.prisma.student_progression_periods.findMany({
+      where: { student_cc: cc },
+      orderBy: { valid_from: 'asc' },
+      include: {
+        classes: { select: { description: true, class_code: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } },
+        houses: { select: { house_name: true, house_color: true } },
+      },
+    });
+  }
+
   async getHouseHistory(cc: number) {
     const logs = await this.prisma.audit_logs.findMany({
       where: { student_id: cc, entity_type: 'STUDENT', field: 'student.house_id' },
@@ -1806,6 +1814,7 @@ export class StudentsService {
         class_id: true,
         section_id: true,
         campus_id: true,
+        house_id: true,
         academic_year: true,
         status: true,
         gr_number: true,
@@ -1921,6 +1930,7 @@ export class StudentsService {
       class_id: number | null;
       section_id: number | null;
       campus_id: number | null;
+      house_id: number | null;
       academic_year: string | null;
       status: string;
       gr_number: string | null;
@@ -2190,17 +2200,17 @@ export class StudentsService {
             },
           });
 
-          await tx.student_academic_history.create({
-            data: {
-              student_cc: student.cc,
-              class_id: null,
-              section_id: student.section_id,
-              campus_id: student.campus_id,
-              academic_year: nextAcademicYear,
-              gr_number: student.gr_number,
-              change_type: 'GRADUATED',
-              changed_by: reason?.trim() || null,
-            },
+          await this.progressionHistory.recordProgressionChange(tx, {
+            studentCc: student.cc,
+            campusId: student.campus_id,
+            classId: null,
+            sectionId: student.section_id,
+            houseId: student.house_id,
+            academicYear: nextAcademicYear,
+            grNumber: student.gr_number,
+            changeType: 'GRADUATED',
+            changedBy,
+            notes: reason?.trim() || null,
           });
         });
 
@@ -2365,16 +2375,16 @@ export class StudentsService {
               },
             });
 
-            await tx.student_academic_history.create({
-              data: {
-                student_cc: student.cc,
-                class_id: toClass!.id,
-                section_id: finalSectionId,
-                campus_id: student.campus_id,
-                academic_year: nextAcademicYear,
-                gr_number: effectiveGr,
-                change_type: 'PROMOTED',
-              },
+            await this.progressionHistory.recordProgressionChange(tx, {
+              studentCc: student.cc,
+              campusId: student.campus_id,
+              classId: toClass!.id,
+              sectionId: finalSectionId ?? null,
+              houseId: student.house_id,
+              academicYear: nextAcademicYear,
+              grNumber: effectiveGr,
+              changeType: 'PROMOTED',
+              changedBy,
             });
           },
           { maxWait: 5000, timeout: 15000 },
