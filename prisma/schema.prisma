@@ -1020,9 +1020,9 @@ model staff_categories {
   name                   String                   @db.VarChar(100)
   description            String?                  @db.VarChar(255)
   employee_code_dep      String?                  @db.VarChar(2)
-  departments            departments              @relation(fields: [department_id], references: [id], onDelete: Restrict)
-  employee_profiles      employee_profiles[]
   academic_calendar_days academic_calendar_days[]
+  employee_profiles      employee_profiles[]
+  departments            departments              @relation(fields: [department_id], references: [id])
 
   @@unique([department_id, code])
   @@unique([department_id, name])
@@ -1057,13 +1057,6 @@ model employee_profiles {
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
-  father_photo_url                   String?
-  father_cnic                        String?                              @db.VarChar(50)
-  mother_photo_url                   String?
-  mother_cnic                        String?                              @db.VarChar(50)
-  spouse_name                        String?                              @db.VarChar(100)
-  spouse_cnic                        String?                              @db.VarChar(50)
-  spouse_photo_url                   String?
   account_number                     String?                              @db.VarChar(50)
   bank_name                          String?                              @db.VarChar(100)
   emergency_contact_name             String?                              @db.VarChar(100)
@@ -1074,6 +1067,13 @@ model employee_profiles {
   employee_code_dep                  String?                              @db.VarChar(10)
   employee_code_number               String?                              @db.VarChar(20)
   staff_category_id                  Int?
+  father_photo_url                   String?
+  mother_photo_url                   String?
+  spouse_cnic                        String?                              @db.VarChar(50)
+  spouse_name                        String?                              @db.VarChar(100)
+  spouse_photo_url                   String?
+  father_cnic                        String?                              @db.VarChar(50)
+  mother_cnic                        String?                              @db.VarChar(50)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_staff_daily             attendance_staff_daily[]
@@ -1119,24 +1119,24 @@ model employee_class_section_assignments {
 }
 
 model academic_calendar_days {
-  id             Int                @id @default(autoincrement())
-  campus_id      Int
-  date           DateTime           @db.Date
-  day_type       String             @db.VarChar(20)
-  description    String?            @db.VarChar(255)
-  applies_to     String             @default("STUDENT") @db.VarChar(20)
-  class_id       Int?
-  section_id     Int?
+  id                Int                @id @default(autoincrement())
+  campus_id         Int
+  date              DateTime           @db.Date
+  day_type          String             @db.VarChar(20)
+  description       String?            @db.VarChar(255)
+  applies_to        String             @default("STUDENT") @db.VarChar(20)
+  class_id          Int?
+  section_id        Int?
   department_id     Int?
-  staff_category_id Int?
   employee_id       Int?
   created_by        String?
+  staff_category_id Int?
+  campuses          campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes           classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  departments       departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  employee          employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  sections          sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
   staff_categories  staff_categories?  @relation(fields: [staff_category_id], references: [id], onDelete: Cascade)
-  campuses       campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes        classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  departments    departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
-  employee       employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  sections       sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, date, applies_to, class_id, section_id, department_id, staff_category_id, employee_id], map: "academic_calendar_days_scope_key")
   @@index([campus_id, date, applies_to])

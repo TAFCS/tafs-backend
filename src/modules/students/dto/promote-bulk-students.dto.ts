@@ -82,11 +82,22 @@ export class PromoteBulkStudentsDto {
   @IsString()
   target_academic_year?: string;
 
+  /** SOURCE filter — which campus students must currently be on. */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   campus_id?: number;
+
+  /**
+   * DESTINATION campus for cross-campus promotion
+   * (e.g. GKF/NN JR-V → Johar SR-1).
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  to_campus_id?: number;
 
   @IsOptional()
   @Type(() => Number)

@@ -11,7 +11,7 @@ import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { allocateSequentialGrNumbers } from '../../common/utils/gr-number.util';
+import { allocateSequentialGrNumbers, resolveCampusGrPrefix } from '../../common/utils/gr-number.util';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
@@ -42,6 +42,10 @@ type PromotionOutcome = {
   to_class_id?: number | null;
   from_academic_year?: string | null;
   to_academic_year?: string;
+  from_campus_id?: number | null;
+  to_campus_id?: number | null;
+  from_gr_number?: string | null;
+  to_gr_number?: string | null;
   graduated?: boolean;
   expelled?: boolean;
   left?: boolean;
@@ -1665,8 +1669,12 @@ export class StudentsService {
     }));
   }
 
-  /** Preview next A-Level GR assignments for a promotion batch (same logic as promoteBulk). */
-  async suggestGrNumbersForPromotion(studentCcs: number[], isALevel = true): Promise<Record<number, string>> {
+  /** Preview next GR assignments for a promotion batch (same logic as promoteBulk). */
+  async suggestGrNumbersForPromotion(
+    studentCcs: number[],
+    isALevel = true,
+    targetCampusId?: number,
+  ): Promise<Record<number, string>> {
     if (!studentCcs.length) return {};
 
     const students = await this.prisma.students.findMany({
@@ -1674,6 +1682,54 @@ export class StudentsService {
       select: { cc: true, campus_id: true },
       orderBy: { cc: 'asc' },
     });
+
+    // Cross-campus → empty-prefix destination: only students from prefixed campuses.
+    if (targetCampusId && !isALevel) {
+      const destPrefix = await resolveCampusGrPrefix(this.prisma, targetCampusId);
+      if (destPrefix !== '') return {};
+
+      const prefixCache = new Map<number, string>();
+      const needing: Array<{ cc: number; campus_id: number }> = [];
+      for (const s of students) {
+        if (!s.campus_id || s.campus_id === targetCampusId) continue;
+        let sourcePrefix = prefixCache.get(s.campus_id);
+        if (sourcePrefix === undefined) {
+          sourcePrefix = await resolveCampusGrPrefix(this.prisma, s.campus_id);
+          prefixCache.set(s.campus_id, sourcePrefix);
+        }
+        if (sourcePrefix !== '') needing.push({ cc: s.cc, campus_id: s.campus_id });
+      }
+      if (!needing.length) return {};
+
+      const grs = await allocateSequentialGrNumbers(
+        this.prisma,
+        targetCampusId,
+        needing.length,
+        false,
+      );
+      const assignments: Record<number, string> = {};
+      needing.forEach((s, i) => {
+        assignments[s.cc] = grs[i];
+      });
+      return assignments;
+    }
+
+    // When target_campus_id is set for A-Level, allocate all against that campus.
+    if (targetCampusId && isALevel) {
+      const ordered = students.filter((s) => s.campus_id != null);
+      if (!ordered.length) return {};
+      const grs = await allocateSequentialGrNumbers(
+        this.prisma,
+        targetCampusId,
+        ordered.length,
+        true,
+      );
+      const assignments: Record<number, string> = {};
+      ordered.forEach((s, i) => {
+        assignments[s.cc] = grs[i];
+      });
+      return assignments;
+    }
 
     const byCampus = new Map<number, Array<{ cc: number; campus_id: number }>>();
     for (const s of students) {
@@ -1698,28 +1754,72 @@ export class StudentsService {
     return assignments;
   }
 
-  private async assignALevelGrOverridesForPromotion(
+  /**
+   * Pre-assign GR overrides for:
+   * - A-Level promotions → next A- GR on (to_campus || current) campus
+   * - Cross-campus into empty-prefix campus (Johar) from prefixed campus (GKF/NN)
+   *   → next no-prefix GR on destination campus
+   */
+  private async assignAutoGrOverridesForPromotion(
     candidates: Array<{ cc: number; campus_id: number | null }>,
     grOverrideMap: Map<number, string>,
     isALevelPromotion: boolean,
+    toCampusId?: number,
   ): Promise<void> {
-    if (!isALevelPromotion) return;
+    if (isALevelPromotion) {
+      const needing = candidates
+        .filter((c) => !grOverrideMap.has(c.cc) && (toCampusId || c.campus_id))
+        .sort((a, b) => a.cc - b.cc);
 
-    const needing = candidates
-      .filter((c) => !grOverrideMap.has(c.cc) && c.campus_id)
-      .sort((a, b) => a.cc - b.cc);
+      if (toCampusId) {
+        const grs = await allocateSequentialGrNumbers(this.prisma, toCampusId, needing.length, true);
+        needing.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
+        return;
+      }
 
-    const byCampus = new Map<number, typeof needing>();
-    for (const s of needing) {
-      const cid = s.campus_id!;
-      if (!byCampus.has(cid)) byCampus.set(cid, []);
-      byCampus.get(cid)!.push(s);
+      const byCampus = new Map<number, typeof needing>();
+      for (const s of needing) {
+        const cid = s.campus_id!;
+        if (!byCampus.has(cid)) byCampus.set(cid, []);
+        byCampus.get(cid)!.push(s);
+      }
+
+      for (const [campusId, group] of byCampus) {
+        const grs = await allocateSequentialGrNumbers(this.prisma, campusId, group.length, true);
+        group.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
+      }
+      return;
     }
 
-    for (const [campusId, group] of byCampus) {
-      const grs = await allocateSequentialGrNumbers(this.prisma, campusId, group.length, true);
-      group.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
+    // Cross-campus → empty-prefix destination (Johar) from prefixed source (GKF/NN)
+    if (!toCampusId) return;
+
+    const destPrefix = await resolveCampusGrPrefix(this.prisma, toCampusId);
+    if (destPrefix !== '') return;
+
+    const needing: typeof candidates = [];
+    const prefixCache = new Map<number, string>();
+    for (const c of candidates) {
+      if (grOverrideMap.has(c.cc) || !c.campus_id) continue;
+      if (c.campus_id === toCampusId) continue;
+      let sourcePrefix = prefixCache.get(c.campus_id);
+      if (sourcePrefix === undefined) {
+        sourcePrefix = await resolveCampusGrPrefix(this.prisma, c.campus_id);
+        prefixCache.set(c.campus_id, sourcePrefix);
+      }
+      if (sourcePrefix !== '') needing.push(c);
     }
+
+    needing.sort((a, b) => a.cc - b.cc);
+    if (!needing.length) return;
+
+    const grs = await allocateSequentialGrNumbers(
+      this.prisma,
+      toCampusId,
+      needing.length,
+      false,
+    );
+    needing.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
   }
 
   async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string) {
@@ -1829,7 +1929,12 @@ export class StudentsService {
     const grOverrideMap = new Map((dto.gr_overrides ?? []).map(o => [o.student_cc, o.new_gr]));
 
     const isALevelPromotion = !!toClass && this.isALevelAcademicSystem(toClass.academic_system);
-    await this.assignALevelGrOverridesForPromotion(candidates, grOverrideMap, isALevelPromotion);
+    await this.assignAutoGrOverridesForPromotion(
+      candidates,
+      grOverrideMap,
+      isALevelPromotion,
+      dto.to_campus_id,
+    );
 
     const CHUNK_SIZE = 25;
     if (isExplicitIds) {
@@ -1867,6 +1972,7 @@ export class StudentsService {
             sectionActiveCache,
             grOverrideMap.get(studentId),
             changedBy,
+            dto.to_campus_id,
           );
           results.push(outcome);
         }));
@@ -1891,6 +1997,7 @@ export class StudentsService {
             sectionActiveCache,
             grOverrideMap.get(student.cc),
             changedBy,
+            dto.to_campus_id,
           );
           results.push(outcome);
         }));
@@ -1950,6 +2057,7 @@ export class StudentsService {
     sectionActiveCache: Map<string, boolean>,
     grOverride: string | undefined,
     changedBy: string,
+    toCampusId?: number,
   ): Promise<PromotionOutcome> {
     // ── Already expelled guard ───────────────────────────────────────────────
     if (student.status === StudentStatus.EXPELLED) {
@@ -2047,15 +2155,16 @@ export class StudentsService {
     // ── Campus/class mapping validation (promotion only) ─────────────────────
     // Resolve the destination section: if none was supplied, keep the current
     // section only when it remains valid for the destination class; otherwise clear it.
+    const effectiveCampusId = toCampusId ?? student.campus_id;
     let resolvedSectionId: number | null | undefined = toSectionId;
     if (!isGraduating && toClass && toSectionId === undefined) {
-      if (student.section_id != null && student.campus_id != null) {
-        const sectionKey = `${student.campus_id}:${toClass.id}:${student.section_id}`;
+      if (student.section_id != null && effectiveCampusId != null) {
+        const sectionKey = `${effectiveCampusId}:${toClass.id}:${student.section_id}`;
         let sectionIsActive = sectionActiveCache.get(sectionKey);
         if (sectionIsActive === undefined) {
           const sectionMapping = await this.prisma.campus_sections.findFirst({
             where: {
-              campus_id: student.campus_id,
+              campus_id: effectiveCampusId,
               class_id: toClass.id,
               section_id: student.section_id,
               is_active: true,
@@ -2073,7 +2182,7 @@ export class StudentsService {
 
     if (!isGraduating && toClass) {
       const mappingValidation = await this.validateTargetMapping(
-        student.campus_id,
+        effectiveCampusId,
         toClass.id,
         resolvedSectionId === null ? undefined : resolvedSectionId ?? toSectionId,
         classActiveCache,
@@ -2090,6 +2199,8 @@ export class StudentsService {
           to_class_id: toClass.id,
           from_academic_year: student.academic_year,
           to_academic_year: nextAcademicYear,
+          from_campus_id: student.campus_id,
+          to_campus_id: effectiveCampusId,
           dry_run: dryRun,
         };
       }
@@ -2097,10 +2208,10 @@ export class StudentsService {
       const sectionForRules =
         resolvedSectionId !== undefined ? resolvedSectionId : toSectionId ?? student.section_id;
       if (
-        student.campus_id != null &&
+        effectiveCampusId != null &&
         sectionForRules != null &&
         this.allocation.shouldValidatePlacement({
-          campusId: student.campus_id,
+          campusId: effectiveCampusId,
           classId: toClass.id,
           sectionId: sectionForRules,
         })
@@ -2108,7 +2219,7 @@ export class StudentsService {
         try {
           await this.allocation.assertPlacementAllowed(
             {
-              campusId: student.campus_id,
+              campusId: effectiveCampusId,
               classId: toClass.id,
               sectionId: sectionForRules,
             },
@@ -2136,7 +2247,9 @@ export class StudentsService {
                     ? 'SECTION_INACTIVE'
                     : code === ALLOCATION_ERROR_CODES.SECTION_NOT_OFFERED
                       ? 'SECTION_NOT_OFFERED'
-                      : 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS';
+                      : code === ALLOCATION_ERROR_CODES.CAMPUS_CLASS_INACTIVE
+                        ? 'TARGET_CLASS_INACTIVE_FOR_CAMPUS'
+                        : 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS';
           return {
             student_id: student.cc,
             status: 'failed',
@@ -2146,28 +2259,90 @@ export class StudentsService {
             to_class_id: toClass.id,
             from_academic_year: student.academic_year,
             to_academic_year: nextAcademicYear,
+            from_campus_id: student.campus_id,
+            to_campus_id: effectiveCampusId,
             dry_run: dryRun,
           };
         }
       }
     }
 
+    // GR uniqueness on destination campus (dry-run + live)
+    const resolvedGrOverride = !isGraduating && !isExpelling && !isLeaving ? grOverride : undefined;
+    const destCampusIdForGr = toCampusId ?? student.campus_id;
+    if (resolvedGrOverride && destCampusIdForGr != null) {
+      const duplicate = await this.prisma.students.findFirst({
+        where: {
+          campus_id: destCampusIdForGr,
+          gr_number: resolvedGrOverride,
+          cc: { not: student.cc },
+          deleted_at: null,
+        },
+        select: { cc: true },
+      });
+      if (duplicate) {
+        return {
+          student_id: student.cc,
+          status: 'failed',
+          reason_code: 'GR_DUPLICATE',
+          message: `GR number ${resolvedGrOverride} is already in use on campus #${destCampusIdForGr}`,
+          from_class_id: student.class_id,
+          to_class_id: toClass?.id ?? null,
+          from_academic_year: student.academic_year,
+          to_academic_year: nextAcademicYear,
+          from_campus_id: student.campus_id,
+          to_campus_id: destCampusIdForGr,
+          from_gr_number: student.gr_number,
+          to_gr_number: resolvedGrOverride,
+          dry_run: dryRun,
+        };
+      }
+    }
+
     // ── Dry-run early return ─────────────────────────────────────────────────
     if (dryRun) {
+      const destCampusId = toCampusId ?? student.campus_id;
+      const nextGr = resolvedGrOverride ?? student.gr_number;
+      const campusChanging =
+        toCampusId != null && student.campus_id != null && toCampusId !== student.campus_id;
+      const grChanging =
+        resolvedGrOverride != null &&
+        resolvedGrOverride !== (student.gr_number ?? '');
+      const sectionCleared = resolvedSectionId === null;
+
+      let message: string;
+      if (isGraduating) {
+        message = 'Student validated for graduation (dry-run)';
+      } else if (isExpelling) {
+        message = 'Student validated for expulsion (dry-run)';
+      } else if (isLeaving) {
+        message = 'Student validated for leaving (dry-run)';
+      } else {
+        const parts = ['Student validated for promotion (dry-run)'];
+        if (campusChanging) {
+          parts.push(`campus #${student.campus_id} → #${toCampusId}`);
+        }
+        if (grChanging) {
+          parts.push(`GR ${student.gr_number ?? '—'} → ${resolvedGrOverride}`);
+        }
+        if (sectionCleared) {
+          parts.push('section will be cleared (not offered at target campus/class)');
+        }
+        message = parts.join('; ');
+      }
+
       return {
         student_id: student.cc,
         status: isGraduating ? 'graduated' : isExpelling ? 'expelled' : isLeaving ? 'left' : 'promoted',
-        message: isGraduating
-          ? 'Student validated for graduation (dry-run)'
-          : isExpelling
-          ? 'Student validated for expulsion (dry-run)'
-          : isLeaving
-          ? 'Student validated for leaving (dry-run)'
-          : 'Student validated successfully for promotion (dry-run)',
+        message,
         from_class_id: student.class_id,
         to_class_id: isGraduating ? null : toClass?.id ?? student.class_id,
         from_academic_year: student.academic_year,
         to_academic_year: (isExpelling || isLeaving) ? undefined : nextAcademicYear,
+        from_campus_id: student.campus_id,
+        to_campus_id: isGraduating || isExpelling || isLeaving ? student.campus_id : destCampusId,
+        from_gr_number: student.gr_number,
+        to_gr_number: isGraduating || isExpelling || isLeaving ? student.gr_number : nextGr,
         graduated: isGraduating,
         expelled: isExpelling,
         left: isLeaving,
@@ -2319,33 +2494,9 @@ export class StudentsService {
           dry_run: false,
         };
       } else {
-        // Normal promotion — A-Level promotions get next available A- GR from promoteBulk pre-allocation
-        const resolvedGrOverride = grOverride;
+        // Normal promotion — auto GR from promoteBulk pre-allocation (A-Level or cross-campus→Johar)
         const effectiveGr = resolvedGrOverride ?? student.gr_number;
-
-        if (resolvedGrOverride) {
-          const duplicate = await this.prisma.students.findFirst({
-            where: {
-              campus_id: student.campus_id,
-              gr_number: resolvedGrOverride,
-              cc: { not: student.cc },
-              deleted_at: null,
-            },
-          });
-          if (duplicate) {
-            return {
-              student_id: student.cc,
-              status: 'failed',
-              reason_code: 'GR_DUPLICATE',
-              message: `GR number ${resolvedGrOverride} is already in use`,
-              from_class_id: student.class_id,
-              to_class_id: toClass!.id,
-              from_academic_year: student.academic_year,
-              to_academic_year: nextAcademicYear,
-              dry_run: false,
-            };
-          }
-        }
+        const destCampusId = toCampusId ?? student.campus_id;
 
         await this.prisma.$transaction(
           async (tx) => {
@@ -2362,6 +2513,7 @@ export class StudentsService {
                 class_id: toClass!.id,
                 section_id: finalSectionId,
                 academic_year: nextAcademicYear,
+                ...(toCampusId ? { campus_id: toCampusId } : {}),
                 ...(resolvedGrOverride ? { gr_number: resolvedGrOverride } : {}),
               },
             });
@@ -2377,7 +2529,7 @@ export class StudentsService {
 
             await this.progressionHistory.recordProgressionChange(tx, {
               studentCc: student.cc,
-              campusId: student.campus_id,
+              campusId: destCampusId,
               classId: toClass!.id,
               sectionId: finalSectionId ?? null,
               houseId: student.house_id,
@@ -2407,14 +2559,26 @@ export class StudentsService {
             .join(' '),
         });
 
+        const campusChanging =
+          toCampusId != null && student.campus_id != null && toCampusId !== student.campus_id;
+        const grChanging =
+          resolvedGrOverride != null && resolvedGrOverride !== (student.gr_number ?? '');
+        const successParts = ['Student promoted successfully'];
+        if (campusChanging) successParts.push(`campus #${student.campus_id} → #${toCampusId}`);
+        if (grChanging) successParts.push(`GR ${student.gr_number ?? '—'} → ${resolvedGrOverride}`);
+
         return {
           student_id: student.cc,
           status: 'promoted',
-          message: 'Student promoted successfully',
+          message: successParts.join('; '),
           from_class_id: student.class_id,
           to_class_id: toClass!.id,
           from_academic_year: student.academic_year,
           to_academic_year: nextAcademicYear,
+          from_campus_id: student.campus_id,
+          to_campus_id: destCampusId,
+          from_gr_number: student.gr_number,
+          to_gr_number: effectiveGr,
           dry_run: false,
         };
       }
@@ -2516,7 +2680,7 @@ export class StudentsService {
       return {
         valid: false,
         reason_code: 'TARGET_CLASS_INACTIVE_FOR_CAMPUS',
-        message: 'Target class is not active for the student campus',
+        message: `Class #${toClassId} is not active for campus #${campusId}. If promoting across campuses, set Target Campus.`,
       };
     }
 
@@ -2544,7 +2708,7 @@ export class StudentsService {
       return {
         valid: false,
         reason_code: 'TARGET_SECTION_INVALID_FOR_CLASS_CAMPUS',
-        message: 'Target section is not valid for the target class and campus',
+        message: `Section #${toSectionId} is not valid for class #${toClassId} at campus #${campusId}`,
       };
     }
 

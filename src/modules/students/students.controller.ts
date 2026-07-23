@@ -70,6 +70,7 @@ export class StudentsController {
     const assignments = await this.studentsService.suggestGrNumbersForPromotion(
       dto.student_ccs,
       dto.a_level !== false,
+      dto.target_campus_id,
     );
     return createApiResponse(
       { assignments },
