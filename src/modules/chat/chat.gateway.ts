@@ -323,7 +323,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   async broadcastNewMessage(
     familyId: number,
-    newMessage: { id: string; message_type: ChatMessageType; content: string; conversation_id: string },
+    newMessage: {
+      id: string;
+      message_type: ChatMessageType;
+      content: string;
+      conversation_id: string;
+      is_read?: boolean;
+    },
     updatedConv: any,
     senderType: ChatSenderType,
     messageType: ChatMessageType,
@@ -351,7 +357,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         console.log(
           `[FCM] Chat push skipped for family ${familyId}: parent has chat screen open`,
         );
+        // Parent already in thread → mark read now so sender ack / UI get blue ticks
+        // without racing client markAsRead vs send confirmation.
+        await this.chatService.markAsRead(familyId, 'GUARDIAN');
+        this.broadcastMessagesRead(familyId, 'GUARDIAN');
+        newMessage.is_read = true;
       }
+    } else if (senderType === 'GUARDIAN' && this.isAdminViewingFamily(familyId)) {
+      await this.chatService.markAsRead(familyId, 'ADMIN');
+      this.broadcastMessagesRead(familyId, 'ADMIN');
+      newMessage.is_read = true;
     }
   }
 
@@ -681,6 +696,20 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   isParentInTicketRoom(ticketId: string): boolean {
     const room = this.server.sockets.adapter.rooms.get(`parent_ticket_${ticketId}`);
     return !!room && room.size > 0;
+  }
+
+  /**
+   * True when any staff socket is actively viewing this ticket thread.
+   * Uses fetchSockets so it works across redis-adapter instances (parents
+   * also join `ticket_*`, so room size alone is not enough).
+   */
+  async isStaffInTicketRoom(ticketId: string): Promise<boolean> {
+    try {
+      const sockets = await this.server.in(`ticket_${ticketId}`).fetchSockets();
+      return sockets.some((s) => s.data?.tafsPayload?.userType === 'STAFF');
+    } catch {
+      return false;
+    }
   }
 
   @SubscribeMessage('enterTicket')

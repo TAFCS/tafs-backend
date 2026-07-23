@@ -613,7 +613,7 @@ export class SupportTicketsService {
         return created;
       });
 
-      await this.deliverApprovedStaffMessage(ticket, message);
+      const readImmediately = await this.deliverApprovedStaffMessage(ticket, message);
 
       void this.auditLogs.log({
         entity_type: 'SUPPORT_TICKET',
@@ -623,7 +623,7 @@ export class SupportTicketsService {
         note: `Staff message #${message.id} auto-approved on ticket "${ticket.subtopic ?? 'No subtopic'}" (${ticket.category}): ${snippet}`,
       });
 
-      return message;
+      return readImmediately ? { ...message, is_read: true } : message;
     }
 
     const message = await this.prisma.$transaction(async (tx) => {
@@ -747,6 +747,33 @@ export class SupportTicketsService {
       ].join(' — '),
     });
 
+    // Staff already viewing → mark parent messages read so Flutter shows blue ticks
+    // without racing send-confirm vs ticketMessagesRead.
+    if (await this.chatGateway.isStaffInTicketRoom(ticketId)) {
+      await this.prisma.ticket_messages.updateMany({
+        where: {
+          ticket_id: ticketId,
+          sender_type: 'GUARDIAN',
+          is_read: false,
+        },
+        data: { is_read: true },
+      });
+      await this.prisma.support_tickets.update({
+        where: { id: ticketId },
+        data: {
+          unread_by_staff: 0,
+          staff_last_read_at: new Date(),
+        },
+      });
+      this.chatGateway.broadcastTicketMessagesRead(
+        ticketId,
+        ticket.family_id,
+        'STAFF',
+        ticket.current_assignee_id,
+      );
+      return { ...result.message, is_read: true };
+    }
+
     return result.message;
   }
 
@@ -855,7 +882,13 @@ export class SupportTicketsService {
     });
 
     if (dto.status === MessageStatus.APPROVED) {
-      await this.deliverApprovedStaffMessage(message.ticket, updated);
+      const readImmediately = await this.deliverApprovedStaffMessage(
+        message.ticket,
+        updated,
+      );
+      if (readImmediately) {
+        return { ...updated, is_read: true };
+      }
     } else {
       await this.chatGateway.broadcastReplyRejected(
         message.ticket_id,
@@ -1235,14 +1268,18 @@ export class SupportTicketsService {
     return `"${ticket.subtopic ?? 'No subtopic'}" (${ticket.category}) opened by ${family} on ${opened}`;
   }
 
+  /**
+   * @returns true when the parent was already in the ticket room and the
+   * message was marked read immediately (so the sender can show blue ticks).
+   */
   private async deliverApprovedStaffMessage(
-    ticket: { id: string; family_id: number },
+    ticket: { id: string; family_id: number; current_assignee_id?: string | null },
     message: {
       id: string;
       message_type: ChatMessageType;
       content: string;
     },
-  ) {
+  ): Promise<boolean> {
     const fullTicket = await this.prisma.support_tickets.findUniqueOrThrow({
       where: { id: ticket.id },
       include: ticketInclude,
@@ -1263,7 +1300,33 @@ export class SupportTicketsService {
           messageId: message.id,
         },
       );
+      return false;
     }
+
+    // Parent already viewing → mark staff messages read + notify sender for ticks
+    await this.prisma.ticket_messages.updateMany({
+      where: {
+        ticket_id: ticket.id,
+        sender_type: 'STAFF',
+        status: 'APPROVED',
+        is_read: false,
+      },
+      data: { is_read: true },
+    });
+    await this.prisma.support_tickets.update({
+      where: { id: ticket.id },
+      data: {
+        unread_by_parent: 0,
+        parent_last_read_at: new Date(),
+      },
+    });
+    this.chatGateway.broadcastTicketMessagesRead(
+      ticket.id,
+      ticket.family_id,
+      'PARENT',
+      ticket.current_assignee_id ?? fullTicket.current_assignee_id,
+    );
+    return true;
   }
 
   private async notifyParentTicketClosed(
