@@ -710,6 +710,9 @@ export class SupportTicketsService {
           media_metadata: (dto.mediaMetadata ?? undefined) as object | undefined,
           status: MessageStatus.APPROVED,
         },
+        include: {
+          sender_guardian: { select: { id: true, full_name: true } },
+        },
       });
 
       const updatedTicket = await tx.support_tickets.update({
