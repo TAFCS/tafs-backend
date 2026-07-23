@@ -10,7 +10,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
+import { DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -87,5 +87,28 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.disburseAll(runId, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'All undisbursed payroll lines marked as disbursed');
+  }
+
+  @Post(':runId/lines/:employeeId/settle')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async settleLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: SettlePayrollLineDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.settleLine(runId, employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll line settled and payslip generated');
+  }
+
+  @Get(':runId/lines/:employeeId/payslip')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  async getPayslip(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.getPayslip(runId, employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payslip retrieved successfully');
   }
 }

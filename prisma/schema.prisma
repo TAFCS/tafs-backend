@@ -750,6 +750,7 @@ model users {
   notice_board_posts                                                       notice_board_posts[]
   processed_change_requests                                                parent_change_requests[]
   payroll_run_lines_disbursed                                              payroll_run_lines[]          @relation("PayrollLineDisbursedBy")
+  payroll_settlements_settled                                              payroll_settlements[]        @relation("PayrollSettlementSettledBy")
   postdated_cheques_cashed                                                 postdated_cheques[]          @relation("ChequeCashedBy")
   postdated_cheques_received                                               postdated_cheques[]          @relation("ChequeReceivedBy")
   tickets_closed                                                           support_tickets[]            @relation("TicketClosedByUser")
@@ -1255,10 +1256,11 @@ model payroll_runs {
   generated_at      DateTime            @default(now()) @db.Timestamp(6)
   finalized_at      DateTime?           @db.Timestamp(6)
   notes             String?             @db.VarChar(500)
+  is_test           Boolean             @default(false)
   payroll_run_lines payroll_run_lines[]
   campuses          campuses            @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
-  @@unique([campus_id, period_start, period_end])
+  @@unique([campus_id, period_start, period_end, is_test])
 }
 
 model payroll_run_lines {
@@ -1294,11 +1296,32 @@ model payroll_run_lines {
   is_mapped              Boolean           @default(true)
   has_punches            Boolean           @default(true)
   total_calendar_days    Int               @default(0)
+  total_overtime_minutes    Int            @default(0)
+  scheduled_minutes_per_day Int            @default(0)
   disbursed_by_user      users?            @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles      employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs           payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
+  payroll_settlements    payroll_settlements?
 
   @@unique([payroll_run_id, employee_id])
+}
+
+model payroll_settlements {
+  id                     Int               @id @default(autoincrement())
+  payroll_run_line_id    Int               @unique
+  overtime_rate_type     OvertimeRateType?
+  overtime_rate_amount   Decimal?          @db.Decimal(12, 2)
+  overtime_minutes       Int               @default(0)
+  overtime_reward_amount Decimal           @default(0) @db.Decimal(12, 2)
+  cash_bonus_amount      Decimal           @default(0) @db.Decimal(12, 2)
+  net_paid               Decimal           @db.Decimal(12, 2)
+  payslip_pdf_url        String?
+  settled_at             DateTime          @db.Timestamp(0)
+  settled_by             String
+  settlement_notes       String?           @db.VarChar(300)
+  created_at             DateTime          @default(now()) @db.Timestamp(6)
+  payroll_run_lines      payroll_run_lines @relation(fields: [payroll_run_line_id], references: [id], onDelete: Cascade)
+  settled_by_user        users             @relation("PayrollSettlementSettledBy", fields: [settled_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model attendance_objections {
@@ -1850,6 +1873,12 @@ enum LeaveRequestStatus {
 enum PayrollRunStatus {
   DRAFT
   FINALIZED
+}
+
+enum OvertimeRateType {
+  PER_MINUTE
+  PER_HOUR
+  PER_DAY
 }
 
 enum AttendanceObjectionStatus {

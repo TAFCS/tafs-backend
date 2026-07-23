@@ -23,14 +23,16 @@ import { PayrollController } from './payroll/payroll.controller';
 import { PayrollSelfController } from './payroll/payroll-self.controller';
 import { PayrollMatrixController } from './payroll/payroll-matrix.controller';
 import { PayrollService } from './payroll/payroll.service';
+import { PayslipPdfService } from './payroll/payslip-pdf/payslip-pdf.service';
 import { EmployeeProfileResolverService } from './employee-profile-resolver.service';
 import { LeavesModule } from './leaves/leaves.module';
 import { SaturdaySchedulesModule } from './saturday-schedules/saturday-schedules.module';
 import { ShiftOverridesModule } from './shift-overrides/shift-overrides.module';
 import { TimetablesModule } from '../timetables/timetables.module';
+import { StorageModule } from '../../common/storage/storage.module';
 
 @Module({
-  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, ShiftOverridesModule, TimetablesModule],
+  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, ShiftOverridesModule, TimetablesModule, StorageModule],
   controllers: [
     EmployeesSelfController,
     EmployeesController,
@@ -56,6 +58,7 @@ import { TimetablesModule } from '../timetables/timetables.module';
     StaffTypesService,
     CalendarNotificationService,
     PayrollService,
+    PayslipPdfService,
     EmployeeProfileResolverService,
   ],
   exports: [
@@ -69,6 +72,7 @@ import { TimetablesModule } from '../timetables/timetables.module';
     StaffTypesService,
     CalendarNotificationService,
     PayrollService,
+    PayslipPdfService,
     EmployeeProfileResolverService,
   ],
 })

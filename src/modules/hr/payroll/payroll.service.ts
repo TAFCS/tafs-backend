@@ -1,15 +1,17 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import { AttendanceSource, Prisma, PayrollRunStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, Prisma, PayrollRunStatus, OvertimeRateType, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
+import { StorageService } from '../../../common/storage/storage.service';
 import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DisbursePayrollLineDto } from './dto/payroll-self.dto';
+import { DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
+import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -58,6 +60,8 @@ interface ComputedLine {
   unresolved_days: number;
   total_break_minutes: number;
   total_late_minutes: number;
+  total_overtime_minutes: number;
+  scheduled_minutes_per_day: number;
   monthly_pay: Prisma.Decimal;
   daily_rate: Prisma.Decimal;
   per_minute_rate: Prisma.Decimal;
@@ -100,11 +104,15 @@ const runInclude = {
  */
 @Injectable()
 export class PayrollService {
+  private readonly logger = new Logger(PayrollService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly expectedTimes: EmployeeExpectedTimesService,
     private readonly auditLogs: AuditLogsService,
+    private readonly storage: StorageService,
+    private readonly payslipPdf: PayslipPdfService,
   ) {}
 
   // Fixed school payroll cycle — see payroll-period.util.ts
@@ -401,6 +409,18 @@ export class PayrollService {
     const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
     const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);
     const totalLateMinutes = dailyBreakdown.reduce((sum, d) => sum + d.late_minutes, 0);
+    // Overtime is read back out of the segments already built above rather
+    // than recomputed separately — one classification pass stays the single
+    // source of truth for every aggregate, overtime included.
+    const totalOvertimeMinutes = dailyBreakdown.reduce((sum, d) => {
+      const segs = d.segments ?? [];
+      return (
+        sum +
+        segs
+          .filter((s) => s.type === 'OVERTIME')
+          .reduce((m, s) => m + Math.max(0, (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000), 0)
+      );
+    }, 0);
 
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
     const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
@@ -444,6 +464,11 @@ export class PayrollService {
       unresolved_days: unresolvedDays,
       total_break_minutes: totalBreakMinutes,
       total_late_minutes: totalLateMinutes,
+      total_overtime_minutes: Math.round(totalOvertimeMinutes),
+      // Standard 8h workday only when this employee's schedule can't be
+      // resolved at all — used solely as the "1 day" divisor for a
+      // per-day overtime reward rate at settlement time.
+      scheduled_minutes_per_day: Math.round(scheduledMinutes) || 480,
       monthly_pay: monthlyPay.toDecimalPlaces(2),
       daily_rate: dailyRate.toDecimalPlaces(2),
       per_minute_rate: perMinuteRate.toDecimalPlaces(4),
@@ -532,29 +557,68 @@ export class PayrollService {
 
     const { periodStart, periodEnd } = this.computePayrollWindow(dto.year, dto.month);
 
-    const employees = await this.prisma.employee_profiles.findMany({
-      where: { campus_id: dto.campus_id, monthly_pay: { not: null } },
-      select: {
-        id: true,
-        monthly_pay: true,
-        reporting_time: true,
-        leaving_time: true,
-        late_relaxation_minutes: true,
-        department_id: true,
-        staff_category_id: true,
-        staff_categories: { select: { code: true } },
-        days_per_week: true,
-        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-      },
-    });
+    // Presence of employee_ids is what makes this a TEST run — scoped to
+    // just those employees instead of every paid employee on the campus.
+    const isTest = !!dto.employee_ids?.length;
+
+    const employees = isTest
+      ? await this.prisma.employee_profiles.findMany({
+          where: { id: { in: dto.employee_ids }, campus_id: dto.campus_id, monthly_pay: { not: null } },
+          select: {
+            id: true,
+            monthly_pay: true,
+            reporting_time: true,
+            leaving_time: true,
+            late_relaxation_minutes: true,
+            department_id: true,
+            staff_category_id: true,
+            staff_categories: { select: { code: true } },
+            days_per_week: true,
+            employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+          },
+        })
+      : await this.prisma.employee_profiles.findMany({
+          where: { campus_id: dto.campus_id, monthly_pay: { not: null } },
+          select: {
+            id: true,
+            monthly_pay: true,
+            reporting_time: true,
+            leaving_time: true,
+            late_relaxation_minutes: true,
+            department_id: true,
+            staff_category_id: true,
+            staff_categories: { select: { code: true } },
+            days_per_week: true,
+            employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+          },
+        });
     if (employees.length === 0) {
-      throw new BadRequestException('No employees on this campus have a monthly_pay set yet — nothing to calculate.');
+      throw new BadRequestException(
+        isTest
+          ? 'None of the selected employees belong to this campus with a monthly_pay set — nothing to calculate.'
+          : 'No employees on this campus have a monthly_pay set yet — nothing to calculate.',
+      );
+    }
+    if (isTest && employees.length !== dto.employee_ids!.length) {
+      throw new BadRequestException(
+        'One or more selected employees are not on this campus or have no monthly_pay set — a test run can only include valid, payable employees.',
+      );
     }
 
     const existing = await this.prisma.payroll_runs.findUnique({
-      where: { campus_id_period_start_period_end: { campus_id: dto.campus_id, period_start: periodStart, period_end: periodEnd } },
+      where: {
+        campus_id_period_start_period_end_is_test: {
+          campus_id: dto.campus_id,
+          period_start: periodStart,
+          period_end: periodEnd,
+          is_test: isTest,
+        },
+      },
     });
-    if (existing?.status === PayrollRunStatus.FINALIZED) {
+    // Test runs are exempt from the immutability guard entirely — the whole
+    // point of test mode is being able to repeat generate -> finalize ->
+    // settle as many times as needed, even after finalizing.
+    if (existing?.status === PayrollRunStatus.FINALIZED && !existing.is_test) {
       throw new BadRequestException(
         `Payroll for ${dto.year}-${String(dto.month).padStart(2, '0')} on this campus is already finalized. ` +
           `Finalized runs are immutable — this isn't a correction workflow yet.`,
@@ -563,11 +627,19 @@ export class PayrollService {
 
     // Re-generating a DRAFT for the same period replaces it in place (recomputed
     // from current attendance data) rather than piling up duplicate drafts —
-    // expected while real attendance data is still being backfilled.
+    // expected while real attendance data is still being backfilled. For a
+    // test run this also applies even if it was previously finalized.
     const run = existing
       ? await this.prisma.payroll_runs.update({
           where: { id: existing.id },
-          data: { notes: dto.notes, generated_by: user.sub, generated_at: new Date() },
+          data: {
+            notes: dto.notes,
+            generated_by: user.sub,
+            generated_at: new Date(),
+            ...(existing.is_test && existing.status === PayrollRunStatus.FINALIZED
+              ? { status: PayrollRunStatus.DRAFT, finalized_at: null }
+              : {}),
+          },
         })
       : await this.prisma.payroll_runs.create({
           data: {
@@ -576,6 +648,7 @@ export class PayrollService {
             period_end: periodEnd,
             notes: dto.notes,
             generated_by: user.sub,
+            is_test: isTest,
           },
         });
 
@@ -846,7 +919,7 @@ export class PayrollService {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status === PayrollRunStatus.FINALIZED) {
+    if (run.status === PayrollRunStatus.FINALIZED && !run.is_test) {
       throw new BadRequestException('Finalized payroll runs cannot be deleted.');
     }
     await this.prisma.payroll_runs.delete({ where: { id } });
@@ -1014,5 +1087,187 @@ export class PayrollService {
     });
 
     return this.getRun(runId, user);
+  }
+
+  /** overtime_minutes is always the line's own persisted snapshot — never recomputed live. */
+  private computeOvertimeReward(
+    overtime: SettlePayrollLineDto['overtime'],
+    overtimeMinutes: number,
+    scheduledMinutesPerDay: number,
+  ): Prisma.Decimal {
+    if (!overtime) return new Prisma.Decimal(0);
+    const rate = new Prisma.Decimal(overtime.rate_amount);
+    if (overtime.rate_type === OvertimeRateType.PER_MINUTE) {
+      return rate.times(overtimeMinutes).toDecimalPlaces(2);
+    }
+    if (overtime.rate_type === OvertimeRateType.PER_HOUR) {
+      return rate.times(overtimeMinutes).dividedBy(60).toDecimalPlaces(2);
+    }
+    const divisor = scheduledMinutesPerDay > 0 ? scheduledMinutesPerDay : 480;
+    return rate.times(overtimeMinutes).dividedBy(divisor).toDecimalPlaces(2);
+  }
+
+  /**
+   * Replaces the plain "mark disbursed" button with a full settlement:
+   * optionally rewards overtime (computed off the line's own persisted
+   * snapshot, never recomputed live), optionally records an off-the-books
+   * cash bonus (kept in payroll_settlements, never returned to
+   * self-service), and always produces a payslip PDF. Still stamps
+   * disbursed_at/disbursed_by on the line — that marker is unchanged, this
+   * is additive.
+   */
+  async settleLine(runId: number, employeeId: number, dto: SettlePayrollLineDto, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({
+      where: { id: runId },
+      include: { campuses: { select: { campus_name: true } } },
+    });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.status !== PayrollRunStatus.FINALIZED) {
+      throw new BadRequestException('Settlement is only allowed on finalized payroll runs');
+    }
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      include: { employee_profiles: { select: { full_name: true, employee_code: true, job_title: true } } },
+    });
+    if (!line) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
+
+    const settledAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
+    if (Number.isNaN(settledAt.getTime())) {
+      throw new BadRequestException('Invalid disbursed_at');
+    }
+
+    const overtimeRewardAmount = this.computeOvertimeReward(dto.overtime, line.total_overtime_minutes, line.scheduled_minutes_per_day);
+    const cashBonusAmount = new Prisma.Decimal(dto.cash_bonus_amount ?? 0).toDecimalPlaces(2);
+    const netPaid = new Prisma.Decimal(line.net_pay).plus(overtimeRewardAmount).toDecimalPlaces(2);
+
+    const settlementData = {
+      overtime_rate_type: dto.overtime?.rate_type ?? null,
+      overtime_rate_amount: dto.overtime ? new Prisma.Decimal(dto.overtime.rate_amount) : null,
+      overtime_minutes: line.total_overtime_minutes,
+      overtime_reward_amount: overtimeRewardAmount,
+      cash_bonus_amount: cashBonusAmount,
+      net_paid: netPaid,
+      settled_at: settledAt,
+      settled_by: user.sub,
+      settlement_notes: dto.notes ?? null,
+    };
+
+    const [updatedLine] = await this.prisma.$transaction([
+      this.prisma.payroll_run_lines.update({
+        where: { id: line.id },
+        data: {
+          disbursed_at: settledAt,
+          disbursed_by: user.sub,
+          disbursement_notes: dto.notes ?? null,
+        },
+        include: { employee_profiles: { select: { full_name: true, employee_code: true } } },
+      }),
+      this.prisma.payroll_settlements.upsert({
+        where: { payroll_run_line_id: line.id },
+        create: { payroll_run_line_id: line.id, ...settlementData },
+        update: settlementData,
+      }),
+    ]);
+
+    const employeeLabel = line.employee_profiles.full_name
+      ? `${line.employee_profiles.full_name}${line.employee_profiles.employee_code ? ` (${line.employee_profiles.employee_code})` : ''}`
+      : line.employee_profiles.employee_code ?? `Employee #${employeeId}`;
+
+    // Payslip generation/upload happens after the settlement numbers are
+    // committed — a failure here shouldn't be able to roll back a
+    // successful settlement, it just leaves payslip_pdf_url null and can be
+    // retried by settling again.
+    let finalSettlement = await this.prisma.payroll_settlements.findUnique({ where: { payroll_run_line_id: line.id } });
+    try {
+      const buffer = await this.payslipPdf.generatePayslipPdf({
+        employee: {
+          fullName: line.employee_profiles.full_name ?? `Employee #${employeeId}`,
+          employeeCode: line.employee_profiles.employee_code,
+          jobTitle: line.employee_profiles.job_title,
+          campusName: run.campuses?.campus_name ?? `Campus #${run.campus_id}`,
+        },
+        period: {
+          start: run.period_start.toISOString().slice(0, 10),
+          end: run.period_end.toISOString().slice(0, 10),
+        },
+        attendance: {
+          scheduledWorkingDays: line.scheduled_working_days,
+          presentDays: line.present_days,
+          lateDays: line.late_days,
+          halfDays: line.half_days,
+          absentDays: line.absent_days,
+          excusedDays: line.excused_days,
+          unpaidLeaveDays: line.unpaid_leave_days,
+          totalBreakMinutes: line.total_break_minutes,
+          totalLateMinutes: line.total_late_minutes,
+        },
+        pay: {
+          monthlyPay: Number(line.monthly_pay),
+          dailyRate: Number(line.daily_rate),
+          absenceDeduction: Number(line.absence_deduction),
+          halfDayDeduction: Number(line.half_day_deduction),
+          lateDeduction: Number(line.late_deduction),
+          breakDeduction: Number(line.break_deduction),
+          totalDeductions: Number(line.total_deductions),
+          netPay: Number(line.net_pay),
+        },
+        overtime: dto.overtime
+          ? {
+              rateType: dto.overtime.rate_type,
+              rateAmount: dto.overtime.rate_amount,
+              overtimeMinutes: line.total_overtime_minutes,
+              rewardAmount: Number(overtimeRewardAmount),
+            }
+          : undefined,
+        netPaid: Number(netPaid),
+        settledAt: settledAt.toLocaleDateString(),
+        generatedByName: user.username,
+      });
+
+      const payslipUrl = await this.storage.upload(`payroll/payslips/${runId}/${employeeId}.pdf`, buffer, 'application/pdf');
+      finalSettlement = await this.prisma.payroll_settlements.update({
+        where: { payroll_run_line_id: line.id },
+        data: { payslip_pdf_url: payslipUrl },
+      });
+    } catch (error) {
+      this.logger.error(`Failed to generate/upload payslip for run ${runId}, employee ${employeeId}`, error as Error);
+    }
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'SETTLED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: user.username,
+      note: [
+        `Settlement for ${employeeLabel}.`,
+        overtimeRewardAmount.greaterThan(0) ? `Overtime reward of ${overtimeRewardAmount.toString()} added.` : null,
+        cashBonusAmount.greaterThan(0) ? 'Cash bonus recorded (internal only).' : null,
+        dto.notes,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    });
+
+    return { ...updatedLine, payroll_settlements: finalSettlement };
+  }
+
+  /** Returns the persisted payslip URL for an already-settled employee line. */
+  async getPayslip(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      include: { payroll_settlements: true },
+    });
+    if (!line?.payroll_settlements?.payslip_pdf_url) {
+      throw new NotFoundException('This employee has not been settled for this payroll run yet, so there is no payslip.');
+    }
+    return { pdf_url: line.payroll_settlements.payslip_pdf_url };
   }
 }

@@ -1,4 +1,4 @@
-import { IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -27,6 +27,20 @@ export class GeneratePayrollRunDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Presence of this field is what makes a run a TEST run — scoped to just
+   * these employees (instead of every paid employee on the campus), free to
+   * delete/regenerate even after finalizing, and stored in a separate
+   * (campus_id, period_start, period_end, is_test) slot so it never collides
+   * with the real campus run for the same period.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  employee_ids?: number[];
 }
 
 export class ListPayrollRunsQueryDto {
