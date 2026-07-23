@@ -429,33 +429,51 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage('markAsRead')
   async handleMarkAsRead(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { familyId: any; role: 'ADMIN' | 'GUARDIAN' },
+    @MessageBody() data: { familyId: any; role?: 'ADMIN' | 'GUARDIAN' },
   ) {
+    const payload = client.data.tafsPayload;
+    // Derive role from JWT — never trust the client-supplied role for tick semantics.
+    const role: 'ADMIN' | 'GUARDIAN' =
+      payload?.userType === 'STAFF'
+        ? 'ADMIN'
+        : payload?.userType === 'PARENT'
+          ? 'GUARDIAN'
+          : data.role === 'ADMIN' || data.role === 'GUARDIAN'
+            ? data.role
+            : 'GUARDIAN';
+
     const familyId = Number(data.familyId);
+    if (payload?.userType === 'PARENT') {
+      const authorizedFamilyId = Number(payload.familyId ?? payload.sub);
+      if (authorizedFamilyId !== familyId) {
+        return { error: 'forbidden' };
+      }
+    }
+
     const conv = await this.prisma.chat_conversations.findUnique({ where: { family_id: familyId } });
     if (!conv) return;
 
     await this.prisma.chat_conversations.update({
       where: { id: conv.id },
       data: {
-        unread_by_admin: data.role === 'ADMIN' ? 0 : undefined,
-        unread_by_parent: data.role === 'GUARDIAN' ? 0 : undefined,
-        admin_last_read_at: data.role === 'ADMIN' ? new Date() : undefined,
-        parent_last_read_at: data.role === 'GUARDIAN' ? new Date() : undefined,
+        unread_by_admin: role === 'ADMIN' ? 0 : undefined,
+        unread_by_parent: role === 'GUARDIAN' ? 0 : undefined,
+        admin_last_read_at: role === 'ADMIN' ? new Date() : undefined,
+        parent_last_read_at: role === 'GUARDIAN' ? new Date() : undefined,
       },
     });
 
     // Also mark all messages in this conversation as read
     await this.prisma.chat_messages.updateMany({
-      where: { 
+      where: {
         conversation_id: conv.id,
-        sender_type: data.role === 'GUARDIAN' ? 'ADMIN' : 'GUARDIAN', // If Guardian marks as read, mark Admin's messages
-        is_read: false 
+        sender_type: role === 'GUARDIAN' ? 'ADMIN' : 'GUARDIAN', // If Guardian marks as read, mark Admin's messages
+        is_read: false
       },
       data: { is_read: true },
     });
 
-    if (data.role === 'ADMIN') {
+    if (role === 'ADMIN') {
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
       this.server.to('admin_inbox').emit('messagesRead', { familyId: familyId, by: 'GUARDIAN' });
@@ -859,6 +877,26 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     },
   ) {
     this.server.to(`family_app_${familyId}`).emit('attendanceAlertReceived', payload);
+  }
+
+  /**
+   * Fan-out read receipts for support tickets.
+   * by=PARENT → staff's approved messages were read (blue ticks on staff UI)
+   * by=STAFF  → parent's messages were read (blue ticks on parent app)
+   */
+  broadcastTicketMessagesRead(
+    ticketId: string,
+    familyId: number,
+    by: 'PARENT' | 'STAFF',
+    assigneeId?: string | null,
+  ) {
+    const payload = { ticketId, by };
+    this.server.to(`family_app_${familyId}`).emit('ticketMessagesRead', payload);
+    this.emitToTicketRoom(ticketId, 'ticketMessagesRead', payload);
+    if (assigneeId) {
+      this.server.to(`staff_inbox_${assigneeId}`).emit('ticketMessagesRead', payload);
+    }
+    this.server.to('super_admin_approvals').emit('ticketMessagesRead', payload);
   }
 
   async broadcastApprovedTicketMessage(ticket: any, message: any) {

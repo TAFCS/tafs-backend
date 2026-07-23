@@ -255,7 +255,23 @@ export class SupportTicketsService {
       },
     });
 
-    return { ...ticket, messages, messageTotal, events };
+    const parentLastRead = ticket.parent_last_read_at;
+    const staffLastRead = ticket.staff_last_read_at;
+
+    return {
+      ...ticket,
+      messages: messages.map((m) => {
+        const isReadByRecipient =
+          m.sender_type === 'STAFF'
+            ? m.is_read ||
+              (!!parentLastRead && m.created_at <= parentLastRead)
+            : m.is_read ||
+              (!!staffLastRead && m.created_at <= staffLastRead);
+        return { ...m, is_read: isReadByRecipient };
+      }),
+      messageTotal,
+      events,
+    };
   }
 
   async createTicket(parent: IJwtParentPayload, dto: CreateTicketDto) {
@@ -935,22 +951,55 @@ export class SupportTicketsService {
     this.assertCanViewTicket(ticket, actor);
 
     if (actor.userType === 'PARENT') {
-      return this.prisma.support_tickets.update({
+      const updated = await this.prisma.support_tickets.update({
         where: { id: ticketId },
         data: {
           unread_by_parent: 0,
           parent_last_read_at: new Date(),
         },
       });
+      // Parent read staff messages → blue ticks on staff side
+      await this.prisma.ticket_messages.updateMany({
+        where: {
+          ticket_id: ticketId,
+          sender_type: 'STAFF',
+          status: 'APPROVED',
+          is_read: false,
+        },
+        data: { is_read: true },
+      });
+      this.chatGateway.broadcastTicketMessagesRead(
+        ticketId,
+        ticket.family_id,
+        'PARENT',
+        ticket.current_assignee_id,
+      );
+      return updated;
     }
 
-    return this.prisma.support_tickets.update({
+    const updated = await this.prisma.support_tickets.update({
       where: { id: ticketId },
       data: {
         unread_by_staff: 0,
         staff_last_read_at: new Date(),
       },
     });
+    // Staff read parent messages → blue ticks on parent side
+    await this.prisma.ticket_messages.updateMany({
+      where: {
+        ticket_id: ticketId,
+        sender_type: 'GUARDIAN',
+        is_read: false,
+      },
+      data: { is_read: true },
+    });
+    this.chatGateway.broadcastTicketMessagesRead(
+      ticketId,
+      ticket.family_id,
+      'STAFF',
+      ticket.current_assignee_id,
+    );
+    return updated;
   }
 
   /** Used by ChatGateway for socket sends. */
