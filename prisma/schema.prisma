@@ -631,7 +631,6 @@ model students {
   cnic                        String?                       @unique @db.VarChar(15)
   not_pursuing                Boolean                       @default(false)
   quick_admission_meta        Json?
-  graduated_at                DateTime?                     @db.Date
   attendance_notifications    attendance_notifications[]
   attendance_roll_records     attendance_roll_records[]
   attendance_student_daily    attendance_student_daily[]
