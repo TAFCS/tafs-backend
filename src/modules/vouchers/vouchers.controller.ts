@@ -174,11 +174,14 @@ export class VouchersController {
     async generatePdf(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: GenerateVoucherPdfDto,
+        @Req() req: any,
     ) {
+        const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         const result = await this.vouchersService.generatePdf(
             id,
             dto.show_discount ?? true,
             dto.paid_stamp ?? false,
+            generatedByName,
         );
         return {
             success: true,
@@ -382,8 +385,9 @@ export class VouchersController {
     @Post('batch-export')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response) {
-        const buffer = await this.vouchersService.batchExport(dto.ids);
+    async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any) {
+        const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
+        const buffer = await this.vouchersService.batchExport(dto.ids, generatedByName);
         res.set({
             'Content-Type': 'application/zip',
             'Content-Disposition': 'attachment; filename=vouchers_batch.zip',
@@ -395,8 +399,9 @@ export class VouchersController {
     @Post('batch-merge')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response) {
-        const buffer = await this.vouchersService.batchMerge(dto.ids);
+    async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any) {
+        const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
+        const buffer = await this.vouchersService.batchMerge(dto.ids, generatedByName);
         res.set({
             'Content-Type': 'application/pdf',
             'Content-Disposition': 'attachment; filename=vouchers_merged.pdf',
