@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
-import { CheckInSource, StaffRole } from '@prisma/client';
+import { CheckInSource, EmployeeStatus, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -31,6 +31,10 @@ export class CreateEmployeeDto {
 
   @IsOptional() @IsString()
   employment_type?: string;
+
+  @IsOptional()
+  @IsEnum(EmployeeStatus)
+  employment_status?: EmployeeStatus;
 
   @IsOptional() @IsInt()
   department_id?: number;
@@ -154,6 +158,11 @@ export class CreateEmployeeDto {
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
+
+export class UpdateEmployeeStatusDto {
+  @IsEnum(EmployeeStatus)
+  status: EmployeeStatus;
+}
 
 export class WorkScheduleDayDto {
   @IsInt()
@@ -329,8 +338,8 @@ export class EmployeesService {
     return employee;
   }
 
-  async create(dto: CreateEmployeeDto, changedBy?: string) {
-    const { class_section_assignments, ...rest } = dto;
+  async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
+    const { class_section_assignments, employment_status, ...rest } = dto;
     const codeFields = resolveEmployeeCodeFields({
       ...rest,
       campusPrefix: campusPrefixForId(rest.campus_id ?? null),
@@ -340,12 +349,23 @@ export class EmployeesService {
       await this.assertCodeAvailable(codeFields.employee_code);
     }
     await this.assertCategoryMatchesDepartment(rest.department_id ?? null, rest.staff_category_id ?? null);
+
+    let status: EmployeeStatus = EmployeeStatus.ACTIVE;
+    if (employment_status != null) {
+      if (caller?.role !== StaffRole.SUPER_ADMIN) {
+        throw new ForbiddenException('Only super admins can set employee status');
+      }
+      status = employment_status;
+    }
+
     const record = await this.prisma.employee_profiles.create({
       data: {
         user_id: rest.user_id || null,
         cnic: rest.cnic || null,
         join_date: rest.join_date ? new Date(rest.join_date) : null,
         employment_type: rest.employment_type || null,
+        employment_status: status,
+        is_permanent_employee: status === EmployeeStatus.PERMANENT,
         department_id: rest.department_id || null,
         designation_id: rest.designation_id || null,
         reporting_manager_id: rest.reporting_manager_id || null,
@@ -409,7 +429,10 @@ export class EmployeesService {
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string) {
     const existing = await this.findOne(id);
 
-    const { class_section_assignments, ...rest } = dto;
+    const { class_section_assignments, employment_status: _ignoredStatus, ...rest } = dto;
+    if (_ignoredStatus !== undefined) {
+      throw new BadRequestException('Use PATCH /hr/employees/:id/status to change employment status');
+    }
     const nextCampusId = rest.campus_id !== undefined ? rest.campus_id : existing.campus_id;
     const hasCodeInput =
       rest.employee_code !== undefined ||
@@ -697,6 +720,53 @@ export class EmployeesService {
       has_custom_schedule: employee.employee_work_schedules.length > 0,
       days: employee.employee_work_schedules.sort((a, b) => a.day_of_week - b.day_of_week),
     };
+  }
+
+  async updateStatus(id: number, dto: UpdateEmployeeStatusDto, caller: IJwtStaffPayload) {
+    if (caller.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only super admins can change employee status');
+    }
+
+    const existing = await this.findOne(id);
+    const nextStatus = dto.status;
+
+    if (existing.employment_status === nextStatus) {
+      return existing;
+    }
+
+    const deactivatePortal =
+      nextStatus === EmployeeStatus.TERMINATED || nextStatus === EmployeeStatus.LEFT;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (deactivatePortal && existing.user_id) {
+        await tx.users.update({
+          where: { id: existing.user_id },
+          data: { is_active: false },
+        });
+      }
+
+      return tx.employee_profiles.update({
+        where: { id },
+        data: {
+          employment_status: nextStatus,
+          is_permanent_employee: nextStatus === EmployeeStatus.PERMANENT,
+        },
+        include: includeRelations,
+      });
+    });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(id),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'Employment Status',
+      old_value: existing.employment_status,
+      new_value: nextStatus,
+      changed_by: caller.username || caller.sub || 'system',
+    });
+
+    return updated;
   }
 
   async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto) {

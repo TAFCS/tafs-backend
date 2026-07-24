@@ -631,6 +631,7 @@ model students {
   cnic                        String?                       @unique @db.VarChar(15)
   not_pursuing                Boolean                       @default(false)
   quick_admission_meta        Json?
+  graduated_at                DateTime?                     @db.Date
   attendance_notifications    attendance_notifications[]
   attendance_roll_records     attendance_roll_records[]
   attendance_student_daily    attendance_student_daily[]
@@ -1076,6 +1077,7 @@ model employee_profiles {
   spouse_photo_url                   String?
   father_cnic                        String?                              @db.VarChar(50)
   mother_cnic                        String?                              @db.VarChar(50)
+  employment_status                  EmployeeStatus                       @default(ACTIVE)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_staff_daily             attendance_staff_daily[]
@@ -1097,6 +1099,8 @@ model employee_profiles {
   teacher_saturday_schedules         teacher_saturday_schedules[]
   timetable_slots                    timetable_slots[]
   zk_attendance_scans                zk_attendance_scans[]
+
+  @@index([employment_status])
 }
 
 model staff_types {
@@ -1916,6 +1920,14 @@ enum PostdatedChequeStatus {
 enum CheckInSource {
   FIXED
   TIMETABLE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  TERMINATED
+  PERMANENT
+  LEFT
+  FAMILY
 }
 
 enum otp_purpose {

@@ -578,7 +578,11 @@ export class PayrollService {
           },
         })
       : await this.prisma.employee_profiles.findMany({
-          where: { campus_id: dto.campus_id, monthly_pay: { not: null } },
+          where: {
+            campus_id: dto.campus_id,
+            monthly_pay: { not: null },
+            employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+          },
           select: {
             id: true,
             monthly_pay: true,

@@ -12,10 +12,13 @@ describe('SupportTicketsService leak-proofing', () => {
     broadcastReplyRejected: jest.fn(),
     broadcastTicketMessageToStaff: jest.fn(),
     broadcastTicketClosed: jest.fn(),
+    broadcastTicketMessagesRead: jest.fn(),
     isParentInTicketRoom: jest.fn().mockReturnValue(false),
+    isStaffInTicketRoom: jest.fn().mockResolvedValue(false),
   };
 
   const mockFcm = { sendToFamily: jest.fn(), sendToUsers: jest.fn() };
+  const mockAuditLogs = { log: jest.fn() };
 
   const prisma = {
     support_tickets: {
@@ -39,6 +42,9 @@ describe('SupportTicketsService leak-proofing', () => {
       findMany: jest.fn(),
       findFirst: jest.fn(),
     },
+    guardians: {
+      findFirst: jest.fn(),
+    },
     $transaction: jest.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
 
@@ -46,10 +52,13 @@ describe('SupportTicketsService leak-proofing', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGateway.isParentInTicketRoom.mockReturnValue(false);
+    mockGateway.isStaffInTicketRoom.mockResolvedValue(false);
     service = new SupportTicketsService(
       prisma as any,
       mockFcm as any,
       mockGateway as any,
+      mockAuditLogs as any,
     );
   });
 
@@ -196,7 +205,14 @@ describe('SupportTicketsService leak-proofing', () => {
     };
     prisma.ticket_messages.findUnique.mockResolvedValue({
       ...pendingMessage,
-      ticket: { id: 't1', family_id: 5 },
+      ticket: {
+        id: 't1',
+        family_id: 5,
+        category: TicketCategory.GENERAL,
+        subtopic: 'Fees',
+        created_at: new Date('2026-01-01'),
+        families: { household_name: 'Khan' },
+      },
     });
     prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
     prisma.ticket_messages.findUniqueOrThrow.mockResolvedValue({
@@ -207,6 +223,10 @@ describe('SupportTicketsService leak-proofing', () => {
       id: 't1',
       family_id: 5,
       current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
     });
     prisma.ticket_events.create.mockResolvedValue({});
 
@@ -252,15 +272,29 @@ describe('SupportTicketsService leak-proofing', () => {
       id: 'm1',
       ticket_id: 't1',
       sender_user_id: 'staff-1',
+      message_type: 'TEXT',
+      content: 'Rejected reply',
       status: MessageStatus.PENDING,
-      ticket: { id: 't1' },
+      ticket: {
+        id: 't1',
+        family_id: 5,
+        category: TicketCategory.GENERAL,
+        subtopic: 'Fees',
+        created_at: new Date('2026-01-01'),
+        families: { household_name: 'Khan' },
+      },
     });
     prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
     prisma.ticket_messages.findUniqueOrThrow.mockResolvedValue({
       id: 'm1',
       status: MessageStatus.REJECTED,
     });
-    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({ id: 't1' });
+    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
+      id: 't1',
+      created_at: new Date('2026-01-01'),
+      category: TicketCategory.GENERAL,
+      families: { household_name: 'Khan' },
+    });
     prisma.ticket_events.create.mockResolvedValue({});
 
     await service.reviewReply(
@@ -294,7 +328,13 @@ describe('SupportTicketsService leak-proofing', () => {
 
   it('finance claim uses atomic updateMany', async () => {
     prisma.support_tickets.updateMany.mockResolvedValue({ count: 1 });
-    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({ id: 't1' });
+    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
+      id: 't1',
+      category: TicketCategory.FINANCIAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
+    });
     prisma.ticket_events.create.mockResolvedValue({});
 
     await service.claimTicket('t1', {
@@ -318,12 +358,17 @@ describe('SupportTicketsService leak-proofing', () => {
       category: TicketCategory.GENERAL,
       family_id: 5,
       subtopic: 'Academics',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
     });
     prisma.support_tickets.update.mockResolvedValue({
       id: 't1',
       family_id: 5,
       subtopic: 'Academics',
       status: TicketStatus.CLOSED,
+      category: TicketCategory.GENERAL,
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
     });
     prisma.ticket_events.create.mockResolvedValue({});
     mockGateway.isParentInTicketRoom.mockReturnValue(false);
@@ -354,12 +399,17 @@ describe('SupportTicketsService leak-proofing', () => {
       category: TicketCategory.GENERAL,
       family_id: 5,
       subtopic: 'Academics',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
     });
     prisma.support_tickets.update.mockResolvedValue({
       id: 't1',
       family_id: 5,
       subtopic: 'Academics',
       status: TicketStatus.CLOSED,
+      category: TicketCategory.GENERAL,
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
     });
     prisma.ticket_events.create.mockResolvedValue({});
     mockGateway.isParentInTicketRoom.mockReturnValue(true);
@@ -396,6 +446,235 @@ describe('SupportTicketsService leak-proofing', () => {
         ticketId: 't1',
       }),
     );
+  });
+
+  it('super admin reply auto-marks read when parent is already in ticket room', async () => {
+    mockGateway.isParentInTicketRoom.mockReturnValue(true);
+
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+    });
+    prisma.ticket_messages.create.mockResolvedValue({
+      id: 'm-live',
+      message_type: 'TEXT',
+      content: 'Seen live',
+      status: MessageStatus.APPROVED,
+      is_read: false,
+      sender_user: { id: 'admin-1', full_name: 'Admin', role: 'SUPER_ADMIN' },
+    });
+    prisma.support_tickets.update.mockResolvedValue({});
+    prisma.ticket_events.create.mockResolvedValue({});
+    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      current_assignee_id: 'staff-1',
+    });
+    prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
+
+    const result = await service.createStaffMessage(
+      't1',
+      { sub: 'admin-1', role: 'SUPER_ADMIN', userType: 'STAFF', username: 'admin' } as any,
+      { messageType: 'TEXT', content: 'Seen live' },
+    );
+
+    expect(mockGateway.broadcastApprovedTicketMessage).toHaveBeenCalled();
+    expect(mockFcm.sendToFamily).not.toHaveBeenCalled();
+    expect(prisma.ticket_messages.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          ticket_id: 't1',
+          sender_type: 'STAFF',
+          is_read: false,
+        }),
+        data: { is_read: true },
+      }),
+    );
+    expect(prisma.support_tickets.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 't1' },
+        data: expect.objectContaining({
+          unread_by_parent: 0,
+        }),
+      }),
+    );
+    expect(mockGateway.broadcastTicketMessagesRead).toHaveBeenCalledWith(
+      't1',
+      5,
+      'PARENT',
+      'staff-1',
+    );
+    expect(result).toEqual(expect.objectContaining({ is_read: true }));
+  });
+
+  it('super admin reply still sends FCM when parent is not in ticket room', async () => {
+    mockGateway.isParentInTicketRoom.mockReturnValue(false);
+
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+    });
+    prisma.ticket_messages.create.mockResolvedValue({
+      id: 'm-offline',
+      message_type: 'TEXT',
+      content: 'Offline parent',
+      status: MessageStatus.APPROVED,
+      is_read: false,
+      sender_user: { id: 'admin-1', full_name: 'Admin', role: 'SUPER_ADMIN' },
+    });
+    prisma.support_tickets.update.mockResolvedValue({});
+    prisma.ticket_events.create.mockResolvedValue({});
+    prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      current_assignee_id: 'staff-1',
+    });
+
+    const result = await service.createStaffMessage(
+      't1',
+      { sub: 'admin-1', role: 'SUPER_ADMIN', userType: 'STAFF', username: 'admin' } as any,
+      { messageType: 'TEXT', content: 'Offline parent' },
+    );
+
+    expect(mockFcm.sendToFamily).toHaveBeenCalled();
+    expect(mockGateway.broadcastTicketMessagesRead).not.toHaveBeenCalled();
+    expect(result.is_read).not.toBe(true);
+  });
+
+  it('parent message auto-marks read when staff is already in ticket room', async () => {
+    mockGateway.isStaffInTicketRoom.mockResolvedValue(true);
+
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      student_id: 10,
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
+    });
+    prisma.guardians.findFirst.mockResolvedValue({
+      id: 1,
+      full_name: 'Parent',
+    });
+
+    const createdMessage = {
+      id: 'm-parent',
+      ticket_id: 't1',
+      message_type: 'TEXT',
+      content: 'Hello staff',
+      status: MessageStatus.APPROVED,
+      is_read: false,
+      sender_guardian: { id: 1, full_name: 'Parent' },
+    };
+    const updatedTicket = {
+      id: 't1',
+      family_id: 5,
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
+      students: null,
+      current_assignee: null,
+    };
+
+    prisma.ticket_messages.create.mockResolvedValue(createdMessage);
+    prisma.support_tickets.update.mockResolvedValue(updatedTicket);
+    prisma.ticket_messages.updateMany.mockResolvedValue({ count: 1 });
+
+    const result = await service.createParentMessage(
+      't1',
+      { familyId: 5, userType: 'PARENT', sub: '5' } as any,
+      { messageType: 'TEXT', content: 'Hello staff' },
+    );
+
+    expect(mockGateway.broadcastTicketMessageToStaff).toHaveBeenCalled();
+    expect(prisma.ticket_messages.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          ticket_id: 't1',
+          sender_type: 'GUARDIAN',
+          is_read: false,
+        }),
+        data: { is_read: true },
+      }),
+    );
+    expect(prisma.support_tickets.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 't1' },
+        data: expect.objectContaining({
+          unread_by_staff: 0,
+        }),
+      }),
+    );
+    expect(mockGateway.broadcastTicketMessagesRead).toHaveBeenCalledWith(
+      't1',
+      5,
+      'STAFF',
+      'staff-1',
+    );
+    expect(result).toEqual(expect.objectContaining({ is_read: true }));
+  });
+
+  it('parent message does not auto-mark when staff is not in ticket room', async () => {
+    mockGateway.isStaffInTicketRoom.mockResolvedValue(false);
+
+    prisma.support_tickets.findUnique.mockResolvedValue({
+      id: 't1',
+      family_id: 5,
+      student_id: 10,
+      status: TicketStatus.ASSIGNED,
+      current_assignee_id: 'staff-1',
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
+    });
+    prisma.guardians.findFirst.mockResolvedValue({
+      id: 1,
+      full_name: 'Parent',
+    });
+
+    const createdMessage = {
+      id: 'm-parent-2',
+      ticket_id: 't1',
+      message_type: 'TEXT',
+      content: 'Hello staff',
+      status: MessageStatus.APPROVED,
+      is_read: false,
+      sender_guardian: { id: 1, full_name: 'Parent' },
+    };
+    const updatedTicket = {
+      id: 't1',
+      family_id: 5,
+      category: TicketCategory.GENERAL,
+      subtopic: 'Fees',
+      created_at: new Date('2026-01-01'),
+      families: { household_name: 'Khan' },
+      students: null,
+      current_assignee: null,
+    };
+
+    prisma.ticket_messages.create.mockResolvedValue(createdMessage);
+    prisma.support_tickets.update.mockResolvedValue(updatedTicket);
+
+    const result = await service.createParentMessage(
+      't1',
+      { familyId: 5, userType: 'PARENT', sub: '5' } as any,
+      { messageType: 'TEXT', content: 'Hello staff' },
+    );
+
+    expect(mockGateway.broadcastTicketMessagesRead).not.toHaveBeenCalled();
+    expect(result.is_read).not.toBe(true);
   });
 });
 

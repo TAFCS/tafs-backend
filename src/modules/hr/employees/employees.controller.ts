@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus } from '@nestjs/common';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -68,6 +68,17 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
   }
 
+  @Patch(':id/status')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateEmployeeStatusDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.updateStatus(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee status updated successfully');
+  }
+
   @Patch(':id/account')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
   async updateAccount(
@@ -98,9 +109,9 @@ export class EmployeesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: any) {
+  async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: IJwtStaffPayload) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.create(dto, changedBy);
+    const data = await this.employeesService.create(dto, changedBy, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Employee created successfully');
   }
 
