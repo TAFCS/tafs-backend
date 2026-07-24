@@ -619,28 +619,59 @@ export class EmployeesService {
   }
 
   async searchSimple(query: string) {
-    const isNumeric = /^\d+$/.test(query);
+    const trimmed = (query || '').trim();
+    if (!trimmed) return [];
+
+    const isNumeric = /^\d+$/.test(trimmed);
     const results: { id: number; full_name: string | null; employee_code: string | null }[] = [];
+
+    // Helper: generate code patterns from raw PIN digits (e.g. 40050117 -> '04-0050117', 300648 -> '03-00648', 30049 -> '03-0049')
+    const codePatterns: string[] = [];
+    if (isNumeric) {
+      if (trimmed.length >= 5) {
+        const rawDep = trimmed.substring(0, 2);
+        const rawNum = trimmed.substring(2);
+        let convDep = rawDep;
+        if (rawDep.endsWith('0')) {
+          convDep = '0' + rawDep[0];
+        }
+        codePatterns.push(`${convDep}-${rawNum}`);
+        codePatterns.push(`${convDep}-${rawNum.padStart(4, '0')}`);
+        codePatterns.push(`${rawDep}-${rawNum}`);
+      }
+      if (trimmed.length >= 4) {
+        const singleDep = '0' + trimmed[0];
+        const rest = trimmed.substring(1);
+        codePatterns.push(`${singleDep}-${rest}`);
+        codePatterns.push(`${singleDep}-${rest.padStart(4, '0')}`);
+      }
+    }
 
     if (isNumeric) {
       const exact = await this.prisma.employee_profiles.findFirst({
-        where: { id: Number(query) },
+        where: { id: Number(trimmed) },
         select: { id: true, full_name: true, employee_code: true },
       });
       if (exact) results.push(exact);
     }
 
+    const orConditions: any[] = [
+      { full_name: { contains: trimmed, mode: 'insensitive' } },
+      { employee_code: { contains: trimmed, mode: 'insensitive' } },
+    ];
+
+    for (const pat of codePatterns) {
+      orConditions.push({ employee_code: { contains: pat, mode: 'insensitive' } });
+    }
+
     const others = await this.prisma.employee_profiles.findMany({
       where: {
-        OR: [
-          { full_name: { contains: query, mode: 'insensitive' } },
-          { employee_code: { contains: query, mode: 'insensitive' } },
-        ],
+        OR: orConditions,
         ...(results.length ? { NOT: { id: results[0].id } } : {}),
       },
       select: { id: true, full_name: true, employee_code: true },
       orderBy: { full_name: 'asc' },
-      take: 5 - results.length,
+      take: 10 - results.length,
     });
 
     return [...results, ...others];
