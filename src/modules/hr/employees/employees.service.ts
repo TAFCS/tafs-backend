@@ -325,6 +325,7 @@ export class EmployeesService {
         personal_email: true,
         photo_url: true,
         is_permanent_employee: true,
+        employment_status: true,
         campuses: { select: { id: true, campus_name: true } },
         departments: { select: { id: true, name: true } },
         designations: { select: { id: true, title: true } },
