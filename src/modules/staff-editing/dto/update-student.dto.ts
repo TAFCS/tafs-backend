@@ -160,6 +160,24 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  complementary_reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  complementary_until?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  fee_endowment_reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  fee_endowment_until?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(10)
   fee_start_term?: string;
 

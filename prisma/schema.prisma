@@ -625,6 +625,10 @@ model students {
   home_phone                  String?                       @db.VarChar(20)
   is_complementary            Boolean                       @default(false)
   is_fee_endowment            Boolean                       @default(false)
+  complementary_reason        String?                       @db.VarChar(500)
+  complementary_until         DateTime?                     @db.Date
+  fee_endowment_reason        String?                       @db.VarChar(500)
+  fee_endowment_until         DateTime?                     @db.Date
   fee_start_term              String?                       @db.VarChar(10)
   graduated_from_class_id     Int?
   graduated_at                DateTime?                     @db.Date

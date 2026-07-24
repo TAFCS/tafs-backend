@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { GetSheetStudentsDto } from './dto/get-sheet-students.dto';
@@ -154,6 +154,10 @@ export class StaffEditingService {
         home_phone: true,
         is_complementary: true,
         is_fee_endowment: true,
+        complementary_reason: true,
+        complementary_until: true,
+        fee_endowment_reason: true,
+        fee_endowment_until: true,
         fee_start_term: true,
         graduated_from_class_id: true,
         families: {
@@ -305,6 +309,8 @@ export class StaffEditingService {
       father_cnic,
       mother_name,
       mother_cnic,
+      complementary_until,
+      fee_endowment_until,
       ...rest
     } = dto;
 
@@ -312,11 +318,55 @@ export class StaffEditingService {
       ...rest,
       ...(dob !== undefined ? { dob: new Date(dob) } : {}),
       ...(doa !== undefined ? { doa: doa ? new Date(doa) : null } : {}),
+      ...(complementary_until !== undefined
+        ? { complementary_until: complementary_until ? new Date(complementary_until) : null }
+        : {}),
+      ...(fee_endowment_until !== undefined
+        ? { fee_endowment_until: fee_endowment_until ? new Date(fee_endowment_until) : null }
+        : {}),
     };
 
     if (studentData.cnic !== undefined) {
       const c = typeof studentData.cnic === 'string' ? studentData.cnic.trim() : studentData.cnic;
       studentData.cnic = (!c || c === 'NULL' || c === 'XXXXX-XXXXXXX-X') ? null : c;
+    }
+
+    // Require why + until when enabling complimentary / endowment; clear when disabling.
+    const nextComplementary =
+      dto.is_complementary !== undefined ? dto.is_complementary : undefined;
+    const nextEndowment =
+      dto.is_fee_endowment !== undefined ? dto.is_fee_endowment : undefined;
+
+    if (nextComplementary === true) {
+      const reason =
+        typeof dto.complementary_reason === 'string'
+          ? dto.complementary_reason.trim()
+          : '';
+      if (!reason || !dto.complementary_until) {
+        throw new BadRequestException(
+          'Complementary students require a reason and an until date',
+        );
+      }
+      studentData.complementary_reason = reason;
+    } else if (nextComplementary === false) {
+      studentData.complementary_reason = null;
+      studentData.complementary_until = null;
+    }
+
+    if (nextEndowment === true) {
+      const reason =
+        typeof dto.fee_endowment_reason === 'string'
+          ? dto.fee_endowment_reason.trim()
+          : '';
+      if (!reason || !dto.fee_endowment_until) {
+        throw new BadRequestException(
+          'Fee endowment students require a reason and an until date',
+        );
+      }
+      studentData.fee_endowment_reason = reason;
+    } else if (nextEndowment === false) {
+      studentData.fee_endowment_reason = null;
+      studentData.fee_endowment_until = null;
     }
 
     try {
@@ -337,7 +387,8 @@ export class StaffEditingService {
           'interests', 'country', 'province', 'city', 'whatsapp_number',
           'primary_phone', 'email', 'campus_id', 'class_id', 'section_id',
           'house_id', 'academic_year', 'gr_number', 'status', 'is_complementary',
-          'is_fee_endowment'
+          'is_fee_endowment', 'complementary_reason', 'complementary_until',
+          'fee_endowment_reason', 'fee_endowment_until',
         ];
 
         for (const field of TRACKED_STUDENT_FIELDS) {
@@ -346,7 +397,12 @@ export class StaffEditingService {
             let oldVal: string | null = null;
             let newVal: string | null = null;
 
-            if (field === 'dob' || field === 'doa') {
+            if (
+              field === 'dob' ||
+              field === 'doa' ||
+              field === 'complementary_until' ||
+              field === 'fee_endowment_until'
+            ) {
               const oldDate = (existing as any)[field];
               const newDateStr = (dto as any)[field];
               const newDate = newDateStr ? new Date(newDateStr) : null;
@@ -657,6 +713,10 @@ export class StaffEditingService {
         house_id: true,
         is_complementary: true,
         is_fee_endowment: true,
+        complementary_reason: true,
+        complementary_until: true,
+        fee_endowment_reason: true,
+        fee_endowment_until: true,
         fee_start_term: true,
         graduated_from_class_id: true,
         admission_age_years: true,
@@ -1304,6 +1364,14 @@ export class StaffEditingService {
       mother_cnic: motherLink?.guardians?.cnic ?? null,
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
+      complementary_reason: s.complementary_reason ?? null,
+      complementary_until: s.complementary_until
+        ? new Date(s.complementary_until).toISOString().slice(0, 10)
+        : null,
+      fee_endowment_reason: s.fee_endowment_reason ?? null,
+      fee_endowment_until: s.fee_endowment_until
+        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
+        : null,
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class ? {
@@ -1404,6 +1472,14 @@ export class StaffEditingService {
         })),
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
+      complementary_reason: s.complementary_reason ?? null,
+      complementary_until: s.complementary_until
+        ? new Date(s.complementary_until).toISOString().slice(0, 10)
+        : null,
+      fee_endowment_reason: s.fee_endowment_reason ?? null,
+      fee_endowment_until: s.fee_endowment_until
+        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
+        : null,
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,

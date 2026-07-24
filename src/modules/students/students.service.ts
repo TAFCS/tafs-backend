@@ -557,6 +557,10 @@ export class StudentsService {
       selectArgs.photograph_url = true;
       selectArgs.is_complementary = true;
       selectArgs.is_fee_endowment = true;
+      selectArgs.complementary_reason = true;
+      selectArgs.complementary_until = true;
+      selectArgs.fee_endowment_reason = true;
+      selectArgs.fee_endowment_until = true;
       selectArgs.fee_start_term = true;
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
       selectArgs.classes   = { select: { description: true, class_code: true } };
@@ -1291,6 +1295,14 @@ export class StudentsService {
       enrollment_status: s.status,
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,
+      complementary_reason: s.complementary_reason ?? null,
+      complementary_until: s.complementary_until
+        ? new Date(s.complementary_until).toISOString().slice(0, 10)
+        : null,
+      fee_endowment_reason: s.fee_endowment_reason ?? null,
+      fee_endowment_until: s.fee_endowment_until
+        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
+        : null,
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,
