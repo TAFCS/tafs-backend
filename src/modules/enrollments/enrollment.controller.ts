@@ -79,4 +79,15 @@ export class EnrollmentController {
       'Admission order data retrieved successfully'
     );
   }
+
+  @Get(':cc/leaving-certificate')
+  @ApiOperation({ summary: 'Get student data for leaving certificate (SLC) PDF' })
+  async getLeavingCertificate(@Param('cc', ParseIntPipe) cc: number) {
+    const data = await this.enrollmentService.getLeavingCertificateData(cc);
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Leaving certificate data retrieved successfully'
+    );
+  }
 }

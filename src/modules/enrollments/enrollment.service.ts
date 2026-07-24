@@ -779,4 +779,175 @@ export class EnrollmentService {
 
     return selectedSectionId;
   }
+
+  async getLeavingCertificateData(cc: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      include: {
+        campuses: true,
+        classes: true,
+        sections: true,
+        houses: true,
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+        },
+        student_guardians: {
+          include: {
+            guardians: true,
+          },
+        },
+        student_previous_schools: {
+          orderBy: { id: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!student) {
+      throw new NotFoundException(`Student with CC #${cc} not found`);
+    }
+
+    const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
+    const fatherFullName = fatherLink?.guardians?.full_name || '';
+
+    const splitName = (fullName: string) => {
+      const parts = (fullName || '').trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) return { last: '', first: '', middle: '' };
+      if (parts.length === 1) return { last: parts[0], first: '', middle: '' };
+      if (parts.length === 2) return { last: parts[0], first: parts[1], middle: '' };
+      return { last: parts[0], first: parts[1], middle: parts.slice(2).join(' ') };
+    };
+
+    const monthNames = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+    const parseDateParts = (dateVal: Date | string | null) => {
+      if (!dateVal) return { month: '—', day: '—', year: '—' };
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return { month: '—', day: '—', year: '—' };
+      return {
+        month: monthNames[d.getMonth()],
+        day: String(d.getDate()).padStart(2, '0'),
+        year: String(d.getFullYear()),
+      };
+    };
+
+    const parseAcademicYear = (ay: string | null) => {
+      if (!ay) return { from: '—', to: '—' };
+      const parts = ay.split('-');
+      return { from: parts[0] || '—', to: parts[1] || '—' };
+    };
+
+    const now = new Date();
+    const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+    const admission = student.student_admissions?.[0];
+    const prevSchool = student.student_previous_schools?.[0];
+
+    const studentNameParts = splitName(student.full_name || '');
+    const fatherNameParts = splitName(fatherFullName);
+
+    const admissionAy = parseAcademicYear(student.academic_year || admission?.academic_year || null);
+    const currentAy = parseAcademicYear(student.academic_year || null);
+
+    const resolvePrefix = () => {
+      const code = (student.classes?.class_code || '').trim().toUpperCase();
+      const desc = (student.classes?.description || '').trim().toUpperCase();
+      const system = (student.classes?.academic_system || '').trim().toUpperCase();
+
+      // A-Levels -> TAFSAL
+      if (system === 'A-LEVEL' || code === 'AS' || code === 'A2' || desc.includes('A-LEVEL') || desc === 'AS' || desc === 'A2') {
+        return 'TAFSAL';
+      }
+
+      // Secondary 6-10 -> TAFSS
+      if (
+        system === 'SECONDARY' ||
+        ['VI', 'VII', 'VIII', 'IX', 'X'].includes(code) ||
+        ['CLASS VI', 'CLASS VII', 'CLASS VIII', 'CLASS IX', 'CLASS X', '6', '7', '8', '9', '10'].includes(desc) ||
+        ['VI', 'VII', 'VIII', 'IX', 'X'].includes(desc)
+      ) {
+        return 'TAFSS';
+      }
+
+      // O-Levels -> TAFCS
+      if (['OI', 'OII', 'OIII', 'O-I', 'O-II', 'O-III'].includes(code) || desc.startsWith('O-') || desc.includes('O-LEVEL')) {
+        return 'TAFCS';
+      }
+
+      // Seniors -> TAFCS
+      if (['SRI', 'SRII', 'SRIII', 'SR-I', 'SR-II', 'SR-III'].includes(code) || desc.startsWith('SR-')) {
+        return 'TAFCS';
+      }
+
+      // Juniors -> TAFS
+      if (['JRI', 'JRII', 'JRIII', 'JRIV', 'JRV', 'JR-I', 'JR-II', 'JR-III', 'JR-IV', 'JR-V'].includes(code) || desc.startsWith('JR-')) {
+        return 'TAFS';
+      }
+
+      // Pre primary -> TAFS
+      if (['PN', 'NUR', 'KG'].includes(code) || desc.includes('PRE') || desc.includes('NURSERY') || desc.includes('K.G.')) {
+        return 'TAFS';
+      }
+
+      return 'TAFS';
+    };
+
+    const headerPrefix = resolvePrefix();
+    const headerTitle = `${headerPrefix} LEAVING CERTIFICATE`;
+
+    return {
+      header_title: headerTitle,
+      header_prefix: headerPrefix,
+      slc_number: String(student.cc),
+      cc: student.cc,
+      gr_number: student.gr_number || '—',
+      name: {
+        last: studentNameParts.last.toUpperCase(),
+        first: studentNameParts.first.toUpperCase(),
+        middle: studentNameParts.middle.toUpperCase(),
+      },
+      father_name: {
+        last: fatherNameParts.last.toUpperCase(),
+        first: fatherNameParts.first.toUpperCase(),
+        middle: fatherNameParts.middle.toUpperCase(),
+      },
+      dob: parseDateParts(student.dob),
+      place_of_birth: {
+        country: (student.country || 'PAKISTAN').toUpperCase(),
+        province: (student.province || 'SINDH').toUpperCase(),
+        city: (student.city || 'KARACHI').toUpperCase(),
+      },
+      nationality: (student.nationality || 'PAKISTANI').toUpperCase(),
+      gender: (student.gender || 'MALE').toUpperCase(),
+      religion: (student.religion || 'MUSLIM').toUpperCase(),
+      identification_marks: student.identification_marks || '—',
+      last_school_attended: prevSchool?.school_name || '—',
+      date_of_admission: parseDateParts(student.doa || student.created_at),
+      scholastic_year_admitted: admissionAy,
+      class_admitted: admission?.requested_grade || student.classes?.class_code || '—',
+      present_level: student.classes?.description || student.classes?.class_code || '—',
+      section: student.sections?.description || '—',
+      scholastic_year_present: currentAy,
+      last_date_of_attendance: parseDateParts(now),
+      reason_for_leaving: "ON PARENT'S REQUEST",
+      result_scholastic_year: currentAy,
+      passed_promoted_level: student.classes?.description || student.classes?.class_code || '—',
+      passed_promoted_year: currentAy,
+      resit_subjects: '—',
+      detained_level: '—',
+      detained_year: { from: '—', to: '—' },
+      school_dues: '—',
+      remarks: `COMPLETED ACADEMIC SESSION ${currentAy.from}-${currentAy.to}`,
+      prepared_by: '',
+      rechecked_by: '',
+      posted_by: '',
+      class_teacher: '',
+      programme_directress: '',
+      day: dayNames[now.getDay()],
+      date: `${monthNames[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`,
+      photograph_url: student.photograph_url || null,
+      campus_name: student.campuses?.campus_name || '',
+      campus_address: student.campuses?.address || 'C-61 - 65, Block # 13, Gulistan-e-Jauhar, Karachi, Pakistan.',
+    };
+  }
 }
