@@ -1,9 +1,13 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +22,7 @@ import {
   ApplyCampusHouseBalanceDto,
   CampusHouseBalancePreviewDto,
 } from './dto/campus-house-balance.dto';
+import { HouseBalancerHistoryQueryDto } from './dto/house-balancer-history.dto';
 import { HouseBalancerScopeDto } from './dto/house-balancer-scope.dto';
 import { HouseBalancerService } from './house-balancer.service';
 
@@ -25,6 +30,26 @@ import { HouseBalancerService } from './house-balancer.service';
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class HouseBalancerController {
   constructor(private readonly houseBalancerService: HouseBalancerService) {}
+
+  @Get('history')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+  async listHistory(@Query() query: HouseBalancerHistoryQueryDto) {
+    const data = await this.houseBalancerService.listHistory(
+      query.campus_id,
+      query.limit,
+      query.offset,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'House rebalance history');
+  }
+
+  @Get('history/:id')
+  @HttpCode(HttpStatus.OK)
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+  async getHistory(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.houseBalancerService.getHistory(id);
+    return createApiResponse(data, HttpStatus.OK, 'House rebalance history detail');
+  }
 
   @Post('preview')
   @HttpCode(HttpStatus.OK)

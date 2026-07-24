@@ -60,6 +60,11 @@ describe('HouseBalancerService', () => {
         findMany: jest.fn().mockResolvedValue(students),
         update: jest.fn().mockResolvedValue({}),
       },
+      audit_logs: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (fn: any) => {
         const tx = {
           $executeRaw: jest.fn().mockResolvedValue(undefined),
@@ -145,7 +150,18 @@ describe('HouseBalancerService', () => {
     );
 
     expect(applied.student_count).toBe(students.length);
-    expect(auditLogs.log).toHaveBeenCalled();
+    expect(Array.isArray(applied.moves)).toBe(true);
+    expect(applied.moves_count).toBe(applied.moves.length);
+    for (const move of applied.moves) {
+      expect(move.old_house?.id ?? null).not.toBe(move.new_house.id);
+      expect(move.student_name).toBeTruthy();
+    }
+    expect(auditLogs.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'REBALANCED',
+        new_value: expect.stringContaining('"moves"'),
+      }),
+    );
 
     await expect(
       service.apply(
@@ -192,8 +208,13 @@ describe('HouseBalancerService', () => {
 
     expect(applied.total_students).toBe(students.length);
     expect(applied.group_count).toBe(1);
+    expect(Array.isArray(applied.moves)).toBe(true);
+    expect(applied.moves_count).toBe(applied.moves.length);
     expect(auditLogs.log).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'CAMPUS_REBALANCED' }),
+      expect.objectContaining({
+        action: 'CAMPUS_REBALANCED',
+        new_value: expect.stringContaining('"moves"'),
+      }),
     );
   });
 
@@ -231,5 +252,56 @@ describe('HouseBalancerService', () => {
         entity_id: 'campus:1:class:2',
       }),
     );
+  });
+
+  it('lists and returns house rebalance history with moves', async () => {
+    const { service, prisma } = buildService();
+    const movesPayload = {
+      moves_count: 1,
+      moves: [
+        {
+          student_id: 1,
+          student_cc: 1,
+          student_name: 'A',
+          old_house: { id: 10, house_name: 'Red', house_color: '#f00' },
+          new_house: { id: 11, house_name: 'Blue', house_color: '#00f' },
+        },
+      ],
+    };
+    prisma.audit_logs.findMany.mockResolvedValue([
+      {
+        id: 42,
+        action: 'REBALANCED',
+        entity_id: '1:2:3',
+        changed_by: 'tester',
+        changed_at: new Date('2026-07-24T10:00:00Z'),
+        note: 'Rebalanced',
+        new_value: JSON.stringify(movesPayload),
+      },
+    ]);
+    prisma.audit_logs.count.mockResolvedValue(1);
+    prisma.audit_logs.findUnique.mockResolvedValue({
+      id: 42,
+      action: 'REBALANCED',
+      entity_type: 'HOUSE',
+      entity_id: '1:2:3',
+      changed_by: 'tester',
+      changed_at: new Date('2026-07-24T10:00:00Z'),
+      note: 'Rebalanced',
+      new_value: JSON.stringify(movesPayload),
+    });
+
+    const list = await service.listHistory(1);
+    expect(list.total).toBe(1);
+    expect(list.items[0]).toMatchObject({
+      id: 42,
+      action: 'REBALANCED',
+      moves_count: 1,
+    });
+
+    const detail = await service.getHistory(42);
+    expect(detail.moves).toHaveLength(1);
+    expect(detail.moves[0].old_house?.id).toBe(10);
+    expect(detail.moves[0].new_house.id).toBe(11);
   });
 });

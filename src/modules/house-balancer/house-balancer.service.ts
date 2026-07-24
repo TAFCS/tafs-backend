@@ -36,6 +36,31 @@ type HouseRow = {
   house_color: string | null;
 };
 
+export type HouseMove = {
+  student_id: number;
+  student_cc: number;
+  student_name: string;
+  old_house: HouseRow | null;
+  new_house: HouseRow;
+};
+
+type StoredMovesPayload = {
+  moves_count: number;
+  moves: HouseMove[];
+  student_count?: number;
+  group_count?: number;
+  scope?: {
+    campus_name?: string | null;
+    class_name?: string | null;
+    section_name?: string | null;
+  };
+  houses?: HouseRow[];
+  before_counts?: Record<string, number>;
+  after_counts?: Record<string, number>;
+};
+
+const HISTORY_ACTIONS = ['REBALANCED', 'CAMPUS_REBALANCED'] as const;
+
 @Injectable()
 export class HouseBalancerService {
   constructor(
@@ -43,6 +68,115 @@ export class HouseBalancerService {
     private readonly auditLogs: AuditLogsService,
     private readonly progressionHistory: ProgressionHistoryService,
   ) {}
+
+  private houseLookup(houses: HouseRow[]): Map<number, HouseRow> {
+    return new Map(houses.map((house) => [house.id, house]));
+  }
+
+  private toHouseRow(
+    house: { id: number; house_name: string | null; house_color: string | null } | null | undefined,
+  ): HouseRow | null {
+    if (!house) return null;
+    return {
+      id: house.id,
+      house_name: house.house_name,
+      house_color: house.house_color,
+    };
+  }
+
+  private buildMoves(
+    students: ScopedStudent[],
+    assignments: Array<{ student_id: number; house_id: number }>,
+    houses: HouseRow[],
+  ): HouseMove[] {
+    const byId = new Map(students.map((student) => [student.cc, student]));
+    const housesById = this.houseLookup(houses);
+    const moves: HouseMove[] = [];
+
+    for (const assignment of assignments) {
+      const student = byId.get(assignment.student_id);
+      if (!student) continue;
+      if (student.house_id === assignment.house_id) continue;
+      const newHouse = housesById.get(assignment.house_id);
+      if (!newHouse) continue;
+      moves.push({
+        student_id: student.cc,
+        student_cc: student.cc,
+        student_name: student.full_name,
+        old_house: this.toHouseRow(student.houses),
+        new_house: newHouse,
+      });
+    }
+
+    return moves;
+  }
+
+  private serializeMovesPayload(
+    moves: HouseMove[],
+    extras?: Omit<StoredMovesPayload, 'moves_count' | 'moves'>,
+  ): string {
+    const payload: StoredMovesPayload = {
+      moves_count: moves.length,
+      moves,
+      ...extras,
+    };
+    return JSON.stringify(payload);
+  }
+
+  private countsForStorage(counts: Record<number, number>): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [id, count] of Object.entries(counts)) {
+      out[String(id)] = count;
+    }
+    return out;
+  }
+
+  private buildSectionNote(params: {
+    studentCount: number;
+    campusName: string;
+    className: string;
+    sectionName: string;
+    houses: HouseRow[];
+    beforeCounts: Record<number, number>;
+    afterCounts: Record<number, number>;
+  }): string {
+    const houseSummary = params.houses
+      .map((house) => {
+        const before = params.beforeCounts[house.id] ?? 0;
+        const after = params.afterCounts[house.id] ?? 0;
+        const label = house.house_name || `House #${house.id}`;
+        return `${label} ${before}→${after}`;
+      })
+      .join(', ');
+    return `Rebalanced ${params.studentCount} students · ${params.campusName} · ${params.className} · Section ${params.sectionName}. Houses: ${houseSummary}`;
+  }
+
+  private buildCampusNote(params: {
+    studentCount: number;
+    groupCount: number;
+    campusName: string;
+    className?: string | null;
+  }): string {
+    const classPart = params.className ? ` · ${params.className}` : ' (all classes)';
+    return `Rebalanced ${params.studentCount} students across ${params.groupCount} class/section groups · ${params.campusName}${classPart}`;
+  }
+
+  private parseMovesPayload(newValue: string | null | undefined): StoredMovesPayload {
+    if (!newValue) {
+      return { moves_count: 0, moves: [] };
+    }
+    try {
+      const parsed = JSON.parse(newValue) as Partial<StoredMovesPayload>;
+      const moves = Array.isArray(parsed.moves) ? (parsed.moves as HouseMove[]) : [];
+      return {
+        moves_count:
+          typeof parsed.moves_count === 'number' ? parsed.moves_count : moves.length,
+        moves,
+      };
+    } catch {
+      return { moves_count: 0, moves: [] };
+    }
+  }
 
   private lockKey(campusId: number, classId: number, sectionId: number): number {
     const raw =
@@ -343,7 +477,7 @@ export class HouseBalancerService {
         students.map((s) => ({ house_id: s.house_id })),
       );
 
-      const previousHouseByCc = new Map(students.map((s) => [s.cc, s.house_id]));
+      const moves = this.buildMoves(students, dto.assignments, houses);
       const studentByCc = new Map(students.map((s) => [s.cc, s]));
 
       for (const item of dto.assignments) {
@@ -381,7 +515,8 @@ export class HouseBalancerService {
         after_counts: afterCounts,
         houses,
         assignments: dto.assignments,
-        previousHouseByCc,
+        moves,
+        moves_count: moves.length,
       };
     });
 
@@ -389,13 +524,47 @@ export class HouseBalancerService {
       entity_type: 'HOUSE',
       entity_id: `${dto.campus_id}:${dto.class_id}:${dto.section_id}`,
       action: 'REBALANCED',
-      section: 'school-setup',
+      section: 'house-balancer',
       changed_by: changedBy ?? 'system',
-      note: `Rebalanced ${result.student_count} students for campus=${dto.campus_id} class=${dto.class_id} section=${dto.section_id}. before=${JSON.stringify(result.before_counts)} after=${JSON.stringify(result.after_counts)}`,
+      note: this.buildSectionNote({
+        studentCount: result.student_count,
+        campusName: result.campus.campus_name,
+        className: result.class.description,
+        sectionName: result.section.description,
+        houses: result.houses,
+        beforeCounts: result.before_counts,
+        afterCounts: result.after_counts,
+      }),
+      new_value: this.serializeMovesPayload(result.moves, {
+        student_count: result.student_count,
+        scope: {
+          campus_name: result.campus.campus_name,
+          class_name: result.class.description,
+          section_name: result.section.description,
+        },
+        houses: result.houses,
+        before_counts: this.countsForStorage(result.before_counts),
+        after_counts: this.countsForStorage(result.after_counts),
+      }),
     });
 
-    const { previousHouseByCc, ...publicResult } = result;
-    return publicResult;
+    await Promise.all(
+      result.moves.map((move) =>
+        this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(move.student_id),
+          action: 'REBALANCED',
+          field: 'student.house_id',
+          old_value: move.old_house ? String(move.old_house.id) : null,
+          new_value: String(move.new_house.id),
+          changed_by: changedBy ?? 'system',
+          student_id: move.student_id,
+          note: 'Reassigned via house balancer',
+        }),
+      ),
+    );
+
+    return result;
   }
 
   async previewCampus(dto: CampusHouseBalancePreviewDto) {
@@ -614,11 +783,7 @@ export class HouseBalancerService {
         before_counts: Record<number, number>;
         after_counts: Record<number, number>;
       }> = [];
-      const houseChanges: Array<{
-        student_id: number;
-        old_house_id: number | null;
-        new_house_id: number;
-      }> = [];
+      const moves: HouseMove[] = [];
 
       for (const group of sortedGroups) {
         const offering = await tx.campus_sections.findUnique({
@@ -688,23 +853,15 @@ export class HouseBalancerService {
           houses.map((house) => house.id),
           students.map((student) => ({ house_id: student.house_id })),
         );
-        const previousHouseByCc = new Map(
-          students.map((student) => [student.cc, student.house_id]),
-        );
         const studentByCc = new Map(students.map((student) => [student.cc, student]));
+        moves.push(...this.buildMoves(students, group.assignments, houses));
         for (const assignment of group.assignments) {
           await tx.students.update({
             where: { cc: assignment.student_id },
             data: { house_id: assignment.house_id },
           });
           const prior = studentByCc.get(assignment.student_id);
-          const oldHouseId = previousHouseByCc.get(assignment.student_id) ?? null;
-          if (!prior || oldHouseId === assignment.house_id) continue;
-          houseChanges.push({
-            student_id: assignment.student_id,
-            old_house_id: oldHouseId,
-            new_house_id: assignment.house_id,
-          });
+          if (!prior || prior.house_id === assignment.house_id) continue;
           await this.progressionHistory.recordProgressionChange(tx, {
             studentCc: assignment.student_id,
             campusId: prior.campus_id,
@@ -739,9 +896,19 @@ export class HouseBalancerService {
         total_students: totalStudents,
         group_count: summaries.length,
         groups: summaries,
-        houseChanges,
+        moves,
+        moves_count: moves.length,
       };
     });
+
+    const classLabel = dto.class_id
+      ? (
+          await this.prisma.classes.findUnique({
+            where: { id: dto.class_id },
+            select: { description: true },
+          })
+        )?.description ?? `Class #${dto.class_id}`
+      : null;
 
     await this.auditLogs.log({
       entity_type: 'HOUSE',
@@ -749,14 +916,137 @@ export class HouseBalancerService {
         ? `campus:${dto.campus_id}:class:${dto.class_id}`
         : `campus:${dto.campus_id}`,
       action: 'CAMPUS_REBALANCED',
-      section: 'school-setup',
+      section: 'house-balancer',
       changed_by: changedBy ?? 'system',
-      note: `Rebalanced ${result.total_students} students across ${result.group_count} class/section groups at campus=${dto.campus_id}${
-        dto.class_id ? ` class=${dto.class_id}` : ''
-      }`,
+      note: this.buildCampusNote({
+        studentCount: result.total_students,
+        groupCount: result.group_count,
+        campusName: result.campus.campus_name,
+        className: classLabel,
+      }),
+      new_value: this.serializeMovesPayload(result.moves, {
+        student_count: result.total_students,
+        group_count: result.group_count,
+        scope: {
+          campus_name: result.campus.campus_name,
+          class_name: classLabel,
+          section_name: null,
+        },
+      }),
     });
 
-    const { houseChanges, ...publicResult } = result;
-    return publicResult;
+    await Promise.all(
+      result.moves.map((move) =>
+        this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(move.student_id),
+          action: 'REBALANCED',
+          field: 'student.house_id',
+          old_value: move.old_house ? String(move.old_house.id) : null,
+          new_value: String(move.new_house.id),
+          changed_by: changedBy ?? 'system',
+          student_id: move.student_id,
+          note: 'Reassigned via campus-wide house balancer',
+        }),
+      ),
+    );
+
+    return result;
+  }
+
+  async listHistory(campusId: number, limit = 20, offset = 0) {
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { id: true },
+    });
+    if (!campus) {
+      throw new NotFoundException(`Campus #${campusId} not found`);
+    }
+
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safeOffset = Math.max(offset, 0);
+
+    const where: Prisma.audit_logsWhereInput = {
+      entity_type: 'HOUSE',
+      action: { in: [...HISTORY_ACTIONS] },
+      OR: [
+        { entity_id: { startsWith: `${campusId}:` } },
+        { entity_id: `campus:${campusId}` },
+        { entity_id: { startsWith: `campus:${campusId}:` } },
+      ],
+    };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.audit_logs.findMany({
+        where,
+        orderBy: { changed_at: 'desc' },
+        take: safeLimit,
+        skip: safeOffset,
+        select: {
+          id: true,
+          action: true,
+          entity_id: true,
+          changed_by: true,
+          changed_at: true,
+          note: true,
+          new_value: true,
+        },
+      }),
+      this.prisma.audit_logs.count({ where }),
+    ]);
+
+    return {
+      total,
+      limit: safeLimit,
+      offset: safeOffset,
+      items: rows.map((row) => {
+        const payload = this.parseMovesPayload(row.new_value);
+        return {
+          id: row.id,
+          action: row.action,
+          entity_id: row.entity_id,
+          changed_by: row.changed_by,
+          changed_at: row.changed_at,
+          note: row.note,
+          moves_count: payload.moves_count,
+        };
+      }),
+    };
+  }
+
+  async getHistory(id: number) {
+    const row = await this.prisma.audit_logs.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        action: true,
+        entity_type: true,
+        entity_id: true,
+        changed_by: true,
+        changed_at: true,
+        note: true,
+        new_value: true,
+      },
+    });
+
+    if (
+      !row ||
+      row.entity_type !== 'HOUSE' ||
+      !HISTORY_ACTIONS.includes(row.action as (typeof HISTORY_ACTIONS)[number])
+    ) {
+      throw new NotFoundException(`House rebalance history #${id} not found`);
+    }
+
+    const payload = this.parseMovesPayload(row.new_value);
+    return {
+      id: row.id,
+      action: row.action,
+      entity_id: row.entity_id,
+      changed_by: row.changed_by,
+      changed_at: row.changed_at,
+      note: row.note,
+      moves_count: payload.moves_count,
+      moves: payload.moves,
+    };
   }
 }

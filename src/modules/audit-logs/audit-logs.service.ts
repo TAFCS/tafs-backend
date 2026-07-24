@@ -10,9 +10,16 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   hr: ['EMPLOYEE', 'DEPARTMENT', 'LEAVE_REQUEST', 'PAYROLL_RUN', 'HR_POLICY_SET', 'HR_POLICY_RULE', 'ACADEMIC_CALENDAR_DAY', 'SATURDAY_SCHEDULE'],
   attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE', 'ATTENDANCE_OBJECTION', 'CLASS_ATTENDANCE_MODE', 'TIMETABLE', 'TIMETABLE_SLOT', 'SUBJECT', 'ZK_ATTENDANCE_MAPPING', 'CLASS_CHECK_IN_SCHEDULE'],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
+  'house-balancer': ['HOUSE'],
   system: ['USER', 'PERMISSION', 'BACKUP', 'APP_CONFIG'],
   'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };
+
+// Per-student house-balancer rows clutter global Activity Logs; the HOUSE summary row is enough there.
+const HOUSE_BALANCER_STUDENT_NOTES = [
+  'Reassigned via house balancer',
+  'Reassigned via campus-wide house balancer',
+] as const;
 
 // Entity types whose audit trail is restricted to super admins only, regardless
 // of which sections/roles are otherwise allowed to view /audit-logs.
@@ -78,7 +85,21 @@ export class AuditLogsService {
     if (query.student_id) {
       where.student_id = Number(query.student_id);
     }
-    if (query.section) {
+    if (query.section === 'house-balancer') {
+      // Dedicated House Rebalancer tab: bundled HOUSE runs (new + legacy school-setup rows)
+      where.AND = [
+        ...(where.AND ?? []),
+        {
+          OR: [
+            { section: 'house-balancer' },
+            {
+              entity_type: 'HOUSE',
+              action: { in: ['REBALANCED', 'CAMPUS_REBALANCED'] },
+            },
+          ],
+        },
+      ];
+    } else if (query.section) {
       // Filter by section: translate to the entity_types that belong to that section
       const sectionTypes = SECTION_ENTITY_TYPES[query.section] ?? [];
       where.section = query.section;
@@ -113,10 +134,27 @@ export class AuditLogsService {
       }
     }
 
+    const clauses: any[] = [where];
+
+    // Global activity feed: hide per-student house-balancer spam; keep HOUSE summary rows.
+    // Student modal (student_id set) still receives the per-student moves.
+    if (!query.student_id) {
+      clauses.push({
+        NOT: {
+          AND: [
+            { field: 'student.house_id' },
+            { note: { in: [...HOUSE_BALANCER_STUDENT_NOTES] } },
+          ],
+        },
+      });
+    }
+
     const isSuperAdmin = requestingUser?.role === StaffRole.SUPER_ADMIN;
-    const finalWhere = isSuperAdmin
-      ? where
-      : { AND: [where, { entity_type: { notIn: SUPER_ADMIN_ONLY_ENTITY_TYPES } }] };
+    if (!isSuperAdmin) {
+      clauses.push({ entity_type: { notIn: SUPER_ADMIN_ONLY_ENTITY_TYPES } });
+    }
+
+    const finalWhere = clauses.length === 1 ? clauses[0] : { AND: clauses };
 
     const limit = Number(query.limit) || 50;
     const offset = Number(query.offset) || 0;
@@ -131,22 +169,75 @@ export class AuditLogsService {
       this.prisma.audit_logs.count({ where: finalWhere }),
     ]);
 
-    // Fetch classes and campuses to map IDs to Names
-    const [allClasses, allCampuses] = await Promise.all([
+    // Fetch classes, campuses, sections, and houses to map IDs to names
+    const [allClasses, allCampuses, allSections, allHouses] = await Promise.all([
       this.prisma.classes.findMany({
-        select: { id: true, description: true }
+        select: { id: true, description: true },
       }),
       this.prisma.campuses.findMany({
-        select: { id: true, campus_name: true }
-      })
+        select: { id: true, campus_name: true },
+      }),
+      this.prisma.sections.findMany({
+        select: { id: true, description: true },
+      }),
+      this.prisma.houses.findMany({
+        select: { id: true, house_name: true, house_color: true },
+      }),
     ]);
 
-    const classMap = new Map(allClasses.map(c => [c.id.toString(), c.description]));
-    const campusMap = new Map(allCampuses.map(c => [c.id.toString(), c.campus_name]));
+    const classMap = new Map(allClasses.map((c) => [c.id.toString(), c.description]));
+    const campusMap = new Map(allCampuses.map((c) => [c.id.toString(), c.campus_name]));
+    const sectionMap = new Map(allSections.map((s) => [s.id.toString(), s.description]));
+    const houseMap = new Map(
+      allHouses.map((h) => [h.id.toString(), h.house_name || `House #${h.id}`]),
+    );
 
-    const enrichedData = data.map(log => {
+    const enrichHouseCounts = (raw: string): string => {
+      try {
+        const counts = JSON.parse(raw) as Record<string, number>;
+        return Object.entries(counts)
+          .map(([id, count]) => `${houseMap.get(id) ?? `House #${id}`}: ${count}`)
+          .join(', ');
+      } catch {
+        return raw;
+      }
+    };
+
+    const enrichHouseBalancerNote = (note: string | null): string | null => {
+      if (!note) return note;
+
+      // Section rebalance: campus=1 class=21 section=1. before={...} after={...}
+      const sectionMatch = note.match(
+        /^Rebalanced (\d+) students for campus=(\d+) class=(\d+) section=(\d+)\. before=(\{.*\}) after=(\{.*\})$/,
+      );
+      if (sectionMatch) {
+        const [, count, campusId, classId, sectionId, beforeRaw, afterRaw] = sectionMatch;
+        const campusName = campusMap.get(campusId) ?? `Campus #${campusId}`;
+        const className = classMap.get(classId) ?? `Class #${classId}`;
+        const sectionName = sectionMap.get(sectionId) ?? `Section #${sectionId}`;
+        return `Rebalanced ${count} students · ${campusName} · ${className} · Section ${sectionName}. Before: ${enrichHouseCounts(beforeRaw)}. After: ${enrichHouseCounts(afterRaw)}`;
+      }
+
+      // Campus rebalance: ... at campus=1 class=2
+      const campusMatch = note.match(
+        /^Rebalanced (\d+) students across (\d+) class\/section groups at campus=(\d+)(?: class=(\d+))?$/,
+      );
+      if (campusMatch) {
+        const [, count, groups, campusId, classId] = campusMatch;
+        const campusName = campusMap.get(campusId) ?? `Campus #${campusId}`;
+        const classPart = classId
+          ? ` · ${classMap.get(classId) ?? `Class #${classId}`}`
+          : ' (all classes)';
+        return `Rebalanced ${count} students across ${groups} class/section groups · ${campusName}${classPart}`;
+      }
+
+      return note;
+    };
+
+    const enrichedData = data.map((log) => {
       let oldVal = log.old_value;
       let newVal = log.new_value;
+      let note = log.note;
 
       if (log.field === 'class_id' || log.field === 'student.class_id') {
         if (oldVal && classMap.has(oldVal)) {
@@ -164,10 +255,18 @@ export class AuditLogsService {
         }
       }
 
+      if (
+        log.entity_type === 'HOUSE' &&
+        (log.action === 'REBALANCED' || log.action === 'CAMPUS_REBALANCED')
+      ) {
+        note = enrichHouseBalancerNote(note);
+      }
+
       return {
         ...log,
         old_value: oldVal,
-        new_value: newVal
+        new_value: newVal,
+        note,
       };
     });
 
