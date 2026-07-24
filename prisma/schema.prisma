@@ -1257,9 +1257,11 @@ model payroll_runs {
   finalized_at      DateTime?           @db.Timestamp(6)
   notes             String?             @db.VarChar(500)
   is_test           Boolean             @default(false)
+  is_test           Boolean             @default(false)
   payroll_run_lines payroll_run_lines[]
   campuses          campuses            @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
+  @@unique([campus_id, period_start, period_end, is_test])
   @@unique([campus_id, period_start, period_end, is_test])
 }
 
@@ -1745,6 +1747,24 @@ model unconfirmed_admissions {
   campuses        campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
 }
 
+model payroll_settlements {
+  id                     Int               @id @default(autoincrement())
+  payroll_run_line_id    Int               @unique
+  overtime_rate_type     OvertimeRateType?
+  overtime_rate_amount   Decimal?          @db.Decimal(12, 2)
+  overtime_minutes       Int               @default(0)
+  overtime_reward_amount Decimal           @default(0) @db.Decimal(12, 2)
+  cash_bonus_amount      Decimal           @default(0) @db.Decimal(12, 2)
+  net_paid               Decimal           @db.Decimal(12, 2)
+  payslip_pdf_url        String?
+  settled_at             DateTime          @db.Timestamp(0)
+  settled_by             String
+  settlement_notes       String?           @db.VarChar(300)
+  created_at             DateTime          @default(now()) @db.Timestamp(6)
+  payroll_run_lines      payroll_run_lines @relation(fields: [payroll_run_line_id], references: [id], onDelete: Cascade)
+  users                  users             @relation(fields: [settled_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
 enum BulkJobStatus {
   PENDING
   PROCESSING
@@ -1921,4 +1941,10 @@ enum otp_purpose {
   PARENT_SIGNUP
   PARENT_FORGOT_PASSWORD
   STAFF_FORGOT_PASSWORD
+}
+
+enum OvertimeRateType {
+  PER_MINUTE
+  PER_HOUR
+  PER_DAY
 }
