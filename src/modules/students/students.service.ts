@@ -1196,6 +1196,36 @@ export class StudentsService {
       resolvedClassId = (s as any).graduated_from_class_id ?? null;
     }
 
+    // Last resort: requested_grade text match found nothing (e.g. free-text
+    // grade that doesn't match any class_code/description). Use the class_id
+    // from this student's own most recent voucher, which is a reliable
+    // historical record of what class they were actually in.
+    if (s.status === 'GRADUATED' && !resolvedClassId) {
+      const lastVoucher = await this.prisma.vouchers.findFirst({
+        where: { student_id: s.cc },
+        orderBy: { issue_date: 'desc' },
+        select: { class_id: true },
+      });
+      if (lastVoucher?.class_id) {
+        resolvedClassId = lastVoucher.class_id;
+        await this.prisma.students.update({
+          where: { cc: s.cc },
+          data: { graduated_from_class_id: lastVoucher.class_id },
+        }).catch(() => { /* non-critical, ignore */ });
+        (s as any).graduated_from_class_id = lastVoucher.class_id;
+      }
+    }
+
+    // Absolute last resort: no admission grade match and no voucher history
+    // at all. Voucher generation must not be blocked for a graduated student
+    // just because their class history couldn't be reconstructed — use any
+    // valid class as a technical placeholder (label stays "GRADUATED" either
+    // way; the placeholder only affects internal academic-year cutoff logic).
+    if (s.status === 'GRADUATED' && !resolvedClassId) {
+      const anyClass = await this.prisma.classes.findFirst({ orderBy: { id: 'asc' }, select: { id: true } });
+      resolvedClassId = anyClass?.id ?? null;
+    }
+
     // ── Potential Family Detection (for unlinked students) ───────────────────
     let potentialFamilyMatch: any = null;
     if (!s.family_id) {
