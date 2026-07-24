@@ -2475,6 +2475,19 @@ export class StudentsService {
               work_done: true,
             },
           });
+
+          await this.progressionHistory.recordProgressionChange(tx, {
+            studentCc: student.cc,
+            campusId: student.campus_id,
+            classId: student.class_id,
+            sectionId: student.section_id,
+            houseId: student.house_id,
+            academicYear: student.academic_year,
+            grNumber: student.gr_number,
+            changeType: 'EXPELLED',
+            changedBy,
+            notes: expulsionReason,
+          });
         });
 
         void this.auditLogs.log({
@@ -2520,6 +2533,19 @@ export class StudentsService {
               comment: leftReason,
               work_done: true,
             },
+          });
+
+          await this.progressionHistory.recordProgressionChange(tx, {
+            studentCc: student.cc,
+            campusId: student.campus_id,
+            classId: student.class_id,
+            sectionId: student.section_id,
+            houseId: student.house_id,
+            academicYear: student.academic_year,
+            grNumber: student.gr_number,
+            changeType: 'LEFT',
+            changedBy,
+            notes: leftReason,
           });
         });
 
