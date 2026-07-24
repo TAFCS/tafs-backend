@@ -1188,6 +1188,14 @@ export class StudentsService {
       }
     }
 
+    // Graduated students have no active class_id by design (see changeStatus).
+    // Fall back to their last known class so downstream consumers (e.g. voucher
+    // generation, which requires a non-null class_id) still work; the class
+    // label itself is overridden to "GRADUATED" below and section is cleared.
+    if (s.status === 'GRADUATED' && !resolvedClassId) {
+      resolvedClassId = (s as any).graduated_from_class_id ?? null;
+    }
+
     // ── Potential Family Detection (for unlinked students) ───────────────────
     let potentialFamilyMatch: any = null;
     if (!s.family_id) {
@@ -1240,10 +1248,12 @@ export class StudentsService {
       campus_code: s.campuses?.campus_code,
       campus_id: s.campus_id,
       class_id: resolvedClassId,
-      section_id: s.section_id,
-      grade_and_section: s.classes
-        ? `${s.classes.description}${s.sections ? ` (${s.sections.description})` : ''}`
-        : s.student_admissions?.[0]?.requested_grade,
+      section_id: s.status === 'GRADUATED' ? null : s.section_id,
+      grade_and_section: s.status === 'GRADUATED'
+        ? 'GRADUATED'
+        : s.classes
+          ? `${s.classes.description}${s.sections ? ` (${s.sections.description})` : ''}`
+          : s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
       is_complementary: s.is_complementary,
       is_fee_endowment: s.is_fee_endowment,

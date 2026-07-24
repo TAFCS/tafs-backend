@@ -1,0 +1,36 @@
+================================================================================
+MISSING 2026-2027 STUDENT FEES REPORT (CLASSES 15, 16, 17, 18, 19)
+STATUS: EXCLUDING 'LEFT' STUDENTS
+TOTAL COUNT: 29
+================================================================================
+
+CC	GR Number	Student Name			Class ID	Class	Section	Campus
+----------------------------------------------------------------------------------------------------
+4490	3930	FATIMA HASSAN                 	16	VII	A	Gulistan-e-Johar Campus
+6510	5419	ANABIA HUSSAIN                	16	VII	A	Gulistan-e-Johar Campus
+4901	4215	SYEDA ARFA HABIB              	17	VIII	A	Gulistan-e-Johar Campus
+5774	4878	SYED MUHAMMAD AMAAN           	17	VIII	B	Gulistan-e-Johar Campus
+5956	5038	KANEEZ -E- ZAHRA              	17	VIII	A	Gulistan-e-Johar Campus
+4386	3832	SYED SHABIH -UL- HASSAN       	18	IX	A	Gulistan-e-Johar Campus
+4424	3866	MARYAM NAWAL                  	18	IX	A	Gulistan-e-Johar Campus
+4467	3907	MADLAAJ ATIF                  	18	IX	Unassigned	Gulistan-e-Johar Campus
+4744	4090	SULEMAN SAANY                 	18	IX	A	Gulistan-e-Johar Campus
+5092	4384	MUHAMMAD HADI                 	18	IX	A	Gulistan-e-Johar Campus
+5752	4864	FILZA                         	18	IX	A	Gulistan-e-Johar Campus
+5782	4888	ZINNIA REHMAN                 	18	IX	A	Gulistan-e-Johar Campus
+6608	5488	SYED MOHAMMAD ALI AKBER RIZVI 	18	IX	A	Gulistan-e-Johar Campus
+6711	5577	BIBI AMNA                     	18	IX	A	Gulistan-e-Johar Campus
+6771	5624	MUHAMMAD ABDUR REHMAN         	18	IX	B	Gulistan-e-Johar Campus
+6781	5648	MUHAMMAD AMIR                 	18	IX	Unassigned	Gulistan-e-Johar Campus
+6806	5655	MUHAMMAD IBRAHIM ATHER        	18	IX	Unassigned	Gulistan-e-Johar Campus
+2	2	TEST STUDENT B                	19	X	A	Kaneez Fatima Campus
+3	N/A	TEST STUDENT C                	19	X	A	Kaneez Fatima Campus
+50	TEST-001	Ali Test Student              	19	X	A	Kaneez Fatima Campus
+51	TEST-002	Ayesha Test Student           	19	X	A	Kaneez Fatima Campus
+4276	3723	MUHAMMAD UMAIR JAVED          	19	X	B	Gulistan-e-Johar Campus
+4340	3786	SHAYAN ALI                    	19	X	B	Gulistan-e-Johar Campus
+5213	4478	FATIMA KHAN DURRANI           	19	X	A	Gulistan-e-Johar Campus
+6635	5509	SYED KARRAR HAIDER            	19	X	B	Gulistan-e-Johar Campus
+6764	5616	MUHAMMAD HUZAIFA              	19	X	B	Gulistan-e-Johar Campus
+7760	6339	GHULAM MURTAZA                	19	X	B	Gulistan-e-Johar Campus
+7871	6410	SYEDA ANUM ZEHRA ZAIDI        	19	X	A	Gulistan-e-Johar Campus
