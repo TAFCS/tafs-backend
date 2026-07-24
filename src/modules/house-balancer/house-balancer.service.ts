@@ -407,10 +407,24 @@ export class HouseBalancerService {
       throw new NotFoundException(`Campus #${dto.campus_id} not found`);
     }
 
+    if (dto.class_id) {
+      const cls = await this.prisma.classes.findUnique({
+        where: { id: dto.class_id },
+        select: { id: true },
+      });
+      if (!cls) {
+        throw new NotFoundException(`Class #${dto.class_id} not found`);
+      }
+    }
+
     const [houses, offerings, campusStudents] = await Promise.all([
       this.prisma.houses.findMany({ orderBy: { id: 'asc' } }),
       this.prisma.campus_sections.findMany({
-        where: { campus_id: dto.campus_id, is_active: true },
+        where: {
+          campus_id: dto.campus_id,
+          is_active: true,
+          ...(dto.class_id ? { class_id: dto.class_id } : {}),
+        },
         select: {
           class_id: true,
           section_id: true,
@@ -426,7 +440,7 @@ export class HouseBalancerService {
       this.prisma.students.findMany({
         where: {
           campus_id: dto.campus_id,
-          class_id: { not: null },
+          ...(dto.class_id ? { class_id: dto.class_id } : { class_id: { not: null } }),
           section_id: { not: null },
           status: student_status.ENROLLED,
           deleted_at: null,
@@ -488,9 +502,10 @@ export class HouseBalancerService {
 
     if (groups.length === 0) {
       throw new BadRequestException({
-        code: 'EMPTY_CAMPUS_ROSTER',
-        message:
-          'No enrolled students with configured class and section were found at this campus',
+        code: dto.class_id ? 'EMPTY_CLASS_ROSTER' : 'EMPTY_CAMPUS_ROSTER',
+        message: dto.class_id
+          ? 'No enrolled students with configured section were found in this class'
+          : 'No enrolled students with configured class and section were found at this campus',
       });
     }
 
@@ -545,10 +560,14 @@ export class HouseBalancerService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Lock every active section at the campus before checking the campus
-      // fingerprint. This also covers sections that were empty during preview.
+      // Lock every active section at the campus/class before checking the fingerprint.
+      // This also covers sections that were empty during preview.
       const activeOfferings = await tx.campus_sections.findMany({
-        where: { campus_id: dto.campus_id, is_active: true },
+        where: {
+          campus_id: dto.campus_id,
+          is_active: true,
+          ...(dto.class_id ? { class_id: dto.class_id } : {}),
+        },
         select: { class_id: true, section_id: true },
         orderBy: [{ class_id: 'asc' }, { section_id: 'asc' }],
       });
@@ -563,7 +582,7 @@ export class HouseBalancerService {
       const campusStudents = await tx.students.findMany({
         where: {
           campus_id: dto.campus_id,
-          class_id: { not: null },
+          ...(dto.class_id ? { class_id: dto.class_id } : { class_id: { not: null } }),
           section_id: { not: null },
           status: student_status.ENROLLED,
           deleted_at: null,
@@ -726,11 +745,15 @@ export class HouseBalancerService {
 
     await this.auditLogs.log({
       entity_type: 'HOUSE',
-      entity_id: `campus:${dto.campus_id}`,
+      entity_id: dto.class_id
+        ? `campus:${dto.campus_id}:class:${dto.class_id}`
+        : `campus:${dto.campus_id}`,
       action: 'CAMPUS_REBALANCED',
       section: 'school-setup',
       changed_by: changedBy ?? 'system',
-      note: `Rebalanced ${result.total_students} students across ${result.group_count} class/section groups at campus=${dto.campus_id}`,
+      note: `Rebalanced ${result.total_students} students across ${result.group_count} class/section groups at campus=${dto.campus_id}${
+        dto.class_id ? ` class=${dto.class_id}` : ''
+      }`,
     });
 
     const { houseChanges, ...publicResult } = result;

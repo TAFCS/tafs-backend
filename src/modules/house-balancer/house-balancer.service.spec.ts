@@ -196,4 +196,40 @@ describe('HouseBalancerService', () => {
       expect.objectContaining({ action: 'CAMPUS_REBALANCED' }),
     );
   });
+
+  it('previews and applies populated class/section groups filtered by class_id', async () => {
+    const { service, auditLogs, students } = buildService();
+    const preview = await service.previewCampus({ campus_id: 1, class_id: 2 });
+
+    expect(preview.group_count).toBe(1);
+    expect(preview.total_students).toBe(students.length);
+    expect(preview.groups[0].class.id).toBe(2);
+
+    const applied = await service.applyCampus(
+      {
+        campus_id: 1,
+        class_id: 2,
+        campus_fingerprint: preview.campus_fingerprint,
+        groups: preview.groups.map((group) => ({
+          class_id: group.class.id,
+          section_id: group.section.id,
+          roster_fingerprint: group.roster_fingerprint,
+          assignments: group.assignments.map((assignment) => ({
+            student_id: assignment.student_id,
+            house_id: assignment.proposed_house.id,
+          })),
+        })),
+      },
+      'tester',
+    );
+
+    expect(applied.total_students).toBe(students.length);
+    expect(applied.group_count).toBe(1);
+    expect(auditLogs.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'CAMPUS_REBALANCED',
+        entity_id: 'campus:1:class:2',
+      }),
+    );
+  });
 });

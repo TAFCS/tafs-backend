@@ -3,6 +3,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsInt,
+  IsOptional,
   IsPositive,
   IsString,
   MinLength,
@@ -15,6 +16,12 @@ export class CampusHouseBalancePreviewDto {
   @IsInt()
   @IsPositive()
   campus_id!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  class_id?: number;
 }
 
 export class CampusHouseBalanceGroupDto {
