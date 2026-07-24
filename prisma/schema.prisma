@@ -627,6 +627,7 @@ model students {
   is_fee_endowment            Boolean                       @default(false)
   fee_start_term              String?                       @db.VarChar(10)
   graduated_from_class_id     Int?
+  graduated_at                DateTime?                     @db.Date
   cnic                        String?                       @unique @db.VarChar(15)
   not_pursuing                Boolean                       @default(false)
   quick_admission_meta        Json?

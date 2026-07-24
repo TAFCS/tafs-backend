@@ -561,6 +561,7 @@ export class StudentsService {
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
       selectArgs.classes   = { select: { description: true, class_code: true } };
       selectArgs.graduated_from_class = { select: { id: true, description: true, class_code: true } };
+      selectArgs.graduated_at = true;
       selectArgs.sections  = { select: { description: true } };
       selectArgs.houses    = { select: { house_name: true, house_color: true } };
       selectArgs.family_id = true;
@@ -799,6 +800,9 @@ export class StudentsService {
           house_color: s.houses?.house_color,
           enrollment_status: s.status,
           class_id: s.class_id,
+          graduated_from_class_id: s.graduated_from_class_id,
+          graduated_from_class_description: s.graduated_from_class?.description,
+          graduated_at: s.graduated_at,
           photograph_url: s.photograph_url,
           academic_system: latestAdmission?.academic_system,
           requested_grade: latestAdmission?.requested_grade,
@@ -1290,6 +1294,7 @@ export class StudentsService {
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,
+      graduated_at: s.graduated_at,
       financial_status_badge: financial.badge,
       total_outstanding_balance: financial.outstanding,
       advance_credit_balance: financial.advance,
@@ -1620,6 +1625,7 @@ export class StudentsService {
           updateData.graduated_from_class_id = student.class_id;
         }
         updateData.class_id = null;
+        updateData.graduated_at = new Date();
         // Auto-increment academic year (e.g. 2023-2024 → 2024-2025)
         updateData.academic_year = this.incrementAcademicYear(student.academic_year);
       }
@@ -2401,6 +2407,7 @@ export class StudentsService {
               status: StudentStatus.GRADUATED,
               graduated_from_class_id: student.class_id,
               class_id: null,
+              graduated_at: new Date(),
               academic_year: nextAcademicYear,
             },
           });
@@ -2418,7 +2425,7 @@ export class StudentsService {
           await this.progressionHistory.recordProgressionChange(tx, {
             studentCc: student.cc,
             campusId: student.campus_id,
-            classId: null,
+            classId: student.class_id,
             sectionId: student.section_id,
             houseId: student.house_id,
             academicYear: nextAcademicYear,

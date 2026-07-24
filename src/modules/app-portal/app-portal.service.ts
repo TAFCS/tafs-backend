@@ -26,6 +26,10 @@ export class AppPortalService {
         classes: { select: { description: true } },
         sections: { select: { description: true } },
         houses: { select: { house_name: true, house_color: true } },
+        status: true,
+        graduated_from_class_id: true,
+        graduated_at: true,
+        graduated_from_class: { select: { description: true } },
         dob: true,
         gender: true,
         student_guardians: {
@@ -137,6 +141,9 @@ export class AppPortalService {
         photograph_url: student.photograph_url,
         dob: student.dob,
         gender: student.gender,
+        enrollment_status: student.status,
+        graduated_from_class: student.graduated_from_class?.description ?? null,
+        graduated_at: student.graduated_at,
         guardians: student.student_guardians.map(sg => ({
           name: sg.guardians.full_name,
           relationship: sg.relationship,

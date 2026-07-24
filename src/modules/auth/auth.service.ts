@@ -240,9 +240,13 @@ export class AuthService {
         campus_id: true,
         class_id: true,
         section_id: true,
+        status: true,
+        graduated_from_class_id: true,
+        graduated_at: true,
         campuses: { select: { campus_name: true, campus_code: true } },
         classes: { select: { description: true, class_code: true } },
         sections: { select: { description: true } },
+        graduated_from_class: { select: { description: true, class_code: true } },
       },
     });
 
@@ -336,6 +340,9 @@ export class AuthService {
         campusId: student.campus_id,
         classId: student.class_id,
         sectionId: student.section_id,
+        enrollmentStatus: student.status,
+        graduatedFromClass: student.graduated_from_class?.description ?? null,
+        graduatedAt: student.graduated_at,
       })),
     };
   }
