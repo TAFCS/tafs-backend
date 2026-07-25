@@ -23,9 +23,14 @@ const JOHAR_UNASSIGNED_IDS = [
   192, 178, 179, 181, 183, 180, 182, 177, 176, 196, 197, 198, 199, 200,
 ];
 
+const CODE_OVERRIDES = {
+  155: 'GEJ-01-0009', // ASIFA OWAIS
+};
+
 const p = new PrismaClient();
 
-function propose(code, campusId) {
+function propose(code, campusId, id) {
+  if (id && CODE_OVERRIDES[id]) return CODE_OVERRIDES[id];
   const prefix = PREFIX_BY_CAMPUS_ID[campusId];
   if (!prefix) return null;
   if (!code) return null;
@@ -73,7 +78,7 @@ function propose(code, campusId) {
     const campusId =
       e.campus_id ??
       (JOHAR_UNASSIGNED_IDS.includes(e.id) ? 1 : null);
-    const newCode = propose(e.employee_code, campusId);
+    const newCode = propose(e.employee_code, campusId, e.id);
     if (!newCode) continue;
     updates.push({
       id: e.id,

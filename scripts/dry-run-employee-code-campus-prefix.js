@@ -20,9 +20,16 @@ const PREFIX_BY_CAMPUS_ID = {
   3: 'NNN', // North Nazimabad Campus (DB code NNZ)
 };
 
+const CODE_OVERRIDES = {
+  155: 'GEJ-01-0009', // ASIFA OWAIS
+};
+
 const p = new PrismaClient();
 
-function propose(code, campusId) {
+function propose(code, campusId, id) {
+  if (id && CODE_OVERRIDES[id]) {
+    return { status: 'rename', newCode: CODE_OVERRIDES[id] };
+  }
   const prefix = PREFIX_BY_CAMPUS_ID[campusId];
   if (!prefix) return { status: 'skip_no_campus', newCode: null };
   if (!code) return { status: 'skip_no_code', newCode: null };
@@ -54,7 +61,7 @@ function propose(code, campusId) {
   for (const e of employees) {
     const campusKey = e.campus_id ?? 'UNASSIGNED';
     if (!byCampus.has(campusKey)) byCampus.set(campusKey, []);
-    const proposal = propose(e.employee_code, e.campus_id);
+    const proposal = propose(e.employee_code, e.campus_id, e.id);
     const row = {
       id: e.id,
       full_name: e.full_name,

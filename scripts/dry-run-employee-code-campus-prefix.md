@@ -12,13 +12,12 @@
 
 ## Summary
 
-- **Gulistan-e-Johar Campus (id=1, prefix=GEJ)**: 87 employees — 85 to rename, 2 skipped
-- **Kaneez Fatima Campus (id=2, prefix=GKF)**: 12 employees — 12 to rename, 0 skipped
-- **North Nazimabad Campus (id=3, prefix=NNN)**: 7 employees — 7 to rename, 0 skipped
-- **UNASSIGNED (campus_id null)**: 14 employees — 0 to rename, 14 skipped
+- **Gulistan-e-Johar Campus (id=1, prefix=GEJ)**: 112 employees — 1 to rename, 111 skipped
+- **Kaneez Fatima Campus (id=2, prefix=GKF)**: 13 employees — 0 to rename, 13 skipped
+- **North Nazimabad Campus (id=3, prefix=NNN)**: 9 employees — 0 to rename, 9 skipped
 
-- **Total to rename:** 104
-- **Total skipped:** 16
+- **Total to rename:** 1
+- **Total skipped:** 133
 - **Duplicate proposed codes:** 0
 - **Proposed code collides with existing kept code:** 0
 
@@ -26,138 +25,147 @@
 
 | id | full_name | old_code | new_code | status |
 |---:|---|---|---|---|
-| 154 | NIMLA ASAD MIRZA | `01-00017` | `GEJ-01-00017` | rename |
-| 145 | SUKAINA KIZILBASH | `01-00018` | `GEJ-01-00018` | rename |
-| 152 | ASAD HUSSAIN MIRZA | `01-00019` | `GEJ-01-00019` | rename |
-| 151 | MUHAMMAD HUSSAIN MIRZA | `01-2000` | `GEJ-01-2000` | rename |
-| 168 | FATIMA HUSSAIN | `01-2005` | `GEJ-01-2005` | rename |
-| 153 | FOZIA HUSSAIN | `01-2006` | `GEJ-01-2006` | rename |
-| 155 | ASIFA OWAIS | `01-2009` | `GEJ-01-2009` | rename |
-| 131 | MAHRUKH BALOCH | `02-001138` | `GEJ-02-001138` | rename |
-| 91 | UME - FARWA | `02-001166` | `GEJ-02-001166` | rename |
-| 94 | SHAZMAH | `02-001192` | `GEJ-02-001192` | rename |
-| 101 | SHABANA ASHFAQ | `02-001197` | `GEJ-02-001197` | rename |
-| 150 | SYEDA ANITA HAIDER | `02-001214` | `GEJ-02-001214` | rename |
-| 110 | LUBNA SABHEEH | `02-001219` | `GEJ-02-001219` | rename |
-| 148 | LAIRULLANA MASOOD | `02-001231` | `GEJ-02-001231` | rename |
-| 111 | SADIYA SAMI | `02-001248` | `GEJ-02-001248` | rename |
-| 92 | LAIBA IRFAN | `02-001264` | `GEJ-02-001264` | rename |
-| 122 | FATIMA USMAN | `02-001271` | `GEJ-02-001271` | rename |
-| 123 | FARAH SOHAIL | `02-001273` | `GEJ-02-001273` | rename |
-| 93 | MUSARAT BEGUM | `02-001291` | `GEJ-02-001291` | rename |
-| 102 | KHUSHBOO | `02-001311` | `GEJ-02-001311` | rename |
-| 112 | AMMARA HASSAN | `02-001337` | `GEJ-02-001337` | rename |
-| 124 | SYEDA SABIKAH HASSAN NAQVI | `02-001338` | `GEJ-02-001338` | rename |
-| 134 | FARHEEN HAIDER | `02-001339` | `GEJ-02-001339` | rename |
-| 126 | BUSHRA IJAZ | `02-001348` | `GEJ-02-001348` | rename |
-| 113 | NABEEHA IFTIKHAR | `02-001352` | `GEJ-02-001352` | rename |
-| 103 | MADIHA SHOAIB | `02-001355` | `GEJ-02-001355` | rename |
-| 95 | FATIMA RAFIQ | `02-001358` | `GEJ-02-001358` | rename |
-| 135 | FAIZA KHAN | `02-001359` | `GEJ-02-001359` | rename |
-| 104 | ASMA NAZ | `02-001365` | `GEJ-02-001365` | rename |
-| 136 | HABIB-UDDIN | `02-001375` | `GEJ-02-001375` | rename |
-| 137 | SYEDA GHAZALA | `02-001376` | `GEJ-02-001376` | rename |
-| 114 | SEHAR ZAIDI | `02-001383` | `GEJ-02-001383` | rename |
-| 138 | ABDULLAH SIDDIQUI | `02-001388` | `GEJ-02-001388` | rename |
-| 96 | HERA QURESHI | `02-001404` | `GEJ-02-001404` | rename |
-| 106 | AMNA SHAHZADI | `02-001405` | `GEJ-02-001405` | rename |
-| 107 | KAINAT WILSON | `02-001406` | `GEJ-02-001406` | rename |
-| 115 | SHAISTA BANO | `02-001407` | `GEJ-02-001407` | rename |
-| 141 | JASMINE NUSRAT | `02-001413` | `GEJ-02-001413` | rename |
-| 108 | NADIA SULEMAN | `02-001414` | `GEJ-02-001414` | rename |
-| 97 | SABA SHAIKH | `02-001417` | `GEJ-02-001417` | rename |
-| 116 | NAILA NAZ | `02-001420` | `GEJ-02-001420` | rename |
-| 117 | AVESHA KHAN | `02-001424` | `GEJ-02-001424` | rename |
-| 127 | SABA ABDUL GHAFFAR | `02-001427` | `GEJ-02-001427` | rename |
-| 118 | ANUM AKRAM | `02-001428` | `GEJ-02-001428` | rename |
-| 125 | SHEREEN MEENA | `02-001435` | `GEJ-02-001435` | rename |
-| 109 | UMAMA ALI | `02-001439` | `GEJ-02-001439` | rename |
-| 128 | SIR IQBAL AHMED | `02-001468` | `GEJ-02-001468` | rename |
-| 98 | MOZMA WASEEM | `02-001470` | `GEJ-02-001470` | rename |
-| 119 | MARJAN | `02-001471` | `GEJ-02-001471` | rename |
-| 129 | REENA KUMARI RAJPOT | `02-001475` | `GEJ-02-001475` | rename |
-| 99 | AREEBA AZHAR | `02-001476` | `GEJ-02-001476` | rename |
-| 130 | ZAHIDA BEGUM | `02-00644` | `GEJ-02-00644` | rename |
-| 147 | MIRZA TAHIR ABBAS | `02-00836` | `GEJ-02-00836` | rename |
-| 132 | MUHAMMAD RASHID QURESHI | `02-00983` | `GEJ-02-00983` | rename |
-| 121 | ANJUM BASHIR | `02-0593` | `GEJ-02-0593` | rename |
-| 120 | SARAH KAUSAR | `02-0635` | `GEJ-02-0635` | rename |
-| 90 | SYED AZMAT AHMED | `02-0861` | `GEJ-02-0861` | rename |
-| 149 | BUSHRA WASIM | `02-0924` | `GEJ-02-0924` | rename |
-| 157 | SAJIDA RUBAB ADIL | `03-00125` | `GEJ-03-00125` | rename |
-| 156 | OWAIS AHMED SHAH | `03-00174` | `GEJ-03-00174` | rename |
-| 160 | ALI SAJJAD | `03-00190` | `GEJ-03-00190` | rename |
-| 161 | AMIR ALI | `03-00237` | `GEJ-03-00237` | rename |
-| 164 | MARTIN IMAMDIN | `03-00318` | `GEJ-03-00318` | rename |
-| 146 | SULTANA AMIR | `03-00325` | `GEJ-03-00325` | rename |
-| 159 | IMTIAZ HUSSAIN | `03-00331` | `GEJ-03-00331` | rename |
-| 142 | AMBREEN FATIMA | `03-00451` | `GEJ-03-00451` | rename |
-| 170 | SYED KOMAIL HASSAN ZAIDI | `03-00486` | `GEJ-03-00486` | rename |
-| 158 | SYEDA MAHEEN ZEHRA | `03-00489` | `GEJ-03-00489` | rename |
-| 172 | SAJEELA SALMAN | `03-00547` | `GEJ-03-00547` | rename |
-| 169 | SHAKERA SHAKEEL | `03-00556` | `GEJ-03-00556` | rename |
-| 139 | SYEDA SARA NAQVI | `03-00557` | `GEJ-03-00557` | rename |
-| 105 | AYESHA ALI | `03-00579` | `GEJ-03-00579` | rename |
-| 171 | MISHAL REHAN | `03-00580` | `GEJ-03-00580` | rename |
-| 162 | MURTAZA HUSSAIN | `03-00591` | `GEJ-03-00591` | rename |
-| 173 | ASIA MUJEEB | `03-00603` | `GEJ-03-00603` | rename |
-| 140 | SANA ZAKA | `03-00608` | `GEJ-03-00608` | rename |
-| 163 | S. JOHN HASSAN RIZVI | `03-00612` | `GEJ-03-00612` | rename |
-| 174 | AMNA MASROOR | `03-00615` | `GEJ-03-00615` | rename |
-| 165 | BINISH FATIMA | `03-00636` | `GEJ-03-00636` | rename |
-| 144 | HIRA KHADIM | `03-00639` | `GEJ-03-00639` | rename |
-| 166 | HAFSA MUSHTAQ | `03-00643` | `GEJ-03-00643` | rename |
-| 167 | UMAMA SHAFIQ | `03-00644` | `GEJ-03-00644` | rename |
-| 143 | ALI ASGHAR MIRZA | `03-1937` | `GEJ-03-1937` | rename |
-| 133 | ZOHAIR INAYAT HUSSAIN | `05-00031` | `GEJ-05-00031` | rename |
-| 100 | SOHAIL KHAN | `05-2011` | `GEJ-05-2011` | rename |
-| 175 | MUHAMMAD HASSAN MIRZA | `EMP-MHM-001` | `—` | skip_legacy_prefix |
+| 154 | NIMLA ASAD MIRZA | `GEJ-01-00017` | `GEJ-01-00017` | already_prefixed |
+| 145 | SUKAINA KIZILBASH | `GEJ-01-00018` | `GEJ-01-00018` | already_prefixed |
+| 152 | ASAD HUSSAIN MIRZA | `GEJ-01-00019` | `GEJ-01-00019` | already_prefixed |
+| 151 | MUHAMMAD HUSSAIN MIRZA | `GEJ-01-2000` | `GEJ-01-2000` | already_prefixed |
+| 168 | FATIMA HUSSAIN | `GEJ-01-2005` | `GEJ-01-2005` | already_prefixed |
+| 153 | FOZIA HUSSAIN | `GEJ-01-2006` | `GEJ-01-2006` | already_prefixed |
+| 155 | ASIFA OWAIS | `GEJ-01-2009` | `GEJ-01-0009` | rename |
+| 131 | MAHRUKH BALOCH | `GEJ-02-001138` | `GEJ-02-001138` | already_prefixed |
+| 91 | UME - FARWA | `GEJ-02-001166` | `GEJ-02-001166` | already_prefixed |
+| 94 | SHAZMAH | `GEJ-02-001192` | `GEJ-02-001192` | already_prefixed |
+| 101 | SHABANA ASHFAQ | `GEJ-02-001197` | `GEJ-02-001197` | already_prefixed |
+| 110 | LUBNA SABHEEH | `GEJ-02-001219` | `GEJ-02-001219` | already_prefixed |
+| 148 | LAIRULLANA MASOOD | `GEJ-02-001231` | `GEJ-02-001231` | already_prefixed |
+| 111 | SADIYA SAMI | `GEJ-02-001248` | `GEJ-02-001248` | already_prefixed |
+| 92 | LAIBA IRFAN | `GEJ-02-001264` | `GEJ-02-001264` | already_prefixed |
+| 122 | FATIMA USMAN | `GEJ-02-001271` | `GEJ-02-001271` | already_prefixed |
+| 123 | FARAH SOHAIL | `GEJ-02-001273` | `GEJ-02-001273` | already_prefixed |
+| 93 | MUSARAT BEGUM | `GEJ-02-001291` | `GEJ-02-001291` | already_prefixed |
+| 102 | KHUSHBOO | `GEJ-02-001311` | `GEJ-02-001311` | already_prefixed |
+| 112 | AMMARA HASSAN | `GEJ-02-001337` | `GEJ-02-001337` | already_prefixed |
+| 124 | SYEDA SABIKAH HASSAN NAQVI | `GEJ-02-001338` | `GEJ-02-001338` | already_prefixed |
+| 134 | FARHEEN HAIDER | `GEJ-02-001339` | `GEJ-02-001339` | already_prefixed |
+| 126 | BUSHRA IJAZ | `GEJ-02-001348` | `GEJ-02-001348` | already_prefixed |
+| 113 | NABEEHA IFTIKHAR | `GEJ-02-001352` | `GEJ-02-001352` | already_prefixed |
+| 103 | MADIHA SHOAIB | `GEJ-02-001355` | `GEJ-02-001355` | already_prefixed |
+| 95 | FATIMA RAFIQ | `GEJ-02-001358` | `GEJ-02-001358` | already_prefixed |
+| 135 | FAIZA KHAN | `GEJ-02-001359` | `GEJ-02-001359` | already_prefixed |
+| 104 | ASMA NAZ | `GEJ-02-001365` | `GEJ-02-001365` | already_prefixed |
+| 136 | HABIB-UDDIN | `GEJ-02-001375` | `GEJ-02-001375` | already_prefixed |
+| 137 | SYEDA GHAZALA | `GEJ-02-001376` | `GEJ-02-001376` | already_prefixed |
+| 114 | SEHAR ZAIDI | `GEJ-02-001383` | `GEJ-02-001383` | already_prefixed |
+| 138 | ABDULLAH SIDDIQUI | `GEJ-02-001388` | `GEJ-02-001388` | already_prefixed |
+| 96 | HERA QURESHI | `GEJ-02-001404` | `GEJ-02-001404` | already_prefixed |
+| 106 | AMNA SHAHZADI | `GEJ-02-001405` | `GEJ-02-001405` | already_prefixed |
+| 107 | KAINAT WILSON | `GEJ-02-001406` | `GEJ-02-001406` | already_prefixed |
+| 115 | SHAISTA BANO | `GEJ-02-001407` | `GEJ-02-001407` | already_prefixed |
+| 141 | JASMINE NUSRAT | `GEJ-02-001413` | `GEJ-02-001413` | already_prefixed |
+| 108 | NADIA SULEMAN | `GEJ-02-001414` | `GEJ-02-001414` | already_prefixed |
+| 97 | SABA SHAIKH | `GEJ-02-001417` | `GEJ-02-001417` | already_prefixed |
+| 116 | NAILA NAZ | `GEJ-02-001420` | `GEJ-02-001420` | already_prefixed |
+| 117 | AVESHA KHAN | `GEJ-02-001424` | `GEJ-02-001424` | already_prefixed |
+| 127 | SABA ABDUL GHAFFAR | `GEJ-02-001427` | `GEJ-02-001427` | already_prefixed |
+| 118 | ANUM AKRAM | `GEJ-02-001428` | `GEJ-02-001428` | already_prefixed |
+| 125 | SHEREEN MEENA | `GEJ-02-001435` | `GEJ-02-001435` | already_prefixed |
+| 109 | UMAMA ALI | `GEJ-02-001439` | `GEJ-02-001439` | already_prefixed |
+| 128 | SIR IQBAL AHMED | `GEJ-02-001468` | `GEJ-02-001468` | already_prefixed |
+| 98 | MOZMA WASEEM | `GEJ-02-001470` | `GEJ-02-001470` | already_prefixed |
+| 119 | MARJAN | `GEJ-02-001471` | `GEJ-02-001471` | already_prefixed |
+| 129 | REENA KUMARI RAJPOT | `GEJ-02-001475` | `GEJ-02-001475` | already_prefixed |
+| 99 | AREEBA AZHAR | `GEJ-02-001476` | `GEJ-02-001476` | already_prefixed |
+| 192 | BENAZIR WASEEM | `GEJ-02-001481` | `GEJ-02-001481` | already_prefixed |
+| 220 | ANUM FATIMA | `GEJ-02-001484` | `GEJ-02-001484` | already_prefixed |
+| 221 | FATIMA SAMI | `GEJ-02-001485` | `GEJ-02-001485` | already_prefixed |
+| 130 | ZAHIDA BEGUM | `GEJ-02-00644` | `GEJ-02-00644` | already_prefixed |
+| 147 | MIRZA TAHIR ABBAS | `GEJ-02-00836` | `GEJ-02-00836` | already_prefixed |
+| 132 | MUHAMMAD RASHID QURESHI | `GEJ-02-00983` | `GEJ-02-00983` | already_prefixed |
+| 121 | ANJUM BASHIR | `GEJ-02-0593` | `GEJ-02-0593` | already_prefixed |
+| 120 | SARAH KAUSAR | `GEJ-02-0635` | `GEJ-02-0635` | already_prefixed |
+| 90 | SYED AZMAT AHMED | `GEJ-02-0861` | `GEJ-02-0861` | already_prefixed |
+| 149 | BUSHRA WASIM | `GEJ-02-0924` | `GEJ-02-0924` | already_prefixed |
+| 157 | SAJIDA RUBAB ADIL | `GEJ-03-00125` | `GEJ-03-00125` | already_prefixed |
+| 156 | OWAIS AHMED SHAH | `GEJ-03-00174` | `GEJ-03-00174` | already_prefixed |
+| 160 | ALI SAJJAD | `GEJ-03-00190` | `GEJ-03-00190` | already_prefixed |
+| 161 | AMIR ALI | `GEJ-03-00237` | `GEJ-03-00237` | already_prefixed |
+| 164 | MARTIN IMAMDIN | `GEJ-03-00318` | `GEJ-03-00318` | already_prefixed |
+| 146 | SULTANA AMIR | `GEJ-03-00325` | `GEJ-03-00325` | already_prefixed |
+| 159 | IMTIAZ HUSSAIN | `GEJ-03-00331` | `GEJ-03-00331` | already_prefixed |
+| 142 | AMBREEN FATIMA | `GEJ-03-00451` | `GEJ-03-00451` | already_prefixed |
+| 170 | SYED KOMAIL HASSAN ZAIDI | `GEJ-03-00486` | `GEJ-03-00486` | already_prefixed |
+| 158 | SYEDA MAHEEN ZEHRA | `GEJ-03-00489` | `GEJ-03-00489` | already_prefixed |
+| 172 | SAJEELA SALMAN | `GEJ-03-00547` | `GEJ-03-00547` | already_prefixed |
+| 169 | SHAKERA SHAKEEL | `GEJ-03-00556` | `GEJ-03-00556` | already_prefixed |
+| 139 | SYEDA SARA NAQVI | `GEJ-03-00557` | `GEJ-03-00557` | already_prefixed |
+| 105 | AYESHA ALI | `GEJ-03-00579` | `GEJ-03-00579` | already_prefixed |
+| 171 | MISHAL REHAN | `GEJ-03-00580` | `GEJ-03-00580` | already_prefixed |
+| 162 | MURTAZA HUSSAIN | `GEJ-03-00591` | `GEJ-03-00591` | already_prefixed |
+| 173 | ASIA MUJEEB | `GEJ-03-00603` | `GEJ-03-00603` | already_prefixed |
+| 140 | SANA ZAKA | `GEJ-03-00608` | `GEJ-03-00608` | already_prefixed |
+| 163 | S. JOHN HASSAN RIZVI | `GEJ-03-00612` | `GEJ-03-00612` | already_prefixed |
+| 174 | AMNA MASROOR | `GEJ-03-00615` | `GEJ-03-00615` | already_prefixed |
+| 165 | BINISH FATIMA | `GEJ-03-00636` | `GEJ-03-00636` | already_prefixed |
+| 144 | HIRA KHADIM | `GEJ-03-00639` | `GEJ-03-00639` | already_prefixed |
+| 166 | HAFSA MUSHTAQ | `GEJ-03-00643` | `GEJ-03-00643` | already_prefixed |
+| 167 | UMAMA SHAFIQ | `GEJ-03-00644` | `GEJ-03-00644` | already_prefixed |
+| 150 | SYEDA ANITA HAIDER | `GEJ-03-00645` | `GEJ-03-00645` | already_prefixed |
+| 218 | AREEBA SHAIKH | `GEJ-03-00647` | `GEJ-03-00647` | already_prefixed |
+| 219 | ZUBIA KHALID | `GEJ-03-00648` | `GEJ-03-00648` | already_prefixed |
+| 143 | ALI ASGHAR MIRZA | `GEJ-03-1937` | `GEJ-03-1937` | already_prefixed |
+| 178 | SHAFIQUE HUSSAIN | `GEJ-04-00143` | `GEJ-04-00143` | already_prefixed |
+| 179 | SAQLAIN ABBAS | `GEJ-04-00151` | `GEJ-04-00151` | already_prefixed |
+| 181 | HASSAN RAZA | `GEJ-04-0050110` | `GEJ-04-0050110` | already_prefixed |
+| 183 | ZEESHAN ABBAS | `GEJ-04-0050113` | `GEJ-04-0050113` | already_prefixed |
+| 180 | TAJ MUHAMMAD | `GEJ-04-0050115` | `GEJ-04-0050115` | already_prefixed |
+| 182 | MUHAMMAD ARIF | `GEJ-04-0050116` | `GEJ-04-0050116` | already_prefixed |
+| 217 | WARIS MASIH | `GEJ-04-0050117` | `GEJ-04-0050117` | already_prefixed |
+| 193 | SHAKEELA | `GEJ-04-0050118` | `GEJ-04-0050118` | already_prefixed |
+| 194 | TASLEEEM | `GEJ-04-005051` | `GEJ-04-005051` | already_prefixed |
+| 177 | HIDAYATULLAH | `GEJ-04-005052` | `GEJ-04-005052` | already_prefixed |
+| 195 | AZRA RIAZ | `GEJ-04-005062` | `GEJ-04-005062` | already_prefixed |
+| 176 | NUSTRAT RAHAT | `GEJ-04-005081` | `GEJ-04-005081` | already_prefixed |
+| 133 | ZOHAIR INAYAT HUSSAIN | `GEJ-05-00031` | `GEJ-05-00031` | already_prefixed |
+| 100 | SOHAIL KHAN | `GEJ-05-2011` | `GEJ-05-2011` | already_prefixed |
+| 196 | ALI HAIDER | `GEJ-06-00562` | `GEJ-06-00562` | already_prefixed |
+| 197 | SALEEM ULLAH | `GEJ-06-00564` | `GEJ-06-00564` | already_prefixed |
+| 216 | muhammad sohail | `GEJ-06-00571` | `GEJ-06-00571` | already_prefixed |
+| 198 | GHULAM HAIDER | `GEJ-06-00572` | `GEJ-06-00572` | already_prefixed |
+| 199 | ABID HUSSAIN KHUSA | `GEJ-06-00573` | `GEJ-06-00573` | already_prefixed |
+| 200 | MUHAMMAD AHMED | `GEJ-06-00575` | `GEJ-06-00575` | already_prefixed |
+| 222 | gul muhammad soomro | `GEJ-06-00576` | `GEJ-06-00576` | already_prefixed |
+| 223 | ZAMAN | `GEJ-06-00577` | `GEJ-06-00577` | already_prefixed |
+| 175 | MUHAMMAD HASSAN MIRZA | `GEJ-08-6969` | `GEJ-08-6969` | already_prefixed |
 | 184 | Hashir Khan | `TEST-HASHIR-001` | `—` | skip_legacy_prefix |
 
 ## Kaneez Fatima Campus — prefix `GKF`
 
 | id | full_name | old_code | new_code | status |
 |---:|---|---|---|---|
-| 185 | ALISHBA AHMED | `02-00010` | `GKF-02-00010` | rename |
-| 186 | AMBREEN UZAIR | `02-00011` | `GKF-02-00011` | rename |
-| 187 | HUSNIA RAHEEM | `02-00014` | `GKF-02-00014` | rename |
-| 188 | SANA BATOOL | `02-00015` | `GKF-02-00015` | rename |
-| 189 | ATIQA SAEED | `02-00018` | `GKF-02-00018` | rename |
-| 190 | SYEDA RUBAB NAQVI | `02-00019` | `GKF-02-00019` | rename |
-| 191 | ASBAH BATOOL | `02-00020` | `GKF-02-00020` | rename |
-| 193 | SHAKEELA | `04-0050118` | `GKF-04-0050118` | rename |
-| 194 | TASLEEEM | `04-005051` | `GKF-04-005051` | rename |
-| 195 | AZRA RIAZ | `04-005062` | `GKF-04-005062` | rename |
-| 201 | SHOAIB ISMAIL | `04-2001` | `GKF-04-2001` | rename |
-| 202 | SONIA CINDERILLA | `04-2002` | `GKF-04-2002` | rename |
+| 185 | ALISHBA AHMED | `GKF-02-00010` | `GKF-02-00010` | already_prefixed |
+| 186 | AMBREEN UZAIR | `GKF-02-00011` | `GKF-02-00011` | already_prefixed |
+| 187 | HUSNIA RAHEEM | `GKF-02-00014` | `GKF-02-00014` | already_prefixed |
+| 188 | SANA BATOOL | `GKF-02-00015` | `GKF-02-00015` | already_prefixed |
+| 189 | ATIQA SAEED | `GKF-02-00018` | `GKF-02-00018` | already_prefixed |
+| 190 | SYEDA RUBAB NAQVI | `GKF-02-00019` | `GKF-02-00019` | already_prefixed |
+| 191 | ASBAH BATOOL | `GKF-02-00020` | `GKF-02-00020` | already_prefixed |
+| 214 | AYESHA SHAHRUKH | `GKF-02-001240` | `GKF-02-001240` | already_prefixed |
+| 215 | NIRMALA RAI OAD | `GKF-03-0001` | `GKF-03-0001` | already_prefixed |
+| 213 | SAMIA ANSARI | `GKF-03-00427` | `GKF-03-00427` | already_prefixed |
+| 201 | SHOAIB ISMAIL | `GKF-04-0001` | `GKF-04-0001` | already_prefixed |
+| 202 | SONIA CINDERILLA | `GKF-04-0002` | `GKF-04-0002` | already_prefixed |
+| 224 | IRFAN ALI | `GKF-06-0001` | `GKF-06-0001` | already_prefixed |
 
 ## North Nazimabad Campus — prefix `NNN`
 
 | id | full_name | old_code | new_code | status |
 |---:|---|---|---|---|
-| 203 | AYESHA | `02-1940` | `NNN-02-1940` | rename |
-| 204 | MUQADDAS JABIN | `02-1953` | `NNN-02-1953` | rename |
-| 205 | FOZIA NIGHAT | `02-1955` | `NNN-02-1955` | rename |
-| 206 | MEHAK MUBASHIRA | `02-1966` | `NNN-02-1966` | rename |
-| 207 | AIMAN IMRAN | `02-1967` | `NNN-02-1967` | rename |
-| 208 | JAVAIRA SHAHZAD | `02-1970` | `NNN-02-1970` | rename |
-| 209 | SAMREEN IRFAN | `02-1971` | `NNN-02-1971` | rename |
-
-## UNASSIGNED — no campus_id (will NOT be renamed)
-
-| id | full_name | old_code | new_code | status |
-|---:|---|---|---|---|
-| 192 | BENAZIR WASEEM | `02-001481` | `—` | skip_no_campus |
-| 178 | SHAFIQUE HUSSAIN | `04-00143` | `—` | skip_no_campus |
-| 179 | SAQLAIN ABBAS | `04-00151` | `—` | skip_no_campus |
-| 181 | HASSAN RAZA | `04-0050110` | `—` | skip_no_campus |
-| 183 | ZEESHAN ABBAS | `04-0050113` | `—` | skip_no_campus |
-| 180 | TAJ MUHAMMAD | `04-0050115` | `—` | skip_no_campus |
-| 182 | MUHAMMAD ARIF | `04-0050116` | `—` | skip_no_campus |
-| 177 | HIDAYATULLAH | `04-005052` | `—` | skip_no_campus |
-| 176 | NUSTRAT RAHAT | `04-005081` | `—` | skip_no_campus |
-| 196 | ALI HAIDER | `06-00562` | `—` | skip_no_campus |
-| 197 | SALEEM ULLAH | `06-00564` | `—` | skip_no_campus |
-| 198 | GHULAM HAIDER | `06-00572` | `—` | skip_no_campus |
-| 199 | ABID HUSSAIN KHUSA | `06-00573` | `—` | skip_no_campus |
-| 200 | MUHAMMAD AHMED | `06-00575` | `—` | skip_no_campus |
+| 203 | AYESHA | `NNN-02-0040` | `NNN-02-0040` | already_prefixed |
+| 204 | MUQADDAS JABIN | `NNN-02-0053` | `NNN-02-0053` | already_prefixed |
+| 205 | FOZIA NIGHAT | `NNN-02-0055` | `NNN-02-0055` | already_prefixed |
+| 206 | MEHAK MUBASHIRA | `NNN-02-0066` | `NNN-02-0066` | already_prefixed |
+| 207 | AIMAN IMRAN | `NNN-02-0067` | `NNN-02-0067` | already_prefixed |
+| 208 | JAVAIRA SHAHZAD | `NNN-02-0070` | `NNN-02-0070` | already_prefixed |
+| 209 | SAMREEN IRFAN | `NNN-02-0071` | `NNN-02-0071` | already_prefixed |
+| 211 | ERUM OWAIS | `NNN-03-00310` | `NNN-03-00310` | already_prefixed |
+| 212 | KANEEZ -E- UMMAY FERWA | `NNN-03-00460` | `NNN-03-00460` | already_prefixed |
