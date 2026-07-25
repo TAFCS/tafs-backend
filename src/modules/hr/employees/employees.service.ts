@@ -10,6 +10,7 @@ import {
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields, campusPrefixForId } from './employee-code.util';
+import { buildMasterEmployeesExcelBuffer } from './master-employee-excel.util';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -240,7 +241,8 @@ const includeRelations = {
       classes: { include: { segments: true } },
       sections: true,
     },
-  }
+  },
+  device_user_mappings: true,
 };
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
@@ -251,6 +253,14 @@ export class EmployeesService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
   ) {}
+
+  async exportMasterExcel(): Promise<Buffer> {
+    const employees = await this.prisma.employee_profiles.findMany({
+      include: includeRelations,
+      orderBy: { id: 'asc' },
+    });
+    return buildMasterEmployeesExcelBuffer(employees as any);
+  }
 
   /** Ensure staff category belongs to the employee's department. */
   private async assertCategoryMatchesDepartment(

@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
@@ -15,6 +16,16 @@ import { createApiResponse } from '../../../utils/serializer.util';
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class EmployeesController {
   constructor(private readonly employeesService: EmployeesService) {}
+
+  @Get('export-master-excel')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async exportMasterExcel(@Res() res: Response) {
+    const buffer = await this.employeesService.exportMasterExcel();
+    const filename = `TAFS_Master_Employee_Database_${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
