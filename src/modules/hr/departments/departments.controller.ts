@@ -2,7 +2,6 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, UseGua
 import {
   DepartmentsService,
   CreateDepartmentDto,
-  CreateDesignationDto,
   CreateStaffCategoryDto,
 } from './departments.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
@@ -52,35 +51,6 @@ export class DepartmentsController {
   async remove(@Param('id', ParseIntPipe) id: number) {
     const data = await this.departmentsService.remove(id);
     return createApiResponse(data, HttpStatus.OK, 'Department deleted successfully');
-  }
-
-  // Designations
-  @Post(':id/designations')
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async createDesignation(@Param('id', ParseIntPipe) id: number, @Body() dto: CreateDesignationDto) {
-    const data = await this.departmentsService.createDesignation(id, dto);
-    return createApiResponse(data, HttpStatus.CREATED, 'Designation created successfully');
-  }
-
-  @Patch(':id/designations/:designationId')
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async updateDesignation(
-    @Param('id', ParseIntPipe) id: number,
-    @Param('designationId', ParseIntPipe) designationId: number,
-    @Body() dto: Partial<CreateDesignationDto>
-  ) {
-    const data = await this.departmentsService.updateDesignation(id, designationId, dto);
-    return createApiResponse(data, HttpStatus.OK, 'Designation updated successfully');
-  }
-
-  @Delete(':id/designations/:designationId')
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async removeDesignation(
-    @Param('id', ParseIntPipe) id: number,
-    @Param('designationId', ParseIntPipe) designationId: number
-  ) {
-    const data = await this.departmentsService.removeDesignation(id, designationId);
-    return createApiResponse(data, HttpStatus.OK, 'Designation deleted successfully');
   }
 
   // Staff categories (subcategories)

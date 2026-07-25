@@ -63,7 +63,6 @@ export class StaffAttendanceService {
       include: {
         users: { select: { id: true, full_name: true, role: true, email: true } },
         departments: { select: { id: true, name: true } },
-        designations: { select: { id: true, title: true } },
       },
       orderBy: [{ departments: { name: 'asc' } }, { id: 'asc' }],
     });
@@ -105,7 +104,6 @@ export class StaffAttendanceService {
       include: {
         users: { select: { id: true, full_name: true, role: true, email: true } },
         departments: { select: { id: true, name: true } },
-        designations: { select: { id: true, title: true } },
         campuses: { select: { id: true, campus_name: true } },
       },
       orderBy: [{ departments: { name: 'asc' } }, { id: 'asc' }],

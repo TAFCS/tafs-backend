@@ -20,18 +20,6 @@ export class CreateDepartmentDto {
   description?: string;
 }
 
-export class CreateDesignationDto {
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  title: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  description?: string;
-}
-
 export class CreateStaffCategoryDto {
   @IsString()
   @MinLength(1)
@@ -64,7 +52,6 @@ export class DepartmentsService {
   async findAll() {
     return this.prisma.departments.findMany({
       include: {
-        designations: true,
         staff_categories: {
           include: { _count: { select: { employee_profiles: true } } },
           orderBy: { name: 'asc' },
@@ -79,7 +66,6 @@ export class DepartmentsService {
     const dept = await this.prisma.departments.findUnique({
       where: { id },
       include: {
-        designations: true,
         staff_categories: {
           include: { _count: { select: { employee_profiles: true } } },
           orderBy: { name: 'asc' },
@@ -191,51 +177,6 @@ export class DepartmentsService {
       changed_by: changedBy ?? 'system',
     });
     return record;
-  }
-
-  // Designations CRUD
-  async createDesignation(departmentId: number, dto: CreateDesignationDto) {
-    await this.findOne(departmentId);
-    return this.prisma.designations.create({
-      data: {
-        department_id: departmentId,
-        title: dto.title,
-        description: dto.description,
-      },
-    });
-  }
-
-  async updateDesignation(
-    departmentId: number,
-    designationId: number,
-    dto: Partial<CreateDesignationDto>,
-  ) {
-    const des = await this.prisma.designations.findUnique({
-      where: { id: designationId },
-    });
-    if (!des || des.department_id !== departmentId) {
-      throw new NotFoundException(
-        `Designation with ID ${designationId} not found in department ${departmentId}`,
-      );
-    }
-    return this.prisma.designations.update({
-      where: { id: designationId },
-      data: dto,
-    });
-  }
-
-  async removeDesignation(departmentId: number, designationId: number) {
-    const des = await this.prisma.designations.findUnique({
-      where: { id: designationId },
-    });
-    if (!des || des.department_id !== departmentId) {
-      throw new NotFoundException(
-        `Designation with ID ${designationId} not found in department ${departmentId}`,
-      );
-    }
-    return this.prisma.designations.delete({
-      where: { id: designationId },
-    });
   }
 
   // Staff categories CRUD

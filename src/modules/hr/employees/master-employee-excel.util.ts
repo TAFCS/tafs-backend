@@ -80,8 +80,6 @@ export async function buildMasterEmployeesExcelBuffer(employees: EmployeeProfile
     'Campus Name',
     'Department',
     'Subcategory',
-    'Designation',
-    'Staff Type',
     'Job Title',
     'Job Description',
     'Class-Section Assignments',

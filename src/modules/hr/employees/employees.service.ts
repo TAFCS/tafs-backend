@@ -209,6 +209,11 @@ const nullIfEmpty = (value?: string | null) => {
   return trimmed === '' ? null : trimmed;
 };
 
+const upperOrNull = (value?: string | null) => {
+  const normalized = nullIfEmpty(value);
+  return normalized ? normalized.toUpperCase() : normalized;
+};
+
 const includeRelations = {
   users: {
     select: {
@@ -380,16 +385,15 @@ export class EmployeesService {
         address: rest.address || null,
         personal_phone: rest.personal_phone || null,
         personal_email: rest.personal_email || null,
-        job_title: rest.job_title || null,
+        job_title: upperOrNull(rest.job_title),
         staff_category_id: rest.staff_category_id ?? null,
-        job_description: rest.job_description || null,
+        job_description: upperOrNull(rest.job_description),
         notes: rest.notes || null,
         reporting_time: toTime(rest.reporting_time),
         leaving_time: toTime(rest.leaving_time),
         check_in_source: rest.check_in_source ?? CheckInSource.FIXED,
         late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
         monthly_pay: rest.monthly_pay ?? null,
-        staff_type_id: rest.staff_type_id || null,
         campus_id: rest.campus_id || null,
         days_per_week: rest.days_per_week ?? null,
         photo_url: rest.photo_url || null,
@@ -504,9 +508,9 @@ export class EmployeesService {
           address: rest.address !== undefined ? nullIfEmpty(rest.address) : undefined,
           personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
           personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
-          job_title: rest.job_title !== undefined ? nullIfEmpty(rest.job_title) : undefined,
+          job_title: rest.job_title !== undefined ? upperOrNull(rest.job_title) : undefined,
           staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
-          job_description: rest.job_description !== undefined ? nullIfEmpty(rest.job_description) : undefined,
+          job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
           reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
           leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined) : undefined,

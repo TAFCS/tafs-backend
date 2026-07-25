@@ -1005,17 +1005,8 @@ model departments {
   name                   String                   @db.VarChar(100)
   description            String?                  @db.VarChar(255)
   academic_calendar_days academic_calendar_days[]
-  designations           designations[]
   employee_profiles      employee_profiles[]
   staff_categories       staff_categories[]
-}
-
-model designations {
-  id                Int          @id @default(autoincrement())
-  department_id     Int?
-  title             String       @db.VarChar(100)
-  description       String?      @db.VarChar(255)
-  departments       departments? @relation(fields: [department_id], references: [id])
 }
 
 model staff_categories {
@@ -1099,14 +1090,6 @@ model employee_profiles {
   zk_attendance_scans                zk_attendance_scans[]
 
   @@index([employment_status])
-}
-
-model staff_types {
-  id          Int     @id @default(autoincrement())
-  code        String  @unique @db.VarChar(50)
-  name        String  @db.VarChar(100)
-  description String? @db.VarChar(255)
-  is_active   Boolean @default(true)
 }
 
 model employee_class_section_assignments {

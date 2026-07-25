@@ -13,8 +13,6 @@ import { HolidayAttendanceSyncService } from './calendar/holiday-attendance-sync
 import { HolidayAttendanceSchedulerService } from './calendar/holiday-attendance-scheduler.service';
 import { ClassAttendanceModesController } from './class-attendance-modes/class-attendance-modes.controller';
 import { ClassAttendanceModesService } from './class-attendance-modes/class-attendance-modes.service';
-import { StaffTypesController } from './staff-types/staff-types.controller';
-import { StaffTypesService } from './staff-types/staff-types.service';
 import { AuthModule } from '../auth/auth.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { CalendarNotificationService } from './calendar/calendar-notification.service';
@@ -40,7 +38,6 @@ import { StorageModule } from '../../common/storage/storage.module';
     PoliciesController,
     CalendarController,
     ClassAttendanceModesController,
-    StaffTypesController,
     CalendarNotificationsController,
     PayrollController,
     PayrollSelfController,
@@ -55,7 +52,6 @@ import { StorageModule } from '../../common/storage/storage.module';
     HolidayAttendanceSyncService,
     HolidayAttendanceSchedulerService,
     ClassAttendanceModesService,
-    StaffTypesService,
     CalendarNotificationService,
     PayrollService,
     PayslipPdfService,
@@ -69,7 +65,6 @@ import { StorageModule } from '../../common/storage/storage.module';
     CalendarDayResolverService,
     HolidayAttendanceSyncService,
     ClassAttendanceModesService,
-    StaffTypesService,
     CalendarNotificationService,
     PayrollService,
     PayslipPdfService,
