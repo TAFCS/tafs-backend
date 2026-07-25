@@ -1011,12 +1011,11 @@ model departments {
 }
 
 model designations {
-  id                Int                 @id @default(autoincrement())
+  id                Int          @id @default(autoincrement())
   department_id     Int?
-  title             String              @db.VarChar(100)
-  description       String?             @db.VarChar(255)
-  departments       departments?        @relation(fields: [department_id], references: [id])
-  employee_profiles employee_profiles[]
+  title             String       @db.VarChar(100)
+  description       String?      @db.VarChar(255)
+  departments       departments? @relation(fields: [department_id], references: [id])
 }
 
 model staff_categories {
@@ -1042,7 +1041,6 @@ model employee_profiles {
   join_date                          DateTime?                            @db.Date
   employment_type                    String?                              @db.VarChar(50)
   department_id                      Int?
-  designation_id                     Int?
   reporting_manager_id               Int?
   employee_code                      String?                              @unique @db.VarChar(50)
   full_name                          String?                              @db.VarChar(100)
@@ -1059,7 +1057,6 @@ model employee_profiles {
   leaving_time                       DateTime?                            @db.Time(0)
   late_relaxation_minutes            Int?
   monthly_pay                        Decimal?                             @db.Decimal(12, 2)
-  staff_type_id                      Int?
   campus_id                          Int?
   days_per_week                      Int?
   photo_url                          String?
@@ -1089,11 +1086,9 @@ model employee_profiles {
   employee_notice_posts              employee_notice_posts[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
-  designations                       designations?                        @relation(fields: [designation_id], references: [id])
   reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
-  staff_types                        staff_types?                         @relation(fields: [staff_type_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
@@ -1107,12 +1102,11 @@ model employee_profiles {
 }
 
 model staff_types {
-  id                Int                 @id @default(autoincrement())
-  code              String              @unique @db.VarChar(50)
-  name              String              @db.VarChar(100)
-  description       String?             @db.VarChar(255)
-  is_active         Boolean             @default(true)
-  employee_profiles employee_profiles[]
+  id          Int     @id @default(autoincrement())
+  code        String  @unique @db.VarChar(50)
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
+  is_active   Boolean @default(true)
 }
 
 model employee_class_section_assignments {

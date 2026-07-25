@@ -41,9 +41,6 @@ export class CreateEmployeeDto {
   department_id?: number;
 
   @IsOptional() @IsInt()
-  designation_id?: number;
-
-  @IsOptional() @IsInt()
   reporting_manager_id?: number;
 
   @IsOptional() @IsString()
@@ -102,9 +99,6 @@ export class CreateEmployeeDto {
 
   @IsOptional() @IsNumber()
   monthly_pay?: number;
-
-  @IsOptional() @IsInt()
-  staff_type_id?: number;
 
   @IsOptional() @IsInt()
   campus_id?: number;
@@ -229,9 +223,7 @@ const includeRelations = {
     },
   },
   departments: true,
-  designations: true,
   staff_categories: true,
-  staff_types: true,
   campuses: true,
   reporting_manager: {
     include: { users: { select: { full_name: true } } }
@@ -338,7 +330,6 @@ export class EmployeesService {
         employment_status: true,
         campuses: { select: { id: true, campus_name: true } },
         departments: { select: { id: true, name: true } },
-        designations: { select: { id: true, title: true } },
         staff_categories: { select: { id: true, code: true, name: true, department_id: true } },
         users: { select: { id: true, username: true, full_name: true, role: true } },
       },
@@ -378,7 +369,6 @@ export class EmployeesService {
         employment_status: status,
         is_permanent_employee: status === EmployeeStatus.PERMANENT,
         department_id: rest.department_id || null,
-        designation_id: rest.designation_id || null,
         reporting_manager_id: rest.reporting_manager_id || null,
         employee_code: codeFields.employee_code,
         employee_code_dep: codeFields.employee_code_dep,
@@ -498,7 +488,6 @@ export class EmployeesService {
           join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
           employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
           department_id: rest.department_id !== undefined ? rest.department_id : undefined,
-          designation_id: rest.designation_id !== undefined ? rest.designation_id : undefined,
           reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
           employee_code: codeFields
             ? codeFields.employee_code
@@ -524,7 +513,6 @@ export class EmployeesService {
           check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
-          staff_type_id: rest.staff_type_id !== undefined ? rest.staff_type_id : undefined,
           campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
           days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
           photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
@@ -555,7 +543,6 @@ export class EmployeesService {
       { key: 'job_title', label: 'Job Title' },
       { key: 'employment_type', label: 'Employment Type' },
       { key: 'department_id', label: 'Department' },
-      { key: 'designation_id', label: 'Designation' },
       { key: 'campus_id', label: 'Campus' },
       { key: 'personal_phone', label: 'Phone' },
       { key: 'personal_email', label: 'Email' },
