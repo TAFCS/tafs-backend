@@ -118,7 +118,28 @@ export class CalendarDayResolverService {
     sectionId: number | null,
     date: Date,
   ): Promise<ResolvedCalendarDay> {
-    const rows = await this.prisma.academic_calendar_days.findMany({
+    const rows = await this.loadStudentCalendarRowsForDate(campusId, date);
+    return this.resolveStudentDayFromRows(rows, classId, sectionId, date);
+  }
+
+  /** Batched equivalent of resolveStudentDay() for running it over many students on
+   *  one date (e.g. campus-wide holiday sync) without one DB round trip per student. */
+  resolveStudentDayFromRows(
+    rows: CalendarRow[],
+    classId: number | null,
+    sectionId: number | null,
+    date: Date,
+  ): ResolvedCalendarDay {
+    const matching = rows.filter((row) => this.matchesStudentScope(row, classId, sectionId));
+    const best = this.pickBestCalendarRow(matching, 'STUDENT');
+    if (best) return this.fromDayType(best.day_type, best.description);
+
+    return this.defaultStudentDay(date);
+  }
+
+  /** Loads the raw STUDENT calendar rows for a campus/date once, for resolveStudentDayFromRows(). */
+  async loadStudentCalendarRowsForDate(campusId: number, date: Date): Promise<CalendarRow[]> {
+    return this.prisma.academic_calendar_days.findMany({
       where: {
         campus_id: campusId,
         date,
@@ -134,12 +155,6 @@ export class CalendarDayResolverService {
         employee_id: true,
       },
     });
-
-    const matching = rows.filter((row) => this.matchesStudentScope(row, classId, sectionId));
-    const best = this.pickBestCalendarRow(matching, 'STUDENT');
-    if (best) return this.fromDayType(best.day_type, best.description);
-
-    return this.defaultStudentDay(date);
   }
 
   async resolveStaffDay(employeeId: number, campusId: number, date: Date): Promise<ResolvedCalendarDay> {
