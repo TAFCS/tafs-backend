@@ -28,9 +28,19 @@ import { SaturdaySchedulesModule } from './saturday-schedules/saturday-schedules
 import { ShiftOverridesModule } from './shift-overrides/shift-overrides.module';
 import { TimetablesModule } from '../timetables/timetables.module';
 import { StorageModule } from '../../common/storage/storage.module';
+import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-notice-board.module';
 
 @Module({
-  imports: [AuthModule, FcmModule, LeavesModule, SaturdaySchedulesModule, ShiftOverridesModule, TimetablesModule, StorageModule],
+  imports: [
+    AuthModule,
+    FcmModule,
+    LeavesModule,
+    SaturdaySchedulesModule,
+    ShiftOverridesModule,
+    TimetablesModule,
+    StorageModule,
+    EmployeeNoticeBoardModule,
+  ],
   controllers: [
     EmployeesSelfController,
     EmployeesController,

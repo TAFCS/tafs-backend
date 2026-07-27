@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import { AttendanceSource, Prisma, PayrollRunStatus, OvertimeRateType, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
@@ -12,6 +12,7 @@ import { DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self
 import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
+import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -61,6 +62,7 @@ interface ComputedLine {
   total_break_minutes: number;
   total_late_minutes: number;
   total_overtime_minutes: number;
+  overtime_days: number;
   scheduled_minutes_per_day: number;
   monthly_pay: Prisma.Decimal;
   daily_rate: Prisma.Decimal;
@@ -74,6 +76,22 @@ interface ComputedLine {
   daily_breakdown: DayBreakdownEntry[];
 }
 
+interface DetectedFlag {
+  flag_type: PayrollFlagType;
+  anchor_date: string;
+  dates: string[];
+  deduction_days: number;
+}
+
+const NON_WORKED_CLASSIFICATIONS = new Set<DayClassification>([
+  'ABSENT',
+  'UNPAID_LEAVE',
+  'EXCUSED',
+  'SICK_LEAVE',
+  'CASUAL_LEAVE',
+  'ANNUAL_LEAVE',
+]);
+
 const runInclude = {
   campuses: { select: { id: true, campus_name: true } },
   payroll_run_lines: {
@@ -83,6 +101,7 @@ const runInclude = {
       },
     },
   },
+  payroll_flags: true,
 };
 
 /**
@@ -113,6 +132,7 @@ export class PayrollService {
     private readonly auditLogs: AuditLogsService,
     private readonly storage: StorageService,
     private readonly payslipPdf: PayslipPdfService,
+    private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
   ) {}
 
   // Fixed school payroll cycle — see payroll-period.util.ts
@@ -421,6 +441,14 @@ export class PayrollService {
           .reduce((m, s) => m + Math.max(0, (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000), 0)
       );
     }, 0);
+    // Distinct days on which any overtime was worked — the basis for a
+    // per-day overtime reward, as opposed to prorating total minutes into a
+    // fractional day count.
+    const overtimeDays = dailyBreakdown.filter((d) =>
+      (d.segments ?? []).some(
+        (s) => s.type === 'OVERTIME' && new Date(s.end).getTime() - new Date(s.start).getTime() > 0,
+      ),
+    ).length;
 
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
     const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
@@ -465,6 +493,7 @@ export class PayrollService {
       total_break_minutes: totalBreakMinutes,
       total_late_minutes: totalLateMinutes,
       total_overtime_minutes: Math.round(totalOvertimeMinutes),
+      overtime_days: overtimeDays,
       // Standard 8h workday only when this employee's schedule can't be
       // resolved at all — used solely as the "1 day" divisor for a
       // per-day overtime reward rate at settlement time.
@@ -480,6 +509,219 @@ export class PayrollService {
       net_pay: netPay.toDecimalPlaces(2),
       daily_breakdown: dailyBreakdown,
     };
+  }
+
+  /**
+   * Neither rule is ever auto-applied — this only detects candidate
+   * instances from the ordered dailyBreakdown so they can be surfaced to an
+   * admin for an explicit Apply/Exempt decision. See finalizeRun, which
+   * blocks while any detected flag is still PENDING.
+   *
+   * Sandwich: any run of one or more consecutive non-working days — a
+   * declared HOLIDAY, an ordinary WEEKEND, or a mix of both back to back —
+   * becomes a candidate whenever the nearest working day on BOTH sides
+   * (skipping other non-working days) was not worked (absent, unpaid
+   * leave, or any approved leave). There's no minimum or maximum block
+   * length: a single bracketed Sunday qualifies exactly like a 4-day
+   * holiday-plus-weekend stretch — the whole off-block becomes unpaid.
+   *
+   * Consecutive-late: walks working days in order, skipping non-working
+   * days (they don't break a streak); any late streak flushes into one flag
+   * per streak with deduction_days = floor(streakLength / 3) — the mod-3
+   * remainder (1-2 stray lates) never counts.
+   */
+  private detectPayrollFlags(dailyBreakdown: DayBreakdownEntry[]): DetectedFlag[] {
+    const flags: DetectedFlag[] = [];
+
+    let i = 0;
+    while (i < dailyBreakdown.length) {
+      if (!dailyBreakdown[i].is_working_day) {
+        let j = i;
+        while (j < dailyBreakdown.length && !dailyBreakdown[j].is_working_day) j++;
+        const runLength = j - i;
+        let beforeIdx = i - 1;
+        while (beforeIdx >= 0 && !dailyBreakdown[beforeIdx].is_working_day) beforeIdx--;
+        let afterIdx = j;
+        while (afterIdx < dailyBreakdown.length && !dailyBreakdown[afterIdx].is_working_day) afterIdx++;
+        const before = beforeIdx >= 0 ? dailyBreakdown[beforeIdx] : null;
+        const after = afterIdx < dailyBreakdown.length ? dailyBreakdown[afterIdx] : null;
+        if (
+          before &&
+          after &&
+          NON_WORKED_CLASSIFICATIONS.has(before.classification) &&
+          NON_WORKED_CLASSIFICATIONS.has(after.classification)
+        ) {
+          const dates = dailyBreakdown.slice(i, j).map((d) => d.date);
+          flags.push({ flag_type: PayrollFlagType.SANDWICH, anchor_date: dates[0], dates, deduction_days: runLength });
+        }
+        i = j;
+      } else {
+        i++;
+      }
+    }
+
+    let streakDates: string[] = [];
+    const flushLateStreak = () => {
+      const groups = Math.floor(streakDates.length / 3);
+      if (groups >= 1) {
+        const dates = streakDates.slice(0, groups * 3);
+        flags.push({ flag_type: PayrollFlagType.CONSECUTIVE_LATE, anchor_date: dates[0], dates, deduction_days: groups });
+      }
+      streakDates = [];
+    };
+    for (const day of dailyBreakdown) {
+      if (!day.is_working_day) continue;
+      if (day.classification === 'LATE') {
+        streakDates.push(day.date);
+      } else {
+        flushLateStreak();
+      }
+    }
+    flushLateStreak();
+
+    return flags;
+  }
+
+  /**
+   * Upserts detected flags for one employee on a run, keyed by
+   * (run, employee, type, anchor_date) so an admin's Apply/Exempt decision
+   * survives a DRAFT regenerate even though the underlying line gets a new
+   * id. Stale flags (no longer detected) are deleted, then the line's flag
+   * deduction columns are recomputed from whatever APPLIED flags remain.
+   */
+  private async syncPayrollFlagsForEmployee(
+    runId: number,
+    employeeId: number,
+    detected: DetectedFlag[],
+    dailyRate: Prisma.Decimal,
+  ): Promise<void> {
+    const existingFlags = await this.prisma.payroll_flags.findMany({
+      where: { payroll_run_id: runId, employee_id: employeeId },
+    });
+    const existingByKey = new Map(
+      existingFlags.map((f) => [`${f.flag_type}:${f.anchor_date.toISOString().slice(0, 10)}`, f]),
+    );
+    const seenKeys = new Set<string>();
+
+    for (const flag of detected) {
+      const key = `${flag.flag_type}:${flag.anchor_date}`;
+      seenKeys.add(key);
+      const deductionAmount = dailyRate.times(flag.deduction_days).toDecimalPlaces(2);
+      const existing = existingByKey.get(key);
+      if (existing) {
+        await this.prisma.payroll_flags.update({
+          where: { id: existing.id },
+          data: { dates: flag.dates, deduction_days: flag.deduction_days, deduction_amount: deductionAmount },
+        });
+      } else {
+        await this.prisma.payroll_flags.create({
+          data: {
+            payroll_run_id: runId,
+            employee_id: employeeId,
+            flag_type: flag.flag_type,
+            anchor_date: new Date(`${flag.anchor_date}T00:00:00.000Z`),
+            dates: flag.dates,
+            deduction_days: flag.deduction_days,
+            deduction_amount: deductionAmount,
+          },
+        });
+      }
+    }
+
+    const staleIds = existingFlags
+      .filter((f) => !seenKeys.has(`${f.flag_type}:${f.anchor_date.toISOString().slice(0, 10)}`))
+      .map((f) => f.id);
+    if (staleIds.length > 0) {
+      await this.prisma.payroll_flags.deleteMany({ where: { id: { in: staleIds } } });
+    }
+
+    await this.recomputeLineFlagDeductions(runId, employeeId);
+  }
+
+  /**
+   * The four base deductions (absence/half-day/late/break) stay exactly as
+   * computeEmployeeLine produced them — flag deductions are an additive
+   * layer folded in only from flags currently APPLIED, so a PENDING or
+   * EXEMPTED flag never changes pay.
+   */
+  private async recomputeLineFlagDeductions(runId: number, employeeId: number): Promise<void> {
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+    });
+    if (!line) return;
+
+    const [sandwichSum, lateSum] = await Promise.all([
+      this.prisma.payroll_flags.aggregate({
+        where: { payroll_run_id: runId, employee_id: employeeId, flag_type: PayrollFlagType.SANDWICH, status: PayrollFlagStatus.APPLIED },
+        _sum: { deduction_amount: true },
+      }),
+      this.prisma.payroll_flags.aggregate({
+        where: { payroll_run_id: runId, employee_id: employeeId, flag_type: PayrollFlagType.CONSECUTIVE_LATE, status: PayrollFlagStatus.APPLIED },
+        _sum: { deduction_amount: true },
+      }),
+    ]);
+
+    const sandwichDeduction = new Prisma.Decimal(sandwichSum._sum.deduction_amount ?? 0).toDecimalPlaces(2);
+    const consecutiveLateDeduction = new Prisma.Decimal(lateSum._sum.deduction_amount ?? 0).toDecimalPlaces(2);
+    const baseDeductions = new Prisma.Decimal(line.absence_deduction)
+      .plus(line.half_day_deduction)
+      .plus(line.late_deduction)
+      .plus(line.break_deduction);
+    const totalDeductions = baseDeductions.plus(sandwichDeduction).plus(consecutiveLateDeduction).toDecimalPlaces(2);
+    const netPay = new Prisma.Decimal(line.monthly_pay).minus(totalDeductions).toDecimalPlaces(2);
+
+    await this.prisma.payroll_run_lines.update({
+      where: { id: line.id },
+      data: {
+        sandwich_deduction: sandwichDeduction,
+        consecutive_late_deduction: consecutiveLateDeduction,
+        total_deductions: totalDeductions,
+        net_pay: netPay,
+      },
+    });
+  }
+
+  /**
+   * Validates the run is still a DRAFT, applies the admin's Apply/Exempt
+   * decision to one flag, and folds it into the line's pay. Endpoint for
+   * the Flag Review panel — see PayrollController.
+   */
+  async decidePayrollFlag(
+    runId: number,
+    employeeId: number,
+    flagId: number,
+    status: 'APPLIED' | 'EXEMPTED',
+    user: IJwtStaffPayload,
+  ) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.status === PayrollRunStatus.FINALIZED) {
+      throw new BadRequestException('Flags can only be decided on a draft payroll run.');
+    }
+
+    const flag = await this.prisma.payroll_flags.findUnique({ where: { id: flagId } });
+    if (!flag || flag.payroll_run_id !== runId || flag.employee_id !== employeeId) {
+      throw new NotFoundException('Payroll flag not found on this run for this employee.');
+    }
+
+    await this.prisma.payroll_flags.update({
+      where: { id: flagId },
+      data: { status: status as PayrollFlagStatus, decided_by: user.sub, decided_at: new Date() },
+    });
+    await this.recomputeLineFlagDeductions(runId, employeeId);
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'FLAG_DECIDED',
+      field: 'flag_id',
+      new_value: String(flagId),
+      changed_by: user.username,
+      note: `${flag.flag_type} flag (${(flag.dates as string[]).join(', ')}) for employee ${employeeId} marked ${status}.`,
+    });
+
+    return this.getRun(runId, user);
   }
 
   // Shared by generateRun (persists a snapshot) and getAttendanceMatrix (reads
@@ -663,6 +905,15 @@ export class PayrollService {
     const computedLines = await this.computeEmployeeLinesForRange(employees, dto.campus_id, periodStart, periodEnd);
     const lines = computedLines.map((line) => ({ payroll_run_id: run.id, ...line }));
     await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });
+
+    // Detect sandwich / consecutive-late candidates from each employee's
+    // freshly computed daily_breakdown and sync them against whatever flags
+    // already exist for this run+employee — Apply/Exempt decisions on a
+    // still-detected flag survive; flags that no longer apply are removed.
+    for (const line of computedLines) {
+      const detected = this.detectPayrollFlags(line.daily_breakdown);
+      await this.syncPayrollFlagsForEmployee(run.id, line.employee_id, detected, line.daily_rate);
+    }
 
     return this.getRun(run.id, user);
   }
@@ -877,11 +1128,39 @@ export class PayrollService {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id }, include: runInclude });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    return run;
+    return this.attachFlagsToLines(run);
+  }
+
+  // Flags are stored on the run, not the line (their identity must survive a
+  // DRAFT regenerate, which replaces every line's id) — attach them onto
+  // their line by employee_id for the API response.
+  private attachFlagsToLines<T extends { payroll_run_lines: { employee_id: number }[]; payroll_flags: unknown[] }>(
+    run: T,
+  ) {
+    const flagsByEmployee = new Map<number, unknown[]>();
+    for (const flag of run.payroll_flags as { employee_id: number }[]) {
+      const bucket = flagsByEmployee.get(flag.employee_id);
+      if (bucket) bucket.push(flag);
+      else flagsByEmployee.set(flag.employee_id, [flag]);
+    }
+    return {
+      ...run,
+      payroll_run_lines: run.payroll_run_lines.map((line) => ({
+        ...line,
+        payroll_flags: flagsByEmployee.get(line.employee_id) ?? [],
+      })),
+    };
   }
 
   async finalizeRun(id: number, user: IJwtStaffPayload) {
-    const run = await this.prisma.payroll_runs.findUnique({ where: { id }, include: { payroll_run_lines: true } });
+    const run = await this.prisma.payroll_runs.findUnique({
+      where: { id },
+      include: {
+        payroll_run_lines: {
+          include: { employee_profiles: { select: { user_id: true } } },
+        },
+      },
+    });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
     if (run.status === PayrollRunStatus.FINALIZED) {
@@ -894,6 +1173,16 @@ export class PayrollService {
         `Cannot finalize: ${unresolvedTotal} unresolved attendance day(s) across employees on this run ` +
           `(working days with no attendance record at all). Resolve them in the staff attendance register first, ` +
           `then regenerate this run.`,
+      );
+    }
+
+    const pendingFlags = await this.prisma.payroll_flags.count({
+      where: { payroll_run_id: id, status: PayrollFlagStatus.PENDING },
+    });
+    if (pendingFlags > 0) {
+      throw new BadRequestException(
+        `Cannot finalize: ${pendingFlags} flagged instance(s) of the sandwich or consecutive-late rules ` +
+          `still need a decision (Apply or Exempt) before this run can be finalized.`,
       );
     }
 
@@ -915,6 +1204,20 @@ export class PayrollService {
       changed_by: user.username,
       note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, ${run.payroll_run_lines.length} employee line(s).`,
     });
+
+    // Test runs are throwaway/repeatable — no reason to page a test employee
+    // every time one gets finalized during testing.
+    if (!run.is_test) {
+      const title = 'Payroll finalized';
+      const body = `Your payroll for ${periodLabel} has been finalized.`;
+      for (const line of run.payroll_run_lines) {
+        const userId = line.employee_profiles.user_id;
+        if (!userId) continue;
+        void this.employeeNoticeBoard
+          .createPayrollNotice(line.employee_id, userId, title, body, id)
+          .catch((err) => this.logger.error(`Failed to send payroll-finalized notice for employee ${line.employee_id}`, err));
+      }
+    }
 
     return this.getRun(id, user);
   }
@@ -961,6 +1264,20 @@ export class PayrollService {
             status: true,
           },
         },
+        // cash_bonus_amount is deliberately never selected here — it must
+        // never reach an employee, only ever the admin panel. See
+        // SettlePayrollLineDto#cash_bonus_amount.
+        payroll_settlements: {
+          select: {
+            overtime_rate_type: true,
+            overtime_rate_amount: true,
+            overtime_minutes: true,
+            overtime_reward_amount: true,
+            net_paid: true,
+            payslip_pdf_url: true,
+            settled_at: true,
+          },
+        },
       },
       orderBy: { payroll_runs: { period_start: 'desc' } },
     });
@@ -975,6 +1292,18 @@ export class PayrollService {
       monthly_pay: Number(line.monthly_pay),
       total_deductions: Number(line.total_deductions),
       net_pay: Number(line.net_pay),
+      overtime_days: line.overtime_days,
+      settlement: line.payroll_settlements
+        ? {
+            overtime_rate_type: line.payroll_settlements.overtime_rate_type,
+            overtime_rate_amount: line.payroll_settlements.overtime_rate_amount != null ? Number(line.payroll_settlements.overtime_rate_amount) : null,
+            overtime_minutes: line.payroll_settlements.overtime_minutes,
+            overtime_reward_amount: Number(line.payroll_settlements.overtime_reward_amount),
+            net_paid: Number(line.payroll_settlements.net_paid),
+            payslip_pdf_url: line.payroll_settlements.payslip_pdf_url,
+            settled_at: line.payroll_settlements.settled_at.toISOString(),
+          }
+        : null,
     }));
   }
 
@@ -999,12 +1328,26 @@ export class PayrollService {
             campuses: { select: { id: true, campus_name: true } },
           },
         },
+        // cash_bonus_amount is deliberately never selected here — internal-only, see listMyPayrollLines above.
+        payroll_settlements: {
+          select: {
+            overtime_rate_type: true,
+            overtime_rate_amount: true,
+            overtime_minutes: true,
+            overtime_reward_amount: true,
+            net_paid: true,
+            payslip_pdf_url: true,
+            settled_at: true,
+          },
+        },
       },
     });
     if (!line) throw new NotFoundException('Payroll line not found for this period');
 
+    const { payroll_settlements, ...lineFields } = line;
+
     return {
-      ...line,
+      ...lineFields,
       monthly_pay: Number(line.monthly_pay),
       daily_rate: Number(line.daily_rate),
       per_minute_rate: Number(line.per_minute_rate),
@@ -1012,10 +1355,24 @@ export class PayrollService {
       half_day_deduction: Number(line.half_day_deduction),
       late_deduction: Number(line.late_deduction),
       break_deduction: Number(line.break_deduction),
+      sandwich_deduction: Number(line.sandwich_deduction),
+      consecutive_late_deduction: Number(line.consecutive_late_deduction),
       total_deductions: Number(line.total_deductions),
       net_pay: Number(line.net_pay),
+      overtime_days: line.overtime_days,
       disbursed_at: line.disbursed_at?.toISOString() ?? null,
       run: line.payroll_runs,
+      settlement: payroll_settlements
+        ? {
+            overtime_rate_type: payroll_settlements.overtime_rate_type,
+            overtime_rate_amount: payroll_settlements.overtime_rate_amount != null ? Number(payroll_settlements.overtime_rate_amount) : null,
+            overtime_minutes: payroll_settlements.overtime_minutes,
+            overtime_reward_amount: Number(payroll_settlements.overtime_reward_amount),
+            net_paid: Number(payroll_settlements.net_paid),
+            payslip_pdf_url: payroll_settlements.payslip_pdf_url,
+            settled_at: payroll_settlements.settled_at.toISOString(),
+          }
+        : null,
     };
   }
 
@@ -1093,11 +1450,11 @@ export class PayrollService {
     return this.getRun(runId, user);
   }
 
-  /** overtime_minutes is always the line's own persisted snapshot — never recomputed live. */
+  /** overtime_minutes/overtime_days are always the line's own persisted snapshot — never recomputed live. */
   private computeOvertimeReward(
     overtime: SettlePayrollLineDto['overtime'],
     overtimeMinutes: number,
-    scheduledMinutesPerDay: number,
+    overtimeDays: number,
   ): Prisma.Decimal {
     if (!overtime) return new Prisma.Decimal(0);
     const rate = new Prisma.Decimal(overtime.rate_amount);
@@ -1107,8 +1464,9 @@ export class PayrollService {
     if (overtime.rate_type === OvertimeRateType.PER_HOUR) {
       return rate.times(overtimeMinutes).dividedBy(60).toDecimalPlaces(2);
     }
-    const divisor = scheduledMinutesPerDay > 0 ? scheduledMinutesPerDay : 480;
-    return rate.times(overtimeMinutes).dividedBy(divisor).toDecimalPlaces(2);
+    // PER_DAY rewards the number of distinct days overtime was worked, not a
+    // fractional proration of total overtime minutes into a "day".
+    return rate.times(overtimeDays).toDecimalPlaces(2);
   }
 
   /**
@@ -1133,7 +1491,7 @@ export class PayrollService {
 
     const line = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      include: { employee_profiles: { select: { full_name: true, employee_code: true, job_title: true } } },
+      include: { employee_profiles: { select: { full_name: true, employee_code: true, job_title: true, user_id: true } } },
     });
     if (!line) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
 
@@ -1142,7 +1500,7 @@ export class PayrollService {
       throw new BadRequestException('Invalid disbursed_at');
     }
 
-    const overtimeRewardAmount = this.computeOvertimeReward(dto.overtime, line.total_overtime_minutes, line.scheduled_minutes_per_day);
+    const overtimeRewardAmount = this.computeOvertimeReward(dto.overtime, line.total_overtime_minutes, line.overtime_days);
     const cashBonusAmount = new Prisma.Decimal(dto.cash_bonus_amount ?? 0).toDecimalPlaces(2);
     const netPaid = new Prisma.Decimal(line.net_pay).plus(overtimeRewardAmount).toDecimalPlaces(2);
 
@@ -1214,6 +1572,8 @@ export class PayrollService {
           halfDayDeduction: Number(line.half_day_deduction),
           lateDeduction: Number(line.late_deduction),
           breakDeduction: Number(line.break_deduction),
+          sandwichDeduction: Number(line.sandwich_deduction),
+          consecutiveLateDeduction: Number(line.consecutive_late_deduction),
           totalDeductions: Number(line.total_deductions),
           netPay: Number(line.net_pay),
         },
@@ -1222,6 +1582,7 @@ export class PayrollService {
               rateType: dto.overtime.rate_type,
               rateAmount: dto.overtime.rate_amount,
               overtimeMinutes: line.total_overtime_minutes,
+              overtimeDays: line.overtime_days,
               rewardAmount: Number(overtimeRewardAmount),
             }
           : undefined,
@@ -1255,6 +1616,21 @@ export class PayrollService {
         .filter(Boolean)
         .join(' '),
     });
+
+    // Same rationale as finalizeRun: test runs are repeated constantly
+    // during testing and shouldn't page the shared test employees each time.
+    if (!run.is_test && line.employee_profiles.user_id) {
+      const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+      void this.employeeNoticeBoard
+        .createPayrollNotice(
+          employeeId,
+          line.employee_profiles.user_id,
+          'Salary settled',
+          `Your salary for ${periodLabel} has been settled. Please check your bank account.`,
+          runId,
+        )
+        .catch((err) => this.logger.error(`Failed to send payroll-settled notice for employee ${employeeId}`, err));
+    }
 
     return { ...updatedLine, payroll_settlements: finalSettlement };
   }

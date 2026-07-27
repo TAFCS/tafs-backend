@@ -2,6 +2,11 @@ import { IsEnum, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'cla
 import { Type } from 'class-transformer';
 import { OvertimeRateType } from '@prisma/client';
 
+export class DecidePayrollFlagDto {
+  @IsEnum(['APPLIED', 'EXEMPTED'])
+  status: 'APPLIED' | 'EXEMPTED';
+}
+
 export class DisbursePayrollLineDto {
   @IsOptional()
   @IsString()

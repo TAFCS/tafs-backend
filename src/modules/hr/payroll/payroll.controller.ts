@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpStatus, Param, ParseIntPipe, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpStatus, Param, ParseIntPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
@@ -10,7 +10,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { DecidePayrollFlagDto, DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -99,6 +99,19 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.settleLine(runId, employeeId, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll line settled and payslip generated');
+  }
+
+  @Patch(':runId/lines/:employeeId/flags/:flagId')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async decideFlag(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Param('flagId', ParseIntPipe) flagId: number,
+    @Body() dto: DecidePayrollFlagDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.decidePayrollFlag(runId, employeeId, flagId, dto.status, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll flag decision recorded');
   }
 
   @Get(':runId/lines/:employeeId/payslip')

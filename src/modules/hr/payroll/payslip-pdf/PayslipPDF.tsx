@@ -160,6 +160,8 @@ export interface PayslipPDFProps {
     halfDayDeduction: number;
     lateDeduction: number;
     breakDeduction: number;
+    sandwichDeduction: number;
+    consecutiveLateDeduction: number;
     totalDeductions: number;
     netPay: number;
   };
@@ -168,6 +170,7 @@ export interface PayslipPDFProps {
     rateType: 'PER_MINUTE' | 'PER_HOUR' | 'PER_DAY';
     rateAmount: number;
     overtimeMinutes: number;
+    overtimeDays: number;
     rewardAmount: number;
   };
   /** monthly net pay + overtime reward. Cash bonus is intentionally never a prop of this component. */
@@ -262,26 +265,38 @@ export const PayslipPDF = ({ employee, period, attendance, pay, overtime, netPai
         </View>
         {pay.absenceDeduction > 0 && (
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Absence Deduction</Text>
+            <Text style={styles.colLabel}>Absence Deduction (days marked absent or unpaid leave)</Text>
             <Text style={styles.deductionValue}>-{money(pay.absenceDeduction)}</Text>
           </View>
         )}
         {pay.halfDayDeduction > 0 && (
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Half Day Deduction</Text>
+            <Text style={styles.colLabel}>Half Day Deduction (half-day attendance)</Text>
             <Text style={styles.deductionValue}>-{money(pay.halfDayDeduction)}</Text>
           </View>
         )}
         {pay.lateDeduction > 0 && (
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Late Deduction</Text>
+            <Text style={styles.colLabel}>Late Deduction (minutes arrived after grace period)</Text>
             <Text style={styles.deductionValue}>-{money(pay.lateDeduction)}</Text>
           </View>
         )}
         {pay.breakDeduction > 0 && (
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Break Deduction</Text>
+            <Text style={styles.colLabel}>Break Deduction (time spent on breaks beyond work hours)</Text>
             <Text style={styles.deductionValue}>-{money(pay.breakDeduction)}</Text>
+          </View>
+        )}
+        {pay.sandwichDeduction > 0 && (
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>Off-Day Deduction (absent the working day before &amp; after this break)</Text>
+            <Text style={styles.deductionValue}>-{money(pay.sandwichDeduction)}</Text>
+          </View>
+        )}
+        {pay.consecutiveLateDeduction > 0 && (
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>Late Attendance Deduction (3 consecutive late days = 1 day's pay)</Text>
+            <Text style={styles.deductionValue}>-{money(pay.consecutiveLateDeduction)}</Text>
           </View>
         )}
         <View style={styles.totalRow}>
@@ -297,6 +312,12 @@ export const PayslipPDF = ({ employee, period, attendance, pay, overtime, netPai
             <Text style={styles.overtimeLabel}>Total overtime worked this period</Text>
             <Text style={styles.overtimeValue}>{formatMinutes(overtime.overtimeMinutes)}</Text>
           </View>
+          {overtime.rateType === 'PER_DAY' && (
+            <View style={styles.overtimeRow}>
+              <Text style={styles.overtimeLabel}>Days worked overtime</Text>
+              <Text style={styles.overtimeValue}>{overtime.overtimeDays}</Text>
+            </View>
+          )}
           <View style={styles.overtimeRow}>
             <Text style={styles.overtimeLabel}>Rate ({OVERTIME_RATE_LABELS[overtime.rateType] ?? overtime.rateType})</Text>
             <Text style={styles.overtimeValue}>{money(overtime.rateAmount)}</Text>
