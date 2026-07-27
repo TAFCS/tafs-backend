@@ -5,7 +5,7 @@ import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service'
 import { CalendarNotificationService } from './calendar-notification.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
-import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsArray, ArrayMinSize } from 'class-validator';
+import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsArray, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCalendarDayDto {
@@ -74,12 +74,14 @@ export class CreateBulkCalendarDayDto {
 export class CreateEmployeeCalendarDaysDto {
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(500)
   @IsInt({ each: true })
   @Type(() => Number)
   employee_ids: number[];
 
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(90)
   @IsDateString({}, { each: true })
   dates: string[];
 
@@ -230,7 +232,12 @@ export class CalendarService {
     return row.date.toISOString().slice(0, 10);
   }
 
-  async create(dto: CreateCalendarDayDto, createdBy?: string, changedBy?: string) {
+  async create(
+    dto: CreateCalendarDayDto,
+    createdBy?: string,
+    changedBy?: string,
+    options?: { skipSync?: boolean },
+  ) {
     this.validateScope(dto);
     this.validateStudentDayType(dto);
 
@@ -257,7 +264,9 @@ export class CalendarService {
       },
     });
 
-    await this.holidaySync.syncAfterCalendarChange(day.campus_id, dto.date);
+    if (!options?.skipSync) {
+      await this.holidaySync.syncAfterCalendarChange(day.campus_id, dto.date);
+    }
 
     if (day.applies_to === 'STUDENT') {
       if (day.day_type === 'HOLIDAY') {
@@ -356,6 +365,12 @@ export class CalendarService {
       errors: [],
     };
 
+    // syncAfterCalendarChange rescans the whole campus for a given date and doesn't
+    // depend on which employee triggered the change, so it's deduped to run once per
+    // (campus_id, date) pair after the loop instead of once per employee — the naive
+    // per-row version made this endpoint scale as employees × dates × campus roster size.
+    const syncPairs = new Map<string, { campusId: number; date: string }>();
+
     for (const employee of employees) {
       for (const date of uniqueDates) {
         try {
@@ -370,8 +385,10 @@ export class CalendarService {
             },
             createdBy,
             changedBy,
+            { skipSync: true },
           );
           result.created++;
+          syncPairs.set(`${employee.campus_id}:${date}`, { campusId: employee.campus_id!, date });
         } catch (err) {
           const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
           if (message.includes('same scope already exists')) {
@@ -382,6 +399,10 @@ export class CalendarService {
           }
         }
       }
+    }
+
+    for (const { campusId, date } of syncPairs.values()) {
+      await this.holidaySync.syncAfterCalendarChange(campusId, date);
     }
 
     if (result.created === 0 && result.failed > 0) {
