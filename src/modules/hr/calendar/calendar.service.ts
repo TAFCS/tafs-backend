@@ -136,11 +136,15 @@ export class CalendarService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async findAll(campusId: number, appliesTo?: string) {
+  async findAll(campusId?: number, appliesTo?: string, employeeId?: number) {
+    if (campusId == null && employeeId == null) {
+      throw new BadRequestException('campusId or employeeId is required');
+    }
     return this.prisma.academic_calendar_days.findMany({
       where: {
-        campus_id: campusId,
+        ...(campusId != null ? { campus_id: campusId } : {}),
         ...(appliesTo ? { applies_to: appliesTo } : {}),
+        ...(employeeId != null ? { employee_id: employeeId } : {}),
       },
       include: {
         classes: { select: { id: true, description: true, class_code: true } },

@@ -44,8 +44,16 @@ export class CalendarController {
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Calendar'))
-  async findAll(@Query('campusId') campusId: string, @Query('appliesTo') appliesTo?: string) {
-    const data = await this.calendarService.findAll(parseInt(campusId, 10), appliesTo);
+  async findAll(
+    @Query('campusId') campusId?: string,
+    @Query('appliesTo') appliesTo?: string,
+    @Query('employeeId') employeeId?: string,
+  ) {
+    const data = await this.calendarService.findAll(
+      campusId ? parseInt(campusId, 10) : undefined,
+      appliesTo,
+      employeeId ? parseInt(employeeId, 10) : undefined,
+    );
     return createApiResponse(data, HttpStatus.OK, 'Calendar days retrieved successfully');
   }
 
