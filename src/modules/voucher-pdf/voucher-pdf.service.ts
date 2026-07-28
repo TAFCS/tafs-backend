@@ -4,6 +4,23 @@ import { PDFDocument } from 'pdf-lib';
 import * as React from 'react';
 import { FeeChallanPDF } from './FeeChallanPDF';
 
+// Renders "DD-MM-YYYY hh:mm AM/PM" in Pakistan Standard Time, independent of
+// the host machine's system timezone (which may be UTC in production).
+function formatPktTimestamp(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Karachi',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+    }).formatToParts(date);
+
+    const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
+}
+
 export interface VoucherPdfData {
     voucherNumber: string;
     student: {
@@ -110,7 +127,9 @@ export class VoucherPdfService {
                 voucherNumber: data.voucherNumber,
                 generatedBy: {
                     fullName: data.generatedByName || 'TAFSync System',
-                    timestampStr: new Date().toLocaleString()
+                    // Server may run in UTC; always render in Pakistan Standard Time
+                    // regardless of host timezone, in explicit DD-MM-YYYY order.
+                    timestampStr: formatPktTimestamp(new Date())
                 },
                 bank: {
                     name: data.bank.name,
