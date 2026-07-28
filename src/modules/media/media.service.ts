@@ -104,7 +104,7 @@ export class MediaService {
     file: Express.Multer.File,
     slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile',
   ) {
-    const employee = await this.prisma.employees.findUnique({ where: { id } });
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
     if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
 
     const extension = file.originalname.split('.').pop() || 'jpg';
@@ -121,7 +121,7 @@ export class MediaService {
 
     const targetColumn = columnMap[slot] || 'photo_url';
 
-    await this.prisma.employees.update({
+    await this.prisma.employee_profiles.update({
       where: { id },
       data: { [targetColumn]: url },
     });
@@ -183,7 +183,7 @@ export class MediaService {
   }
 
   async deleteEmployeePhoto(id: number, slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile') {
-    const employee = await this.prisma.employees.findUnique({ where: { id } });
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
     if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
 
     const columnMap: Record<string, string> = {
@@ -194,7 +194,7 @@ export class MediaService {
     };
     const targetColumn = columnMap[slot] || 'photo_url';
 
-    await this.prisma.employees.update({
+    await this.prisma.employee_profiles.update({
       where: { id },
       data: { [targetColumn]: null },
     });
