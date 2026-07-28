@@ -206,4 +206,12 @@ export class UpdateStudentDto {
   @IsString()
   @MaxLength(15)
   mother_cnic?: string;
+
+  @IsOptional()
+  @IsString()
+  photograph_url?: string | null;
+
+  @IsOptional()
+  @IsString()
+  photo_blue_bg_url?: string | null;
 }

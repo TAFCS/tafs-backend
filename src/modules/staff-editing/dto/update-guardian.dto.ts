@@ -157,7 +157,7 @@ export class UpdateGuardianDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
-  photo_url?: string;
+  photo_url?: string | null;
 
   @IsOptional()
   additional_phones?: any[];
