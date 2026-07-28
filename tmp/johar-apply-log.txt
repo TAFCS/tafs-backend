@@ -1,0 +1,483 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm.
+Mode: APPLY | campus: Johar (1) | class filter: ALL
+XLSX: /Users/air/Downloads/STUDENT PROFILE 2026-2027 JULY 25.xlsx
+Classes: PN=1, KG=3, NUR=2, JRI=4, JRII=5, JRIII=6, JRIV=7, JRV=8, SRI=9, SRII=10, SRIII=11, OI=12, OII=13, OIII=14, AS=20, A2=21, VI=15, VII=16, VIII=17, IX=18, X=19
+Sections: C=3, D=4, B=2, A=1
+Parsed sheets: 38 | students: 983
+Skipped sheets: EX O-III 2025-2026  | EX O-III  2024-2025 | EX- X A  | EX-X B  | QUIT STUDENTS
+
+========== JOHAR DRY-RUN / RESULT SUMMARY ==========
+
+Pre-Nursery A (PN A) → section A  n=8
+  would_set=0  already=3  class_mismatch=2  missing=0  applied=3  failed=0
+    MISMATCH CC 7867 sheet=MUHAMMAD AAHIL RIZWAN (PN) db=MUHAMMAD AAHIL RIZWAN (NUR/B)
+    MISMATCH CC 7894 sheet=NOOR FATIMA (PN) db=NOOR FATIMA (NUR/A)
+    SECTION CC 7904 MOHAMMAD ARHAM SHOAIB B → A [applied]
+    SECTION CC 7949 MUSTAFA AHMED SIDDIQUI B → A [applied]
+    SECTION CC 7978 HUMNA JUNAID B → A [applied]
+
+Nursery A (NUR A) → section A  n=20
+  would_set=0  already=10  class_mismatch=1  missing=0  applied=9  failed=0
+    MISMATCH CC 7883 sheet=ZYMAL ARSALAN (NUR) db=ZYMAL ARSLAN (KG/C)
+    SECTION CC 7640 MUNTAHA SOHAIL B → A [applied]
+    SECTION CC 7673 HAADIYAH UZAIR KHAN B → A [applied]
+    SECTION CC 7783 MURTAZA MUZAMIL B → A [applied]
+    SECTION CC 7837 MUHAMMAD ZAIN ALI JAMALI B → A [applied]
+    SECTION CC 7890 SALAR ASIF KHAN B → A [applied]
+    SECTION CC 7915 SALAAR AZEEM B → A [applied]
+    SECTION CC 7966 MUHAMMAD ABDUL ALI B → A [applied]
+    SECTION CC 7990 ANAYA ZEESHAN B → A [applied]
+    SECTION CC 7997 MUHAMMAD ORHAAN C → A [applied]
+
+Nursery B (NUR B) → section B  n=18
+  would_set=0  already=6  class_mismatch=0  missing=0  applied=11  failed=1
+    SECTION CC 7654 SYED MUHAMMAD ALI AKBAR A → B [applied]
+    SECTION CC 7716 SHAHZAIN A → B [applied]
+    SECTION CC 7731 USMAN KHALID A → B [applied]
+    SECTION CC 7830 SYEDA UME-WAJEEHA A → B [applied]
+    SECTION CC 7856 TEHREEM FATIMA A → B [applied]
+    SECTION CC 7886 MUHAMMAD ABDULLAH A → B [applied]
+    SECTION CC 7960 MUHAMMAD HUSSAIN C → B [applied]
+    SECTION CC 7962 MUHAMMAD IZHAAN AHMED A → B [applied]
+    SECTION CC 7993 MUHAMMAD UMAR A → B [applied]
+    SECTION CC 7999 MAHATIR MOHAMMAD C → B [applied]
+    SECTION CC 8005 GHULAM MUSTAFA FARAZ C → B [applied]
+
+KG A (KG A) → section A  n=18
+  would_set=0  already=15  class_mismatch=2  missing=0  applied=1  failed=0
+    MISMATCH CC 7829 sheet=SYEDA UME-ABEEHA (KG) db=SYEDA UME-ABEEHA (NUR/A)
+    MISMATCH CC 7975 sheet=HAREEM FAIZAN (KG) db=HAREEM FAIZAN (JRI/B)
+    SECTION CC 7961 MUHAMMAD HASSAN B → A [applied]
+
+KG B (KG B) → section B  n=19
+  would_set=0  already=19  class_mismatch=0  missing=0  applied=0  failed=0
+
+KG C (KG C) → section C  n=18
+  would_set=0  already=15  class_mismatch=1  missing=0  applied=2  failed=0
+    MISMATCH CC 7064 sheet=SYED BAQIR ABBAS (KG) db=SYED BAQIR ABBAS (JRI/C)
+    SECTION CC 7987 MUHAMMAD AFFAN B → C [applied]
+    SECTION CC 7995 MUHAMMAD JAFFER B → C [applied]
+
+JR. I A (JR. I A) → section A  n=22
+  would_set=0  already=9  class_mismatch=0  missing=0  applied=13  failed=0
+    SECTION CC 6961 ZARSHAL DANISH C → A [applied]
+    SECTION CC 7149 MUHAMMAD AZAN ARSALAN MINHAS C → A [applied]
+    SECTION CC 7217 ASMARA KHAN C → A [applied]
+    SECTION CC 7235 MUHAMMAD ZAYAN C → A [applied]
+    SECTION CC 7319 AYREEN B → A [applied]
+    SECTION CC 7323 SYED MUHAMMAD SAIM HUSSAIN ZAIDI B → A [applied]
+    SECTION CC 7355 AYZAL MANSOOR C → A [applied]
+    SECTION CC 7422 MUHAMMAD IZYAN MALIK B → A [applied]
+    SECTION CC 7443 ABDUL AHAD C → A [applied]
+    SECTION CC 7809 AYEZA SHARYAR C → A [applied]
+    SECTION CC 7826 SYED MUHAMMAD SHAHEER B → A [applied]
+    SECTION CC 7874 SYED MUHAMMAD ZAYAN AHMED B → A [applied]
+    SECTION CC 7903 HOORAIN SHOAIB B → A [applied]
+
+JR. I B (JR. I B) → section B  n=22
+  would_set=0  already=7  class_mismatch=0  missing=0  applied=15  failed=0
+    SECTION CC 7002 AYESHA FARHAN C → B [applied]
+    SECTION CC 7015 SAYEEDA ZEHRA MIRZA A → B [applied]
+    SECTION CC 7018 SYED RAYAN AHMED SAQUIB A → B [applied]
+    SECTION CC 7094 MUHAMMAD ASHTAR MIRZA A → B [applied]
+    SECTION CC 7373 MUHAMMAD KHAN C → B [applied]
+    SECTION CC 7385 MUHAMMAD MEKAEEL A → B [applied]
+    SECTION CC 7406 MUHAMMAD HASSAN C → B [applied]
+    SECTION CC 7548 AMAL ZAHRA C → B [applied]
+    SECTION CC 7597 SYED MOOSA ALI A → B [applied]
+    SECTION CC 7613 ABDUL QAVI C → B [applied]
+    SECTION CC 7655 SYEDA FATIMA KUBRA ZAIDI A → B [applied]
+    SECTION CC 7782 WANIYA KHAN A → B [applied]
+    SECTION CC 7751 AAIMA SHAFI LASHARI C → B [applied]
+    SECTION CC 7898 MUHAMMAD IBRAHIIM FARIDI C → B [applied]
+    SECTION CC 7931 MUHAMMAD HARIS QAZI C → B [applied]
+
+JR. I C (JR. I C) → section C  n=21
+  would_set=0  already=7  class_mismatch=0  missing=0  applied=14  failed=0
+    SECTION CC 6628 USMAN IRFAN A → C [applied]
+    SECTION CC 7016 MUHAMMAD MATEE A → C [applied]
+    SECTION CC 7165 MUHAMMAD AZFAR SIDDIQUI A → C [applied]
+    SECTION CC 7342 ZAVIYAR SHAH A → C [applied]
+    SECTION CC 7351 SYEDA IRHA NAQVI A → C [applied]
+    SECTION CC 7359 ZUNAIRAH HUSSAIN B → C [applied]
+    SECTION CC 7389 AIZA BAIG B → C [applied]
+    SECTION CC 7421 HAREEM FATIMA A → C [applied]
+    SECTION CC 7619 VIRAJ KUMAR A → C [applied]
+    SECTION CC 7682 MUHAMMAD USAID A → C [applied]
+    SECTION CC 7749 EMAN A → C [applied]
+    SECTION CC 7822 MUHAMMAD MOOSA SAQIB B → C [applied]
+    SECTION CC 7868 AHMED RAZA B → C [applied]
+    SECTION CC 7920 MUHAMMAD ARHAM KHAN B → C [applied]
+
+JR. I D (JR. I D) → section D  n=20
+  would_set=0  already=0  class_mismatch=1  missing=0  applied=19  failed=0
+    MISMATCH CC 7950 sheet=MALAIKA SIDDIQUI (JRI) db=MALAIKA SIDDIQUI (KG/C)
+    SECTION CC 7006 MUHAMMAD MIR HADI C → D [applied]
+    SECTION CC 7083 ARHAAN HASSAN B → D [applied]
+    SECTION CC 7134 HUSSAIN AHMED B → D [applied]
+    SECTION CC 7135 HASSAN AHMED A → D [applied]
+    SECTION CC 7156 MUHAMMAD SHAYAN SHAIKH A → D [applied]
+    SECTION CC 7177 FABIHA NAVEED JABBAR C → D [applied]
+    SECTION CC 7201 YAHYA AKBAR A → D [applied]
+    SECTION CC 7233 ABEERA JAVED B → D [applied]
+    SECTION CC 7268 SABEEN SAEED PIRZADA B → D [applied]
+    SECTION CC 7300 SYEDA SAKINA ZEHRA B → D [applied]
+    SECTION CC 7301 MUHAMMAD MAIZ KHAN C → D [applied]
+    SECTION CC 7326 ANAYA WAQAR C → D [applied]
+    SECTION CC 7374 HAREEM MALIK B → D [applied]
+    SECTION CC 7387 MUHAMMAD ASHAR C → D [applied]
+    SECTION CC 7445 RAYYAN ALI B → D [applied]
+    SECTION CC 7446 MUHAMMAD ALI B → D [applied]
+    SECTION CC 7458 SYED ZULFIQAR ALI C → D [applied]
+    SECTION CC 7534 SIMRA SHAKIR B → D [applied]
+    SECTION CC 7857 ANWER ALI A → D [applied]
+
+JR. II A (JR. II A) → section A  n=17
+  would_set=0  already=8  class_mismatch=0  missing=0  applied=9  failed=0
+    SECTION CC 6743 MUHAMMAD AHMED B → A [applied]
+    SECTION CC 6960 MUHAMMAD ZAID C → A [applied]
+    SECTION CC 7113 KABEER KUMAR B → A [applied]
+    SECTION CC 7124 MIR ZOHAIR AHMED C → A [applied]
+    SECTION CC 7585 MUHAMMAD YOUSUF KASHANI C → A [applied]
+    SECTION CC 7621 MUHAMMAD ARHAM C → A [applied]
+    SECTION CC 7677 SYED MUHAMMAD ABUZAR RIZVI B → A [applied]
+    SECTION CC 7972 MUHAMMAD MUSTAFA B → A [applied]
+    SECTION CC 7989 ZIMAL SAMI C → A [applied]
+
+JR. II B (JR. II B) → section B  n=16
+  would_set=0  already=7  class_mismatch=1  missing=0  applied=8  failed=0
+    MISMATCH CC 7882 sheet=LUBABA ARSALAN (JRII) db=LUBABA ARSLAN (JRIII/A)
+    SECTION CC 6826 ANABIA ABDUL AZIZ A → B [applied]
+    SECTION CC 6902 MARYAM ATIF A → B [applied]
+    SECTION CC 6957 ESHAAL HUSSAIN A → B [applied]
+    SECTION CC 6972 AQS-E-ZAINAB A → B [applied]
+    SECTION CC 7112 SAHAB HUSSAIN C → B [applied]
+    SECTION CC 7185 MALEEHA KASHIF A → B [applied]
+    SECTION CC 7283 MARYAM SOHAIL A → B [applied]
+    SECTION CC 7678 MUHAMMAD ZOHAAN KHAN C → B [applied]
+
+JR. II C (JR. II C) → section C  n=17
+  would_set=0  already=6  class_mismatch=0  missing=0  applied=11  failed=0
+    SECTION CC 6688 MUHAMMAD MOOSA B → C [applied]
+    SECTION CC 6908 AJWA SAMAD A → C [applied]
+    SECTION CC 6909 HARSHEETA A → C [applied]
+    SECTION CC 7059 ALI ABBAS B → C [applied]
+    SECTION CC 7084 ABIHA AHAD SHAIKH A → C [applied]
+    SECTION CC 7090 HOORAIN ZEHRA MANGI A → C [applied]
+    SECTION CC 7190 HANIYA AYAZ A → C [applied]
+    SECTION CC 7292 HAFSA AZAM A → C [applied]
+    SECTION CC 7354 AZHAAN MANSOOR B → C [applied]
+    SECTION CC 7466 ANNAYA A → C [applied]
+    SECTION CC 7667 MIRZA AHMAD ALI B → C [applied]
+
+JR. II D (JR. II D) → section D  n=15
+  would_set=0  already=0  class_mismatch=1  missing=0  applied=14  failed=0
+    MISMATCH CC 7115 sheet=MUHAMMAD SARIM WASEEM (JRII) db=MUHAMMAD AHMED ANSARI (NULL/A)
+    SECTION CC 6738 SAQLAIN ZAHID HUSSAIN B → D [applied]
+    SECTION CC 6924 AYAN SHAMOIL C → D [applied]
+    SECTION CC 6942 DAANEEN ZEHRA A → D [applied]
+    SECTION CC 7027 ANABIA FARHAN A → D [applied]
+    SECTION CC 7062 MUHAMMAD SUFYAN SHAIKH B → D [applied]
+    SECTION CC 7102 ANABIA ATIF A → D [applied]
+    SECTION CC 7127 KAIRA KUMARI A → D [applied]
+    SECTION CC 7395 HANIYA ABBAS A → D [applied]
+    SECTION CC 7437 MUHAMMAD MOOSA B → D [applied]
+    SECTION CC 7453 MUHAMMAD RAYYAN ALI C → D [applied]
+    SECTION CC 7592 MUHAMMAD MUSTAFA C → D [applied]
+    SECTION CC 7629 SYEDA IRHA A → D [applied]
+    SECTION CC 7823 MUHAMMAD IBRAHIM SAQIB C → D [applied]
+    SECTION CC 7919 HAREEM ZUHAIB B → D [applied]
+
+JR. III A (JR. III A) → section A  n=23
+  would_set=0  already=10  class_mismatch=0  missing=0  applied=13  failed=0
+    SECTION CC 6399 MUHAMMAD ABYAN B → A [applied]
+    SECTION CC 6462 HIBAAN UMAR B → A [applied]
+    SECTION CC 6514 ZAVIYAR ALI KHAN DURRANI B → A [applied]
+    SECTION CC 6528 SHAMEER HAIDER B → A [applied]
+    SECTION CC 6695 MUHAMMAD ARHAM C → A [applied]
+    SECTION CC 6766 USMAN BIN AFFAN B → A [applied]
+    SECTION CC 6799 KIRSH KUMAR B → A [applied]
+    SECTION CC 6821 ASAD FAISAL KHAN C → A [applied]
+    SECTION CC 6835 MUHAMMAD IBRAHIM KHAN C → A [applied]
+    SECTION CC 7245 MUHAMMAD HASSAAN B → A [applied]
+    SECTION CC 7318 MUHAMMAD SIBTAIN B → A [applied]
+    SECTION CC 7872 AYAN ALI B → A [applied]
+    SECTION CC 7937 AUN HAIDER ABRO C → A [applied]
+
+JR. III B (JR. III B) → section B  n=22
+  would_set=0  already=6  class_mismatch=0  missing=0  applied=16  failed=0
+    SECTION CC 6220 MARYUM IRFAN A → B [applied]
+    SECTION CC 6377 MURTAZA RASOOL C → B [applied]
+    SECTION CC 6397 IBRAHIM AHMED C → B [applied]
+    SECTION CC 6536 FABIHA ASIM A → B [applied]
+    SECTION CC 6671 BAREERAH FAHAD A → B [applied]
+    SECTION CC 6741 FATIMA NOMAN A → B [applied]
+    SECTION CC 6816 INAAYA IKRAM A → B [applied]
+    SECTION CC 6841 HOORAIN HAMMAD A → B [applied]
+    SECTION CC 6928 MUHAMMAD HUSNAIN C → B [applied]
+    SECTION CC 7026 ABDUL HADI FARHAN C → B [applied]
+    SECTION CC 7132 ZUWAINAH HAMZA A → B [applied]
+    SECTION CC 7348 AGHA MUHAMMAD YAHYA KHAN C → B [applied]
+    SECTION CC 7658 SARA UMAR CHOUDHARY A → B [applied]
+    SECTION CC 7892 MUHAMMAD MUSTAFA C → B [applied]
+    SECTION CC 7930 ESHAL FATIMA QAZI C → B [applied]
+    SECTION CC 7992 MUHAMMAD ALIYAN C → B [applied]
+
+JR. III C (JR. III C) → section C  n=22
+  would_set=0  already=7  class_mismatch=0  missing=0  applied=15  failed=0
+    SECTION CC 6543 AYESHA A → C [applied]
+    SECTION CC 6653 MOHIB-UR-REHMAN QURESHI B → C [applied]
+    SECTION CC 6730 MUHAMMAD HADI YOUSUF B → C [applied]
+    SECTION CC 6756 AMMARAH IMRAN BAIG A → C [applied]
+    SECTION CC 6704 KHADIJA KHURRAM A → C [applied]
+    SECTION CC 6779 MUHAMMAD MUSTAFA KATH B → C [applied]
+    SECTION CC 6785 MUHAMMAD ISMAIL USMAN B → C [applied]
+    SECTION CC 6788 AMNA BAIG A → C [applied]
+    SECTION CC 7120 FATIMA SAJJAD A → C [applied]
+    SECTION CC 7129 MUHAMMAD JUNAID B → C [applied]
+    SECTION CC 7358 BAREERAH HUSSAIN A → C [applied]
+    SECTION CC 7611 MINSA ABDUL QADIR A → C [applied]
+    SECTION CC 7722 ASGHAR ALI B → C [applied]
+    SECTION CC 7723 FIZZA ALI A → C [applied]
+    SECTION CC 7734 KHADIJAH SULEMAN A → C [applied]
+
+JR. IV A (JR. IV A) → section A  n=23
+  would_set=0  already=9  class_mismatch=1  missing=0  applied=13  failed=0
+    MISMATCH CC 7873 sheet=SYED ARHAM (JRIV) db=SYED ARHAM (JRV/C)
+    SECTION CC 6344 SAJAWAL TARIQ C → A [applied]
+    SECTION CC 6365 MUHAMMAD MUZZAMMIL AHMED C → A [applied]
+    SECTION CC 6593 UZAIR AHMED SHAIKH B → A [applied]
+    SECTION CC 6607 MUHAMMAD UMAR B → A [applied]
+    SECTION CC 6611 MEHMED MUSHTAQ B → A [applied]
+    SECTION CC 6778 SYED RAFAY RASHID C → A [applied]
+    SECTION CC 6889 JAI NEEL C → A [applied]
+    SECTION CC 7236 MUHAMMAD ARIB WAQAS B → A [applied]
+    SECTION CC 7259 HADI MALIK B → A [applied]
+    SECTION CC 7270 MUHAMMAD HASNAIN SIDDIQUI C → A [applied]
+    SECTION CC 7299 SYED HASSAN ALI C → A [applied]
+    SECTION CC 7556 MUHAMMAD ZAYYAN ALI C → A [applied]
+    SECTION CC 7618 NAKLESH KUMAR B → A [applied]
+
+JR. IV B (JR. IV B) → section B  n=24
+  would_set=0  already=6  class_mismatch=1  missing=0  applied=17  failed=0
+    MISMATCH CC 7934 sheet=SYED MUJTABA ALI (JRIV) db=SYED MUJTABA ALI (JRV/B)
+    SECTION CC 6151 MUHAMMAD RAZA C → B [applied]
+    SECTION CC 6287 MUHAMMAD ASKARI JAWWAD C → B [applied]
+    SECTION CC 6366 SIDRATUL MUNTAHA A → B [applied]
+    SECTION CC 6367 HORAIN QASIM A → B [applied]
+    SECTION CC 6449 AISHA RAHEEL A → B [applied]
+    SECTION CC 6512 SYED ZAYYAN FASIH C → B [applied]
+    SECTION CC 6626 MANHA BINTE HARIS A → B [applied]
+    SECTION CC 6679 UMAIMA FATIMA A → B [applied]
+    SECTION CC 6825 ABRISH ABDUL AZIZ A → B [applied]
+    SECTION CC 7034 MANHA FATIMA A → B [applied]
+    SECTION CC 7078 SHAHZAIN ALI MEMON C → B [applied]
+    SECTION CC 7106 KANIA KHAN A → B [applied]
+    SECTION CC 7360 MUHAMMAD ROHAAN C → B [applied]
+    SECTION CC 7586 ABDUL HAMEED KASHANI C → B [applied]
+    SECTION CC 7684 AMNA FATIMA A → B [applied]
+    SECTION CC 7800 RIDA FATIMA A → B [applied]
+    SECTION CC 7905 ZAINAB RAZA C → B [applied]
+
+JR. IV C (JR. IV C) → section C  n=24
+  would_set=0  already=5  class_mismatch=0  missing=0  applied=19  failed=0
+    SECTION CC 6693 SYED MAAZ DANISH B → C [applied]
+    SECTION CC 6767 MUHAMMAD MEESUM B → C [applied]
+    SECTION CC 6786 MUHAMMAD SULEMAN USMAN B → C [applied]
+    SECTION CC 6852 MUHAMMAD MAHI B → C [applied]
+    SECTION CC 6973 MOHAMMAD QASIM B → C [applied]
+    SECTION CC 7021 SYED HASHIR AHMED B → C [applied]
+    SECTION CC 7575 MUHAMMAD AZAN HUSSAIN B → C [applied]
+    SECTION CC 7638 SYED ASJAD AHSAN B → C [applied]
+    SECTION CC 6323 HANIYA MUNAWAR A → C [applied]
+    SECTION CC 6513 BIBI AISHA A → C [applied]
+    SECTION CC 6682 MANAL FATIMA A → C [applied]
+    SECTION CC 6680 MANHA FATIMA A → C [applied]
+    SECTION CC 7028 BISHRA SAKINA A → C [applied]
+    SECTION CC 7175 HOORAIN FATIMA A → C [applied]
+    SECTION CC 7327 WANIYA WAQAR A → C [applied]
+    SECTION CC 7633 ZAINAB GHANI A → C [applied]
+    SECTION CC 7651 AISHA YASIR WAHAB A → C [applied]
+    SECTION CC 7880 ALISHA A → C [applied]
+    SECTION CC 7935 ALISHBA RASHID ALI B → C [applied]
+
+JR. V A (JR.V A) → section A  n=27
+  would_set=0  already=9  class_mismatch=0  missing=0  applied=18  failed=0
+    SECTION CC 5626 QAZI MUHAMMAD BASEERUDDIN C → A [applied]
+    SECTION CC 5657 ABDULLAH IRFAN B → A [applied]
+    SECTION CC 5673 SYED NUFAIL ALI NAQVI C → A [applied]
+    SECTION CC 5783 ISHAQ-UR-REHMAN B → A [applied]
+    SECTION CC 5921 SYED ABDULLAH AHMER C → A [applied]
+    SECTION CC 5927 MUHAMMAD HASSAN ALI C → A [applied]
+    SECTION CC 6223 SYED ABAN ALI C → A [applied]
+    SECTION CC 6378 MUHIBULLAH RASOOL B → A [applied]
+    SECTION CC 6774 SAIFULLAH MUNIR B → A [applied]
+    SECTION CC 6888 KUNAL KUMAR C → A [applied]
+    SECTION CC 7589 MUHAMMAD ALIYAAN FAROOQI B → A [applied]
+    SECTION CC 7662 ABDUL AZIZ B → A [applied]
+    SECTION CC 7755 MUSTAFA AHMED KHAN C → A [applied]
+    SECTION CC 7869 AZHAR ALI B → A [applied]
+    SECTION CC 7927 NABILA MANZOOR C → A [applied]
+    SECTION CC 7943 MUHAMMAD HANFIYA ABRO B → A [applied]
+    SECTION CC 7964 MUHAMMED IBRAHIM B → A [applied]
+    SECTION CC 8014 ANSHARAH ARSHAD D → A [applied]
+
+JR. V B (JR. V B) → section B  n=26
+  would_set=0  already=12  class_mismatch=0  missing=0  applied=14  failed=0
+    SECTION CC 5780 NABIHA BATOOL A → B [applied]
+    SECTION CC 5275 MOHAMMAD SUDAIS KHAN C → B [applied]
+    SECTION CC 5863 NOOR FATIMA A → B [applied]
+    SECTION CC 5928 MUHAMMAD HIBAAN C → B [applied]
+    SECTION CC 6087 MUHAMMAD HUNAID -UL- HAQUE C → B [applied]
+    SECTION CC 6222 ANNAYA AHMED A → B [applied]
+    SECTION CC 6557 SHAJIA ALI A → B [applied]
+    SECTION CC 6606 ANUM REHAN A → B [applied]
+    SECTION CC 6681 MUHAMMAD AABAN C → B [applied]
+    SECTION CC 6700 MARIYAM WASIF A → B [applied]
+    SECTION CC 7014 MISHFA SHOAIB A → B [applied]
+    SECTION CC 7576 DUA ZAID A → B [applied]
+    SECTION CC 7685 MINAHIL FATIMA A → B [applied]
+    SECTION CC 7850 SYEDA SOHA BATOOL A → B [applied]
+
+JR. V C (JR. V C) → section C  n=26
+  would_set=0  already=12  class_mismatch=0  missing=0  applied=14  failed=0
+    SECTION CC 6128 MOHAMMAD ASADULLAH FARHAN B → C [applied]
+    SECTION CC 6130 ANABIA FAIZAN MINHAS A → C [applied]
+    SECTION CC 6136 UMAIMA UZAIR KHAN A → C [applied]
+    SECTION CC 6343 FATIMA TARIQ A → C [applied]
+    SECTION CC 6398 SYEDA SANI ZEHRA A → C [applied]
+    SECTION CC 6500 MALIK MUHAMMAD HASAN TALIB B → C [applied]
+    SECTION CC 6529 ABDULLAH B → C [applied]
+    SECTION CC 6687 IBRAHIM AKBAR B → C [applied]
+    SECTION CC 7099 HAYA FAROOQ A → C [applied]
+    SECTION CC 7130 REEYA KUMARI A → C [applied]
+    SECTION CC 7402 MARYAM SAMAD A → C [applied]
+    SECTION CC 7672 HIBA AHMED A → C [applied]
+    SECTION CC 7714 SYED SHAYAAN ALI B → C [applied]
+    SECTION CC 7938 ABDULLAH HAIDER ABRO B → C [applied]
+
+SR. I A (SR. I A) → section A  n=35
+  would_set=0  already=9  class_mismatch=2  missing=0  applied=24  failed=0
+    MISMATCH CC 6532 sheet=MUHAMMAD MOIZ ABRO (SRI) db=MUHAMMAD MOIZ ABRO (JRV/C)
+    MISMATCH CC 7976 sheet=ABDULLAH CHISHTI (SRI) db=ABDULLAH CHISHTI (SRII/B)
+    (24 section updates — see diff workbook)
+
+SR. I B (SR. I B) → section B  n=36
+  would_set=0  already=6  class_mismatch=1  missing=0  applied=29  failed=0
+    MISMATCH CC 5382 sheet=AIZAH IMRAN (SRI) db=AIZAH IMRAN (VII/A)
+    (29 section updates — see diff workbook)
+
+SR. I C (SR. I C) → section C  n=35
+  would_set=0  already=9  class_mismatch=0  missing=0  applied=26  failed=0
+    (26 section updates — see diff workbook)
+
+SR. II A (SR. II A) → section A  n=33
+  would_set=0  already=14  class_mismatch=0  missing=0  applied=19  failed=0
+    SECTION CC 4437 OMAIS SHAH B → A [applied]
+    SECTION CC 4577 RAYYAN AHMED HAYAT B → A [applied]
+    SECTION CC 4855 SYED MUHAMMAD HUYZAL RASHID C → A [applied]
+    SECTION CC 5059 MANEESH KUMAR KIRPLANI C → A [applied]
+    SECTION CC 5309 SYED ABDUL NAFAY SHAH C → A [applied]
+    SECTION CC 5520 MUHAMMAD AHSAN HASHMI C → A [applied]
+    SECTION CC 6113 MUSTAFA HASAN KHAN C → A [applied]
+    SECTION CC 6139 MUHAMMAD HAMZA B → A [applied]
+    SECTION CC 6141 MUHAMMAD ALI B → A [applied]
+    SECTION CC 6353 MUHAMMAD AYAN B → A [applied]
+    SECTION CC 7244 MUHAMMAD MEKAIL B → A [applied]
+    SECTION CC 7255 JEWAN HUSSAIN MESAM C → A [applied]
+    SECTION CC 7275 MUHAMMAD SOHAIB ABID B → A [applied]
+    SECTION CC 7308 MUHAMMAD ABDUL HADI B → A [applied]
+    SECTION CC 7371 ATTA-UR-REHMAN B → A [applied]
+    SECTION CC 7593 ZAIN-UL-ABIDEEN C → A [applied]
+    SECTION CC 7680 SAMEER ZAMAN C → A [applied]
+    SECTION CC 7789 MUHAMMAD OMAR AASIM B → A [applied]
+    SECTION CC 7932 NADIR ALI C → A [applied]
+
+SR. II B (SR. II B) → section B  n=33
+  would_set=0  already=9  class_mismatch=0  missing=0  applied=24  failed=0
+    (24 section updates — see diff workbook)
+
+SR. III A (SR. III A) → section A  n=34
+  would_set=0  already=12  class_mismatch=0  missing=0  applied=22  failed=0
+    (22 section updates — see diff workbook)
+
+SR. III B (SR. III B) → section B  n=33
+  would_set=0  already=12  class_mismatch=0  missing=1  applied=20  failed=0
+    MISSING CC 3003 SHEHZAD
+    SECTION CC 4575 ZENIA QASIM A → B [applied]
+    SECTION CC 4587 ZAHRA WASEEM A → B [applied]
+    SECTION CC 4608 MUHAMMAD AYAAN ALI C → B [applied]
+    SECTION CC 4607 ABDUL MUQEEM C → B [applied]
+    SECTION CC 4848 AQSA ABDUL MALIK A → B [applied]
+    SECTION CC 4971 SYED ARIZ C → B [applied]
+    SECTION CC 5010 MUHAMMAD AYAAN BABAR C → B [applied]
+    SECTION CC 5024 MUHAMMAD HAMIM MIRZA C → B [applied]
+    SECTION CC 5543 HAFSA SOOMRO A → B [applied]
+    SECTION CC 5672 SYED AALIYAN ALI NAQVI C → B [applied]
+    SECTION CC 5862 WARDA BINT SAMIR A → B [applied]
+    SECTION CC 6744 RIJA ZAIDI A → B [applied]
+    SECTION CC 6879 MUHAMMAD QASIM SOOMRO C → B [applied]
+    SECTION CC 7104 GHULAM MUJTABA SHAIKH C → B [applied]
+    SECTION CC 7180 JAVERIA MUSHAHID A → B [applied]
+    SECTION CC 7294 ZAINYA KHAN A → B [applied]
+    SECTION CC 7339 AMEERAH IMRAN A → B [applied]
+    SECTION CC 7741 SYEDA ALIZA BATOOL A → B [applied]
+    SECTION CC 7768 SYED MAHAD HUSSAIN C → B [applied]
+    SECTION CC 8015 MUHAMMAD SHAHRAM ARSHAD C → B [applied]
+
+O-I A (O-I A ENG) → section A  n=45
+  would_set=0  already=14  class_mismatch=1  missing=0  applied=30  failed=0
+    MISMATCH CC 5752 sheet=FILZA (OI) db=FILZA (SRIII/A)
+    (30 section updates — see diff workbook)
+
+O-I B (O-I B BIO & COMM) → section B  n=25
+  would_set=0  already=0  class_mismatch=1  missing=0  applied=24  failed=0
+    MISMATCH CC 7768 sheet=MUHAMMAD ALI AASIM (OI) db=SYED MAHAD HUSSAIN (SRIII/C)
+    (24 section updates — see diff workbook)
+
+O-II A (O-II) → section A  n=51
+  would_set=0  already=51  class_mismatch=0  missing=0  applied=0  failed=0
+
+O-III A (O-III) → section A  n=44
+  would_set=0  already=44  class_mismatch=0  missing=0  applied=0  failed=0
+
+VII A (VII) → section A  n=18
+  would_set=0  already=16  class_mismatch=1  missing=0  applied=1  failed=0
+    MISMATCH CC 5774 sheet=SYED MUHAMMAD AMAAN (VII) db=SYED MUHAMMAD AMAAN (VIII/B)
+    SECTION CC 5450 SYED ROHAAN FASIH C → A [applied]
+
+VIII A (VIII) → section A  n=15
+  would_set=0  already=12  class_mismatch=1  missing=0  applied=2  failed=0
+    MISMATCH CC 4806 sheet=ABDULLAH (VIII) db=ABDULLAH (SRIII/B)
+    SECTION CC 4561 ZARYAB AGHA C → A [applied]
+    SECTION CC 5846 MOHAMMAD ABDULLAH C → A [applied]
+
+IX A (IX) → section A  n=33
+  would_set=0  already=23  class_mismatch=3  missing=0  applied=7  failed=0
+    MISMATCH CC 6771 sheet=MUHAMMAD ABDUR REHMAN (IX) db=MUHAMMAD ABDUR REHMAN (SRIII/B)
+    MISMATCH CC 6781 sheet=MUHAMMAD AMIR (IX) db=MUHAMMAD AMIR (SRIII/B)
+    MISMATCH CC 7871 sheet=SYEDA ANUM ZEHRA ZAIDI (IX) db=SYEDA ANUM ZEHRA ZAIDI (X/A)
+    SECTION CC 4467 MADLAAJ ATIF NULL → A [applied]
+    SECTION CC 6806 MUHAMMAD IBRAHIM ATHER NULL → A [applied]
+    SECTION CC 7944 FATIMA B → A [applied]
+    SECTION CC 7954 SHAHYAN IQRAR B → A [applied]
+    SECTION CC 7958 ASIFA ASIF B → A [applied]
+    SECTION CC 7963 MUHAMMAD IBRAHIM B → A [applied]
+    SECTION CC 7965 MUHAMMED RAIYAN B → A [applied]
+
+X A (X A) → section A  n=45
+  would_set=0  already=18  class_mismatch=0  missing=0  applied=27  failed=0
+    (27 section updates — see diff workbook)
+
+DUPLICATE CCs ACROSS SHEETS: 1
+  CC 7768: SR. III B/SYED MAHAD HUSSAIN | O-I B BIO & COMM/MUHAMMAD ALI AASIM
+
+TOTALS {
+  class_mismatch: 21,
+  applied: 523,
+  already_correct: 437,
+  apply_failed: 1,
+  missing: 1
+}
+
+Wrote diff workbook: /Volumes/umr_drive/Documents/tafs-backend/tmp/johar-allocation-dry-run-2026-07-27T09-09-24.xlsx

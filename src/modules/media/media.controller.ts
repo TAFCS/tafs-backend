@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Param,
   Query,
   Res,
@@ -132,6 +133,35 @@ export class MediaController {
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
     return this.mediaService.uploadEmployeePhoto(id, file, slot);
+  }
+
+  @Delete('student/:cc/photo/:type')
+  @ApiOperation({ summary: 'Delete student photo (standard or blue_bg)' })
+  async deleteStudentPhoto(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Param('type') type: string,
+  ) {
+    if (type !== 'standard' && type !== 'blue_bg') {
+      throw new BadRequestException('Invalid photo type. Use "standard" or "blue_bg"');
+    }
+    return this.mediaService.deleteStudentPhoto(cc, type as 'standard' | 'blue_bg');
+  }
+
+  @Delete('guardian/:id/photo')
+  @ApiOperation({ summary: 'Delete guardian photo' })
+  async deleteGuardianPhoto(
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.mediaService.deleteGuardianPhoto(id);
+  }
+
+  @Delete('employee/:id/photo')
+  @ApiOperation({ summary: 'Delete employee photo' })
+  async deleteEmployeePhoto(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('slot') slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile',
+  ) {
+    return this.mediaService.deleteEmployeePhoto(id, slot);
   }
 
   @Post('employee/:id/leave-attachment')

@@ -104,7 +104,7 @@ export class MediaService {
     file: Express.Multer.File,
     slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile',
   ) {
-    const employee = await this.prisma.employee_profiles.findUnique({ where: { id } });
+    const employee = await this.prisma.employees.findUnique({ where: { id } });
     if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
 
     const extension = file.originalname.split('.').pop() || 'jpg';
@@ -121,7 +121,7 @@ export class MediaService {
 
     const targetColumn = columnMap[slot] || 'photo_url';
 
-    await this.prisma.employee_profiles.update({
+    await this.prisma.employees.update({
       where: { id },
       data: { [targetColumn]: url },
     });
@@ -135,7 +135,80 @@ export class MediaService {
       note: `Uploaded employee ${slot} photo for #${id} (${employee.full_name || 'N/A'}).`,
     });
 
-    return { url, slot };
+    return { url };
+  }
+
+  async deleteStudentPhoto(cc: number, type: 'standard' | 'blue_bg') {
+    const student = await this.prisma.students.findUnique({ where: { cc } });
+    if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
+
+    const field = type === 'blue_bg' ? 'photo_blue_bg_url' : 'photograph_url';
+    await this.prisma.students.update({
+      where: { cc },
+      data: { [field]: null },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'STUDENT',
+      entity_id: String(cc),
+      action: 'UPDATED',
+      field,
+      changed_by: 'system',
+      student_id: cc,
+      note: `Removed student ${type === 'blue_bg' ? 'blue-background photo' : 'standard photo'} for CC ${cc}.`,
+    });
+
+    return { message: 'Photo removed successfully' };
+  }
+
+  async deleteGuardianPhoto(id: number) {
+    const guardian = await this.prisma.guardians.findUnique({ where: { id } });
+    if (!guardian) throw new NotFoundException(`Guardian with ID ${id} not found`);
+
+    await this.prisma.guardians.update({
+      where: { id },
+      data: { photo_url: null },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'GUARDIAN',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: 'photo_url',
+      changed_by: 'system',
+      note: `Removed guardian photo for #${id}.`,
+    });
+
+    return { message: 'Photo removed successfully' };
+  }
+
+  async deleteEmployeePhoto(id: number, slot: 'profile' | 'father' | 'mother' | 'spouse' = 'profile') {
+    const employee = await this.prisma.employees.findUnique({ where: { id } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${id} not found`);
+
+    const columnMap: Record<string, string> = {
+      profile: 'photo_url',
+      father: 'father_photo_url',
+      mother: 'mother_photo_url',
+      spouse: 'spouse_photo_url',
+    };
+    const targetColumn = columnMap[slot] || 'photo_url';
+
+    await this.prisma.employees.update({
+      where: { id },
+      data: { [targetColumn]: null },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: targetColumn,
+      changed_by: 'system',
+      note: `Removed employee ${slot} photo for #${id}.`,
+    });
+
+    return { message: 'Photo removed successfully' };
   }
 
   async uploadLeaveAttachment(id: number, file: Express.Multer.File) {
