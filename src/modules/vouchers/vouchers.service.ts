@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -999,8 +999,10 @@ export class VouchersService {
                 const total = sf.student_fee_installments?.installment_count || group.length;
                 const seqNum = standaloneSequenceMap.get(sf.id);
                 if (seqNum != null) {
-                    const installmentLabel = `${prefixStr}${feeTypeDesc} INSTALLMENTS (${seqNum}/${total})`;
-                    description = `${installmentLabel}${monthSuffix}`;
+                    const installmentLabel = `${prefixStr}${getInstallmentLabel(feeTypeDesc, seqNum, total)}`;
+                    description = sf?.target_month != null
+                        ? `${prefixStr}${getInstallmentLabel(feeTypeDesc, seqNum, total, sf.target_month, effectiveAcadYear, voucher.class_id)}`
+                        : installmentLabel;
                     baseDescription = installmentLabel;
                 }
             }
@@ -1225,13 +1227,12 @@ export class VouchersService {
             const total = f.student_fee_installments?.installment_count || group.length;
             const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
             const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
-            const monthLbl = getMonthYearLabel(f.target_month, f.academic_year, voucher.class_id).toUpperCase();
-            const desc = `${feeType} INSTALLMENTS (${seqNum}/${total}) (${monthLbl})`;
+            const desc = getInstallmentLabel(feeType, seqNum, total, f.target_month, f.academic_year, voucher.class_id);
             const amount = Number(f.amount || 0);
             return {
                 description: desc,
                 originalDescription: desc,
-                baseDescription: `${feeType} INSTALLMENTS (${seqNum}/${total})`,
+                baseDescription: getInstallmentLabel(feeType, seqNum, total),
                 amount,
                 discount: 0,
                 netAmount: amount,
@@ -1473,7 +1474,7 @@ export class VouchersService {
                         const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
                         return {
                             date: f.fee_date?.toISOString().split('T')[0] || 'N/A',
-                            head: `${feeType} INSTALLMENTS (${seqIdx + 1}/${total})`,
+                            head: getInstallmentLabel(feeType, seqIdx + 1, total),
                             amount: Number(f.amount || 0).toLocaleString(),
                             totalAmount: Number(f.amount || 0).toLocaleString(),
                             target_month: f.target_month,
@@ -1516,7 +1517,7 @@ export class VouchersService {
                             ? `${monthNames[f.target_month - 1].slice(0, 3).toUpperCase()} ${year.slice(-2)}`
                             : 'N/A';
                         return {
-                            head: `${feeType} INSTALLMENTS (${seqNum}/${total})`,
+                            head: getInstallmentLabel(feeType, seqNum, total),
                             month,
                             amount: Number(f.amount || 0),
                             status: f.status === 'PAID' ? 'PAID' : 'DUE',
