@@ -29,6 +29,40 @@ export function getMonthYearLabel(m: number, academicYear: string, classId?: num
 }
 
 /**
+ * Returns a full month+year label, e.g. "APRIL 2026".
+ * Same academic-year resolution as getMonthYearLabel, but unabbreviated —
+ * used for installment row wording on challans.
+ */
+export function getFullMonthYearLabel(m: number, academicYear: string, classId?: number): string {
+    const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
+    const parts = academicYear.split('-').map(y => y.trim());
+    const cutoff = isSpecial(classId) ? 4 : 8;
+    const year = m >= cutoff ? parts[0] : (parts[1] || parts[0]);
+    return `${monthName.toUpperCase()} ${year}`;
+}
+
+/**
+ * Canonical wording for an installment row on a challan, e.g.
+ *   "ANNUAL CHARGES INSTALLMENTS PLAN - 01 OF 09 - APRIL 2026"
+ *
+ * Pass month/academicYear to append the " - <MONTH> <YEAR>" suffix; omit them
+ * for contexts that already carry the month in a separate column.
+ */
+export function getInstallmentLabel(
+    feeTypeDesc: string,
+    seqNum: number,
+    total: number,
+    month?: number | null,
+    academicYear?: string | null,
+    classId?: number,
+): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const base = `${feeTypeDesc} INSTALLMENTS PLAN - ${pad(seqNum)} OF ${pad(total)}`;
+    if (month == null || !academicYear) return base;
+    return `${base} - ${getFullMonthYearLabel(month, academicYear, classId)}`;
+}
+
+/**
  * Collapses a list of month+academicYear items into a human-readable label
  * that consolidates consecutive months into ranges, e.g. "AUG 25 - OCT 25".
  */

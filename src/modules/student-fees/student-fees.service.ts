@@ -617,7 +617,13 @@ export class StudentFeesService {
                 );
 
                 // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
+                // Installment-linked rows are excluded: they're managed exclusively through the
+                // installments module's own CRUD (create/update/removeHead), and standalone-mode
+                // installment heads are never part of the studentwise-fees grid's payload in the
+                // first place, so treating their absence as "removed by the user" would wipe out
+                // installment plans every time the unrelated bulk-save endpoint is called.
                 const toDeleteRows = existingFees
+                    .filter((f) => f.installment_id == null)
                     .filter((f) => {
                         const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
                         const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
@@ -639,50 +645,6 @@ export class StudentFeesService {
                         note: `Removed ${toDelete.length} fee row(s) from student #${student_id}'s schedule (no longer in the submitted list): ` +
                             toDeleteRows.map((f) => `${feeTypeLabel(f.fee_type_id)} (${this.periodLabel(f.target_month, f.academic_year, f.fee_date)}, ${this.fmtMoney(f.amount)})`).join(', '),
                     });
-
-                    // This path can remove installment-linked heads directly (bypassing
-                    // installments.service.removeHead), so replicate its bookkeeping here:
-                    // recalc total_amount/installment_count for affected plans, or drop a
-                    // plan entirely once its last head is gone — otherwise plans are left
-                    // with stale totals/counts or orphaned with zero heads.
-                    const affectedPlanIds = Array.from(
-                        new Set(
-                            toDeleteRows
-                                .map((f) => f.installment_id)
-                                .filter((id): id is number => id != null),
-                        ),
-                    );
-
-                    for (const planId of affectedPlanIds) {
-                        const remaining = await tx.student_fees.findMany({
-                            where: { installment_id: planId },
-                            select: { amount: true },
-                        });
-
-                        if (remaining.length === 0) {
-                            await tx.student_fee_installments.delete({ where: { id: planId } });
-                            auditEvents.push({
-                                entity_type: 'STUDENT_FEE_SCHEDULE',
-                                entity_id: String(planId),
-                                action: 'DELETED',
-                                note: `Installment plan #${planId} deleted — its last remaining fee row was removed from student #${student_id}'s schedule.`,
-                            });
-                        } else {
-                            const newTotal = remaining.reduce((sum, f) => sum + Number(f.amount || 0), 0);
-                            await tx.student_fee_installments.update({
-                                where: { id: planId },
-                                data: { total_amount: newTotal, installment_count: remaining.length },
-                            });
-                            auditEvents.push({
-                                entity_type: 'STUDENT_FEE_SCHEDULE',
-                                entity_id: String(planId),
-                                action: 'UPDATED',
-                                field: 'total_amount',
-                                new_value: String(newTotal),
-                                note: `Installment plan #${planId} recalculated after a member fee row was removed — new total ${this.fmtMoney(newTotal)} across ${remaining.length} installment(s).`,
-                            });
-                        }
-                    }
                 }
 
                 // 2. Map existing fees by key for manual lookup (since NULL fee_date breaks unique constraint)

@@ -11,6 +11,11 @@ try {
   // Fallback if logo not found
 }
 
+// Every value printed on the slip is upper-cased — the slip is a
+// hand-filed provisional receipt and must read fully capitalised.
+const UP = (value?: string | number | null): string =>
+  value === undefined || value === null ? '' : String(value).toUpperCase();
+
 // Styling mirrors FeeChallanPDF (voucher-pdf module) so the deposit slip
 // reads as the same document family as a paid fee voucher.
 const styles = StyleSheet.create({
@@ -19,6 +24,7 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 8,
     fontFamily: 'Helvetica',
+    textTransform: 'uppercase',
   },
   // Dashed frame around the whole printable area = outer trim/cut guide.
   cutFrame: {
@@ -67,6 +73,7 @@ const styles = StyleSheet.create({
     transform: 'rotate(-32deg)',
     letterSpacing: 6,
     fontFamily: 'Helvetica-Bold',
+    textTransform: 'uppercase',
   },
   header: {
     flexDirection: 'column',
@@ -88,11 +95,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
     letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   schoolAddress: {
     fontSize: 7,
     color: '#333333',
     marginTop: 1,
+    textTransform: 'uppercase',
   },
   provisionalBadge: {
     marginTop: 3,
@@ -133,6 +142,7 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    textTransform: 'uppercase',
   },
   sectionLabelRow: {
     backgroundColor: '#f8fafc',
@@ -168,9 +178,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.3,
     borderBottomColor: '#f0f0f0',
   },
-  gCellName: { flex: 2, fontSize: 7.5 },
-  gCellRelation: { flex: 1, fontSize: 7.5 },
-  gCellCnic: { flex: 1.5, fontSize: 7.5 },
+  gCellName: { flex: 2, fontSize: 7.5, textTransform: 'uppercase' },
+  gCellRelation: { flex: 1, fontSize: 7.5, textTransform: 'uppercase' },
+  gCellCnic: { flex: 1.5, fontSize: 7.5, textTransform: 'uppercase' },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -188,11 +198,13 @@ const styles = StyleSheet.create({
     fontSize: 8.5,
     fontWeight: 'bold',
     color: '#021A54',
+    textTransform: 'uppercase',
   },
   totalValue: {
     fontSize: 13,
     fontWeight: 'bold',
     color: '#021A54',
+    textTransform: 'uppercase',
   },
   footerContainer: {
     marginTop: 'auto',
@@ -211,11 +223,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
     marginBottom: 1,
+    textTransform: 'uppercase',
   },
   notesText: {
     fontSize: 7,
     color: '#1a1a1a',
     fontWeight: 'bold',
+    textTransform: 'uppercase',
   },
   stampSignatureRow: {
     flexDirection: 'row',
@@ -235,6 +249,7 @@ const styles = StyleSheet.create({
     fontSize: 6.5,
     color: '#333333',
     fontWeight: 'bold',
+    textTransform: 'uppercase',
   },
   signatureLineContainer: {
     justifyContent: 'flex-end',
@@ -251,11 +266,13 @@ const styles = StyleSheet.create({
     fontSize: 6.5,
     color: '#333333',
     fontWeight: 'bold',
+    textTransform: 'uppercase',
   },
   generatedBy: {
     fontSize: 6,
     color: '#333333',
     textAlign: 'center',
+    textTransform: 'uppercase',
     marginTop: 6,
     borderTopWidth: 0.5,
     borderTopColor: '#efefef',
@@ -296,7 +313,7 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
       )}
       <View style={styles.schoolInfo}>
         <Text style={styles.schoolName}>THE AMERICAN FOUNDATION SCHOOL</Text>
-        <Text style={styles.schoolAddress}>{data.campusName || 'Main Campus'}</Text>
+        <Text style={styles.schoolAddress}>{UP(data.campusName) || 'MAIN CAMPUS'}</Text>
         <Text style={styles.schoolAddress}>QUICK ADMISSION — DEPOSIT SLIP</Text>
         <Text style={styles.provisionalBadge}>PROVISIONAL RECEIPT</Text>
       </View>
@@ -306,45 +323,45 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
       <View style={styles.studentCol}>
         <View style={{ flex: 3.5 }}>
           <Text style={styles.label}>Candidate Name</Text>
-          <Text style={styles.value}>{data.fullName.toUpperCase()}</Text>
+          <Text style={styles.value}>{UP(data.fullName)}</Text>
         </View>
         <View style={{ minWidth: 50, flexShrink: 0, alignItems: 'flex-end' }}>
           <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
-          <Text style={[styles.value, { textAlign: 'right' }]}>{data.gender.toUpperCase()}</Text>
+          <Text style={[styles.value, { textAlign: 'right' }]}>{UP(data.gender)}</Text>
         </View>
       </View>
       <View style={styles.studentCol}>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>Computer Code</Text>
-          <Text style={styles.value}>{data.cc}</Text>
+          <Text style={styles.value}>{UP(data.cc)}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>D.O.B</Text>
-          <Text style={styles.value}>{data.dateOfBirth}</Text>
+          <Text style={styles.value}>{UP(data.dateOfBirth)}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>Age at Reg.</Text>
-          <Text style={styles.value}>{data.age}</Text>
+          <Text style={styles.value}>{UP(data.age)}</Text>
         </View>
         <View style={{ flex: 1, alignItems: 'flex-end' }}>
           <Text style={[styles.label, { textAlign: 'right' }]}>Date</Text>
-          <Text style={[styles.value, { textAlign: 'right' }]}>{data.createdAt}</Text>
+          <Text style={[styles.value, { textAlign: 'right' }]}>{UP(data.createdAt)}</Text>
         </View>
       </View>
       <View style={styles.studentCol}>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>System</Text>
-          <Text style={styles.value}>{data.academicSystem || 'N/A'}</Text>
+          <Text style={styles.value}>{UP(data.academicSystem) || 'N/A'}</Text>
         </View>
         <View style={{ flex: 1.5, alignItems: 'flex-end' }}>
           <Text style={[styles.label, { textAlign: 'right' }]}>Class Applying For</Text>
-          <Text style={[styles.value, { textAlign: 'right' }]}>{data.requestedGrade || 'N/A'}</Text>
+          <Text style={[styles.value, { textAlign: 'right' }]}>{UP(data.requestedGrade) || 'N/A'}</Text>
         </View>
       </View>
       {data.address && (
         <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2 }}>
           <Text style={styles.label}>Address</Text>
-          <Text style={[styles.value, { fontSize: 7.5 }]}>{data.address}</Text>
+          <Text style={[styles.value, { fontSize: 7.5 }]}>{UP(data.address)}</Text>
         </View>
       )}
     </View>
@@ -362,9 +379,9 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
           </View>
           {data.guardians.map((g, index) => (
             <View key={index} style={styles.guardianTableRow}>
-              <Text style={styles.gCellName}>{g.name}</Text>
-              <Text style={styles.gCellRelation}>{g.relation || 'N/A'}</Text>
-              <Text style={[styles.gCellCnic, { textAlign: 'right' }]}>{g.cnic || 'N/A'}</Text>
+              <Text style={styles.gCellName}>{UP(g.name)}</Text>
+              <Text style={styles.gCellRelation}>{UP(g.relation) || 'N/A'}</Text>
+              <Text style={[styles.gCellCnic, { textAlign: 'right' }]}>{UP(g.cnic) || 'N/A'}</Text>
             </View>
           ))}
         </View>
@@ -373,14 +390,14 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
 
     <View style={styles.totalRow}>
       <Text style={styles.totalLabel}>DEPOSIT AMOUNT RECEIVED</Text>
-      <Text style={styles.totalValue}>PKR {data.depositAmount}</Text>
+      <Text style={styles.totalValue}>PKR {UP(data.depositAmount)}</Text>
     </View>
 
     <View style={styles.footerContainer}>
       {copyType === 'SCHOOL COPY' && data.adminNotes && (
         <View style={styles.notesContainer}>
           <Text style={styles.notesLabel}>INTERNAL NOTE (BACK OFFICE ONLY):</Text>
-          <Text style={styles.notesText}>{data.adminNotes}</Text>
+          <Text style={styles.notesText}>{UP(data.adminNotes)}</Text>
         </View>
       )}
 
@@ -396,7 +413,7 @@ const SlipCopy = ({ copyType, data, isLast }: { copyType: string; data: DepositS
       </View>
 
       <Text style={styles.generatedBy}>
-        GENERATED BY {data.createdBy || 'SYSTEM'}{`\n`}{data.createdAt}
+        GENERATED BY {UP(data.createdBy) || 'SYSTEM'}{`\n`}{UP(data.createdAt)}
       </Text>
     </View>
 

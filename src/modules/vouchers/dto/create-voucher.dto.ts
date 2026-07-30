@@ -142,6 +142,21 @@ export class CreateVoucherDto {
     @IsOptional()
     waived_by?: string;
 
+    /**
+     * Whether to push the "voucher issued" alert to the family the moment the
+     * voucher is created. Omitted/undefined means "send" so existing callers keep
+     * their behaviour — only an explicit `false` suppresses the instant push.
+     * Suppressing it does not affect the scheduled due/overdue/expiry reminders.
+     */
+    @Transform(({ value }) =>
+        value === undefined || value === null || value === ''
+            ? undefined
+            : value === 'true' || value === true,
+    )
+    @IsBoolean()
+    @IsOptional()
+    send_notification?: boolean;
+
     /** Pre-computed surcharge groups from an outer computeArrears() call. When present,
      *  create() skips its internal computeArrears() call to avoid a redundant DB round-trip. */
     @IsOptional()
