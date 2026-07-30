@@ -28,7 +28,7 @@ const GUARDIAN_FIELD_MAX_LENGTHS: Record<string, number> = {
   occupation: 100,
   organization: 255,
   job_position: 100,
-  house_appt_name: 100,
+  house_appt_name: 255,
   house_appt_number: 50,
   area_block: 100,
   country: 50,
@@ -821,7 +821,7 @@ export class ParentChangeRequestsService {
       province: province.substring(0, 50).toUpperCase(),
       city: city.substring(0, 50).toUpperCase(),
       area_block: area_block.substring(0, 100).toUpperCase(),
-      house_appt_name: house_appt_name.substring(0, 100).toUpperCase(),
+      house_appt_name: house_appt_name.substring(0, 255).toUpperCase(),
     };
   }
 }

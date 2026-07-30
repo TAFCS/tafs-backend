@@ -69,7 +69,7 @@ function parseMailingAddress(addressStr: string) {
     province: province.substring(0, 50).toUpperCase(),
     city: city.substring(0, 50).toUpperCase(),
     area_block: area_block.substring(0, 100).toUpperCase(),
-    house_appt_name: house_appt_name.substring(0, 100).toUpperCase(),
+    house_appt_name: house_appt_name.substring(0, 255).toUpperCase(),
   };
 }
 

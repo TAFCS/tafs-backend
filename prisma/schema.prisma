@@ -268,7 +268,7 @@ model guardians {
   deleted_at                 DateTime?                @db.Timestamp(6)
   photo_url                  String?
   mailing_address            String?
-  house_appt_name            String?                  @db.VarChar(100)
+  house_appt_name            String?                  @db.VarChar(255)
   house_appt_number          String?                  @db.VarChar(50)
   area_block                 String?                  @db.VarChar(100)
   country                    String?                  @db.VarChar(50)

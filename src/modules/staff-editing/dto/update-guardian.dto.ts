@@ -93,7 +93,7 @@ export class UpdateGuardianDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(100)
+  @MaxLength(255)
   house_appt_name?: string;
 
   @IsOptional()

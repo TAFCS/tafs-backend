@@ -3,7 +3,7 @@ import { IsString, IsOptional, MaxLength } from 'class-validator';
 export class UpdateFamilyAddressDto {
   @IsOptional()
   @IsString()
-  @MaxLength(100)
+  @MaxLength(255)
   house_appt_name?: string;
 
   @IsOptional()
