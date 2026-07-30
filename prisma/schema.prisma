@@ -65,6 +65,7 @@ model bulk_voucher_jobs {
   class_ids           Int[]         @default([])
   section_ids         Int[]         @default([])
   job_type            String        @default("BULK") @db.VarChar(20)
+  send_notification   Boolean       @default(true)
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")

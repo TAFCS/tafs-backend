@@ -564,6 +564,7 @@ export class VouchersService {
             `Issue Date: ${issueDateStr}`,
             monthLabel ? `Month: ${monthLabel}` : null,
             finalVoucher.academic_year ? `AY: ${finalVoucher.academic_year}` : null,
+            `Instant parent notification: ${dto.send_notification === false ? 'No' : 'Yes'}`,
         ].filter(Boolean).join(' | ');
 
         await this.auditLogs.log({
@@ -578,13 +579,22 @@ export class VouchersService {
         // Log any previous vouchers this creation superseded/voided.
         await this.flushAuditEvents(sideEffectEvents, changedBy);
 
-        this.voucherNotificationService
-            .sendVoucherIssuedNotification(finalVoucher.id)
-            .catch((err) =>
-                this.logger.error(
-                    `[Voucher ${finalVoucher.id}] Issued notification failed: ${(err as Error).message}`,
-                ),
+        // Instant "voucher issued" push to the parents. The admin can opt out at
+        // generation time (send_notification === false); everything else — the
+        // scheduled due/overdue/expiry reminders — is unaffected by that choice.
+        if (dto.send_notification === false) {
+            this.logger.log(
+                `[Voucher ${finalVoucher.id}] Instant issued notification suppressed by admin at generation.`,
             );
+        } else {
+            this.voucherNotificationService
+                .sendVoucherIssuedNotification(finalVoucher.id)
+                .catch((err) =>
+                    this.logger.error(
+                        `[Voucher ${finalVoucher.id}] Issued notification failed: ${(err as Error).message}`,
+                    ),
+                );
+        }
 
         return finalVoucher;
     }

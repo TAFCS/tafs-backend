@@ -87,6 +87,15 @@ export class StartBulkJobDto {
     @IsOptional()
     apply_late_fee?: boolean;
 
+    /**
+     * Whether each voucher produced by this job pushes an instant "voucher issued"
+     * alert to the family. Defaults to true; an explicit `false` suppresses only the
+     * instant push, not the scheduled due/overdue/expiry reminders.
+     */
+    @IsBoolean()
+    @IsOptional()
+    send_notification?: boolean;
+
     @Type(() => Number)
     @IsNumber()
     @IsOptional()

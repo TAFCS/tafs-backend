@@ -213,6 +213,7 @@ export class BulkVoucherJobsService {
                 skip_count: 0,
                 fail_count: 0,
                 waive_surcharge: dto.waive_surcharge ?? false,
+                send_notification: dto.send_notification ?? true,
                 job_type: dto.job_type || 'BULK',
                 updated_at: new Date(),
             },
@@ -232,6 +233,7 @@ export class BulkVoucherJobsService {
                 `Period=${dto.fee_date_from}→${dto.fee_date_to}`,
                 `Total items=${totalCount}`,
                 `Academic year=${academicYear}`,
+                `Instant parent notification=${dto.send_notification === false ? 'No' : 'Yes'}`,
             ].join(' | '),
         });
 
@@ -584,6 +586,7 @@ export class BulkVoucherJobsService {
             late_fee_amount: dto.late_fee_amount ?? 1000,
             waive_surcharge: dto.waive_surcharge ?? false,
             waived_by: createdBy,
+            send_notification: dto.send_notification ?? true,
             academic_year: item.academicYear,
             fee_date: dateStr,
             precedence: 1,
