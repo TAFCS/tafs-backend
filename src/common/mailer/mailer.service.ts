@@ -36,7 +36,7 @@ export class MailerService implements OnModuleInit {
       console.error(
         `[Mailer] Resend not initialized — cannot send OTP to ${to}`,
       );
-      return;
+      throw new Error('Email service is not configured');
     }
 
     const isSignup = purpose === 'signup';
@@ -62,16 +62,22 @@ export class MailerService implements OnModuleInit {
     `;
 
     try {
-      const { error } = await this.client.emails.send({
+      const { data, error } = await this.client.emails.send({
         from: `${this.fromName} <${this.fromEmail}>`,
         to: [to],
         subject,
         html: htmlBody,
       });
-      if (error) throw new Error(error.message);
-      console.log(`[Mailer] OTP email sent to ${to} (purpose=${purpose})`);
+      // Resend reports rejections (unverified domain, quota, bad payload) in
+      // `error` rather than by throwing — these never reach the Resend logs UI,
+      // so the name is the only breadcrumb we get.
+      if (error) throw new Error(`${error.name}: ${error.message}`);
+      console.log(
+        `[Mailer] OTP email sent to ${to} (purpose=${purpose}, id=${data?.id})`,
+      );
     } catch (e) {
       console.error(`[Mailer] Failed to send OTP email to ${to}:`, e.message);
+      throw e;
     }
   }
 }

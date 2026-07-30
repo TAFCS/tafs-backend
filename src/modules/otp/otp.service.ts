@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -85,7 +89,20 @@ export class OtpService {
 
     const emailPurpose =
       purpose === otp_purpose.PARENT_SIGNUP ? 'signup' : 'forgot-password';
-    await this.mailerService.sendOtpEmail(normalizedEmail, code, emailPurpose);
+
+    try {
+      await this.mailerService.sendOtpEmail(normalizedEmail, code, emailPurpose);
+    } catch {
+      // The code row is already committed. Retire it so the 60s cooldown does
+      // not lock the caller out of retrying a code that was never delivered.
+      await this.prisma.otp_codes.updateMany({
+        where: { email: normalizedEmail, purpose, consumed_at: null },
+        data: { consumed_at: new Date() },
+      });
+      throw new ServiceUnavailableException(
+        'Could not send the verification email. Please try again.',
+      );
+    }
   }
 
   async verify(params: {
