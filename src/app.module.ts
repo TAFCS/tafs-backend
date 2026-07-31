@@ -30,6 +30,7 @@ import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { MeezanModule } from './modules/meezan/meezan.module';
 import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
+import { ScholarshipPresetsModule } from './modules/scholarship-presets/scholarship-presets.module';
 import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { SupportTicketsModule } from './modules/support-tickets/support-tickets.module';
@@ -76,6 +77,7 @@ import { StudentAllocationModule } from './modules/student-allocation/student-al
     InstallmentsModule,
     MeezanModule,
     DiscountPresetsModule,
+    ScholarshipPresetsModule,
     ParentChangeRequestsModule,
     ChatModule,
     SupportTicketsModule,

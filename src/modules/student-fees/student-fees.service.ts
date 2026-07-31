@@ -662,7 +662,7 @@ export class StudentFeesService {
                 // 3. Upsert items
                 const createdLabels: string[] = [];
                 const updatedLabels: string[] = [];
-                const upsertPromises = items.map((item) => {
+                const upsertPromises = items.map(async (item) => {
                     const tm = item.target_month ?? item.month ?? 8;
                     const targetMonth = tm > 0 ? tm : 8;
                     const feeDate = item.fee_date ? new Date(item.fee_date) : null;
@@ -671,17 +671,55 @@ export class StudentFeesService {
 
                     const existingId = feeKeyMap.get(key);
 
+                    // Scholarships are MTF-only (fee_type_id=1). Enforced here — the
+                    // single source of truth — regardless of what the frontend sends.
+                    const hasScholarship = item.scholarship_percentage != null;
+                    if (hasScholarship && item.fee_type_id !== 1) {
+                        throw new BadRequestException(
+                            `Scholarships can only be applied to MTF (fee_type_id=1); got fee_type_id=${item.fee_type_id}.`,
+                        );
+                    }
+
+                    // Resolve/create the scholarship preset (same pattern as createDiscount).
+                    let scholarshipTypeId: number | null = null;
+                    if (hasScholarship) {
+                        if (item.scholarship_type_id != null) {
+                            const preset = await tx.scholarship_presets.findUnique({ where: { id: item.scholarship_type_id } });
+                            if (!preset) throw new NotFoundException(`Scholarship preset #${item.scholarship_type_id} not found`);
+                            scholarshipTypeId = preset.id;
+                        } else if (item.scholarship_custom_title?.trim()) {
+                            const newPreset = await tx.scholarship_presets.create({
+                                data: { title: item.scholarship_custom_title.trim().toUpperCase(), is_active: true },
+                            });
+                            scholarshipTypeId = newPreset.id;
+                        }
+                    }
+
+                    // amount_after_discount = the amount after the system discount, before scholarship
+                    // (what `item.amount` has always meant from the client's perspective).
+                    // `amount` is repurposed to always hold the FINAL amount (after scholarship, if any).
+                    const amountAfterDiscount = new Prisma.Decimal(item.amount ?? item.amount_before_discount ?? 0);
+                    const finalAmount = hasScholarship
+                        ? amountAfterDiscount
+                              .mul(new Prisma.Decimal(1).minus(new Prisma.Decimal(item.scholarship_percentage!).div(100)))
+                              .toDecimalPlaces(2)
+                        : amountAfterDiscount;
+
                     if (existingId) {
                         const before = existingFeeById.get(existingId);
-                        const amountChanged = before && Number(before.amount ?? 0) !== Number(item.amount ?? 0);
+                        const beforeAmountAfterDiscount = before ? Number(before.amount_after_discount ?? before.amount ?? 0) : null;
+                        const amountChanged = before && beforeAmountAfterDiscount !== Number(amountAfterDiscount);
+                        const scholarshipChanged = before &&
+                            Number(before.scholarship_percentage ?? 0) !== Number(item.scholarship_percentage ?? 0);
                         const beforeDateStr = before?.fee_date ? before.fee_date.toISOString().split('T')[0] : null;
                         const afterDateStr = feeDate ? feeDate.toISOString().split('T')[0] : null;
                         const dateChanged = before && beforeDateStr !== afterDateStr;
-                        if (before && (amountChanged || dateChanged)) {
+                        if (before && (amountChanged || dateChanged || scholarshipChanged)) {
                             updatedLabels.push(
                                 `${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}): ` +
                                 [
-                                    amountChanged ? `amount ${this.fmtMoney(before.amount)} → ${this.fmtMoney(item.amount)}` : null,
+                                    amountChanged ? `amount ${this.fmtMoney(before.amount)} → ${this.fmtMoney(finalAmount)}` : null,
+                                    scholarshipChanged ? `scholarship ${before.scholarship_percentage ?? 0}% → ${item.scholarship_percentage ?? 0}%` : null,
                                     dateChanged ? `date ${this.fmtDate(before.fee_date)} → ${this.fmtDate(feeDate)}` : null,
                                 ].filter(Boolean).join(', '),
                             );
@@ -690,8 +728,11 @@ export class StudentFeesService {
                             where: { id: existingId },
                             data: {
                                 month: item.month,
-                                amount: item.amount,
+                                amount: finalAmount,
                                 amount_before_discount: item.amount_before_discount,
+                                amount_after_discount: amountAfterDiscount,
+                                scholarship_percentage: item.scholarship_percentage ?? null,
+                                scholarship_type_id: scholarshipTypeId,
                                 academic_year: item.academic_year,
                                 target_month: targetMonth,
                                 fee_date: feeDate,
@@ -699,14 +740,17 @@ export class StudentFeesService {
                         });
                     }
 
-                    createdLabels.push(`${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}, ${this.fmtMoney(item.amount)})`);
+                    createdLabels.push(`${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}, ${this.fmtMoney(finalAmount)})`);
                     return tx.student_fees.create({
                         data: {
                             student_id,
                             fee_type_id: item.fee_type_id,
                             month: item.month,
-                            amount: item.amount,
+                            amount: finalAmount,
                             amount_before_discount: item.amount_before_discount,
+                            amount_after_discount: amountAfterDiscount,
+                            scholarship_percentage: item.scholarship_percentage ?? null,
+                            scholarship_type_id: scholarshipTypeId,
                             academic_year: item.academic_year,
                             target_month: targetMonth,
                             fee_date: feeDate,
@@ -1211,6 +1255,7 @@ export class StudentFeesService {
                 academic_year,
                 amount: new Prisma.Decimal(amount),
                 amount_before_discount: new Prisma.Decimal(amount),
+                amount_after_discount: new Prisma.Decimal(amount),
                 fee_date: targetDate,
                 status: 'NOT_ISSUED' as any,
             })),
@@ -1334,6 +1379,7 @@ export class StudentFeesService {
                 academic_year,
                 amount: new Prisma.Decimal(amount),
                 amount_before_discount: new Prisma.Decimal(amount),
+                amount_after_discount: new Prisma.Decimal(amount),
                 fee_date: date,
                 status: 'NOT_ISSUED' as any,
             }));
@@ -1586,7 +1632,7 @@ export class StudentFeesService {
             if (!preset) throw new NotFoundException(`Discount preset #${discountTypeId} not found`);
         } else if (dto.custom_title?.trim()) {
             const newPreset = await this.prisma.discount_presets.create({
-                data: { title: dto.custom_title.trim(), is_active: true },
+                data: { title: dto.custom_title.trim().toUpperCase(), is_active: true },
             });
             discountTypeId = newPreset.id;
         } else {
@@ -1634,6 +1680,89 @@ export class StudentFeesService {
         });
 
         return created;
+    }
+
+    /**
+     * "Universal" scholarship setter: writes one scholarship percentage onto
+     * every existing MTF (fee_type_id=1, non-discount) row for a student in a
+     * given academic year, since a student's scholarship is normally constant
+     * for the whole year. One-time bulk write — does not affect MTF rows
+     * added later in the year (those need the setter re-run, or the
+     * percentage set per-row in bulkSaveStudentFees).
+     */
+    async applyScholarshipToStudent(dto: {
+        student_id: number;
+        academic_year: string;
+        scholarship_percentage: number;
+        scholarship_type_id?: number | null;
+        custom_title?: string;
+    }, changedBy: string = 'system') {
+        const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
+        if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
+
+        // Either an existing preset (must actually exist) or a custom_title (used to create one on the fly).
+        let scholarshipTypeId = dto.scholarship_type_id ?? null;
+        if (scholarshipTypeId != null) {
+            const preset = await this.prisma.scholarship_presets.findUnique({ where: { id: scholarshipTypeId } });
+            if (!preset) throw new NotFoundException(`Scholarship preset #${scholarshipTypeId} not found`);
+        } else if (dto.custom_title?.trim()) {
+            const newPreset = await this.prisma.scholarship_presets.create({
+                data: { title: dto.custom_title.trim().toUpperCase(), is_active: true },
+            });
+            scholarshipTypeId = newPreset.id;
+        } else {
+            throw new BadRequestException('Provide either a scholarship_type_id or a custom_title for the scholarship.');
+        }
+
+        const rows = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: dto.student_id,
+                academic_year: dto.academic_year,
+                fee_type_id: 1,
+                is_discount: false,
+            },
+        });
+
+        if (rows.length === 0) {
+            return { updated: 0, rows: [] };
+        }
+
+        const pct = new Prisma.Decimal(dto.scholarship_percentage);
+        const factor = new Prisma.Decimal(1).minus(pct.div(100));
+
+        const updated = await this.prisma.$transaction(
+            rows.map((row) => {
+                // amount_after_discount is the stable base this scholarship is computed
+                // from — it must be persisted (not just read), otherwise a second call
+                // to this setter (e.g. changing the percentage) would fall back to the
+                // already-discounted `amount` and double-apply the scholarship.
+                const amountAfterDiscount = new Prisma.Decimal(
+                    row.amount_after_discount ?? row.amount_before_discount ?? row.amount ?? 0,
+                );
+                const finalAmount = amountAfterDiscount.mul(factor).toDecimalPlaces(2);
+                return this.prisma.student_fees.update({
+                    where: { id: row.id },
+                    data: {
+                        scholarship_percentage: pct,
+                        scholarship_type_id: scholarshipTypeId,
+                        amount_after_discount: amountAfterDiscount,
+                        amount: finalAmount,
+                    },
+                });
+            }),
+        );
+
+        await this.auditLogs.log({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(dto.student_id),
+            action: 'UPDATED',
+            section: 'finance',
+            changed_by: changedBy,
+            student_id: dto.student_id,
+            note: `Scholarship of ${dto.scholarship_percentage}% applied to ${updated.length} MTF row(s) for student #${dto.student_id}, academic year ${dto.academic_year}.`,
+        });
+
+        return { updated: updated.length, rows: updated };
     }
 
     /**

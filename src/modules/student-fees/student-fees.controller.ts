@@ -21,6 +21,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateDiscountDto } from './dto/create-discount.dto';
+import { ApplyScholarshipDto } from './dto/apply-scholarship.dto';
 
 @Controller('student-fees')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -300,6 +301,20 @@ export class StudentFeesController {
     async deleteDiscount(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.deleteDiscount(id, changedBy);
+        return { success: true, data };
+    }
+
+    // ─── Scholarship Endpoints ──────────────────────────────────────────────────
+
+    // "Universal" scholarship setter — writes one percentage onto every existing
+    // MTF row for a student in an academic year (a student's scholarship is
+    // normally constant for the whole year).
+    @Post('apply-scholarship')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async applyScholarship(@Body() body: ApplyScholarshipDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.applyScholarshipToStudent(body, changedBy);
         return { success: true, data };
     }
 

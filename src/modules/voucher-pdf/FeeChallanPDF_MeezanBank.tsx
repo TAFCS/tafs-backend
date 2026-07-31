@@ -556,29 +556,43 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 const renderFeeRow = (fee: any, i: string | number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
                     const isMTF = fee.description.toLowerCase().includes('tuition');
-                    const hasDiscount = showDiscount !== false && fee.discount && fee.discount > 0;
+                    const hasDiscount = showDiscount !== false && Number(fee.discount) > 0;
+                    const hasScholarship = showDiscount !== false && Number(fee.scholarship) > 0;
+                    const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
-                    if (isMTF && hasDiscount) {
+                    if (isMTF && (hasDiscount || hasScholarship)) {
+                        const amountAfterDiscount = fee.amountAfterDiscount ?? fee.amount;
+                        const scholarshipPct = fee.scholarshipPercentage != null ? ` (${fee.scholarshipPercentage}%)` : '';
                         return (
                             <React.Fragment key={i}>
                                 <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
                                     <Text style={styles.colDesc}>{fee.description}</Text>
-                                    <Text style={styles.colAmount}>
-                                        {fee.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </Text>
+                                    <Text style={styles.colAmount}>{fmt(fee.amount)}</Text>
                                 </View>
-                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`DISCOUNT ON ${fee.description}`}</Text>
-                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>
-                                        -{fee.discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </Text>
-                                </View>
-                                <View style={styles.tableRow}>
-                                    <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER DISCOUNT`}</Text>
-                                    <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
-                                        {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                    </Text>
-                                </View>
+                                {hasDiscount && (
+                                    <React.Fragment>
+                                        <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                            <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`DISCOUNT ON ${fee.description}`}</Text>
+                                            <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.discount)}</Text>
+                                        </View>
+                                        <View style={hasScholarship ? [styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }] : styles.tableRow}>
+                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER DISCOUNT`}</Text>
+                                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(amountAfterDiscount)}</Text>
+                                        </View>
+                                    </React.Fragment>
+                                )}
+                                {hasScholarship && (
+                                    <React.Fragment>
+                                        <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                            <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`SCHOLARSHIP ON ${fee.description}${scholarshipPct}`}</Text>
+                                            <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.scholarship)}</Text>
+                                        </View>
+                                        <View style={styles.tableRow}>
+                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER SCHOLARSHIP`}</Text>
+                                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(effectiveNet)}</Text>
+                                        </View>
+                                    </React.Fragment>
+                                )}
                             </React.Fragment>
                         );
                     }
@@ -586,9 +600,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     return (
                         <View key={i} style={styles.tableRow}>
                             <Text style={styles.colDesc}>{fee.description}</Text>
-                            <Text style={styles.colAmount}>
-                                {effectiveNet.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </Text>
+                            <Text style={styles.colAmount}>{fmt(effectiveNet)}</Text>
                         </View>
                     );
                 };

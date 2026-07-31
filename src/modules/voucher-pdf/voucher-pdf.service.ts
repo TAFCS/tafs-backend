@@ -57,6 +57,9 @@ export interface VoucherPdfData {
         description: string;
         amount: number;
         discount?: number;
+        amountAfterDiscount?: number;
+        scholarship?: number;
+        scholarshipPercentage?: number | null;
         netAmount: number;
         discountLabel?: string;
         isArrear?: boolean;
@@ -148,6 +151,9 @@ export class VoucherPdfService {
                 amount: f.amount,
                 netAmount: f.netAmount,
                 discount: f.discount,
+                amountAfterDiscount: f.amountAfterDiscount,
+                scholarship: f.scholarship,
+                scholarshipPercentage: f.scholarshipPercentage,
                 discountLabel: f.discountLabel,
                 isArrear: f.isArrear,
                 feeDate: f.feeDate,

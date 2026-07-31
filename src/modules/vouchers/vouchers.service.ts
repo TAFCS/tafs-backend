@@ -76,6 +76,7 @@ const VOUCHER_INCLUDE = {
                         include: { fee_types: true }
                     },
                     discount_presets: true,
+                    scholarship_presets: true,
                 }
             }
         }
@@ -230,6 +231,7 @@ export class VouchersService {
                 },
                 include: {
                     fee_types: true,
+                    scholarship_presets: true,
                 },
             });
 
@@ -262,7 +264,11 @@ export class VouchersService {
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
                     reprint_fee_charge: dto.reprint_fee_charge ?? false,
-                    academic_year: (isSpecial(dto.class_id) && feeDate)
+                    // Always derive from the voucher's own fee_date server-side, mirroring
+                    // bulk-voucher-logic.service.ts — the client's academic-year selector is a
+                    // page-level default that doesn't track per-voucher fee dates (e.g. arrear
+                    // groups from a prior session), so it can't be trusted as the source of truth.
+                    academic_year: feeDate
                         ? deriveAcademicYear(feeDate.toISOString(), dto.class_id ?? undefined)
                         : dto.academic_year,
                     month: dto.month ?? null,
@@ -292,6 +298,8 @@ export class VouchersService {
                 amount_deposited: number;
                 balance: Prisma.Decimal;
                 description_prefix: string | null;
+                scholarship_amount: Prisma.Decimal;
+                scholarship_label: string | null;
             }[] = [];
 
             for (const fee of feeRecords) {
@@ -312,12 +320,15 @@ export class VouchersService {
                         amount_deposited: 0,
                         balance: new Prisma.Decimal(0), // discount rows are never deposited against
                         description_prefix: null,
+                        scholarship_amount: new Prisma.Decimal(0),
+                        scholarship_label: null,
                     });
                     continue;
                 }
 
                 // 1. Calculate net balance after any prior partial payments.
                 // Rule: net_amount = student_fees.amount - student_fees.amount_paid
+                // `amount` is always the FINAL amount (post-discount, post-scholarship).
                 const amount = new Prisma.Decimal(fee.amount ?? 0);
                 const amountPaid = new Prisma.Decimal(fee.amount_paid ?? 0);
                 const netAmount = amount.sub(amountPaid);
@@ -327,17 +338,22 @@ export class VouchersService {
                     continue;
                 }
 
-                // 3. Keep the discount snapshot consistent.
-                // discount_amount = amount_before_discount - amount
-                // This ensures we show the discount that was originally granted.
+                // 3. Keep the discount/scholarship snapshot consistent.
+                // discount_amount = amount_before_discount - amount_after_discount
+                // scholarship_amount = amount_after_discount - amount (final)
+                // This ensures we show the discount/scholarship that was originally granted.
                 // Exception: PARTIAL/BALANCE PAYMENT OF rows are a re-allocation of an
-                // already-issued fee by amount, not a fresh discount grant — they must
-                // never show a discount on the voucher.
+                // already-issued fee by amount, not a fresh discount/scholarship grant —
+                // they must never show a discount or scholarship on the voucher.
                 const isSplitPaymentRow = this.isSplitPaymentPrefix((fee as any).description_prefix);
-                const gross = fee.amount_before_discount ?? fee.amount ?? new Prisma.Decimal(0);
+                const gross = fee.amount_before_discount ?? fee.amount_after_discount ?? fee.amount ?? new Prisma.Decimal(0);
+                const amountAfterDiscount = fee.amount_after_discount ?? fee.amount ?? new Prisma.Decimal(0);
                 const discount = isSplitPaymentRow
                     ? new Prisma.Decimal(0)
-                    : new Prisma.Decimal(gross).sub(amount);
+                    : new Prisma.Decimal(gross).sub(amountAfterDiscount);
+                const scholarshipAmount = isSplitPaymentRow
+                    ? new Prisma.Decimal(0)
+                    : new Prisma.Decimal(amountAfterDiscount).sub(amount);
 
                 totalBeforeDueDecimal = totalBeforeDueDecimal.add(netAmount);
 
@@ -356,6 +372,10 @@ export class VouchersService {
                     amount_deposited: 0,
                     balance: netAmount,
                     description_prefix: (fee as any).description_prefix ?? null,
+                    scholarship_amount: scholarshipAmount,
+                    scholarship_label: isSplitPaymentRow
+                        ? null
+                        : (scholarshipAmount.gt(0) ? ((fee as any).scholarship_presets?.title ?? 'Scholarship') : null),
                 });
             }
 
@@ -984,6 +1004,9 @@ export class VouchersService {
                     originalDescription: presetTitle,
                     amount: 0,
                     discount: 0,
+                    amountAfterDiscount: 0,
+                    scholarship: 0,
+                    scholarshipPercentage: null,
                     netAmount,
                     amountDeposited: 0,
                     balance: 0,
@@ -1055,27 +1078,32 @@ export class VouchersService {
             const finalPaid = Math.max(Number(h.amount_deposited || 0), Number(h.student_fees?.amount_paid || 0));
             const netAmount = Number(h.net_amount);
 
+            // Gross/discount/scholarship display figures — class_fee_schedule is the
+            // source of truth for "gross" (not student_fees.amount_before_discount).
+            const schedKey = sf?.fee_type_id != null && sf?.academic_year
+                ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
+                : null;
+            const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
+            const amountAfterDiscountRaw = Number(sf?.amount_after_discount ?? sf?.amount ?? h.net_amount);
+            const finalAmountRaw = Number(sf?.amount ?? h.net_amount);
+
+            const amountDisplay = isSplitHead ? Number(h.net_amount) : (schedGross ?? Number(h.net_amount));
+            const discountDisplay = isSplitHead || schedGross == null
+                ? 0
+                : Math.max(0, schedGross - amountAfterDiscountRaw);
+            // amount after discount, before scholarship — the intermediate stage.
+            const amountAfterDiscountDisplay = isSplitHead ? Number(h.net_amount) : amountDisplay - discountDisplay;
+            const scholarshipDisplay = isSplitHead ? 0 : Math.max(0, amountAfterDiscountRaw - finalAmountRaw);
+
             return {
                 description,
                 originalDescription: feeTypeDesc + monthSuffix,
                 baseDescription,
-                amount: (() => {
-                    if (isSplitHead) return Number(h.net_amount);
-                    const schedKey = sf?.fee_type_id != null && sf?.academic_year
-                        ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
-                        : null;
-                    const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
-                    return schedGross != null ? schedGross : Number(h.net_amount);
-                })(),
-                discount: (() => {
-                    if (isSplitHead) return 0;
-                    const schedKey = sf?.fee_type_id != null && sf?.academic_year
-                        ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
-                        : null;
-                    const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
-                    if (schedGross == null) return 0;
-                    return Math.max(0, schedGross - Number(sf?.amount ?? h.net_amount));
-                })(),
+                amount: amountDisplay,
+                discount: discountDisplay,
+                amountAfterDiscount: amountAfterDiscountDisplay,
+                scholarship: scholarshipDisplay,
+                scholarshipPercentage: isSplitHead ? null : (sf?.scholarship_percentage != null ? Number(sf.scholarship_percentage) : null),
                 netAmount,
                 amountDeposited: finalPaid,
                 balance: Math.max(netAmount - finalPaid, 0),
@@ -1157,6 +1185,8 @@ export class VouchersService {
             let aggregate = {
                 amount: Number(sorted[0].amount || 0),
                 discount: Number(sorted[0].discount || 0),
+                amountAfterDiscount: Number(sorted[0].amountAfterDiscount || 0),
+                scholarship: Number(sorted[0].scholarship || 0),
                 netAmount: Number(sorted[0].netAmount || 0),
                 amountDeposited: Number(sorted[0].amountDeposited || 0),
                 balance: Number(sorted[0].balance || 0),
@@ -1170,6 +1200,8 @@ export class VouchersService {
                     rangeEnd = current;
                     aggregate.amount += Number(current.amount || 0);
                     aggregate.discount += Number(current.discount || 0);
+                    aggregate.amountAfterDiscount += Number(current.amountAfterDiscount || 0);
+                    aggregate.scholarship += Number(current.scholarship || 0);
                     aggregate.netAmount += Number(current.netAmount || 0);
                     aggregate.amountDeposited += Number(current.amountDeposited || 0);
                     aggregate.balance += Number(current.balance || 0);
@@ -1192,6 +1224,11 @@ export class VouchersService {
                     )}`,
                     amount: aggregate.amount,
                     discount: aggregate.discount,
+                    amountAfterDiscount: aggregate.amountAfterDiscount,
+                    scholarship: aggregate.scholarship,
+                    // Percentage is a rate, not additive — carried via the `...rangeStart`
+                    // spread above (assumes a uniform rate across the consolidated range,
+                    // true whenever the universal setter or per-row entry used one value).
                     netAmount: aggregate.netAmount,
                     amountDeposited: aggregate.amountDeposited,
                     balance: Math.max(aggregate.balance, 0),
@@ -1202,6 +1239,8 @@ export class VouchersService {
                 aggregate = {
                     amount: Number(current.amount || 0),
                     discount: Number(current.discount || 0),
+                    amountAfterDiscount: Number(current.amountAfterDiscount || 0),
+                    scholarship: Number(current.scholarship || 0),
                     netAmount: Number(current.netAmount || 0),
                     amountDeposited: Number(current.amountDeposited || 0),
                     balance: Number(current.balance || 0),
@@ -1224,6 +1263,8 @@ export class VouchersService {
                 )}`,
                 amount: aggregate.amount,
                 discount: aggregate.discount,
+                amountAfterDiscount: aggregate.amountAfterDiscount,
+                scholarship: aggregate.scholarship,
                 netAmount: aggregate.netAmount,
                 amountDeposited: aggregate.amountDeposited,
                 balance: Math.max(aggregate.balance, 0),
@@ -3221,6 +3262,8 @@ export class VouchersService {
             balance: Prisma.Decimal;
             // This is set from student_fees.description_prefix — always the source of truth.
             description_prefix: string | null;
+            scholarship_amount: Prisma.Decimal;
+            scholarship_label: string | null;
         };
 
         const paidHeadRows: HeadInsert[] = [];
@@ -3270,6 +3313,10 @@ export class VouchersService {
                     amount_deposited: dep,
                     balance: new Prisma.Decimal(0),
                     description_prefix: prefixPaid,
+                    // Re-allocation of an already-issued fee by amount, not a fresh
+                    // scholarship grant — never show a scholarship on a split row.
+                    scholarship_amount: new Prisma.Decimal(0),
+                    scholarship_label: null,
                 });
                 unpaidHeadRows.push({
                     student_fee_id: sf.id,   // will be replaced by resolveSfId in tx
@@ -3279,6 +3326,8 @@ export class VouchersService {
                     amount_deposited: new Prisma.Decimal(0),
                     balance: balanceFromHead,
                     description_prefix: prefixBalance,
+                    scholarship_amount: new Prisma.Decimal(0),
+                    scholarship_label: null,
                 } as any);
 
             } else if (sf.status === 'PAID') {
@@ -3297,6 +3346,8 @@ export class VouchersService {
                     amount_deposited: linePaid,
                     balance: new Prisma.Decimal(0),
                     description_prefix: (sf as any).description_prefix ?? null,
+                    scholarship_amount: new Prisma.Decimal((h as any).scholarship_amount ?? 0),
+                    scholarship_label: (h as any).scholarship_label ?? null,
                 });
 
             } else if (sf.status === 'ISSUED' || sf.status === 'NOT_ISSUED') {
@@ -3317,6 +3368,8 @@ export class VouchersService {
                     amount_deposited: new Prisma.Decimal(0),
                     balance: netOutstanding,
                     description_prefix: (sf as any).description_prefix ?? null,
+                    scholarship_amount: new Prisma.Decimal((h as any).scholarship_amount ?? 0),
+                    scholarship_label: (h as any).scholarship_label ?? null,
                 });
 
             } else if (sf.status === 'DISCOUNT' || (sf as any).is_discount === true) {
@@ -3331,6 +3384,8 @@ export class VouchersService {
                     amount_deposited: new Prisma.Decimal(0),
                     balance: new Prisma.Decimal(h.balance ?? 0),
                     description_prefix: (sf as any).description_prefix ?? null,
+                    scholarship_amount: new Prisma.Decimal((h as any).scholarship_amount ?? 0),
+                    scholarship_label: (h as any).scholarship_label ?? null,
                 });
 
             } else {
@@ -3432,7 +3487,11 @@ export class VouchersService {
                         amount_paid: new Prisma.Decimal(0),
                         description_prefix: prefixBalance,
                         fee_date: balanceFeeDate,
-                    },
+                        // Scholarship identity (percentage/type) carries over unchanged —
+                        // this is still the same MTF fee, just tracking the unpaid portion.
+                        scholarship_percentage: oldFee.scholarship_percentage,
+                        scholarship_type_id: oldFee.scholarship_type_id,
+                    } as any,
                 });
 
                 // ── Create a NEW row for the PAID side, sharing the same fee_date.
@@ -3467,6 +3526,9 @@ export class VouchersService {
                         // so reversal in _destroyVoucherInTx can find it directly even when
                         // balanceFeeDate above has moved it off oldFee.fee_date.
                         split_pair_id: oldFeeId,
+                        // Scholarship identity carries over unchanged (see balance-row update above).
+                        scholarship_percentage: oldFee.scholarship_percentage,
+                        scholarship_type_id: oldFee.scholarship_type_id,
                     } as any,
                 });
 
@@ -3622,6 +3684,8 @@ export class VouchersService {
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
                     description_prefix: resolvePrefix(row, 'paid'),   // ← always from SF
+                    scholarship_amount: row.scholarship_amount,
+                    scholarship_label: row.scholarship_label,
                 } as any)),
             });
 
@@ -3635,6 +3699,8 @@ export class VouchersService {
                     amount_deposited: row.amount_deposited,
                     balance: row.balance,
                     description_prefix: resolvePrefix(row, 'unpaid'),  // ← always from SF
+                    scholarship_amount: row.scholarship_amount,
+                    scholarship_label: row.scholarship_label,
                 } as any)),
             });
 

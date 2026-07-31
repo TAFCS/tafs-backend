@@ -1,4 +1,4 @@
-import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, IsISO8601, Min } from 'class-validator';
+import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, IsISO8601, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SaveStudentFeeItemDto {
@@ -21,7 +21,11 @@ export class SaveStudentFeeItemDto {
     @Min(0)
     amount_before_discount: number;
 
-    /** Net amount for this student (after specific override). */
+    /**
+     * Net amount for this student after the system discount override —
+     * i.e. the amount BEFORE any scholarship. Stored as amount_after_discount;
+     * the final `amount` (after scholarship, if any) is computed server-side.
+     */
     @IsNumber({ maxDecimalPlaces: 2 })
     @Min(0)
     @IsOptional()
@@ -31,6 +35,23 @@ export class SaveStudentFeeItemDto {
     @IsISO8601()
     @IsOptional()
     fee_date?: string;
+
+    /** Scholarship percentage (0-100) applied on top of amount_after_discount. MTF (fee_type_id=1) only. */
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
+    @Max(100)
+    @IsOptional()
+    scholarship_percentage?: number;
+
+    /** Existing scholarship_presets.id — mutually exclusive with scholarship_custom_title. */
+    @IsNumber()
+    @IsOptional()
+    scholarship_type_id?: number;
+
+    /** Free-text title used to create a new scholarship preset on the fly. */
+    @IsString()
+    @IsOptional()
+    scholarship_custom_title?: string;
 }
 
 export class SaveStudentFeeBundleDto {
