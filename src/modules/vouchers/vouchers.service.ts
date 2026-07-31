@@ -846,15 +846,32 @@ export class VouchersService {
             });
         }
 
-        // 2. Fetch all installment fees for this student to calculate sequence numbers once
-        let studentInstallmentFees = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: voucher.student_id,
-                academic_year: voucher.academic_year,
-                installment_id: { not: null } as any
-            },
-            include: { student_fee_installments: { include: { fee_types: true } } } as any,
-        });
+        // 2. Fetch all installment fees for this student to calculate sequence numbers once.
+        //
+        // Scope by the academic years actually carried by this voucher's heads, not by
+        // vouchers.academic_year alone. The voucher's own month/academic_year are header
+        // metadata chosen in the /fee-challan UI and are stored verbatim (see create());
+        // nothing derives them from — or reconciles them against — the fee rows that end
+        // up on the voucher. When they disagree (e.g. voucher 08260008012: header says
+        // 2025-2026 while every head is a 2026-2027 row), scoping on the header value
+        // returns zero rows, which silently drops BOTH the "(INSTALLMENT n/N)" label from
+        // the main columns and the entire installment plan from the 4th column.
+        const installmentLookupYears = Array.from(new Set(
+            [
+                ...(voucher.voucher_heads as any[]).map((h: any) => h.student_fees?.academic_year),
+                voucher.academic_year,
+            ].filter((ay): ay is string => !!ay),
+        ));
+        let studentInstallmentFees = installmentLookupYears.length > 0
+            ? await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: voucher.student_id,
+                    academic_year: { in: installmentLookupYears },
+                    installment_id: { not: null } as any
+                },
+                include: { student_fee_installments: { include: { fee_types: true } } } as any,
+            })
+            : [];
 
         // Term cutoff: class IDs 15–19 run Apr–Mar (cutoff=4); all others run Aug–Jul (cutoff=8).
         // Installment sequence order is derived from target_month relative to the term start,
@@ -1215,6 +1232,16 @@ export class VouchersService {
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
 
+        // student_fees ids printed in this voucher's CURRENT-period main columns (arrear heads
+        // excluded — those still belong in the installment plan column). Used to keep the 4th
+        // column from repeating a line the main columns already show.
+        const currentPeriodInstallmentFeeIds = new Set<number>(
+            (voucher.voucher_heads as any[])
+                .filter((h: any) => forceHeadsAsCurrent || !this.headIsArrear(h, voucher))
+                .map((h: any) => h.student_fee_id)
+                .filter((id: any): id is number => id != null),
+        );
+
         // Standalone installments that are past + unpaid but absent from this voucher's heads
         // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
         const installmentSortIdx = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
@@ -1507,7 +1534,12 @@ export class VouchersService {
                         // Exclude only the installment(s) that are the current voucher month —
                         // those are already shown in the main fee columns.
                         // Past arrear installments and future installments all belong in the plan.
-                        return !(f.target_month === voucher.month && f.academic_year === voucher.academic_year);
+                        // Matched against the voucher's own current-period heads rather than
+                        // voucher.month/academic_year: those are UI-chosen header metadata that
+                        // can disagree with the heads (see installmentLookupYears above), in which
+                        // case a month/year comparison never fires and the current installment
+                        // gets printed twice — once in the main columns, once here.
+                        return !currentPeriodInstallmentFeeIds.has(f.id);
                     })
                     .sort((a: any, b: any) => {
                         const aDate = a.fee_date ? new Date(a.fee_date).getTime() : 0;
