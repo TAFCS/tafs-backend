@@ -24,10 +24,11 @@ export class ClassFeeScheduleService {
     });
   }
 
-  async findByClassId(classId: number, campusId?: number) {
+  async findByClassId(classId: number, campusId?: number, academicYear?: string) {
     return this.prisma.class_fee_schedule.findMany({
       where: {
         class_id: classId,
+        ...(academicYear ? { academic_year: academicYear } : {}),
         ...(campusId !== undefined
           ? {
               OR: [{ campus_id: campusId }, { campus_id: null }],

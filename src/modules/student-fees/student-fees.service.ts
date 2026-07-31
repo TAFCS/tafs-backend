@@ -527,6 +527,7 @@ export class StudentFeesService {
         const template = await this.prisma.class_fee_schedule.findMany({
             where: {
                 class_id: effectiveClassId,
+                academic_year: academicYear,
                 ...(effectiveCampusId !== undefined
                     ? {
                         OR: [{ campus_id: effectiveCampusId }, { campus_id: null }],

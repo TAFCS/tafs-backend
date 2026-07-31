@@ -47,7 +47,11 @@ export class ClassFeeScheduleController {
       ability.can(Action.Read, 'ClassFeeSchedule') ||
       ability.can(Action.Manage, 'all'),
   )
-  async findByClass(@Query('class_id') classId: string, @Query('campus_id') campusId?: string) {
+  async findByClass(
+    @Query('class_id') classId: string,
+    @Query('campus_id') campusId?: string,
+    @Query('academic_year') academicYear?: string,
+  ) {
     const parsedClassId = Number(classId);
     const parsedCampusId = campusId ? Number(campusId) : undefined;
 
@@ -59,8 +63,11 @@ export class ClassFeeScheduleController {
       };
     }
 
-    const schedules =
-      await this.classFeeScheduleService.findByClassId(parsedClassId, parsedCampusId);
+    const schedules = await this.classFeeScheduleService.findByClassId(
+      parsedClassId,
+      parsedCampusId,
+      academicYear,
+    );
 
     return {
       success: true,
