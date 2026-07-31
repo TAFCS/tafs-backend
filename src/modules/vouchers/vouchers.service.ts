@@ -1273,16 +1273,6 @@ export class VouchersService {
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
 
-        // student_fees ids printed in this voucher's CURRENT-period main columns (arrear heads
-        // excluded — those still belong in the installment plan column). Used to keep the 4th
-        // column from repeating a line the main columns already show.
-        const currentPeriodInstallmentFeeIds = new Set<number>(
-            (voucher.voucher_heads as any[])
-                .filter((h: any) => forceHeadsAsCurrent || !this.headIsArrear(h, voucher))
-                .map((h: any) => h.student_fee_id)
-                .filter((id: any): id is number => id != null),
-        );
-
         // Standalone installments that are past + unpaid but absent from this voucher's heads
         // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
         const installmentSortIdx = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
@@ -1572,15 +1562,13 @@ export class VouchersService {
                         // of a 'BALANCE PAYMENT OF...' row that already represents this slot
                         // in the history — listing both would show the same installment twice.
                         if (((f.description_prefix ?? '') as string).startsWith('PARTIAL PAYMENT OF')) return false;
-                        // Exclude only the installment(s) that are the current voucher month —
-                        // those are already shown in the main fee columns.
-                        // Past arrear installments and future installments all belong in the plan.
-                        // Matched against the voucher's own current-period heads rather than
-                        // voucher.month/academic_year: those are UI-chosen header metadata that
-                        // can disagree with the heads (see installmentLookupYears above), in which
-                        // case a month/year comparison never fires and the current installment
-                        // gets printed twice — once in the main columns, once here.
-                        return !currentPeriodInstallmentFeeIds.has(f.id);
+                        // The 4th column (INSTALLMENTS PLAN) always lists every installment head
+                        // for the plan — past, current, and future — even though the current
+                        // period's head is also shown in the main fee columns. Previously the
+                        // current-period head was deliberately excluded here to avoid the
+                        // "duplicate" line, but the plan is meant to be a complete at-a-glance
+                        // view of all twelve heads regardless of what's also on the main columns.
+                        return true;
                     })
                     .sort((a: any, b: any) => {
                         const aDate = a.fee_date ? new Date(a.fee_date).getTime() : 0;
