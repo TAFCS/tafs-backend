@@ -256,15 +256,16 @@ export class StudentsService {
         }] : []),
       ];
     }
-    if (campus_id)   where.campus_id  = campus_id;
-    if (class_id)    where.class_id   = class_id;
-    if (section_id)  where.section_id = section_id;
-    if (house_id)    where.house_id   = house_id;
+    if (campus_id?.length)  where.campus_id  = { in: campus_id };
+    if (class_id?.length)   where.class_id   = { in: class_id };
+    if (section_id?.length) where.section_id = { in: section_id };
+    if (house_id?.length)   where.house_id   = { in: house_id };
     // UNCONFIRMED is kept as an alias for QUICK_ADMISSION (real students status).
-    if (status === 'UNCONFIRMED') {
-      where.status = StudentStatus.QUICK_ADMISSION as any;
-    } else if (status) {
-      where.status = status as any;
+    if (status?.length) {
+      const mapped = status.map((s) =>
+        s === 'UNCONFIRMED' ? StudentStatus.QUICK_ADMISSION : s,
+      );
+      where.status = { in: [...new Set(mapped)] } as any;
     }
 
     // Data Audit Filters
@@ -327,7 +328,7 @@ export class StudentsService {
       query.audit_type ||
       (query.is_abnormal === '1' || query.is_abnormal === 'true' ? 'abnormal' : null);
 
-    if (class_id || section_id || house_id || auditType) return null;
+    if (class_id?.length || section_id?.length || house_id?.length || auditType) return null;
     if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
 
     const where: Prisma.unconfirmed_admissionsWhereInput = {};
@@ -341,8 +342,11 @@ export class StudentsService {
       ];
     }
 
-    const scopedCampus = user?.campusId ?? campus_id;
-    if (scopedCampus != null) where.campus_id = scopedCampus;
+    if (user?.campusId != null) {
+      where.campus_id = user.campusId;
+    } else if (campus_id?.length) {
+      where.campus_id = campus_id.length === 1 ? campus_id[0] : { in: campus_id };
+    }
 
     if (has_photo === 'true') {
       and.push({ photograph_url: { not: null } }, { photograph_url: { not: '' } });
@@ -412,14 +416,22 @@ export class StudentsService {
 
     // Alias UNCONFIRMED → QUICK_ADMISSION for the students query
     const statusFilter = query.status;
+    const normalizedStatuses = [
+      ...new Set(
+        (statusFilter ?? []).map((s) =>
+          s === 'UNCONFIRMED' ? StudentStatus.QUICK_ADMISSION : s,
+        ),
+      ),
+    ];
+    const includesQuick = normalizedStatuses.includes(StudentStatus.QUICK_ADMISSION);
     const quickOnly =
-      statusFilter === 'UNCONFIRMED' || statusFilter === StudentStatus.QUICK_ADMISSION;
+      normalizedStatuses.length === 1 && includesQuick;
 
     const where = await this.buildStudentsWhere(query, user);
 
     // Remaining unconfirmed rows (collision leftovers / pre-migration) — dual-read
     const uncWhere =
-      !statusFilter || quickOnly
+      !statusFilter?.length || includesQuick
         ? this.buildLeftoverUnconfirmedWhere(query, user)
         : null;
     const uncInclude = { campuses: { select: { campus_name: true, campus_code: true } } };
@@ -2603,15 +2615,9 @@ export class StudentsService {
               },
             });
 
-            await tx.student_admissions.create({
-              data: {
-                student_id: student.cc,
-                academic_system: toClass!.academic_system,
-                requested_grade: toClass!.description,
-                academic_year: nextAcademicYear,
-              },
-            });
-
+            // Promotions are academic progression events — do not create a
+            // student_admissions row (that would show up as a fake "application"
+            // in Application History). Progression history is the source of truth.
             await this.progressionHistory.recordProgressionChange(tx, {
               studentCc: student.cc,
               campusId: destCampusId,

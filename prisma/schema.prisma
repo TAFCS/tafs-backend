@@ -847,6 +847,8 @@ model vouchers {
   split_parent_id           Int?
   reprint_fee_charge        Boolean                     @default(false)
   reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
+  generated_by_name         String?                     @db.VarChar(100)
+  generated_at              DateTime?                   @db.Timestamp(6)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]
@@ -978,6 +980,7 @@ model ticket_messages {
   reviewed_at        DateTime?
   review_comment     String?
   created_at         DateTime         @default(now())
+  deleted_at         DateTime?
   reviewer           users?           @relation("TicketMessageReviewer", fields: [reviewed_by], references: [id])
   sender_guardian    guardians?       @relation("TicketMessageSenderGuardian", fields: [sender_guardian_id], references: [id])
   sender_user        users?           @relation("TicketMessageSenderUser", fields: [sender_user_id], references: [id])
@@ -985,6 +988,7 @@ model ticket_messages {
 
   @@index([ticket_id, created_at(sort: Desc)])
   @@index([status, sender_type])
+  @@index([deleted_at])
 }
 
 model ticket_events {

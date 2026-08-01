@@ -52,4 +52,25 @@ describe('staff-scope', () => {
       ForbiddenException,
     );
   });
+
+  it('rejects campus outside scope when request is an array', () => {
+    expect(() =>
+      applyStudentScope(staff({ campusId: 1 }), {}, { campus_id: [1, 2] }),
+    ).toThrow(ForbiddenException);
+  });
+
+  it('accepts campus array wholly within scope', () => {
+    const where = applyStudentScope(staff({ campusId: 1 }), {}, { campus_id: [1] });
+    expect(where.campus_id).toBe(1);
+  });
+
+  it('rejects class outside scope when request is an array', () => {
+    expect(() =>
+      applyStudentScope(
+        staff({ allowedClassIds: [1, 2, 3] }),
+        { class_id: { in: [1, 2, 9] } },
+        { class_id: [1, 2, 9] },
+      ),
+    ).toThrow(ForbiddenException);
+  });
 });

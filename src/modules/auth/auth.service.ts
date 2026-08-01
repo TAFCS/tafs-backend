@@ -295,24 +295,25 @@ export class AuthService {
               });
             }
           }
-          const phoneCode = guardian.primary_phone_country_code ?? '';
+          const phoneCode = guardian.primary_phone_country_code ?? '+92';
+          const whatsappCode = guardian.whatsapp_country_code ?? '+92';
           const phoneNum = guardian.primary_phone ?? '';
-          const fullPhone = phoneNum.startsWith(phoneCode)
-            ? phoneNum
-            : `${phoneCode}${phoneNum}`;
+          const whatsappNum = guardian.whatsapp_number ?? '';
 
           return {
             id: guardian.id,
             name: guardian.full_name,
             relationship: g.relationship,
-            phone: fullPhone || null,
+            phone: phoneNum || null,
+            phoneCountryCode: phoneCode,
             photographUrl: guardian.photo_url,
             email: guardian.email_address || null,
             occupation: guardian.occupation || null,
             organization: guardian.organization || null,
             education: guardian.education_level || null,
             cnic: guardian.cnic || null,
-            whatsapp: guardian.whatsapp_number || null,
+            whatsapp: whatsappNum || null,
+            whatsappCountryCode: whatsappCode,
             address: guardian.mailing_address || null,
             houseApptName: guardian.house_appt_name || null,
             areaBlock: guardian.area_block || null,

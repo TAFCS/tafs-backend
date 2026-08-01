@@ -6,6 +6,24 @@ import { StudentStatus } from '../../../constants/student-status.constant';
 export const STUDENT_LIST_STATUSES = [...Object.values(StudentStatus), 'UNCONFIRMED'] as const;
 export type StudentListStatus = (typeof STUDENT_LIST_STATUSES)[number];
 
+/** Accepts a single value, comma-separated string, or array → number[]. */
+function toNumberArray({ value }: { value: unknown }): number[] | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const raw = Array.isArray(value) ? value : String(value).split(',');
+  const nums = raw
+    .map((v) => Number(String(v).trim()))
+    .filter((n) => Number.isInteger(n) && !Number.isNaN(n));
+  return nums.length ? nums : undefined;
+}
+
+/** Accepts a single value, comma-separated string, or array → string[]. */
+function toStringArray({ value }: { value: unknown }): string[] | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const raw = Array.isArray(value) ? value : String(value).split(',');
+  const items = raw.map((v) => String(v).trim()).filter(Boolean);
+  return items.length ? items : undefined;
+}
+
 export class GetStudentsDto {
   @IsOptional()
   @Type(() => Number)
@@ -24,28 +42,34 @@ export class GetStudentsDto {
   search?: string;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campus_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  class_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  class_id?: number[];
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  section_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  section_id?: number[];
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  house_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  house_id?: number[];
 
   @IsOptional()
-  @IsIn(STUDENT_LIST_STATUSES as unknown as string[])
-  status?: StudentListStatus;
+  @Transform(toStringArray)
+  @IsArray()
+  @IsIn(STUDENT_LIST_STATUSES as unknown as string[], { each: true })
+  status?: StudentListStatus[];
 
   @IsOptional()
   @IsArray()
