@@ -21,8 +21,11 @@ const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
 const GUARDIAN_FIELD_MAX_LENGTHS: Record<string, number> = {
   full_name: 100,
   primary_phone: 20,
+  primary_phone_country_code: 10,
   whatsapp_number: 20,
+  whatsapp_country_code: 10,
   work_phone: 20,
+  work_phone_country_code: 10,
   email_address: 100,
   education_level: 255,
   occupation: 100,
@@ -117,6 +120,7 @@ export class ParentChangeRequestsService {
           lowerKey.includes('email') ||
           lowerKey.includes('url') ||
           lowerKey.includes('pic') ||
+          lowerKey.includes('country_code') ||
           lowerKey === 'dob'
         ) {
           continue;
@@ -232,6 +236,9 @@ export class ParentChangeRequestsService {
           select: {
             full_name: true,
             primary_phone: true,
+            primary_phone_country_code: true,
+            whatsapp_number: true,
+            whatsapp_country_code: true,
             email_address: true,
             cnic: true,
             occupation: true,

@@ -9,21 +9,31 @@ import { IJwtStaffPayload } from '../modules/auth/interfaces/jwt-payload.interfa
 export function applyStudentScope(
   user: IJwtStaffPayload,
   where: Prisma.studentsWhereInput,
-  query?: { campus_id?: number; class_id?: number },
+  query?: { campus_id?: number | number[]; class_id?: number | number[] },
 ): Prisma.studentsWhereInput {
   const scoped = { ...where };
 
   if (user.campusId != null) {
-    if (query?.campus_id != null && query.campus_id !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
+    if (query?.campus_id != null) {
+      const requested = Array.isArray(query.campus_id)
+        ? query.campus_id
+        : [query.campus_id];
+      if (requested.some((id) => id !== user.campusId)) {
+        throw new ForbiddenException('You do not have access to this campus');
+      }
     }
     scoped.campus_id = user.campusId;
   }
 
   const allowed = user.allowedClassIds ?? [];
   if (allowed.length > 0) {
-    if (query?.class_id != null && !allowed.includes(query.class_id)) {
-      throw new ForbiddenException('You do not have access to this class');
+    if (query?.class_id != null) {
+      const requested = Array.isArray(query.class_id)
+        ? query.class_id
+        : [query.class_id];
+      if (requested.some((id) => !allowed.includes(id))) {
+        throw new ForbiddenException('You do not have access to this class');
+      }
     }
     const existing = scoped.class_id;
     if (

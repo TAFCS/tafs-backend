@@ -819,6 +819,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  @SubscribeMessage('deleteTicketMessage')
+  async handleDeleteTicketMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { messageId: string },
+  ) {
+    const payload = client.data.tafsPayload;
+    if (!payload || payload.userType !== 'STAFF') {
+      return { error: 'unauthorized' };
+    }
+    if (!data?.messageId) return { error: 'messageId required' };
+
+    try {
+      return await this.supportTicketsService.deleteOwnStaffMessage(
+        data.messageId,
+        payload,
+      );
+    } catch (err: any) {
+      return { error: err.message ?? 'failed' };
+    }
+  }
+
   async broadcastTicketCreated(ticket: any) {
     this.server.to('super_admin_approvals').emit('ticketCreated', { ticket });
     if (ticket.current_assignee_id) {
@@ -1003,6 +1024,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
     this.server.to('super_admin_approvals').emit('ticketClosed', { ticket });
     this.emitToTicketRoom(ticket.id, 'ticketClosed', { ticket });
+  }
+
+  async broadcastTicketMessageDeleted(ticket: any, messageId: string) {
+    const payload = {
+      ticketId: ticket.id,
+      messageId,
+      ticket,
+    };
+    this.server
+      .to(`family_app_${ticket.family_id}`)
+      .emit('ticketMessageDeleted', payload);
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketMessageDeleted', payload);
+    }
+    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
+      this.server.to('finance_queue').emit('ticketMessageDeleted', payload);
+    }
+    this.server.to('super_admin_approvals').emit('ticketMessageDeleted', payload);
+    this.emitToTicketRoom(ticket.id, 'ticketMessageDeleted', payload);
   }
 
   private emitToTicketRoom(ticketId: string | null | undefined, event: string, payload: unknown) {

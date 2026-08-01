@@ -13,6 +13,7 @@ describe('SupportTicketsService leak-proofing', () => {
     broadcastTicketMessageToStaff: jest.fn(),
     broadcastTicketClosed: jest.fn(),
     broadcastTicketMessagesRead: jest.fn(),
+    broadcastTicketMessageDeleted: jest.fn(),
     isParentInTicketRoom: jest.fn().mockReturnValue(false),
     isStaffInTicketRoom: jest.fn().mockResolvedValue(false),
   };
@@ -67,10 +68,13 @@ describe('SupportTicketsService leak-proofing', () => {
       { userType: 'PARENT', familyId: 1 },
       { id: 't1' },
     );
-    expect(where.OR).toEqual([
-      { sender_type: 'GUARDIAN' },
-      { sender_type: 'STAFF', status: MessageStatus.APPROVED },
-    ]);
+    expect(where).toEqual({
+      deleted_at: null,
+      OR: [
+        { sender_type: 'GUARDIAN' },
+        { sender_type: 'STAFF', status: MessageStatus.APPROVED },
+      ],
+    });
   });
 
   it('parent event filter hides internal workflow events', () => {
