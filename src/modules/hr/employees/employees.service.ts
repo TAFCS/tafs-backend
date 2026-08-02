@@ -589,8 +589,16 @@ export class EmployeesService {
 
   async remove(id: number, changedBy?: string) {
     const existing = await this.findOne(id);
-    const record = await this.prisma.employee_profiles.delete({
-      where: { id }
+    const record = await this.prisma.$transaction(async (tx) => {
+      if (existing.user_id) {
+        await tx.users.update({
+          where: { id: existing.user_id },
+          data: { is_active: false },
+        });
+      }
+      return tx.employee_profiles.delete({
+        where: { id },
+      });
     });
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
@@ -769,12 +777,25 @@ export class EmployeesService {
 
     const deactivatePortal =
       nextStatus === EmployeeStatus.TERMINATED || nextStatus === EmployeeStatus.LEFT;
+    const wasOffboarded =
+      existing.employment_status === EmployeeStatus.TERMINATED ||
+      existing.employment_status === EmployeeStatus.LEFT;
+    const reactivatePortal =
+      wasOffboarded &&
+      (nextStatus === EmployeeStatus.ACTIVE ||
+        nextStatus === EmployeeStatus.PERMANENT ||
+        nextStatus === EmployeeStatus.FAMILY);
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (deactivatePortal && existing.user_id) {
+      if (existing.user_id && deactivatePortal) {
         await tx.users.update({
           where: { id: existing.user_id },
           data: { is_active: false },
+        });
+      } else if (existing.user_id && reactivatePortal) {
+        await tx.users.update({
+          where: { id: existing.user_id },
+          data: { is_active: true },
         });
       }
 
