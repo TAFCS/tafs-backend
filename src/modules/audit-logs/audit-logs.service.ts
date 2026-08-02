@@ -12,6 +12,7 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
   'house-balancer': ['HOUSE'],
   system: ['USER', 'PERMISSION', 'BACKUP', 'APP_CONFIG'],
+  'app-config': ['APP_CONFIG'],
   'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };
 
