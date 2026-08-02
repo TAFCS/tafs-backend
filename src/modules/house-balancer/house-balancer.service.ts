@@ -520,48 +520,44 @@ export class HouseBalancerService {
       };
     });
 
-    await this.auditLogs.log({
-      entity_type: 'HOUSE',
-      entity_id: `${dto.campus_id}:${dto.class_id}:${dto.section_id}`,
-      action: 'REBALANCED',
-      section: 'house-balancer',
-      changed_by: changedBy ?? 'system',
-      note: this.buildSectionNote({
-        studentCount: result.student_count,
-        campusName: result.campus.campus_name,
-        className: result.class.description,
-        sectionName: result.section.description,
-        houses: result.houses,
-        beforeCounts: result.before_counts,
-        afterCounts: result.after_counts,
-      }),
-      new_value: this.serializeMovesPayload(result.moves, {
-        student_count: result.student_count,
-        scope: {
-          campus_name: result.campus.campus_name,
-          class_name: result.class.description,
-          section_name: result.section.description,
-        },
-        houses: result.houses,
-        before_counts: this.countsForStorage(result.before_counts),
-        after_counts: this.countsForStorage(result.after_counts),
-      }),
-    });
-
-    await Promise.all(
-      result.moves.map((move) =>
-        this.auditLogs.log({
-          entity_type: 'STUDENT',
-          entity_id: String(move.student_id),
-          action: 'REBALANCED',
-          field: 'student.house_id',
-          old_value: move.old_house ? String(move.old_house.id) : null,
-          new_value: String(move.new_house.id),
-          changed_by: changedBy ?? 'system',
-          student_id: move.student_id,
-          note: 'Reassigned via house balancer',
+    await this.auditLogs.logGroup(
+      {
+        entity_type: 'HOUSE',
+        entity_id: `${dto.campus_id}:${dto.class_id}:${dto.section_id}`,
+        action: 'REBALANCED',
+        section: 'house-balancer',
+        changed_by: changedBy ?? 'system',
+        note: this.buildSectionNote({
+          studentCount: result.student_count,
+          campusName: result.campus.campus_name,
+          className: result.class.description,
+          sectionName: result.section.description,
+          houses: result.houses,
+          beforeCounts: result.before_counts,
+          afterCounts: result.after_counts,
         }),
-      ),
+        new_value: this.serializeMovesPayload(result.moves, {
+          student_count: result.student_count,
+          scope: {
+            campus_name: result.campus.campus_name,
+            class_name: result.class.description,
+            section_name: result.section.description,
+          },
+          houses: result.houses,
+          before_counts: this.countsForStorage(result.before_counts),
+          after_counts: this.countsForStorage(result.after_counts),
+        }),
+      },
+      result.moves.map((move) => ({
+        entity_type: 'STUDENT',
+        entity_id: String(move.student_id),
+        action: 'REBALANCED',
+        field: 'student.house_id',
+        old_value: move.old_house ? String(move.old_house.id) : null,
+        new_value: String(move.new_house.id),
+        student_id: move.student_id,
+        note: 'Reassigned via house balancer',
+      })),
     );
 
     return result;
@@ -910,45 +906,41 @@ export class HouseBalancerService {
         )?.description ?? `Class #${dto.class_id}`
       : null;
 
-    await this.auditLogs.log({
-      entity_type: 'HOUSE',
-      entity_id: dto.class_id
-        ? `campus:${dto.campus_id}:class:${dto.class_id}`
-        : `campus:${dto.campus_id}`,
-      action: 'CAMPUS_REBALANCED',
-      section: 'house-balancer',
-      changed_by: changedBy ?? 'system',
-      note: this.buildCampusNote({
-        studentCount: result.total_students,
-        groupCount: result.group_count,
-        campusName: result.campus.campus_name,
-        className: classLabel,
-      }),
-      new_value: this.serializeMovesPayload(result.moves, {
-        student_count: result.total_students,
-        group_count: result.group_count,
-        scope: {
-          campus_name: result.campus.campus_name,
-          class_name: classLabel,
-          section_name: null,
-        },
-      }),
-    });
-
-    await Promise.all(
-      result.moves.map((move) =>
-        this.auditLogs.log({
-          entity_type: 'STUDENT',
-          entity_id: String(move.student_id),
-          action: 'REBALANCED',
-          field: 'student.house_id',
-          old_value: move.old_house ? String(move.old_house.id) : null,
-          new_value: String(move.new_house.id),
-          changed_by: changedBy ?? 'system',
-          student_id: move.student_id,
-          note: 'Reassigned via campus-wide house balancer',
+    await this.auditLogs.logGroup(
+      {
+        entity_type: 'HOUSE',
+        entity_id: dto.class_id
+          ? `campus:${dto.campus_id}:class:${dto.class_id}`
+          : `campus:${dto.campus_id}`,
+        action: 'CAMPUS_REBALANCED',
+        section: 'house-balancer',
+        changed_by: changedBy ?? 'system',
+        note: this.buildCampusNote({
+          studentCount: result.total_students,
+          groupCount: result.group_count,
+          campusName: result.campus.campus_name,
+          className: classLabel,
         }),
-      ),
+        new_value: this.serializeMovesPayload(result.moves, {
+          student_count: result.total_students,
+          group_count: result.group_count,
+          scope: {
+            campus_name: result.campus.campus_name,
+            class_name: classLabel,
+            section_name: null,
+          },
+        }),
+      },
+      result.moves.map((move) => ({
+        entity_type: 'STUDENT',
+        entity_id: String(move.student_id),
+        action: 'REBALANCED',
+        field: 'student.house_id',
+        old_value: move.old_house ? String(move.old_house.id) : null,
+        new_value: String(move.new_house.id),
+        student_id: move.student_id,
+        note: 'Reassigned via campus-wide house balancer',
+      })),
     );
 
     return result;

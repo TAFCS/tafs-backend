@@ -59,10 +59,12 @@ type ResolvedClass = {
   academic_system: string;
 };
 
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
 import { ProgressionHistoryService } from './progression-history.service';
+
+type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
 export class StudentsService {
@@ -1400,6 +1402,22 @@ export class StudentsService {
     const nextHouseId = dto.house_id !== undefined ? dto.house_id : student.house_id;
     const countsTowardCapacity = student.status === StudentStatus.ENROLLED;
 
+    const changeType = this.progressionHistory.resolveChangeType({
+      prior: {
+        campus_id: student.campus_id,
+        class_id: student.class_id,
+        section_id: student.section_id,
+        house_id: student.house_id,
+      },
+      next: {
+        campusId: nextCampusId,
+        classId: nextClassId,
+        sectionId: nextSectionId,
+        houseId: nextHouseId,
+      },
+      defaultType: 'REASSIGNED',
+    });
+
     const runUpdate = async (tx: any) => {
       if (
         this.allocation.shouldValidatePlacement({
@@ -1434,22 +1452,6 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
-      const changeType = this.progressionHistory.resolveChangeType({
-        prior: {
-          campus_id: student.campus_id,
-          class_id: student.class_id,
-          section_id: student.section_id,
-          house_id: student.house_id,
-        },
-        next: {
-          campusId: nextCampusId,
-          classId: nextClassId,
-          sectionId: nextSectionId,
-          houseId: nextHouseId,
-        },
-        defaultType: 'REASSIGNED',
-      });
-
       await this.progressionHistory.recordProgressionChange(tx, {
         studentCc: id,
         campusId: nextCampusId,
@@ -1465,24 +1467,62 @@ export class StudentsService {
       return updated;
     };
 
-    if (
+    const updated = (
       this.allocation.shouldValidatePlacement({
         campusId: nextCampusId,
         classId: nextClassId,
         sectionId: nextSectionId,
       })
-    ) {
-      return this.allocation.withSectionLock(
-        {
-          campusId: nextCampusId,
-          classId: nextClassId,
-          sectionId: nextSectionId,
-        },
-        runUpdate,
-      );
+    )
+      ? await this.allocation.withSectionLock(
+          {
+            campusId: nextCampusId,
+            classId: nextClassId,
+            sectionId: nextSectionId,
+          },
+          runUpdate,
+        )
+      : await this.prisma.$transaction(async (tx) => runUpdate(tx));
+
+    const fieldParts: string[] = [];
+    if (student.campus_id !== nextCampusId) {
+      fieldParts.push(`campus ${student.campus_id ?? '—'}→${nextCampusId ?? '—'}`);
+    }
+    if (student.class_id !== nextClassId) {
+      fieldParts.push(`class ${student.class_id ?? '—'}→${nextClassId ?? '—'}`);
+    }
+    if (student.section_id !== nextSectionId) {
+      fieldParts.push(`section ${student.section_id ?? '—'}→${nextSectionId ?? '—'}`);
+    }
+    if (student.house_id !== nextHouseId) {
+      fieldParts.push(`house ${student.house_id ?? '—'}→${nextHouseId ?? '—'}`);
     }
 
-    return this.prisma.$transaction(async (tx) => runUpdate(tx));
+    if (fieldParts.length > 0) {
+      void this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(id),
+        action: changeType === 'REASSIGNED' ? 'REASSIGNED' : 'UPDATED',
+        field: fieldParts.join(', '),
+        old_value: [
+          student.campus_id,
+          student.class_id,
+          student.section_id,
+          student.house_id,
+        ].map((v) => (v == null ? '—' : String(v))).join('/'),
+        new_value: [
+          nextCampusId,
+          nextClassId,
+          nextSectionId,
+          nextHouseId,
+        ].map((v) => (v == null ? '—' : String(v))).join('/'),
+        changed_by: changedBy,
+        student_id: id,
+        note: `${student.full_name ?? `Student CC ${id}`} (#${id}) ${changeType.toLowerCase()}: ${fieldParts.join('; ')}`,
+      });
+    }
+
+    return updated;
   }
 
   async unexpelStudent(id: number, changedBy: string) {
@@ -1996,6 +2036,7 @@ export class StudentsService {
     const classActiveCache = new Map<string, boolean>();
     const sectionActiveCache = new Map<string, boolean>();
     const results: PromotionOutcome[] = [];
+    const auditChildren: AuditChildPayload[] = [];
     const grOverrideMap = new Map((dto.gr_overrides ?? []).map(o => [o.student_cc, o.new_gr]));
 
     const isALevelPromotion = !!toClass && this.isALevelAcademicSystem(toClass.academic_system);
@@ -2042,6 +2083,7 @@ export class StudentsService {
             sectionActiveCache,
             grOverrideMap.get(studentId),
             changedBy,
+            auditChildren,
             dto.to_campus_id,
           );
           results.push(outcome);
@@ -2067,6 +2109,7 @@ export class StudentsService {
             sectionActiveCache,
             grOverrideMap.get(student.cc),
             changedBy,
+            auditChildren,
             dto.to_campus_id,
           );
           results.push(outcome);
@@ -2080,11 +2123,57 @@ export class StudentsService {
     const total_left = results.filter((r) => r.status === 'left').length;
     const total_skipped = results.filter((r) => r.status === 'skipped').length;
     const total_failed = results.filter((r) => r.status === 'failed').length;
+    const total_success = total_promoted + total_graduated + total_expelled + total_left;
+
+    if (!dryRun && auditChildren.length > 0) {
+      const action = isGraduating
+        ? 'GRADUATED'
+        : isExpelling
+          ? 'EXPELLED'
+          : isLeaving
+            ? 'LEFT'
+            : 'PROMOTED';
+      const modeVerb = isGraduating
+        ? 'graduated'
+        : isExpelling
+          ? 'expelled'
+          : isLeaving
+            ? 'marked left'
+            : 'promoted';
+      const fromLabel = fromClass
+        ? `${fromClass.description || fromClass.class_code} (#${fromClass.id})`
+        : 'N/A';
+      const toLabel = toClass
+        ? `${toClass.description || toClass.class_code} (#${toClass.id})`
+        : null;
+      const countParts = [
+        total_promoted ? `${total_promoted} promoted` : null,
+        total_graduated ? `${total_graduated} graduated` : null,
+        total_expelled ? `${total_expelled} expelled` : null,
+        total_left ? `${total_left} left` : null,
+      ].filter(Boolean);
+      const noteParts = [
+        `Bulk ${modeVerb}: ${countParts.join(', ') || `${total_success} student(s)`}.`,
+        `From ${fromLabel}${toLabel ? ` → ${toLabel}` : ''}.`,
+        dto.reason?.trim() ? `Reason: ${dto.reason.trim()}` : null,
+      ].filter(Boolean);
+
+      void this.auditLogs.logGroup(
+        {
+          entity_type: 'STUDENT',
+          entity_id: fromClass ? String(fromClass.id) : 'BULK_PROMOTE',
+          action,
+          changed_by: changedBy,
+          note: noteParts.join(' '),
+        },
+        auditChildren,
+      );
+    }
 
     return {
       summary: {
         total_requested: results.length,
-        total_promoted: total_promoted + total_graduated + total_expelled + total_left,
+        total_promoted: total_success,
         total_promoted_only: total_promoted,
         total_graduated,
         total_expelled,
@@ -2127,6 +2216,7 @@ export class StudentsService {
     sectionActiveCache: Map<string, boolean>,
     grOverride: string | undefined,
     changedBy: string,
+    auditChildren: AuditChildPayload[],
     toCampusId?: number,
   ): Promise<PromotionOutcome> {
     // ── Already expelled guard ───────────────────────────────────────────────
@@ -2460,14 +2550,13 @@ export class StudentsService {
           });
         });
 
-        void this.auditLogs.log({
+        auditChildren.push({
           entity_type: 'STUDENT',
           entity_id: String(student.cc),
           action: 'GRADUATED',
           field: 'status',
           old_value: student.status,
           new_value: StudentStatus.GRADUATED,
-          changed_by: changedBy,
           student_id: student.cc,
           note: [`${student.full_name ?? `Student CC ${student.cc}`} graduated from class #${student.class_id ?? 'N/A'}.`, reason?.trim()]
             .filter(Boolean)
@@ -2521,14 +2610,13 @@ export class StudentsService {
           });
         });
 
-        void this.auditLogs.log({
+        auditChildren.push({
           entity_type: 'STUDENT',
           entity_id: String(student.cc),
           action: 'EXPELLED',
           field: 'status',
           old_value: student.status,
           new_value: StudentStatus.EXPELLED,
-          changed_by: changedBy,
           student_id: student.cc,
           note: [`${student.full_name ?? `Student CC ${student.cc}`} expelled.`, expulsionReason].filter(Boolean).join(' '),
         });
@@ -2578,6 +2666,19 @@ export class StudentsService {
             changedBy,
             notes: leftReason,
           });
+        });
+
+        auditChildren.push({
+          entity_type: 'STUDENT',
+          entity_id: String(student.cc),
+          action: 'LEFT',
+          field: 'status',
+          old_value: student.status,
+          new_value: StudentStatus.LEFT,
+          student_id: student.cc,
+          note: [`${student.full_name ?? `Student CC ${student.cc}`} marked as left.`, leftReason]
+            .filter(Boolean)
+            .join(' '),
         });
 
         return {
@@ -2633,14 +2734,13 @@ export class StudentsService {
           { maxWait: 5000, timeout: 15000 },
         );
 
-        void this.auditLogs.log({
+        auditChildren.push({
           entity_type: 'STUDENT',
           entity_id: String(student.cc),
           action: 'PROMOTED',
           field: 'class_id',
           old_value: student.class_id != null ? String(student.class_id) : null,
           new_value: String(toClass!.id),
-          changed_by: changedBy,
           student_id: student.cc,
           note: [
             `${student.full_name ?? `Student CC ${student.cc}`} promoted from ${student.academic_year ?? 'N/A'} to ${nextAcademicYear}.`,

@@ -63,19 +63,49 @@ export class StudentFeesService {
     }
 
     private async flushAuditEvents(events: FeeAuditEvent[], studentId: number | null, changedBy: string) {
-        for (const e of events) {
+        if (events.length === 0) return;
+
+        // First event is the parent summary; remaining events nest as children
+        // so one user action appears as one top-level Activity Log row.
+        const [parent, ...children] = events;
+        if (children.length === 0) {
             await this.auditLogs.log({
+                entity_type: parent.entity_type,
+                entity_id: parent.entity_id,
+                action: parent.action,
+                field: parent.field ?? null,
+                old_value: parent.old_value ?? null,
+                new_value: parent.new_value ?? null,
+                changed_by: changedBy,
+                student_id: studentId,
+                note: parent.note,
+            });
+            return;
+        }
+
+        await this.auditLogs.logGroup(
+            {
+                entity_type: parent.entity_type,
+                entity_id: parent.entity_id,
+                action: parent.action,
+                field: parent.field ?? null,
+                old_value: parent.old_value ?? null,
+                new_value: parent.new_value ?? null,
+                changed_by: changedBy,
+                student_id: studentId,
+                note: parent.note,
+            },
+            children.map((e) => ({
                 entity_type: e.entity_type,
                 entity_id: e.entity_id,
                 action: e.action,
                 field: e.field ?? null,
                 old_value: e.old_value ?? null,
                 new_value: e.new_value ?? null,
-                changed_by: changedBy,
                 student_id: studentId,
                 note: e.note,
-            });
-        }
+            })),
+        );
     }
 
     async getMonthlyStatusForParent(studentCc: number, familyId: number) {

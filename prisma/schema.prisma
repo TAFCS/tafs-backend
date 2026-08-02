@@ -1675,12 +1675,16 @@ model audit_logs {
   note        String?
   student_id  Int?
   section     String?   @db.VarChar(50)
+  parent_id   Int?
   students    students? @relation(fields: [student_id], references: [cc])
+  parent      audit_logs?  @relation("AuditLogChildren", fields: [parent_id], references: [id], onDelete: Cascade)
+  children    audit_logs[] @relation("AuditLogChildren")
 
   @@index([changed_at(sort: Desc)])
   @@index([entity_type, entity_id])
   @@index([student_id])
   @@index([section])
+  @@index([parent_id])
 }
 
 model class_check_in_schedules {

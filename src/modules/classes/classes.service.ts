@@ -96,6 +96,14 @@ export class ClassesService {
     }
 
     const actor = changedBy ?? 'system';
+    const children: Array<{
+      entity_type: string;
+      entity_id: string;
+      action: string;
+      section?: string;
+      note: string;
+    }> = [];
+
     for (const record of updated) {
       const before = beforeMap.get(record.id);
       if (!before) continue;
@@ -110,15 +118,28 @@ export class ClassesService {
         changes.push(`academic_system "${before.academic_system ?? '—'}" → "${record.academic_system ?? '—'}"`);
       }
       if (changes.length > 0) {
-        await this.auditLogs.log({
+        children.push({
           entity_type: 'CLASS',
           entity_id: String(record.id),
           action: 'UPDATED',
           section: 'school-setup',
-          changed_by: actor,
           note: `Class #${record.id} ("${before.class_code} – ${before.description}") bulk-updated: ${changes.join(', ')}.`,
         });
       }
+    }
+
+    if (children.length > 0) {
+      await this.auditLogs.logGroup(
+        {
+          entity_type: 'CLASS',
+          entity_id: 'BULK',
+          action: 'UPDATED',
+          section: 'school-setup',
+          changed_by: actor,
+          note: `Bulk class save: ${children.length} class(es) updated.`,
+        },
+        children,
+      );
     }
 
     return updated;

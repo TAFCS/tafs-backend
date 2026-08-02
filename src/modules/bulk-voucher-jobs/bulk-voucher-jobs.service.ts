@@ -220,9 +220,7 @@ export class BulkVoucherJobsService {
         });
 
         // 2. Fire-and-forget async pipeline (no external queue needed)
-        setImmediate(() => this.processJob(job.id, dto, feeDates, createdBy));
-
-        await this.auditLogs.log({
+        const auditParentId = await this.auditLogs.log({
             entity_type: 'BULK_VOUCHER',
             entity_id: String(job.id),
             action: 'CREATED',
@@ -236,6 +234,8 @@ export class BulkVoucherJobsService {
                 `Instant parent notification=${dto.send_notification === false ? 'No' : 'Yes'}`,
             ].join(' | '),
         });
+
+        setImmediate(() => this.processJob(job.id, dto, feeDates, createdBy, auditParentId));
 
         return { job_id: job.id };
     }
@@ -308,7 +308,13 @@ export class BulkVoucherJobsService {
 
     // ── Async Pipeline ──────────────────────────────────────────────────────
 
-    private async processJob(jobId: number, dto: StartBulkJobDto, expectedFeeDates: string[], createdBy: string) {
+    private async processJob(
+        jobId: number,
+        dto: StartBulkJobDto,
+        expectedFeeDates: string[],
+        createdBy: string,
+        auditParentId?: number | null,
+    ) {
         const jobReport: any[] = [];
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
         const userRecord = await this.prisma.users.findUnique({ where: { id: createdBy }, select: { full_name: true } });
@@ -391,7 +397,9 @@ export class BulkVoucherJobsService {
                 const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
 
                 const results = await Promise.allSettled(
-                    chunk.map((item) => this.processWorkItem(item, dto, createdBy, generatedByName)),
+                    chunk.map((item) =>
+                        this.processWorkItem(item, dto, createdBy, generatedByName, auditParentId),
+                    ),
                 );
 
                 let chunkSuccess = 0;
@@ -495,6 +503,7 @@ export class BulkVoucherJobsService {
                 field: 'status',
                 new_value: finalStatus,
                 changed_by: createdBy || 'system',
+                parent_id: auditParentId ?? null,
                 note: [
                     `Bulk voucher job #${jobId} completed with status ${finalStatus}.`,
                     `Success=${successCount}`,
@@ -531,6 +540,7 @@ export class BulkVoucherJobsService {
                 field: 'status',
                 new_value: finalStatus,
                 changed_by: createdBy || 'system',
+                parent_id: auditParentId ?? null,
                 note: [
                     `Bulk voucher job #${jobId} ended with status ${finalStatus} after fatal error.`,
                     `Success=${successCount}`,
@@ -546,10 +556,11 @@ export class BulkVoucherJobsService {
     // ── Per-item worker ─────────────────────────────────────────────────────
 
     private async processWorkItem(
-        item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string },
+        item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string; splitFromPartiallyPaid?: boolean },
         dto: StartBulkJobDto,
         createdBy: string,
         generatedByName?: string,
+        auditParentId?: number | null,
     ): Promise<{ buffer: Buffer; url: string; voucher_id: number }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
@@ -593,7 +604,7 @@ export class BulkVoucherJobsService {
             orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
-        }, undefined, createdBy);
+        }, undefined, createdBy, auditParentId);
 
         const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
         return { ...pdfResult, voucher_id: voucher.id };

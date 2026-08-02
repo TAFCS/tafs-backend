@@ -823,7 +823,7 @@ export class EmployeesService {
     return updated;
   }
 
-  async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto) {
+  async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto, caller?: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
@@ -846,14 +846,39 @@ export class EmployeesService {
       ),
     ]);
 
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const scheduleNote = dto.days
+      .map((d) => `${dayNames[d.day_of_week]}${(d.is_working ?? true) ? '' : ' (off)'}`)
+      .join(', ');
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'work_schedule',
+      note: `${employee.full_name ?? `#${employeeId}`} — work schedule set: ${scheduleNote || 'none'}`,
+      changed_by: caller?.username || caller?.sub || 'system',
+    });
+
     return this.getWorkSchedule(employeeId);
   }
 
-  async clearWorkSchedule(employeeId: number) {
+  async clearWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
     await this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'work_schedule',
+      note: `${employee.full_name ?? `#${employeeId}`} — work schedule cleared`,
+      changed_by: caller?.username || caller?.sub || 'system',
+    });
+
     return this.getWorkSchedule(employeeId);
   }
 
@@ -867,6 +892,17 @@ export class EmployeesService {
       throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
     }
 
+    const existingUser = await this.prisma.users.findUnique({
+      where: { id: employee.user_id },
+      select: {
+        email: true,
+        role: true,
+        campus_id: true,
+        is_active: true,
+        allowed_class_ids: true,
+      },
+    });
+
     if (dto.email !== undefined) {
       const email = dto.email.trim();
       if (email) {
@@ -879,7 +915,7 @@ export class EmployeesService {
       }
     }
 
-    return this.prisma.users.update({
+    const updated = await this.prisma.users.update({
       where: { id: employee.user_id },
       data: {
         email: dto.email !== undefined ? (dto.email.trim() || null) : undefined,
@@ -899,9 +935,47 @@ export class EmployeesService {
         allowed_class_ids: true,
       },
     });
+
+    const changes: string[] = [];
+    if (dto.email !== undefined && (existingUser?.email ?? null) !== (updated.email ?? null)) {
+      changes.push(`email: ${existingUser?.email || '—'} → ${updated.email || '—'}`);
+    }
+    if (dto.role !== undefined && existingUser?.role !== updated.role) {
+      changes.push(`role: ${existingUser?.role || '—'} → ${updated.role || '—'}`);
+    }
+    if (dto.campus_id !== undefined && (existingUser?.campus_id ?? null) !== (updated.campus_id ?? null)) {
+      changes.push(`campus: ${existingUser?.campus_id ?? '—'} → ${updated.campus_id ?? '—'}`);
+    }
+    if (dto.is_active !== undefined && existingUser?.is_active !== updated.is_active) {
+      changes.push(`active: ${existingUser?.is_active} → ${updated.is_active}`);
+    }
+    if (dto.allowed_class_ids !== undefined) {
+      const oldBand = JSON.stringify(existingUser?.allowed_class_ids ?? []);
+      const newBand = JSON.stringify(updated.allowed_class_ids ?? []);
+      if (oldBand !== newBand) {
+        changes.push(`class-band: ${oldBand} → ${newBand}`);
+      }
+    }
+
+    if (changes.length > 0) {
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(employeeId),
+        action: 'UPDATED',
+        section: 'hr',
+        note: `${(employee as any).full_name ?? `#${employeeId}`} account — ${changes.join(' | ')}`,
+        changed_by: caller.username || caller.sub || 'system',
+      });
+    }
+
+    return updated;
   }
 
-  async resetAccountPassword(employeeId: number, dto: ResetEmployeePasswordDto) {
+  async resetAccountPassword(
+    employeeId: number,
+    dto: ResetEmployeePasswordDto,
+    caller?: IJwtStaffPayload,
+  ) {
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -915,6 +989,17 @@ export class EmployeesService {
       where: { id: employee.user_id },
       data: { password_hash },
     });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'password',
+      note: `${(employee as any).full_name ?? `#${employeeId}`} — portal password reset`,
+      changed_by: caller?.username || caller?.sub || 'system',
+    });
+
     return { success: true };
   }
 }

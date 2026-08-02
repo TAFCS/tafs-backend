@@ -232,7 +232,11 @@ export class VouchersService {
         return sf?.id != null ? `fee #${sf.id}` : 'fee';
     }
 
-    private async flushAuditEvents(events: VoucherAuditEvent[], changedBy: string): Promise<void> {
+    private async flushAuditEvents(
+        events: VoucherAuditEvent[],
+        changedBy: string,
+        parentId?: number | null,
+    ): Promise<void> {
         for (const e of events) {
             await this.auditLogs.log({
                 entity_type: e.entity_type,
@@ -244,11 +248,17 @@ export class VouchersService {
                 changed_by: changedBy,
                 student_id: e.student_id ?? null,
                 note: e.note,
+                parent_id: parentId ?? null,
             });
         }
     }
 
-    async create(dto: CreateVoucherDto, pdfBuffer?: Buffer, changedBy: string = 'system') {
+    async create(
+        dto: CreateVoucherDto,
+        pdfBuffer?: Buffer,
+        changedBy: string = 'system',
+        auditParentId?: number | null,
+    ) {
         // --- Temporary Debug Check for orderedFeeIds ---
         if (!dto.orderedFeeIds || dto.orderedFeeIds.length === 0) {
             throw new BadRequestException({
@@ -689,17 +699,50 @@ export class VouchersService {
             `Instant parent notification: ${dto.send_notification === false ? 'No' : 'Yes'}`,
         ].filter(Boolean).join(' | ');
 
-        await this.auditLogs.log({
-            entity_type: 'VOUCHER',
-            entity_id: String(finalVoucher.id),
-            action: 'CREATED',
-            changed_by: changedBy,
-            student_id: dto.student_id,
-            note: logNote,
-        });
-
-        // Log any previous vouchers this creation superseded/voided.
-        await this.flushAuditEvents(sideEffectEvents, changedBy);
+        if (auditParentId != null) {
+            // Nested under an existing bulk-job parent.
+            await this.auditLogs.log({
+                entity_type: 'VOUCHER',
+                entity_id: String(finalVoucher.id),
+                action: 'CREATED',
+                changed_by: changedBy,
+                student_id: dto.student_id,
+                note: logNote,
+                parent_id: auditParentId,
+            });
+            await this.flushAuditEvents(sideEffectEvents, changedBy, auditParentId);
+        } else if (sideEffectEvents.length > 0) {
+            // Standalone create with supersede side-effects → one parent + children.
+            await this.auditLogs.logGroup(
+                {
+                    entity_type: 'VOUCHER',
+                    entity_id: String(finalVoucher.id),
+                    action: 'CREATED',
+                    changed_by: changedBy,
+                    student_id: dto.student_id,
+                    note: logNote,
+                },
+                sideEffectEvents.map((e) => ({
+                    entity_type: e.entity_type,
+                    entity_id: e.entity_id,
+                    action: e.action,
+                    field: e.field ?? null,
+                    old_value: e.old_value ?? null,
+                    new_value: e.new_value ?? null,
+                    student_id: e.student_id ?? null,
+                    note: e.note,
+                })),
+            );
+        } else {
+            await this.auditLogs.log({
+                entity_type: 'VOUCHER',
+                entity_id: String(finalVoucher.id),
+                action: 'CREATED',
+                changed_by: changedBy,
+                student_id: dto.student_id,
+                note: logNote,
+            });
+        }
 
         // Instant "voucher issued" push to the parents. The admin can opt out at
         // generation time (send_notification === false); everything else — the
@@ -1839,8 +1882,7 @@ export class VouchersService {
             include: VOUCHER_INCLUDE,
         });
 
-        // Audit each field that actually changed, one entry per field, plus a
-        // summary note so the admin sees exactly what was edited.
+        // One user action → one parent row; per-field diffs nest as children.
         const fieldChecks: Array<{ field: string; before: string | null; after: string | null; label: string }> = [
             { field: 'issue_date', before: this.fmtDate((before as any).issue_date), after: this.fmtDate((updated as any).issue_date), label: 'Issue date' },
             { field: 'due_date', before: this.fmtDate((before as any).due_date), after: this.fmtDate((updated as any).due_date), label: 'Due date' },
@@ -1851,18 +1893,29 @@ export class VouchersService {
             { field: 'section_id', before: (before as any).section_id != null ? String((before as any).section_id) : null, after: (updated as any).section_id != null ? String((updated as any).section_id) : null, label: 'Section' },
         ];
         const changes = fieldChecks.filter((c) => c.before !== c.after);
-        for (const c of changes) {
-            await this.auditLogs.log({
-                entity_type: 'VOUCHER',
-                entity_id: String(id),
-                action: 'UPDATED',
-                field: c.field,
-                old_value: c.before,
-                new_value: c.after,
-                changed_by: changedBy,
-                student_id: (updated as any).student_id,
-                note: `Voucher #${id} (no. ${(updated as any).voucher_number || 'N/A'}) ${c.label} changed from "${c.before ?? '—'}" to "${c.after ?? '—'}".`,
-            });
+        if (changes.length > 0) {
+            const voucherNo = (updated as any).voucher_number || 'N/A';
+            const studentId = (updated as any).student_id;
+            await this.auditLogs.logGroup(
+                {
+                    entity_type: 'VOUCHER',
+                    entity_id: String(id),
+                    action: 'UPDATED',
+                    changed_by: changedBy,
+                    student_id: studentId,
+                    note: `Voucher #${id} (no. ${voucherNo}) updated — ${changes.length} field(s) changed: ${changes.map((c) => c.label).join(', ')}.`,
+                },
+                changes.map((c) => ({
+                    entity_type: 'VOUCHER',
+                    entity_id: String(id),
+                    action: 'UPDATED',
+                    field: c.field,
+                    old_value: c.before,
+                    new_value: c.after,
+                    student_id: studentId,
+                    note: `${c.label} changed from "${c.before ?? '—'}" to "${c.after ?? '—'}".`,
+                })),
+            );
         }
 
         return updated;
@@ -2763,7 +2816,7 @@ export class VouchersService {
         }, { timeout: 15000 });
 
         if (deposit) {
-            await this.auditLogs.log({
+            const parentId = await this.auditLogs.log({
                 entity_type: 'DEPOSIT',
                 entity_id: String(depositId),
                 action: 'DELETED',
@@ -2771,11 +2824,12 @@ export class VouchersService {
                 student_id: voucher.student_id,
                 note: `Deposit of Rs. ${new Prisma.Decimal(deposit.total_amount).toFixed(2)} cleared/reversed (Ref: ${deposit.reference_number || 'N/A'}) against Voucher #${voucherId}.`,
             });
-        }
 
-        // Flush voucher-level side effects (PAID voucher deleted, heads reset,
-        // predecessors reactivated, or a split fully reversed).
-        await this.flushAuditEvents(auditEvents, changedBy);
+            // Flush voucher-level side effects as children of the deposit clear.
+            await this.flushAuditEvents(auditEvents, changedBy, parentId);
+        } else {
+            await this.flushAuditEvents(auditEvents, changedBy);
+        }
 
         // The PAID + split delete path and the full split-undo both remove this voucher —
         // nothing to fetch back in either case.
@@ -5018,9 +5072,32 @@ export class VouchersService {
             { maxWait: 5000, timeout: 15000 },
         );
 
-        // Flush the deletion + every side effect (heads reset, predecessors
-        // reactivated, orphaned arrears unlocked) now that the tx has committed.
-        await this.flushAuditEvents(auditEvents, changedBy);
+        // One parent for the delete; side effects (heads reset, predecessors
+        // reactivated, orphaned arrears unlocked) nest as children.
+        if (auditEvents.length === 0) {
+            await this.auditLogs.log({
+                entity_type: 'VOUCHER',
+                entity_id: String(id),
+                action: 'DELETED',
+                changed_by: changedBy,
+                student_id: voucher.student_id,
+                note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}, status ${voucher.status}) deleted.`,
+            });
+        } else {
+            const [parentEvent, ...childEvents] = auditEvents;
+            const parentId = await this.auditLogs.log({
+                entity_type: parentEvent.entity_type,
+                entity_id: parentEvent.entity_id,
+                action: parentEvent.action,
+                field: parentEvent.field ?? null,
+                old_value: parentEvent.old_value ?? null,
+                new_value: parentEvent.new_value ?? null,
+                changed_by: changedBy,
+                student_id: parentEvent.student_id ?? voucher.student_id,
+                note: parentEvent.note,
+            });
+            await this.flushAuditEvents(childEvents, changedBy, parentId);
+        }
 
         return result;
     }

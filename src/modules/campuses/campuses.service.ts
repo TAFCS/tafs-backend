@@ -211,16 +211,24 @@ export class CampusesService {
         );
 
         const actor = changedBy ?? 'system';
+        const children: Array<{
+            entity_type: string;
+            entity_id: string;
+            action: string;
+            section?: string;
+            new_value?: string | null;
+            note: string;
+        }> = [];
+
         for (const record of updated) {
             const before = beforeMap.get(record.id);
             if (!before) {
-                await this.auditLogs.log({
+                children.push({
                     entity_type: 'CAMPUS',
                     entity_id: String(record.id),
                     action: 'CREATED',
                     section: 'school-setup',
                     new_value: record.campus_name,
-                    changed_by: actor,
                     note: `Created campus #${record.id} ("${record.campus_name}", code ${record.campus_code}) via bulk update.`,
                 });
                 continue;
@@ -239,15 +247,28 @@ export class CampusesService {
                 changes.push(`prefix "${(before as any).campus_prefix ?? '—'}" → "${(record as any).campus_prefix ?? '—'}"`);
             }
             if (changes.length > 0) {
-                await this.auditLogs.log({
+                children.push({
                     entity_type: 'CAMPUS',
                     entity_id: String(record.id),
                     action: 'UPDATED',
                     section: 'school-setup',
-                    changed_by: actor,
                     note: `Campus #${record.id} ("${before.campus_name}") bulk-updated: ${changes.join(', ')}.`,
                 });
             }
+        }
+
+        if (children.length > 0) {
+            await this.auditLogs.logGroup(
+                {
+                    entity_type: 'CAMPUS',
+                    entity_id: 'BULK',
+                    action: 'UPDATED',
+                    section: 'school-setup',
+                    changed_by: actor,
+                    note: `Bulk campus save: ${children.length} campus(es) created/updated.`,
+                },
+                children,
+            );
         }
 
         return updated;

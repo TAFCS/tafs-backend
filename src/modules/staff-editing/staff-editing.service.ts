@@ -9,10 +9,12 @@ import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationshi
 import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { ProgressionHistoryService } from '../students/progression-history.service';
+
+type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
 export class StaffEditingService {
@@ -370,6 +372,9 @@ export class StaffEditingService {
     }
 
     try {
+      const studentFieldChanges: AuditChildPayload[] = [];
+      let studentDisplayName: string | null = null;
+
       await this.prisma.$transaction(async (tx) => {
         // Fetch existing record first for diff logging
         const existing = await tx.students.findUnique({
@@ -378,6 +383,7 @@ export class StaffEditingService {
         if (!existing) {
           throw new NotFoundException(`Student #${cc} not found`);
         }
+        studentDisplayName = existing.full_name;
 
         // Log student field changes (placement FKs go to progression periods, not audit_logs)
         const PLACEMENT_FIELDS = new Set(['campus_id', 'class_id', 'section_id', 'house_id']);
@@ -420,14 +426,13 @@ export class StaffEditingService {
             }
 
             if (oldVal !== null || newVal !== null) {
-              await this.auditLogs.log({
+              studentFieldChanges.push({
                 entity_type: 'STUDENT',
                 entity_id: String(cc),
                 action: 'UPDATED',
                 field: `student.${field}`,
                 old_value: oldVal,
                 new_value: newVal,
-                changed_by: changedBy,
                 student_id: cc,
               });
             }
@@ -679,6 +684,21 @@ export class StaffEditingService {
           }
         }
       });
+
+      if (studentFieldChanges.length > 0) {
+        const name = studentDisplayName ?? `CC ${cc}`;
+        void this.auditLogs.logGroup(
+          {
+            entity_type: 'STUDENT',
+            entity_id: String(cc),
+            action: 'UPDATED',
+            changed_by: changedBy,
+            student_id: cc,
+            note: `Student #${cc} (${name}) updated — ${studentFieldChanges.length} change(s).`,
+          },
+          studentFieldChanges,
+        );
+      }
     } catch (e: any) {
       if (e?.code === 'P2025')
         throw new NotFoundException(`Student #${cc} not found`);

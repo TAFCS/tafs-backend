@@ -56,11 +56,22 @@ export class SectionsService {
     }
 
     const actor = changedBy ?? 'system';
+    const children: Array<{
+      entity_type: string;
+      entity_id: string;
+      action: string;
+      section?: string;
+      field?: string;
+      old_value?: string | null;
+      new_value?: string | null;
+      note: string;
+    }> = [];
+
     for (const record of updated) {
       const before = beforeMap.get(record.id);
       if (!before) continue;
       if (before.description !== record.description) {
-        await this.auditLogs.log({
+        children.push({
           entity_type: 'SECTION',
           entity_id: String(record.id),
           action: 'UPDATED',
@@ -68,10 +79,23 @@ export class SectionsService {
           field: 'description',
           old_value: before.description,
           new_value: record.description,
-          changed_by: actor,
           note: `Section #${record.id} description changed from "${before.description}" to "${record.description}".`,
         });
       }
+    }
+
+    if (children.length > 0) {
+      await this.auditLogs.logGroup(
+        {
+          entity_type: 'SECTION',
+          entity_id: 'BULK',
+          action: 'UPDATED',
+          section: 'school-setup',
+          changed_by: actor,
+          note: `Bulk section save: ${children.length} section(s) updated.`,
+        },
+        children,
+      );
     }
 
     return updated;

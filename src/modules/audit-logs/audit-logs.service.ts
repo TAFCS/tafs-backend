@@ -16,40 +16,39 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };
 
-// Per-student house-balancer rows clutter global Activity Logs; the HOUSE summary row is enough there.
 const HOUSE_BALANCER_STUDENT_NOTES = [
   'Reassigned via house balancer',
   'Reassigned via campus-wide house balancer',
 ] as const;
 
-// Entity types whose audit trail is restricted to super admins only, regardless
-// of which sections/roles are otherwise allowed to view /audit-logs.
 const SUPER_ADMIN_ONLY_ENTITY_TYPES = ['PARENT_CHANGE_REQUEST'];
+
+export type AuditLogParams = {
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  section?: string | null;
+  field?: string | null;
+  old_value?: string | null;
+  new_value?: string | null;
+  changed_by: string;
+  student_id?: number | null;
+  note?: string | null;
+  parent_id?: number | null;
+};
 
 @Injectable()
 export class AuditLogsService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Log an event. This is fire-and-forget and safe.
-   * If it fails, we catch the error to ensure user actions aren't blocked.
+   * Log an event. Fire-and-forget safe: failures are swallowed so user actions
+   * are never blocked. Returns the new row id when successful (for grouping).
    */
-  async log(params: {
-    entity_type: string;
-    entity_id: string;
-    action: string;
-    section?: string | null;
-    field?: string | null;
-    old_value?: string | null;
-    new_value?: string | null;
-    changed_by: string;
-    student_id?: number | null;
-    note?: string | null;
-  }) {
+  async log(params: AuditLogParams): Promise<number | null> {
     try {
-      // Auto-derive section from entity_type if not explicitly provided
       const section = params.section ?? this.deriveSectionFromEntityType(params.entity_type);
-      await this.prisma.audit_logs.create({
+      const row = await this.prisma.audit_logs.create({
         data: {
           entity_type: params.entity_type,
           entity_id: params.entity_id,
@@ -61,11 +60,36 @@ export class AuditLogsService {
           changed_by: params.changed_by,
           student_id: params.student_id || null,
           note: params.note || null,
+          parent_id: params.parent_id ?? null,
         },
+        select: { id: true },
       });
+      return row.id;
     } catch (err) {
       console.error('[AuditLog] Failed to write log entry:', err);
+      return null;
     }
+  }
+
+  /**
+   * One user action → one parent row + optional child detail rows.
+   * Children inherit changed_by from the parent when omitted.
+   */
+  async logGroup(
+    parent: AuditLogParams,
+    children: Array<Omit<AuditLogParams, 'changed_by'> & { changed_by?: string }> = [],
+  ): Promise<number | null> {
+    const parentId = await this.log(parent);
+    if (parentId == null || children.length === 0) return parentId;
+
+    for (const child of children) {
+      await this.log({
+        ...child,
+        changed_by: child.changed_by ?? parent.changed_by,
+        parent_id: parentId,
+      });
+    }
+    return parentId;
   }
 
   private deriveSectionFromEntityType(entityType: string): string | null {
@@ -77,17 +101,23 @@ export class AuditLogsService {
 
   /**
    * Find logs matching query criteria.
-   * `requestingUser` is used to strip out entity types that are restricted
-   * to super admins (e.g. parent data-change requests) for anyone else.
+   * Global feed: top-level parents only (`parent_id` null), with `children` attached.
+   * Student-scoped queries: include matching child rows too (so nested voucher /
+   * promote details still appear on a student timeline).
    */
   async findAll(query: QueryAuditLogsDto, requestingUser?: { role?: string }) {
     const where: any = {};
+
+    // Global activity feed hides children (they're nested under parents).
+    // Student timelines include every matching row, including children.
+    if (!query.student_id) {
+      where.parent_id = null;
+    }
 
     if (query.student_id) {
       where.student_id = Number(query.student_id);
     }
     if (query.section === 'house-balancer') {
-      // Dedicated House Rebalancer tab: bundled HOUSE runs (new + legacy school-setup rows)
       where.AND = [
         ...(where.AND ?? []),
         {
@@ -101,10 +131,8 @@ export class AuditLogsService {
         },
       ];
     } else if (query.section) {
-      // Filter by section: translate to the entity_types that belong to that section
       const sectionTypes = SECTION_ENTITY_TYPES[query.section] ?? [];
       if (sectionTypes.length > 0 && !where.entity_type) {
-        // Support rows stored with section set or matching entity_type (handles legacy/system-saved rows)
         where.OR = [
           { section: query.section },
           { entity_type: { in: sectionTypes } },
@@ -137,8 +165,6 @@ export class AuditLogsService {
 
     const clauses: any[] = [where];
 
-    // Global activity feed: hide per-student house-balancer spam; keep HOUSE summary rows.
-    // Student modal (student_id set) still receives the per-student moves.
     if (!query.student_id) {
       clauses.push({
         NOT: {
@@ -170,7 +196,25 @@ export class AuditLogsService {
       this.prisma.audit_logs.count({ where: finalWhere }),
     ]);
 
-    // Fetch classes, campuses, sections, and houses to map IDs to names
+    const parentIds = data.map((d) => d.id);
+    // Only hydrate children for top-level parents in the global feed.
+    // Student-scoped results already include child rows flat.
+    const children =
+      query.student_id || parentIds.length === 0
+        ? []
+        : await this.prisma.audit_logs.findMany({
+            where: { parent_id: { in: parentIds } },
+            orderBy: { id: 'asc' },
+          });
+
+    const childrenByParent = new Map<number, typeof children>();
+    for (const child of children) {
+      if (child.parent_id == null) continue;
+      const list = childrenByParent.get(child.parent_id) ?? [];
+      list.push(child);
+      childrenByParent.set(child.parent_id, list);
+    }
+
     const [allClasses, allCampuses, allSections, allHouses] = await Promise.all([
       this.prisma.classes.findMany({
         select: { id: true, description: true },
@@ -207,7 +251,6 @@ export class AuditLogsService {
     const enrichHouseBalancerNote = (note: string | null): string | null => {
       if (!note) return note;
 
-      // Section rebalance: campus=1 class=21 section=1. before={...} after={...}
       const sectionMatch = note.match(
         /^Rebalanced (\d+) students for campus=(\d+) class=(\d+) section=(\d+)\. before=(\{.*\}) after=(\{.*\})$/,
       );
@@ -219,7 +262,6 @@ export class AuditLogsService {
         return `Rebalanced ${count} students · ${campusName} · ${className} · Section ${sectionName}. Before: ${enrichHouseCounts(beforeRaw)}. After: ${enrichHouseCounts(afterRaw)}`;
       }
 
-      // Campus rebalance: ... at campus=1 class=2
       const campusMatch = note.match(
         /^Rebalanced (\d+) students across (\d+) class\/section groups at campus=(\d+)(?: class=(\d+))?$/,
       );
@@ -235,7 +277,7 @@ export class AuditLogsService {
       return note;
     };
 
-    const enrichedData = data.map((log) => {
+    const enrichLog = (log: (typeof data)[number]) => {
       let oldVal = log.old_value;
       let newVal = log.new_value;
       let note = log.note;
@@ -268,6 +310,16 @@ export class AuditLogsService {
         old_value: oldVal,
         new_value: newVal,
         note,
+      };
+    };
+
+    const enrichedData = data.map((log) => {
+      const enriched = enrichLog(log);
+      const kids = (childrenByParent.get(log.id) ?? []).map(enrichLog);
+      return {
+        ...enriched,
+        children: kids,
+        child_count: kids.length,
       };
     });
 

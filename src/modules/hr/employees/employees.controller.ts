@@ -67,15 +67,19 @@ export class EmployeesController {
   async updateWorkSchedule(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateWorkScheduleDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.employeesService.updateWorkSchedule(id, dto);
+    const data = await this.employeesService.updateWorkSchedule(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule updated successfully');
   }
 
   @Delete(':id/work-schedule')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async clearWorkSchedule(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.employeesService.clearWorkSchedule(id);
+  async clearWorkSchedule(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.clearWorkSchedule(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
   }
 
@@ -106,8 +110,9 @@ export class EmployeesController {
   async resetAccountPassword(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ResetEmployeePasswordDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.employeesService.resetAccountPassword(id, dto);
+    const data = await this.employeesService.resetAccountPassword(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee password reset successfully');
   }
 
