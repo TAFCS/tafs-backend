@@ -3048,6 +3048,14 @@ export class VouchersService {
      * Stamps generated_by_name / generated_at once. Subsequent regenerations
      * reuse the persisted values so the PDF footer never drifts to "now" or
      * "TAFSync System" for human-created vouchers.
+     *
+     * Rules:
+     * - If both are already set → always reuse (never overwrite).
+     * - If generated_at is set but name is missing → keep the timestamp and
+     *   leave the name unset (PDF shows TAFSync System). Do NOT attribute the
+     *   voucher to whoever is regenerating/downloading it.
+     * - If both are missing and a name was passed → stamp both (first generate
+     *   for legacy vouchers that predate the columns).
      */
     private async ensureVoucherGenerationMeta(
         voucherId: number,
@@ -3060,20 +3068,38 @@ export class VouchersService {
             voucherData.generatedAt = voucher.generated_at;
             return;
         }
-        if (!generatedByName && !voucher.generated_by_name) {
+
+        if (voucher.generated_at && !voucher.generated_by_name) {
+            voucherData.generatedAt = voucher.generated_at;
+            // Name stays unset → PDF falls back to TAFSync System.
+            return;
+        }
+
+        if (voucher.generated_by_name && !voucher.generated_at) {
+            const at = new Date();
+            await this.prisma.vouchers.update({
+                where: { id: voucherId },
+                data: { generated_at: at },
+            });
+            voucherData.generatedByName = voucher.generated_by_name;
+            voucherData.generatedAt = at;
+            return;
+        }
+
+        if (!generatedByName) {
             // Leave unset → PDF shows TAFSync System; timestamp falls back to issue date.
             return;
         }
-        const name = voucher.generated_by_name ?? generatedByName ?? null;
-        const at = voucher.generated_at ?? new Date();
+
+        const at = new Date();
         await this.prisma.vouchers.update({
             where: { id: voucherId },
             data: {
-                ...(voucher.generated_by_name ? {} : { generated_by_name: name }),
-                ...(voucher.generated_at ? {} : { generated_at: at }),
+                generated_by_name: generatedByName,
+                generated_at: at,
             },
         });
-        voucherData.generatedByName = name ?? undefined;
+        voucherData.generatedByName = generatedByName;
         voucherData.generatedAt = at;
     }
 
@@ -3177,6 +3203,7 @@ export class VouchersService {
 
         const { voucherData, key } = await this.prepareVoucherPdfData(voucher, /* paidStamp */ true, /* forceHeadsAsCurrent */ true);
         voucherData.showDiscount = true; // match the existing "PAID PDF" download convention
+        await this.ensureVoucherGenerationMeta(voucherId, voucher, undefined, voucherData);
 
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
@@ -3726,6 +3753,9 @@ export class VouchersService {
                 month: targetMonth,
                 fee_date: targetFeeDate,
                 late_fee_charge: original.late_fee_charge,
+                // Stamp the splitter as generator of the new vouchers (new records).
+                generated_by_name: (await this.resolveGeneratedByName(changedBy)) ?? null,
+                generated_at: new Date(),
             };
 
             // ── Step 5: Compute arrear totals for each split side.
@@ -4050,6 +4080,10 @@ export class VouchersService {
         const [pData, uData] = await Promise.all([
             this.prepareVoucherPdfData(paidFull, true),
             this.prepareVoucherPdfData(unpaidFull, false),
+        ]);
+        await Promise.all([
+            this.ensureVoucherGenerationMeta(paidVoucher.id, paidFull!, undefined, pData.voucherData),
+            this.ensureVoucherGenerationMeta(unpaidVoucher.id, unpaidFull!, undefined, uData.voucherData),
         ]);
 
         const [pBuf, uBuf] = await Promise.all([

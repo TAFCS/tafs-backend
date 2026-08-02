@@ -593,7 +593,7 @@ export class BulkVoucherJobsService {
             orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
-        });
+        }, undefined, createdBy);
 
         const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
         return { ...pdfResult, voucher_id: voucher.id };
