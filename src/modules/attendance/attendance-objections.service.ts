@@ -81,15 +81,22 @@ export class AttendanceObjectionsService {
   }
 
   async listForReview(query: ListAttendanceObjectionsQueryDto, user: IJwtStaffPayload) {
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
-    if (campusId) {
-      this.assertCampusAccess(user, campusId);
+    const campusIds =
+      query.campus_id?.length
+        ? query.campus_id
+        : user.campusId != null
+          ? [user.campusId]
+          : undefined;
+    if (campusIds?.length) {
+      for (const campusId of campusIds) {
+        this.assertCampusAccess(user, campusId);
+      }
     }
 
     return this.prisma.attendance_objections.findMany({
       where: {
-        ...(query.status ? { status: query.status } : {}),
-        ...(campusId ? { employee: { campus_id: campusId } } : {}),
+        ...(query.status?.length ? { status: { in: query.status } } : {}),
+        ...(campusIds?.length ? { employee: { campus_id: { in: campusIds } } } : {}),
       },
       include: {
         employee: {

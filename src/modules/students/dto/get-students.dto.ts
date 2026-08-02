@@ -1,28 +1,11 @@
 import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray, IsIn } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { StudentStatus } from '../../../constants/student-status.constant';
+import { toNumberArray, toStringArray } from '../../../common/transforms/query-array.transform';
 
 // Accepts every real student status plus "UNCONFIRMED" as an alias for QUICK_ADMISSION.
 export const STUDENT_LIST_STATUSES = [...Object.values(StudentStatus), 'UNCONFIRMED'] as const;
 export type StudentListStatus = (typeof STUDENT_LIST_STATUSES)[number];
-
-/** Accepts a single value, comma-separated string, or array → number[]. */
-function toNumberArray({ value }: { value: unknown }): number[] | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  const raw = Array.isArray(value) ? value : String(value).split(',');
-  const nums = raw
-    .map((v) => Number(String(v).trim()))
-    .filter((n) => Number.isInteger(n) && !Number.isNaN(n));
-  return nums.length ? nums : undefined;
-}
-
-/** Accepts a single value, comma-separated string, or array → string[]. */
-function toStringArray({ value }: { value: unknown }): string[] | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  const raw = Array.isArray(value) ? value : String(value).split(',');
-  const items = raw.map((v) => String(v).trim()).filter(Boolean);
-  return items.length ? items : undefined;
-}
 
 export class GetStudentsDto {
   @IsOptional()

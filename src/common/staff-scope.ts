@@ -92,3 +92,17 @@ export function resolveAnalyticsCampusId(
   }
   return requestedCampusId;
 }
+
+/** Resolve one or more campus IDs for analytics filters (CSV / multi-select). */
+export function resolveAnalyticsCampusIds(
+  user: IJwtStaffPayload,
+  requestedCampusIds?: number[],
+): number[] | undefined {
+  if (user.campusId != null) {
+    if (requestedCampusIds?.some((id) => id !== user.campusId)) {
+      throw new ForbiddenException('You do not have access to this campus');
+    }
+    return [user.campusId];
+  }
+  return requestedCampusIds?.length ? requestedCampusIds : undefined;
+}

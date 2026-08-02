@@ -7,7 +7,8 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { AnalyticsService } from './analytics.service';
 import { createApiResponse } from '../../utils/serializer.util';
-import { resolveAnalyticsCampusId } from '../../common/staff-scope';
+import { resolveAnalyticsCampusIds } from '../../common/staff-scope';
+import { toNumberArray } from '../../common/transforms/query-array.transform';
 
 @Controller('analytics')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -23,10 +24,10 @@ export class AnalyticsController {
     @Query('campusId') campusId: string | undefined,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const requested = campusId ? parseInt(campusId, 10) : undefined;
-    const cid = resolveAnalyticsCampusId(user, requested);
+    const requested = toNumberArray({ value: campusId });
+    const campusIds = resolveAnalyticsCampusIds(user, requested);
     const stats = await this.analyticsService.getDashboardStats(
-      cid,
+      campusIds,
       user.allowedClassIds,
     );
     return createApiResponse(stats, HttpStatus.OK, 'Dashboard analytics retrieved successfully');
@@ -37,13 +38,12 @@ export class AnalyticsController {
     @Query('campusId') campusId: string | undefined,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const requested = campusId ? parseInt(campusId, 10) : undefined;
-    const cid = resolveAnalyticsCampusId(user, requested);
+    const requested = toNumberArray({ value: campusId });
+    const campusIds = resolveAnalyticsCampusIds(user, requested);
     const stats = await this.analyticsService.getModuleStats(
-      cid,
+      campusIds,
       user.allowedClassIds,
     );
     return createApiResponse(stats, HttpStatus.OK, 'Module stats retrieved successfully');
   }
 }
-

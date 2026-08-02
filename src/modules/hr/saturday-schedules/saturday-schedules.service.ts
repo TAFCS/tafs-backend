@@ -169,13 +169,20 @@ export class SaturdaySchedulesService {
     const monthStart = new Date(Date.UTC(year, month - 1, 1));
     const monthEnd = new Date(Date.UTC(year, month, 0));
 
-    const campusId = query.campusId ?? (user.role === StaffRole.CAMPUS_ADMIN ? user.campusId ?? undefined : undefined);
-    if (user.role === StaffRole.CAMPUS_ADMIN && campusId != null) {
-      this.assertCampusAccess(user, campusId);
+    const campusIds =
+      query.campusId?.length
+        ? query.campusId
+        : user.role === StaffRole.CAMPUS_ADMIN && user.campusId != null
+          ? [user.campusId]
+          : undefined;
+    if (user.role === StaffRole.CAMPUS_ADMIN && campusIds?.length) {
+      for (const campusId of campusIds) {
+        this.assertCampusAccess(user, campusId);
+      }
     }
 
     const employeeFilter: Prisma.employee_profilesWhereInput = {};
-    if (campusId != null) employeeFilter.campus_id = campusId;
+    if (campusIds?.length) employeeFilter.campus_id = { in: campusIds };
     if (query.sectionId != null) {
       employeeFilter.employee_class_section_assignments = {
         some: { section_id: query.sectionId },

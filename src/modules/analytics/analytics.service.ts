@@ -19,14 +19,15 @@ export class AnalyticsService {
     return `${startYear}-${startYear + 1}`;
   }
 
-  async getDashboardStats(campusId?: number, allowedClassIds: number[] = []) {
+  async getDashboardStats(campusIds?: number[], allowedClassIds: number[] = []) {
     const currentYear = this.getCurrentAcademicYear();
     const startYear = parseInt(currentYear.split('-')[0]);
     const today = new Date();
+    const campusFilter = campusIds?.length ? { campus_id: { in: campusIds } } : {};
 
     const studentFilter: any = {
       status: 'ENROLLED',
-      ...(campusId ? { campus_id: campusId } : {}),
+      ...campusFilter,
       ...(allowedClassIds.length > 0
         ? { class_id: { in: allowedClassIds } }
         : {}),
@@ -409,7 +410,8 @@ export class AnalyticsService {
     };
   }
 
-  async getModuleStats(campusId?: number, allowedClassIds: number[] = []) {
+  async getModuleStats(campusIds?: number[], allowedClassIds: number[] = []) {
+    const campusFilter = campusIds?.length ? { campus_id: { in: campusIds } } : {};
     const currentYear = this.getCurrentAcademicYear();
     const startYear = parseInt(currentYear.split('-')[0]);
     const yearStart = new Date(startYear, 7, 1);
@@ -419,7 +421,7 @@ export class AnalyticsService {
 
     const studentFilter: any = {
       status: 'ENROLLED',
-      ...(campusId ? { campus_id: campusId } : {}),
+      ...campusFilter,
       ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
       deleted_at: null,
     };
@@ -440,7 +442,7 @@ export class AnalyticsService {
       this.prisma.students.count({
         where: {
           status: 'ENROLLED',
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
           ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
           deleted_at: null,
         },
@@ -448,7 +450,7 @@ export class AnalyticsService {
       this.prisma.students.count({
         where: {
           status: 'SOFT_ADMISSION',
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
           ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
           deleted_at: null,
         },
@@ -456,12 +458,12 @@ export class AnalyticsService {
       this.prisma.families.count({
         where: {
           deleted_at: null,
-          ...(campusId || allowedClassIds.length > 0
+          ...((campusIds?.length) || allowedClassIds.length > 0
             ? {
                 students: {
                   some: {
                     deleted_at: null,
-                    ...(campusId ? { campus_id: campusId } : {}),
+                    ...campusFilter,
                     ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
                   },
                 },
@@ -472,11 +474,11 @@ export class AnalyticsService {
       this.prisma.audit_logs.count({
         where: {
           entity_type: 'TRANSFER',
-          ...(campusId || allowedClassIds.length > 0
+          ...((campusIds?.length) || allowedClassIds.length > 0
             ? {
                 students: {
                   deleted_at: null,
-                  ...(campusId ? { campus_id: campusId } : {}),
+                  ...campusFilter,
                   ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
                 },
               }
@@ -525,11 +527,11 @@ export class AnalyticsService {
     const collectionRate = expected > 0 ? (collected / expected) * 100 : 0;
 
     // 3. Communication stats
-    const ticketCampusFilter = campusId || allowedClassIds.length > 0
+    const ticketCampusFilter = (campusIds?.length) || allowedClassIds.length > 0
       ? {
           OR: [
-            { students: { deleted_at: null, ...(campusId ? { campus_id: campusId } : {}), ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } },
-            { families: { students: { some: { deleted_at: null, ...(campusId ? { campus_id: campusId } : {}), ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } } } }
+            { students: { deleted_at: null, ...campusFilter, ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } },
+            { families: { students: { some: { deleted_at: null, ...campusFilter, ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}) } } } }
           ]
         }
       : {};
@@ -544,7 +546,7 @@ export class AnalyticsService {
       this.prisma.notice_board_posts.count({
         where: {
           deleted_at: null,
-          ...(campusId ? { OR: [{ campus_ids: { has: campusId } }, { campus_ids: { equals: [] } }] } : {}),
+          ...(campusIds?.length ? { OR: [{ campus_ids: { hasSome: campusIds } }, { campus_ids: { equals: [] } }] } : {}),
         },
       }),
       this.prisma.support_tickets.aggregate({
@@ -566,7 +568,7 @@ export class AnalyticsService {
     const unread = unreadTicketsAgg._sum?.unread_by_staff || 0;
 
     // 4. HR stats
-    const hrCampusFilter = campusId ? { campus_id: campusId } : {};
+    const hrCampusFilter = campusIds?.length ? { campus_id: { in: campusIds } } : {};
 
     const [totalStaff, onLeave, departments, payrollRuns] = await Promise.all([
       this.prisma.employee_profiles.count({
@@ -589,7 +591,7 @@ export class AnalyticsService {
       this.prisma.departments.count(),
       this.prisma.payroll_runs.count({
         where: {
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
         },
       }),
     ]);
@@ -600,14 +602,14 @@ export class AnalyticsService {
         where: {
           date: todayDate,
           status: { in: ['PRESENT', 'LATE', 'HALF_DAY'] },
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
         },
       }),
       this.prisma.attendance_student_daily.count({
         where: {
           date: todayDate,
           status: { in: ['PRESENT', 'LATE'] },
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
           students: {
             ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
             deleted_at: null,
@@ -618,7 +620,7 @@ export class AnalyticsService {
         where: {
           date: todayDate,
           status: 'ABSENT',
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
           students: {
             ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
             deleted_at: null,
@@ -629,7 +631,7 @@ export class AnalyticsService {
         where: {
           date: todayDate,
           status: 'LATE',
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
           students: {
             ...(allowedClassIds.length > 0 ? { class_id: { in: allowedClassIds } } : {}),
             deleted_at: null,
@@ -669,7 +671,7 @@ export class AnalyticsService {
       this.prisma.users.count({
         where: {
           deleted_at: null,
-          ...(campusId ? { campus_id: campusId } : {}),
+          ...campusFilter,
         },
       }),
       this.prisma.role_permissions.groupBy({
@@ -679,7 +681,7 @@ export class AnalyticsService {
         where: {
           revoked_at: null,
           expires_at: { gt: new Date() },
-          ...(campusId ? { users: { campus_id: campusId } } : {}),
+          ...(campusIds?.length ? { users: { campus_id: { in: campusIds } } } : {}),
         },
       }),
     ]);

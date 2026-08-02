@@ -14,7 +14,6 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { PostdatedChequeStatus } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { createApiResponse } from '../../utils/serializer.util';
 import {
@@ -22,6 +21,7 @@ import {
   PostdatedChequesService,
   UpdateStatusDto,
 } from './postdated-cheques.service';
+import { ListPostdatedChequesQueryDto } from './dto/list-postdated-cheques.dto';
 
 @ApiTags('postdated-cheques')
 @Controller('postdated-cheques')
@@ -44,20 +44,14 @@ export class PostdatedChequesController {
 
   @Get()
   @ApiOperation({ summary: 'List all cheques with optional filters' })
-  async list(
-    @Query('status') status?: PostdatedChequeStatus,
-    @Query('student_id') studentId?: string,
-    @Query('campus_id') campusId?: string,
-    @Query('from_date') fromDate?: string,
-    @Query('to_date') toDate?: string,
-  ) {
+  async list(@Query() query: ListPostdatedChequesQueryDto) {
     return createApiResponse(
       await this.svc.list({
-        status,
-        student_id: studentId ? parseInt(studentId, 10) : undefined,
-        campus_id: campusId ? parseInt(campusId, 10) : undefined,
-        from_date: fromDate,
-        to_date: toDate,
+        status: query.status,
+        student_id: query.student_id,
+        campus_id: query.campus_id,
+        from_date: query.from_date,
+        to_date: query.to_date,
       }),
       HttpStatus.OK,
       'Cheques retrieved',

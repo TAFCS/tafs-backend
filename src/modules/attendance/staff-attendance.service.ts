@@ -44,24 +44,34 @@ export class StaffAttendanceService {
     }
   }
 
+  private empCampusId(
+    emp: { users?: { campus_id: number | null } | null; campus_id?: number | null },
+    fallbackCampusIds: number[],
+  ): number {
+    return emp.users?.campus_id ?? emp.campus_id ?? fallbackCampusIds[0];
+  }
+
   async getRegister(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
 
-    // Determine effective campus: caller-scoped or explicit
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
-    if (!campusId) throw new BadRequestException('campus_id is required');
-    this.assertCampusAccess(user, campusId);
+    const campusIds =
+      query.campus_id?.length
+        ? query.campus_id
+        : user.campusId != null
+          ? [user.campusId]
+          : [];
+    if (!campusIds.length) throw new BadRequestException('campus_id is required');
+    for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
-    await this.holidaySync.syncCampusForDate(campusId, date);
+    await Promise.all(campusIds.map((id) => this.holidaySync.syncCampusForDate(id, date)));
 
-    // Fetch employees whose linked user belongs to this campus
     const employees = await this.prisma.employee_profiles.findMany({
       where: {
-        users: { campus_id: campusId, is_active: true, deleted_at: null },
-        ...(query.department_id ? { department_id: query.department_id } : {}),
+        users: { campus_id: { in: campusIds }, is_active: true, deleted_at: null },
+        ...(query.department_id?.length ? { department_id: { in: query.department_id } } : {}),
       },
       include: {
-        users: { select: { id: true, full_name: true, role: true, email: true } },
+        users: { select: { id: true, full_name: true, role: true, email: true, campus_id: true } },
         departments: { select: { id: true, name: true } },
       },
       orderBy: [{ departments: { name: 'asc' } }, { id: 'asc' }],
@@ -69,7 +79,6 @@ export class StaffAttendanceService {
 
     if (employees.length === 0) return [];
 
-    // Fetch existing attendance records for the date
     const employeeIds = employees.map((e) => e.id);
     const records = await this.prisma.attendance_staff_daily.findMany({
       where: { date, employee_id: { in: employeeIds } },
@@ -79,7 +88,8 @@ export class StaffAttendanceService {
 
     const rows = await Promise.all(
       employees.map(async (emp) => {
-        const resolved = await this.calendarResolver.resolveStaffDay(emp.id, campusId, date);
+        const empCampusId = this.empCampusId(emp, campusIds);
+        const resolved = await this.calendarResolver.resolveStaffDay(emp.id, empCampusId, date);
         return {
           employee: emp,
           record: recordMap.get(emp.id) ?? null,
@@ -95,14 +105,14 @@ export class StaffAttendanceService {
 
   // Shared employee scope lookup for the summary/dashboard endpoints — same
   // campus + department filtering as getRegister().
-  private async getEmployeesInScope(campusId: number, departmentId?: number) {
+  private async getEmployeesInScope(campusIds: number[], departmentIds?: number[]) {
     return this.prisma.employee_profiles.findMany({
       where: {
-        users: { campus_id: campusId, is_active: true, deleted_at: null },
-        ...(departmentId ? { department_id: departmentId } : {}),
+        users: { campus_id: { in: campusIds }, is_active: true, deleted_at: null },
+        ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
       },
       include: {
-        users: { select: { id: true, full_name: true, role: true, email: true } },
+        users: { select: { id: true, full_name: true, role: true, email: true, campus_id: true } },
         departments: { select: { id: true, name: true } },
         campuses: { select: { id: true, campus_name: true } },
       },
@@ -182,22 +192,26 @@ export class StaffAttendanceService {
   }
 
   private async getOffDayEmployeeIds(
-    campusId: number,
-    employees: { id: number }[],
+    employees: { id: number; users?: { campus_id: number | null } | null; campus_id?: number | null }[],
     date: Date,
+    fallbackCampusIds: number[],
   ): Promise<Set<number>> {
     const offDayIds = new Set<number>();
     await Promise.all(
       employees.map(async (emp) => {
-        const resolved = await this.calendarResolver.resolveStaffDay(emp.id, campusId, date);
+        const resolved = await this.calendarResolver.resolveStaffDay(
+          emp.id,
+          this.empCampusId(emp, fallbackCampusIds),
+          date,
+        );
         if (!resolved.isWorkingDay) offDayIds.add(emp.id);
       }),
     );
     return offDayIds;
   }
 
-  private async getCountsForDate(campusId: number, departmentId: number | undefined, date: Date) {
-    const employees = await this.getEmployeesInScope(campusId, departmentId);
+  private async getCountsForDate(campusIds: number[], departmentIds: number[] | undefined, date: Date) {
+    const employees = await this.getEmployeesInScope(campusIds, departmentIds);
     if (employees.length === 0) {
       return { onTime: 0, late: 0, early: 0, absent: 0, noClockIn: 0, noClockOut: 0, dayOff: 0 };
     }
@@ -206,11 +220,15 @@ export class StaffAttendanceService {
       where: { date, employee_id: { in: employees.map((e) => e.id) } },
     });
     const recordMap = new Map(records.map((r) => [r.employee_id, r]));
-    const offDayIds = await this.getOffDayEmployeeIds(campusId, employees, date);
+    const offDayIds = await this.getOffDayEmployeeIds(employees, date, campusIds);
 
     const expectedEntries = await Promise.all(
       employees.map(async (emp) => {
-        const resolved = await this.expectedTimes.resolveExpectedTimes(emp.id, campusId, date);
+        const resolved = await this.expectedTimes.resolveExpectedTimes(
+          emp.id,
+          this.empCampusId(emp, campusIds),
+          date,
+        );
         return [
           emp.id,
           {
@@ -227,16 +245,21 @@ export class StaffAttendanceService {
 
   async getSummary(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
-    if (!campusId) throw new BadRequestException('campus_id is required');
-    this.assertCampusAccess(user, campusId);
+    const campusIds =
+      query.campus_id?.length
+        ? query.campus_id
+        : user.campusId != null
+          ? [user.campusId]
+          : [];
+    if (!campusIds.length) throw new BadRequestException('campus_id is required');
+    for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
     const previousDate = new Date(date);
     previousDate.setUTCDate(previousDate.getUTCDate() - 1);
 
     const [today, yesterday] = await Promise.all([
-      this.getCountsForDate(campusId, query.department_id, date),
-      this.getCountsForDate(campusId, query.department_id, previousDate),
+      this.getCountsForDate(campusIds, query.department_id, date),
+      this.getCountsForDate(campusIds, query.department_id, previousDate),
     ]);
 
     const card = (key: keyof typeof today) => ({ count: today[key], delta: today[key] - yesterday[key] });
@@ -270,11 +293,16 @@ export class StaffAttendanceService {
 
   async getDashboard(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
-    if (!campusId) throw new BadRequestException('campus_id is required');
-    this.assertCampusAccess(user, campusId);
+    const campusIds =
+      query.campus_id?.length
+        ? query.campus_id
+        : user.campusId != null
+          ? [user.campusId]
+          : [];
+    if (!campusIds.length) throw new BadRequestException('campus_id is required');
+    for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
-    const employees = await this.getEmployeesInScope(campusId, query.department_id);
+    const employees = await this.getEmployeesInScope(campusIds, query.department_id);
     if (employees.length === 0) return [];
 
     const records = await this.prisma.attendance_staff_daily.findMany({
@@ -284,7 +312,11 @@ export class StaffAttendanceService {
 
     const expectedEntries = await Promise.all(
       employees.map(async (emp) => {
-        const resolved = await this.expectedTimes.resolveExpectedTimes(emp.id, campusId, date);
+        const resolved = await this.expectedTimes.resolveExpectedTimes(
+          emp.id,
+          this.empCampusId(emp, campusIds),
+          date,
+        );
         return [emp.id, resolved] as const;
       }),
     );

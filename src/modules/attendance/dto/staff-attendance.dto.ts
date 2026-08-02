@@ -1,20 +1,23 @@
 import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { StaffAttendanceStatus } from '@prisma/client';
+import { toNumberArray } from '../../../common/transforms/query-array.transform';
 
 export class GetStaffAttendanceQueryDto {
   @IsDateString()
   date: string;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campus_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  department_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  department_id?: number[];
 }
 
 export class StaffAttendanceMarkDto {

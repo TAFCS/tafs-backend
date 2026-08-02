@@ -1,6 +1,7 @@
 import { AttendanceObjectionStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { toNumberArray, toStringArray } from '../../../common/transforms/query-array.transform';
 
 export class CreateAttendanceObjectionDto {
   @IsDateString()
@@ -21,13 +22,16 @@ export class CreateAttendanceObjectionDto {
 
 export class ListAttendanceObjectionsQueryDto {
   @IsOptional()
-  @IsEnum(AttendanceObjectionStatus)
-  status?: AttendanceObjectionStatus;
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(AttendanceObjectionStatus, { each: true })
+  status?: AttendanceObjectionStatus[];
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campus_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
 }
 
 export class ReviewAttendanceObjectionDto {
