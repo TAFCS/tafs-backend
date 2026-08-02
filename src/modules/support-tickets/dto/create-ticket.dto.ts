@@ -15,7 +15,7 @@ export class CreateTicketDto {
 
   @IsString()
   @MinLength(20)
-  @MaxLength(300)
+  @MaxLength(150)
   description: string;
 
   @IsOptional()
