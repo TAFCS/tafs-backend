@@ -76,8 +76,14 @@ export class BulkVoucherJobsController {
      */
     @Get()
     async listJobs(@Query('campus_id') campusId?: string) {
+        const campusIds = campusId
+            ? campusId
+                  .split(',')
+                  .map((v) => parseInt(v.trim(), 10))
+                  .filter((n) => Number.isInteger(n) && !Number.isNaN(n))
+            : undefined;
         const jobs = await this.bulkVoucherJobsService.listJobs(
-            campusId ? parseInt(campusId, 10) : undefined,
+            campusIds?.length ? campusIds : undefined,
         );
         return {
             success: true,

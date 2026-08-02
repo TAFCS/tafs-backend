@@ -39,9 +39,9 @@ export class CreatePostdatedChequeDto {
 }
 
 export class ListPostdatedChequesFilter {
-  status?: PostdatedChequeStatus;
+  status?: PostdatedChequeStatus | PostdatedChequeStatus[];
   student_id?: number;
-  campus_id?: number;
+  campus_id?: number | number[];
   from_date?: string;
   to_date?: string;
 }
@@ -118,9 +118,17 @@ export class PostdatedChequesService {
   async list(filters: ListPostdatedChequesFilter) {
     const where: any = {};
 
-    if (filters.status) where.status = filters.status;
+    if (filters.status) {
+      const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+    }
     if (filters.student_id) where.student_id = filters.student_id;
-    if (filters.campus_id) where.students = { campus_id: filters.campus_id };
+    if (filters.campus_id != null) {
+      const campusIds = Array.isArray(filters.campus_id) ? filters.campus_id : [filters.campus_id];
+      where.students = {
+        campus_id: campusIds.length === 1 ? campusIds[0] : { in: campusIds },
+      };
+    }
 
     if (filters.from_date || filters.to_date) {
       where.cheque_date = {};

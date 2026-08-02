@@ -277,10 +277,10 @@ export class BulkVoucherJobsService {
 
     // ── Job History ─────────────────────────────────────────────────────────
 
-    async listJobs(campusId?: number) {
+    async listJobs(campusIds?: number[]) {
         const jobs = await this.prisma.bulk_voucher_jobs.findMany({
             where: {
-                ...(campusId ? { campus_ids: { has: campusId } } : {}),
+                ...(campusIds?.length ? { campus_ids: { hasSome: campusIds } } : {}),
             },
             orderBy: { created_at: 'desc' },
             take: 50,

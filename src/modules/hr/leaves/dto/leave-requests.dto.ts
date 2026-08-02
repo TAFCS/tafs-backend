@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeaveRequestStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { toNumberArray, toStringArray } from '../../../../common/transforms/query-array.transform';
 
 export class CreateLeaveRequestDto {
   @ApiProperty({ description: 'Leave type code: SICK | CASUAL | ANNUAL | UNPAID' })
@@ -38,21 +39,26 @@ export class CreateLeaveRequestDto {
 }
 
 export class ListLeaveRequestsQueryDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: [Number], description: 'Campus IDs (comma-separated or repeated)' })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campusId?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campusId?: number[];
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: [String], description: 'Leave type codes (comma-separated or repeated)' })
   @IsOptional()
-  @IsString()
-  leaveTypeCode?: string;
+  @Transform(toStringArray)
+  @IsArray()
+  @IsString({ each: true })
+  leaveTypeCode?: string[];
 
-  @ApiPropertyOptional({ enum: LeaveRequestStatus })
+  @ApiPropertyOptional({ enum: LeaveRequestStatus, isArray: true })
   @IsOptional()
-  @IsEnum(LeaveRequestStatus)
-  status?: LeaveRequestStatus;
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(LeaveRequestStatus, { each: true })
+  status?: LeaveRequestStatus[];
 
   @ApiPropertyOptional()
   @IsOptional()

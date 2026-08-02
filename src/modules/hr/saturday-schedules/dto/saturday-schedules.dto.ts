@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsDateString, IsInt, IsOptional, IsString, Matches } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { toNumberArray } from '../../../../common/transforms/query-array.transform';
 
 export class CreateSaturdayScheduleDto {
   @ApiProperty({ type: [Number], description: 'Employee profile IDs to assign this Saturday' })
@@ -21,11 +22,12 @@ export class ListSaturdaySchedulesQueryDto {
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'month must be YYYY-MM' })
   month: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: [Number] })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campusId?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campusId?: number[];
 
   @ApiPropertyOptional()
   @IsOptional()

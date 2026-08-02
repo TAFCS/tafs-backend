@@ -143,17 +143,14 @@ export class LeaveRequestsService {
   async listForReview(query: ListLeaveRequestsQueryDto, user: IJwtStaffPayload) {
     this.assertApprovePermission(user);
 
-    const campusId = this.resolveCampusFilter(query.campusId, user);
-    if (user.campusId && campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
+    const campusIds = this.resolveCampusFilter(query.campusId, user);
 
     const where: Prisma.leave_requestsWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
-      ...(query.leaveTypeCode
-        ? { leave_types: { code: query.leaveTypeCode.toUpperCase() } }
+      ...(query.status?.length ? { status: { in: query.status } } : {}),
+      ...(query.leaveTypeCode?.length
+        ? { leave_types: { code: { in: query.leaveTypeCode.map((c) => c.toUpperCase()) } } }
         : {}),
-      ...(campusId ? { employee_profiles: { campus_id: campusId } } : {}),
+      ...(campusIds?.length ? { employee_profiles: { campus_id: { in: campusIds } } } : {}),
       ...(query.fromDate || query.toDate
         ? {
             AND: [
@@ -375,16 +372,19 @@ export class LeaveRequestsService {
   }
 
   private resolveCampusFilter(
-    queryCampusId: number | undefined,
+    queryCampusIds: number[] | undefined,
     user: IJwtStaffPayload,
-  ): number | undefined {
+  ): number[] | undefined {
     if (user.role === StaffRole.SUPER_ADMIN) {
-      return queryCampusId;
+      return queryCampusIds;
     }
     if (user.campusId) {
-      return queryCampusId ?? user.campusId;
+      if (queryCampusIds?.some((id) => id !== user.campusId)) {
+        throw new ForbiddenException('You do not have access to this campus');
+      }
+      return [user.campusId];
     }
-    return queryCampusId;
+    return queryCampusIds;
   }
 
   private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {

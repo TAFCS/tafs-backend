@@ -525,9 +525,9 @@ model student_fees {
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
   discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  scholarship_presets      scholarship_presets?      @relation(fields: [scholarship_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   fee_types                fee_types?                @relation(fields: [fee_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student_fee_installments student_fee_installments? @relation(fields: [installment_id], references: [id])
+  scholarship_presets      scholarship_presets?      @relation(fields: [scholarship_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students                 students                  @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
   voucher_heads            voucher_heads[]
 
@@ -639,16 +639,16 @@ model students {
   home_phone                  String?                       @db.VarChar(20)
   is_complementary            Boolean                       @default(false)
   is_fee_endowment            Boolean                       @default(false)
+  fee_start_term              String?                       @db.VarChar(10)
+  graduated_from_class_id     Int?
+  cnic                        String?                       @unique @db.VarChar(15)
+  not_pursuing                Boolean                       @default(false)
+  quick_admission_meta        Json?
+  graduated_at                DateTime?                     @db.Date
   complementary_reason        String?                       @db.VarChar(500)
   complementary_until         DateTime?                     @db.Date
   fee_endowment_reason        String?                       @db.VarChar(500)
   fee_endowment_until         DateTime?                     @db.Date
-  fee_start_term              String?                       @db.VarChar(10)
-  graduated_from_class_id     Int?
-  graduated_at                DateTime?                     @db.Date
-  cnic                        String?                       @unique @db.VarChar(15)
-  not_pursuing                Boolean                       @default(false)
-  quick_admission_meta        Json?
   attendance_notifications    attendance_notifications[]
   attendance_roll_records     attendance_roll_records[]
   attendance_student_daily    attendance_student_daily[]
@@ -980,7 +980,7 @@ model ticket_messages {
   reviewed_at        DateTime?
   review_comment     String?
   created_at         DateTime         @default(now())
-  deleted_at         DateTime?
+  deleted_at         DateTime?        @db.Timestamp(6)
   reviewer           users?           @relation("TicketMessageReviewer", fields: [reviewed_by], references: [id])
   sender_guardian    guardians?       @relation("TicketMessageSenderGuardian", fields: [sender_guardian_id], references: [id])
   sender_user        users?           @relation("TicketMessageSenderUser", fields: [sender_user_id], references: [id])
@@ -1104,8 +1104,8 @@ model employee_profiles {
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
   leave_requests                     leave_requests[]
-  payroll_run_lines                  payroll_run_lines[]
   payroll_flags                      payroll_flags[]
+  payroll_run_lines                  payroll_run_lines[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
   timetable_slots                    timetable_slots[]
   zk_attendance_scans                zk_attendance_scans[]
@@ -1263,8 +1263,8 @@ model payroll_runs {
   finalized_at      DateTime?           @db.Timestamp(6)
   notes             String?             @db.VarChar(500)
   is_test           Boolean             @default(false)
-  payroll_run_lines payroll_run_lines[]
   payroll_flags     payroll_flags[]
+  payroll_run_lines payroll_run_lines[]
   campuses          campuses            @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, period_start, period_end, is_test])
@@ -1304,10 +1304,10 @@ model payroll_run_lines {
   has_punches                Boolean              @default(true)
   total_calendar_days        Int                  @default(0)
   total_overtime_minutes     Int                  @default(0)
-  overtime_days              Int                  @default(0)
   scheduled_minutes_per_day  Int                  @default(0)
-  sandwich_deduction         Decimal              @default(0) @db.Decimal(12, 2)
   consecutive_late_deduction Decimal              @default(0) @db.Decimal(12, 2)
+  overtime_days              Int                  @default(0)
+  sandwich_deduction         Decimal              @default(0) @db.Decimal(12, 2)
   disbursed_by_user          users?               @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles          employee_profiles    @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   payroll_runs               payroll_runs         @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
@@ -1329,8 +1329,8 @@ model payroll_flags {
   decided_by        String?
   decided_at        DateTime?
   created_at        DateTime          @default(now()) @db.Timestamp(6)
-  payroll_runs      payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
   employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  payroll_runs      payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
 
   @@unique([payroll_run_id, employee_id, flag_type, anchor_date])
   @@index([payroll_run_id, employee_id])
