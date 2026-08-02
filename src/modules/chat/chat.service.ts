@@ -215,13 +215,96 @@ export class ChatService {
 
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
 
+    const dimensions = file.mimetype.startsWith('image/')
+      ? this.extractImageDimensions(file.buffer, file.mimetype)
+      : {};
+
     const metadata = {
       sizeBytes: file.size,
       mimetype: file.mimetype,
-      originalName: file.originalname
+      originalName: file.originalname,
+      ...dimensions,
     };
 
     return { url, metadata };
+  }
+
+  /** Best-effort width/height from common image headers (no extra deps). */
+  private extractImageDimensions(
+    buffer: Buffer,
+    mimetype: string,
+  ): { width?: number; height?: number } {
+    try {
+      if (
+        mimetype === 'image/png' ||
+        (buffer.length >= 24 && buffer[0] === 0x89 && buffer[1] === 0x50)
+      ) {
+        return {
+          width: buffer.readUInt32BE(16),
+          height: buffer.readUInt32BE(20),
+        };
+      }
+
+      if (
+        mimetype === 'image/gif' ||
+        (buffer.length >= 10 && buffer[0] === 0x47 && buffer[1] === 0x49)
+      ) {
+        return {
+          width: buffer.readUInt16LE(6),
+          height: buffer.readUInt16LE(8),
+        };
+      }
+
+      if (
+        mimetype === 'image/jpeg' ||
+        mimetype === 'image/jpg' ||
+        (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8)
+      ) {
+        let offset = 2;
+        while (offset + 9 < buffer.length) {
+          if (buffer[offset] !== 0xff) break;
+          const marker = buffer[offset + 1];
+          if (marker === 0xda) break; // start of scan
+          const segmentLength = buffer.readUInt16BE(offset + 2);
+          if (
+            (marker >= 0xc0 && marker <= 0xc3) ||
+            (marker >= 0xc5 && marker <= 0xc7) ||
+            (marker >= 0xc9 && marker <= 0xcb) ||
+            (marker >= 0xcd && marker <= 0xcf)
+          ) {
+            return {
+              height: buffer.readUInt16BE(offset + 5),
+              width: buffer.readUInt16BE(offset + 7),
+            };
+          }
+          offset += 2 + segmentLength;
+        }
+      }
+
+      if (
+        mimetype === 'image/webp' &&
+        buffer.length >= 30 &&
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+      ) {
+        const fourcc = buffer.toString('ascii', 12, 16);
+        if (fourcc === 'VP8X') {
+          return {
+            width: 1 + buffer[24] + (buffer[25] << 8) + (buffer[26] << 16),
+            height: 1 + buffer[27] + (buffer[28] << 8) + (buffer[29] << 16),
+          };
+        }
+        if (fourcc === 'VP8 ' && buffer.length >= 30) {
+          return {
+            width: buffer.readUInt16LE(26) & 0x3fff,
+            height: buffer.readUInt16LE(28) & 0x3fff,
+          };
+        }
+      }
+    } catch {
+      // Ignore probe failures; clients may still supply dimensions.
+    }
+    return {};
   }
 
   async getMediaFile(key: string) {

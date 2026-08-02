@@ -177,7 +177,22 @@ export class SupportTicketsService {
     const [items, total] = await Promise.all([
       this.prisma.support_tickets.findMany({
         where,
-        include: ticketInclude,
+        include: {
+          ...ticketInclude,
+          events: {
+            where: {
+              event_type: {
+                in: [
+                  TicketEventType.CLOSED_BY_STAFF,
+                  TicketEventType.CLOSED_BY_PARENT,
+                ],
+              },
+            },
+            orderBy: { created_at: 'desc' },
+            take: 1,
+            select: { note: true, event_type: true, created_at: true },
+          },
+        },
         orderBy: { closed_at: 'desc' },
         take,
         skip,
@@ -185,7 +200,15 @@ export class SupportTicketsService {
       this.prisma.support_tickets.count({ where }),
     ]);
 
-    return { items, total, take, skip };
+    return {
+      items: items.map(({ events, ...ticket }) => ({
+        ...ticket,
+        closing_note: events[0]?.note?.trim() || null,
+      })),
+      total,
+      take,
+      skip,
+    };
   }
 
   async listPendingApprovals(staff: IJwtStaffPayload, take = 50, skip = 0) {
@@ -194,7 +217,11 @@ export class SupportTicketsService {
     }
 
     return this.prisma.ticket_messages.findMany({
-      where: { status: MessageStatus.PENDING, sender_type: 'STAFF' },
+      where: {
+        status: MessageStatus.PENDING,
+        sender_type: 'STAFF',
+        deleted_at: null,
+      },
       orderBy: { created_at: 'asc' },
       take,
       skip,
@@ -1050,6 +1077,91 @@ export class SupportTicketsService {
     return this.createParentMessage(ticketId, payload, dto);
   }
 
+  /** Staff soft-delete of own ticket message only. */
+  async deleteOwnStaffMessage(messageId: string, staff: IJwtStaffPayload) {
+    const message = await this.prisma.ticket_messages.findUnique({
+      where: { id: messageId },
+      include: {
+        ticket: { include: { families: { select: { household_name: true } } } },
+        sender_user: { select: { id: true, full_name: true, role: true } },
+      },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    if (message.deleted_at) {
+      throw new BadRequestException('Message already deleted');
+    }
+    if (
+      message.sender_type !== 'STAFF' ||
+      message.sender_user_id !== staff.sub
+    ) {
+      throw new ForbiddenException('You can only delete your own messages');
+    }
+
+    const wasApprovedUnread =
+      message.status === MessageStatus.APPROVED && !message.is_read;
+    const snippetBefore = this.messageSnippet(
+      message.message_type,
+      message.content,
+    );
+
+    const updatedTicket = await this.prisma.$transaction(async (tx) => {
+      const softDeleted = await tx.ticket_messages.updateMany({
+        where: {
+          id: messageId,
+          sender_user_id: staff.sub,
+          deleted_at: null,
+        },
+        data: { deleted_at: new Date() },
+      });
+      if (softDeleted.count === 0) {
+        throw new ConflictException('Message already deleted');
+      }
+
+      const snippetFields = await this.recalculateTicketSnippetFields(
+        tx,
+        message.ticket_id,
+      );
+
+      let unreadByParent: number | undefined;
+      if (wasApprovedUnread) {
+        const current = await tx.support_tickets.findUnique({
+          where: { id: message.ticket_id },
+          select: { unread_by_parent: true },
+        });
+        unreadByParent = Math.max(0, (current?.unread_by_parent ?? 0) - 1);
+      }
+
+      return tx.support_tickets.update({
+        where: { id: message.ticket_id },
+        data: {
+          ...snippetFields,
+          ...(unreadByParent !== undefined
+            ? { unread_by_parent: unreadByParent }
+            : {}),
+        },
+        include: ticketInclude,
+      });
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: message.ticket_id,
+      action: 'MESSAGE_DELETED',
+      changed_by: staff.username,
+      note: [
+        this.ticketContextLabel(message.ticket),
+        `Staff soft-deleted own message #${messageId} (${message.message_type}): ${snippetBefore}`,
+      ].join(' — '),
+    });
+
+    await this.chatGateway.broadcastTicketMessageDeleted(
+      updatedTicket,
+      messageId,
+    );
+
+    return { success: true, messageId, ticket: updatedTicket };
+  }
+
   private async closeTicket(
     ticketId: string,
     eventType: TicketEventType,
@@ -1175,6 +1287,7 @@ export class SupportTicketsService {
   ): Prisma.ticket_messagesWhereInput {
     if (actor.userType === 'PARENT') {
       return {
+        deleted_at: null,
         OR: [
           { sender_type: 'GUARDIAN' },
           { sender_type: 'STAFF', status: MessageStatus.APPROVED },
@@ -1184,15 +1297,89 @@ export class SupportTicketsService {
 
     const staff = actor as IJwtStaffPayload;
     if (staff.role === 'SUPER_ADMIN') {
-      return {};
+      return { deleted_at: null };
     }
 
     return {
+      deleted_at: null,
       OR: [
         { sender_type: 'GUARDIAN' },
         { sender_type: 'STAFF', status: MessageStatus.APPROVED },
         { sender_type: 'STAFF', sender_user_id: staff.sub },
       ],
+    };
+  }
+
+  private async recalculateTicketSnippetFields(
+    tx: Prisma.TransactionClient,
+    ticketId: string,
+  ): Promise<{
+    last_message_at: Date;
+    last_message_snippet: string | null;
+    last_staff_snippet: string | null;
+    last_staff_sender_id: string | null;
+    last_staff_sender_name: string | null;
+    last_family_snippet: string | null;
+    last_family_sender_name: string | null;
+  }> {
+    const ticket = await tx.support_tickets.findUniqueOrThrow({
+      where: { id: ticketId },
+      select: { created_at: true, description: true },
+    });
+
+    const visibleWhere: Prisma.ticket_messagesWhereInput = {
+      ticket_id: ticketId,
+      deleted_at: null,
+      OR: [
+        { sender_type: 'GUARDIAN' },
+        { sender_type: 'STAFF', status: MessageStatus.APPROVED },
+      ],
+    };
+
+    const [latest, latestStaff, latestFamily] = await Promise.all([
+      tx.ticket_messages.findFirst({
+        where: visibleWhere,
+        orderBy: { created_at: 'desc' },
+      }),
+      tx.ticket_messages.findFirst({
+        where: {
+          ticket_id: ticketId,
+          deleted_at: null,
+          sender_type: 'STAFF',
+          status: MessageStatus.APPROVED,
+        },
+        orderBy: { created_at: 'desc' },
+        include: {
+          sender_user: { select: { id: true, full_name: true } },
+        },
+      }),
+      tx.ticket_messages.findFirst({
+        where: {
+          ticket_id: ticketId,
+          deleted_at: null,
+          sender_type: 'GUARDIAN',
+        },
+        orderBy: { created_at: 'desc' },
+        include: {
+          sender_guardian: { select: { full_name: true } },
+        },
+      }),
+    ]);
+
+    return {
+      last_message_at: latest?.created_at ?? ticket.created_at,
+      last_message_snippet: latest
+        ? this.messageSnippet(latest.message_type, latest.content)
+        : ticket.description.slice(0, 50),
+      last_staff_snippet: latestStaff
+        ? this.messageSnippet(latestStaff.message_type, latestStaff.content)
+        : null,
+      last_staff_sender_id: latestStaff?.sender_user_id ?? null,
+      last_staff_sender_name: latestStaff?.sender_user?.full_name ?? null,
+      last_family_snippet: latestFamily
+        ? this.messageSnippet(latestFamily.message_type, latestFamily.content)
+        : null,
+      last_family_sender_name: latestFamily?.sender_guardian?.full_name ?? null,
     };
   }
 

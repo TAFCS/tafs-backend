@@ -69,6 +69,8 @@ export interface VoucherPdfData {
     lateFeeAmount: number;
     reprintFeeAmount: number;
     generatedByName?: string;
+    /** Stamp recorded when the voucher was first generated — used for the PDF footer. */
+    generatedAt?: Date | string;
     /** When true, overlay a PAID stamp on all three challan copies */
     paidStamp?: boolean;
     /** When false, hide the discount column. Default: true */
@@ -130,9 +132,16 @@ export class VoucherPdfService {
                 voucherNumber: data.voucherNumber,
                 generatedBy: {
                     fullName: data.generatedByName || 'TAFSync System',
-                    // Server may run in UTC; always render in Pakistan Standard Time
-                    // regardless of host timezone, in explicit DD-MM-YYYY order.
-                    timestampStr: formatPktTimestamp(new Date())
+                    // Prefer the persisted generation timestamp; fall back to
+                    // issue date for legacy vouchers that predate the columns.
+                    // Never use "now" — regenerations must not rewrite the stamp.
+                    timestampStr: formatPktTimestamp(
+                        data.generatedAt
+                            ? new Date(data.generatedAt)
+                            : data.issueDate
+                              ? new Date(data.issueDate)
+                              : new Date(0),
+                    ),
                 },
                 bank: {
                     name: data.bank.name,

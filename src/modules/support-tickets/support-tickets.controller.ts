@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -172,6 +173,17 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
   ) {
     return this.supportTicketsService.reviewReply(messageId, dto, staff);
+  }
+
+  @Delete('messages/:messageId')
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies(canViewTickets)
+  @ApiOperation({ summary: 'Staff soft-delete own ticket message' })
+  deleteMessage(
+    @Param('messageId') messageId: string,
+    @CurrentUser() staff: any,
+  ) {
+    return this.supportTicketsService.deleteOwnStaffMessage(messageId, staff);
   }
 
   @Post('media')
