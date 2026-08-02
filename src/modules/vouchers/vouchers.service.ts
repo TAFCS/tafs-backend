@@ -134,6 +134,63 @@ export class VouchersService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Gross-amount resolution.
+    //
+    // class_fee_schedule is the SINGLE SOURCE OF TRUTH for a fee head's gross
+    // ("before discount") price. student_fees.amount_before_discount is NOT used:
+    // it is a per-row copy that goes stale whenever the published class price is
+    // revised, which produced vouchers whose printed "before discount" line and
+    // stored discount_amount snapshot disagreed (e.g. schedule 19,995 vs row
+    // 15,995 on the same head). Both voucher creation and the PDF read path go
+    // through these two helpers so they can never drift apart again.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Normalises "2026-27" / "2026-2027" to a single comparable form. */
+    private normalizeAcademicYear(ay: string | null | undefined): string {
+        const parts = (ay ?? '').split('-');
+        if (parts.length !== 2) return ay ?? '';
+        const start = parts[0].trim();
+        const endRaw = parts[1].trim();
+        const end = endRaw.length === 2 ? `${start.slice(0, 2)}${endRaw}` : endRaw;
+        return `${start}-${end}`;
+    }
+
+    /**
+     * Builds a "feeTypeId|academicYear" → gross amount map from class_fee_schedule.
+     * A campus-specific row wins over a null-campus (all-campus) row for the same key.
+     * `client` accepts a transaction client so voucher creation can use it inside its tx.
+     */
+    private async buildScheduleGrossMap(
+        client: { class_fee_schedule: { findMany: Function } },
+        classId: number | null | undefined,
+        campusId: number | null | undefined,
+        feeTypeIds: number[],
+        academicYears: string[],
+    ): Promise<Map<string, number>> {
+        const map = new Map<string, number>();
+        const years = [...new Set(academicYears.map((y) => this.normalizeAcademicYear(y)).filter(Boolean))];
+        const ids = [...new Set(feeTypeIds.filter((id) => id != null))];
+        if (ids.length === 0 || years.length === 0 || classId == null) return map;
+
+        const rows = await client.class_fee_schedule.findMany({
+            where: {
+                class_id: classId,
+                fee_id: { in: ids },
+                academic_year: { in: years },
+                OR: [{ campus_id: campusId }, { campus_id: null }],
+            },
+        });
+
+        for (const row of rows as any[]) {
+            const key = `${row.fee_id}|${this.normalizeAcademicYear(row.academic_year)}`;
+            if (!map.has(key) || row.campus_id != null) {
+                map.set(key, Number(row.amount));
+            }
+        }
+        return map;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Audit-logging helpers.
     //
     // Every data-mutating operation in this service must leave a descriptive
@@ -234,6 +291,19 @@ export class VouchersService {
                     scholarship_presets: true,
                 },
             });
+
+            // 1.c Resolve gross ("before discount") prices from class_fee_schedule —
+            // the same single source of truth the rendered voucher uses. Using the
+            // per-row amount_before_discount copy here instead made the stored
+            // discount_amount snapshot disagree with the printed breakdown whenever
+            // the published class price had been revised since the row was created.
+            const scheduleGrossMap = await this.buildScheduleGrossMap(
+                tx,
+                dto.class_id,
+                dto.campus_id,
+                feeRecords.filter((f: any) => !f.is_discount).map((f: any) => f.fee_type_id),
+                feeRecords.filter((f: any) => !f.is_discount).map((f: any) => f.academic_year ?? ''),
+            );
 
             // 2. Create the voucher record (initial creation with placeholder totals)
             let bankAccountId = dto.bank_account_id;
@@ -339,19 +409,47 @@ export class VouchersService {
                 }
 
                 // 3. Keep the discount/scholarship snapshot consistent.
-                // discount_amount = amount_before_discount - amount_after_discount
+                // discount_amount    = schedule gross      - amount_after_discount
                 // scholarship_amount = amount_after_discount - amount (final)
                 // This ensures we show the discount/scholarship that was originally granted.
+                //
+                // Gross comes from class_fee_schedule (see buildScheduleGrossMap) — the same
+                // source the rendered voucher prints — NOT from the per-row
+                // amount_before_discount copy, which goes stale when the published class
+                // price is revised and made this stored snapshot contradict the printed
+                // breakdown. Falls back to the row's own columns only when the head has no
+                // schedule entry (e.g. one-off/legacy fee types).
+                //
+                // scholarship_percentage is the ONLY source of truth for "this head has a
+                // scholarship". Never infer one from the arithmetic gap between
+                // amount_after_discount and amount: amount_after_discount is a derived
+                // column that older/other code paths (splits, merges, installment edits)
+                // change `amount` without maintaining, so a stale value would otherwise
+                // turn a plain discount into a phantom scholarship on the voucher.
+                // With no scholarship, "after discount" IS the final amount by definition.
+                //
                 // Exception: PARTIAL/BALANCE PAYMENT OF rows are a re-allocation of an
                 // already-issued fee by amount, not a fresh discount/scholarship grant —
                 // they must never show a discount or scholarship on the voucher.
                 const isSplitPaymentRow = this.isSplitPaymentPrefix((fee as any).description_prefix);
-                const gross = fee.amount_before_discount ?? fee.amount_after_discount ?? fee.amount ?? new Prisma.Decimal(0);
-                const amountAfterDiscount = fee.amount_after_discount ?? fee.amount ?? new Prisma.Decimal(0);
-                const discount = isSplitPaymentRow
+                const hasScholarship = Number((fee as any).scholarship_percentage ?? 0) > 0;
+                const schedKey = fee.fee_type_id != null && fee.academic_year
+                    ? `${fee.fee_type_id}|${this.normalizeAcademicYear(fee.academic_year)}`
+                    : null;
+                const schedGross = schedKey ? scheduleGrossMap.get(schedKey) : undefined;
+                const amountAfterDiscount = hasScholarship
+                    ? (fee.amount_after_discount ?? fee.amount ?? new Prisma.Decimal(0))
+                    : amount;
+                const gross = schedGross != null
+                    ? new Prisma.Decimal(schedGross)
+                    : new Prisma.Decimal(fee.amount_before_discount ?? amountAfterDiscount ?? 0);
+                // A revised-down class price can leave gross below the charged amount;
+                // never emit a negative discount (it printed as "DISCOUNT -(-420)").
+                const rawDiscount = new Prisma.Decimal(gross).sub(amountAfterDiscount);
+                const discount = isSplitPaymentRow || rawDiscount.lt(0)
                     ? new Prisma.Decimal(0)
-                    : new Prisma.Decimal(gross).sub(amountAfterDiscount);
-                const scholarshipAmount = isSplitPaymentRow
+                    : rawDiscount;
+                const scholarshipAmount = isSplitPaymentRow || !hasScholarship
                     ? new Prisma.Decimal(0)
                     : new Prisma.Decimal(amountAfterDiscount).sub(amount);
 
@@ -936,54 +1034,20 @@ export class VouchersService {
         // 3a. Build class_fee_schedule lookup for gross-amount and discount calculation.
         //     Discount = schedule.amount − student_fees.amount  (schedule is single source of truth).
         //     student_fees.amount_before_discount is intentionally NOT used here.
-        const normalizeAY = (ay: string): string => {
-            const parts = (ay ?? '').split('-');
-            if (parts.length !== 2) return ay ?? '';
-            const start = parts[0].trim();
-            const endRaw = parts[1].trim();
-            const end = endRaw.length === 2 ? `${start.slice(0, 2)}${endRaw}` : endRaw;
-            return `${start}-${end}`;
-        };
+        //     Voucher creation uses this exact same helper, so the stored
+        //     discount_amount snapshot and this printed breakdown always agree.
+        const normalizeAY = (ay: string) => this.normalizeAcademicYear(ay);
 
         const regularHeads = (voucher.voucher_heads as any[]).filter(
             (h: any) => !(h.student_fees?.is_discount === true),
         );
-        const scheduleYears = [
-            ...new Set(
-                regularHeads
-                    .map((h: any) => normalizeAY(h.student_fees?.academic_year ?? ''))
-                    .filter(Boolean),
-            ),
-        ] as string[];
-        const scheduleFeeIds = [
-            ...new Set(
-                regularHeads
-                    .map((h: any) => h.student_fees?.fee_type_id)
-                    .filter((id: any) => id != null),
-            ),
-        ] as number[];
-
-        const rawScheduleRows =
-            scheduleFeeIds.length > 0 && scheduleYears.length > 0
-                ? await this.prisma.class_fee_schedule.findMany({
-                      where: {
-                          class_id: voucher.class_id,
-                          fee_id: { in: scheduleFeeIds },
-                          academic_year: { in: scheduleYears },
-                          OR: [{ campus_id: voucher.campus_id }, { campus_id: null }],
-                      },
-                  })
-                : [];
-
-        // Build map: "fee_type_id|academic_year" → gross amount.
-        // Campus-specific row wins over null-campus row for the same key.
-        const scheduleMap = new Map<string, number>();
-        for (const row of rawScheduleRows) {
-            const key = `${row.fee_id}|${normalizeAY(row.academic_year)}`;
-            if (!scheduleMap.has(key) || row.campus_id != null) {
-                scheduleMap.set(key, Number(row.amount));
-            }
-        }
+        const scheduleMap = await this.buildScheduleGrossMap(
+            this.prisma,
+            voucher.class_id,
+            voucher.campus_id,
+            regularHeads.map((h: any) => h.student_fees?.fee_type_id),
+            regularHeads.map((h: any) => h.student_fees?.academic_year ?? ''),
+        );
 
         // 3. Initial Mapping of Heads
         let heads = voucher.voucher_heads.map((h: any) => {
@@ -1084,8 +1148,17 @@ export class VouchersService {
                 ? `${sf.fee_type_id}|${normalizeAY(sf.academic_year)}`
                 : null;
             const schedGross = schedKey ? scheduleMap.get(schedKey) : undefined;
-            const amountAfterDiscountRaw = Number(sf?.amount_after_discount ?? sf?.amount ?? h.net_amount);
             const finalAmountRaw = Number(sf?.amount ?? h.net_amount);
+            // scholarship_percentage is the ONLY source of truth for "this head has a
+            // scholarship" — never infer one from the amount_after_discount/amount gap.
+            // That column is derived and is not maintained by every path that edits
+            // `amount` (splits, merges, installment edits), so a stale value would
+            // otherwise render a plain discount as a phantom scholarship. With no
+            // scholarship, "after discount" IS the final amount by definition.
+            const hasScholarshipHead = Number(sf?.scholarship_percentage ?? 0) > 0;
+            const amountAfterDiscountRaw = hasScholarshipHead
+                ? Number(sf?.amount_after_discount ?? sf?.amount ?? h.net_amount)
+                : finalAmountRaw;
 
             const amountDisplay = isSplitHead ? Number(h.net_amount) : (schedGross ?? Number(h.net_amount));
             const discountDisplay = isSplitHead || schedGross == null
@@ -1093,7 +1166,9 @@ export class VouchersService {
                 : Math.max(0, schedGross - amountAfterDiscountRaw);
             // amount after discount, before scholarship — the intermediate stage.
             const amountAfterDiscountDisplay = isSplitHead ? Number(h.net_amount) : amountDisplay - discountDisplay;
-            const scholarshipDisplay = isSplitHead ? 0 : Math.max(0, amountAfterDiscountRaw - finalAmountRaw);
+            const scholarshipDisplay = isSplitHead || !hasScholarshipHead
+                ? 0
+                : Math.max(0, amountAfterDiscountRaw - finalAmountRaw);
 
             return {
                 description,
@@ -1272,16 +1347,6 @@ export class VouchersService {
         }
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
-
-        // student_fees ids printed in this voucher's CURRENT-period main columns (arrear heads
-        // excluded — those still belong in the installment plan column). Used to keep the 4th
-        // column from repeating a line the main columns already show.
-        const currentPeriodInstallmentFeeIds = new Set<number>(
-            (voucher.voucher_heads as any[])
-                .filter((h: any) => forceHeadsAsCurrent || !this.headIsArrear(h, voucher))
-                .map((h: any) => h.student_fee_id)
-                .filter((id: any): id is number => id != null),
-        );
 
         // Standalone installments that are past + unpaid but absent from this voucher's heads
         // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
@@ -1572,15 +1637,13 @@ export class VouchersService {
                         // of a 'BALANCE PAYMENT OF...' row that already represents this slot
                         // in the history — listing both would show the same installment twice.
                         if (((f.description_prefix ?? '') as string).startsWith('PARTIAL PAYMENT OF')) return false;
-                        // Exclude only the installment(s) that are the current voucher month —
-                        // those are already shown in the main fee columns.
-                        // Past arrear installments and future installments all belong in the plan.
-                        // Matched against the voucher's own current-period heads rather than
-                        // voucher.month/academic_year: those are UI-chosen header metadata that
-                        // can disagree with the heads (see installmentLookupYears above), in which
-                        // case a month/year comparison never fires and the current installment
-                        // gets printed twice — once in the main columns, once here.
-                        return !currentPeriodInstallmentFeeIds.has(f.id);
+                        // The 4th column (INSTALLMENTS PLAN) always lists every installment head
+                        // for the plan — past, current, and future — even though the current
+                        // period's head is also shown in the main fee columns. Previously the
+                        // current-period head was deliberately excluded here to avoid the
+                        // "duplicate" line, but the plan is meant to be a complete at-a-glance
+                        // view of all twelve heads regardless of what's also on the main columns.
+                        return true;
                     })
                     .sort((a: any, b: any) => {
                         const aDate = a.fee_date ? new Date(a.fee_date).getTime() : 0;

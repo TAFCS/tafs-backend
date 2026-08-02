@@ -697,13 +697,15 @@ export class StudentFeesService {
 
                     // amount_after_discount = the amount after the system discount, before scholarship
                     // (what `item.amount` has always meant from the client's perspective).
-                    // `amount` is repurposed to always hold the FINAL amount (after scholarship, if any).
+                    // `amount` is the SINGLE SOURCE OF TRUTH for receivables and is always a
+                    // whole number — see the trg_student_fees_amount_invariants DB trigger,
+                    // which enforces both rules regardless of which code path writes.
                     const amountAfterDiscount = new Prisma.Decimal(item.amount ?? item.amount_before_discount ?? 0);
-                    const finalAmount = hasScholarship
+                    const finalAmount = (hasScholarship
                         ? amountAfterDiscount
                               .mul(new Prisma.Decimal(1).minus(new Prisma.Decimal(item.scholarship_percentage!).div(100)))
-                              .toDecimalPlaces(2)
-                        : amountAfterDiscount;
+                        : amountAfterDiscount
+                    ).toDecimalPlaces(0);
 
                     if (existingId) {
                         const before = existingFeeById.get(existingId);
@@ -1739,7 +1741,8 @@ export class StudentFeesService {
                 const amountAfterDiscount = new Prisma.Decimal(
                     row.amount_after_discount ?? row.amount_before_discount ?? row.amount ?? 0,
                 );
-                const finalAmount = amountAfterDiscount.mul(factor).toDecimalPlaces(2);
+                // `amount` is the final receivable and is always a whole number.
+                const finalAmount = amountAfterDiscount.mul(factor).toDecimalPlaces(0);
                 return this.prisma.student_fees.update({
                     where: { id: row.id },
                     data: {
