@@ -11,7 +11,7 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE', 'ATTENDANCE_OBJECTION', 'CLASS_ATTENDANCE_MODE', 'TIMETABLE', 'TIMETABLE_SLOT', 'SUBJECT', 'ZK_ATTENDANCE_MAPPING', 'CLASS_CHECK_IN_SCHEDULE'],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
   'house-balancer': ['HOUSE'],
-  system: ['USER', 'PERMISSION', 'BACKUP', 'APP_CONFIG'],
+  system: ['USER', 'PERMISSION', 'BACKUP'],
   'app-config': ['APP_CONFIG'],
   'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };
@@ -103,14 +103,14 @@ export class AuditLogsService {
     } else if (query.section) {
       // Filter by section: translate to the entity_types that belong to that section
       const sectionTypes = SECTION_ENTITY_TYPES[query.section] ?? [];
-      where.section = query.section;
       if (sectionTypes.length > 0 && !where.entity_type) {
-        // Also support older rows that may not have section set yet
+        // Support rows stored with section set or matching entity_type (handles legacy/system-saved rows)
         where.OR = [
           { section: query.section },
-          { section: null, entity_type: { in: sectionTypes } },
+          { entity_type: { in: sectionTypes } },
         ];
-        delete where.section;
+      } else {
+        where.section = query.section;
       }
     }
     if (query.entity_type) {
