@@ -1663,22 +1663,22 @@ model app_config {
 }
 
 model audit_logs {
-  id          Int       @id @default(autoincrement())
-  entity_type String    @db.VarChar(50)
-  entity_id   String    @db.VarChar(50)
-  action      String    @db.VarChar(50)
-  field       String?   @db.VarChar(100)
+  id          Int          @id @default(autoincrement())
+  entity_type String       @db.VarChar(50)
+  entity_id   String       @db.VarChar(50)
+  action      String       @db.VarChar(50)
+  field       String?      @db.VarChar(100)
   old_value   String?
   new_value   String?
-  changed_by  String    @db.VarChar(255)
-  changed_at  DateTime  @default(now())
+  changed_by  String       @db.VarChar(255)
+  changed_at  DateTime     @default(now())
   note        String?
   student_id  Int?
-  section     String?   @db.VarChar(50)
+  section     String?      @db.VarChar(50)
   parent_id   Int?
-  students    students? @relation(fields: [student_id], references: [cc])
   parent      audit_logs?  @relation("AuditLogChildren", fields: [parent_id], references: [id], onDelete: Cascade)
   children    audit_logs[] @relation("AuditLogChildren")
+  students    students?    @relation(fields: [student_id], references: [cc])
 
   @@index([changed_at(sort: Desc)])
   @@index([entity_type, entity_id])
