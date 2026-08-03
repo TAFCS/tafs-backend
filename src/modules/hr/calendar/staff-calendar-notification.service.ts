@@ -111,43 +111,49 @@ export class StaffCalendarNotificationService {
 
     for (const emp of candidates) {
       if (!emp.user_id) continue;
-      const resolved = this.calendarResolver.resolveStaffDayFromRows(
-        rows,
-        day.date,
-        emp.id,
-        emp.department_id,
-        emp.staff_category_id,
-        emp.staff_categories?.code ?? null,
-        emp.days_per_week,
-        emp.employee_work_schedules,
-        mandatorySaturdayMap.get(emp.id),
-      );
+      try {
+        const resolved = this.calendarResolver.resolveStaffDayFromRows(
+          rows,
+          day.date,
+          emp.id,
+          emp.department_id,
+          emp.staff_category_id,
+          emp.staff_categories?.code ?? null,
+          emp.days_per_week,
+          emp.employee_work_schedules,
+          mandatorySaturdayMap.get(emp.id),
+        );
 
-      if (changeType !== 'REMOVED') {
-        if (day.day_type === 'HOLIDAY' && !resolved.isWorkingDay && resolved.dayType === 'HOLIDAY') {
-          const desc = resolved.description ?? day.description ?? 'Holiday';
+        if (changeType !== 'REMOVED') {
+          if (day.day_type === 'HOLIDAY' && !resolved.isWorkingDay && resolved.dayType === 'HOLIDAY') {
+            const desc = resolved.description ?? day.description ?? 'Holiday';
+            await this.noticeBoard.createScheduleNotice(
+              emp.id,
+              emp.user_id,
+              'Day Off Marked',
+              `You're marked off on ${formattedDate} for ${desc}. Your attendance will show as Excused — no action needed.`,
+            );
+          } else if (day.day_type === 'WORKDAY' && resolved.isWorkingDay) {
+            const desc = day.description ?? 'a working day override';
+            await this.noticeBoard.createScheduleNotice(
+              emp.id,
+              emp.user_id,
+              'Working Day Notice',
+              `You're required to attend on ${formattedDate} (${desc}) — this day has been changed to a working day.`,
+            );
+          }
+        } else if (previousDayType === 'HOLIDAY' && resolved.isWorkingDay) {
           await this.noticeBoard.createScheduleNotice(
             emp.id,
             emp.user_id,
-            'Day Off Marked',
-            `You're marked off on ${formattedDate} for ${desc}. Your attendance will show as Excused — no action needed.`,
-          );
-        } else if (day.day_type === 'WORKDAY' && resolved.isWorkingDay) {
-          const desc = day.description ?? 'a working day override';
-          await this.noticeBoard.createScheduleNotice(
-            emp.id,
-            emp.user_id,
-            'Working Day Notice',
-            `You're required to attend on ${formattedDate} (${desc}) — this day has been changed to a working day.`,
+            'Day Off Cancelled',
+            `The day off on ${formattedDate} has been cancelled — you're now expected to attend as normal.`,
           );
         }
-      } else if (previousDayType === 'HOLIDAY' && resolved.isWorkingDay) {
-        await this.noticeBoard.createScheduleNotice(
-          emp.id,
-          emp.user_id,
-          'Day Off Cancelled',
-          `The day off on ${formattedDate} has been cancelled — you're now expected to attend as normal.`,
-        );
+      } catch (err: any) {
+        // One employee's notice failing (e.g. a transient DB error) shouldn't stop
+        // the rest of a campus/department-wide batch from being notified.
+        console.error(`[StaffCalendarNotification] Notice failed for employee #${emp.id}:`, err?.message);
       }
     }
   }

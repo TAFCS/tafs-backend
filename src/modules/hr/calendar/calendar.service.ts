@@ -318,9 +318,13 @@ export class CalendarService {
         await this.notificationService.notifySchoolOpenForCalendarDay(day);
       }
     } else if (day.applies_to === 'STAFF') {
-      void this.staffNotificationService.notifyForCalendarChange(day, 'CREATED');
+      void this.staffNotificationService
+        .notifyForCalendarChange(day, 'CREATED')
+        .catch((err) => console.error('[Calendar] Staff notice (created) failed:', err?.message));
       if (conflictWarning && day.employee_id != null) {
-        void this.staffNotificationService.notifySaturdayConflict(day.employee_id, day.date);
+        void this.staffNotificationService
+          .notifySaturdayConflict(day.employee_id, day.date)
+          .catch((err) => console.error('[Calendar] Staff conflict notice failed:', err?.message));
       }
     }
 
@@ -546,16 +550,23 @@ export class CalendarService {
       }
     } else if (day.applies_to === 'STAFF') {
       const dateChanged = this.dateKeyFromRow(day) !== this.dateKeyFromRow(existing);
+      const onNotifyError = (err: any) => console.error('[Calendar] Staff notice (updated) failed:', err?.message);
       if (dateChanged) {
         // The old date is no longer covered by this entry — tell the same
         // audience it moved, then notify for the new date as a fresh change.
-        void this.staffNotificationService.notifyForCalendarChange(existing, 'REMOVED', existing.day_type);
-        void this.staffNotificationService.notifyForCalendarChange(day, 'CREATED');
+        void this.staffNotificationService
+          .notifyForCalendarChange(existing, 'REMOVED', existing.day_type)
+          .catch(onNotifyError);
+        void this.staffNotificationService.notifyForCalendarChange(day, 'CREATED').catch(onNotifyError);
       } else {
-        void this.staffNotificationService.notifyForCalendarChange(day, 'UPDATED', existing.day_type);
+        void this.staffNotificationService
+          .notifyForCalendarChange(day, 'UPDATED', existing.day_type)
+          .catch(onNotifyError);
       }
       if (conflictWarning && day.employee_id != null) {
-        void this.staffNotificationService.notifySaturdayConflict(day.employee_id, day.date);
+        void this.staffNotificationService
+          .notifySaturdayConflict(day.employee_id, day.date)
+          .catch((err) => console.error('[Calendar] Staff conflict notice failed:', err?.message));
       }
     }
 
@@ -601,7 +612,9 @@ export class CalendarService {
         : null;
 
     if (existing.applies_to === 'STAFF') {
-      void this.staffNotificationService.notifyForCalendarChange(existing, 'REMOVED', existing.day_type);
+      void this.staffNotificationService
+        .notifyForCalendarChange(existing, 'REMOVED', existing.day_type)
+        .catch((err) => console.error('[Calendar] Staff notice (removed) failed:', err?.message));
     }
 
     void this.auditLogs.log({

@@ -157,18 +157,22 @@ export class SaturdaySchedulesService {
     }
 
     for (const campusId of affectedCampusIds) {
-      void this.noticeBoard.createPost(
-        {
-          title: `Mandatory Saturday Attendance — ${monthLabel}`,
-          body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
-          target_roles: [StaffRole.TEACHER],
-          campus_ids: [campusId],
-        },
-        user,
-      );
+      void this.noticeBoard
+        .createPost(
+          {
+            title: `Mandatory Saturday Attendance — ${monthLabel}`,
+            body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
+            target_roles: [StaffRole.TEACHER],
+            campus_ids: [campusId],
+          },
+          user,
+        )
+        .catch((err) => console.error('[SaturdaySchedules] Notice board post failed:', err?.message));
     }
 
-    void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date);
+    void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date).catch((err) =>
+      console.error('[SaturdaySchedules] Monthly summary notice failed:', err?.message),
+    );
 
     if (holidayConflicts.length > 0) {
       const createdById = new Map(created.map((row) => [row.employee_id, row]));
