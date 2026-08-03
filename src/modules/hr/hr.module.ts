@@ -16,6 +16,7 @@ import { ClassAttendanceModesService } from './class-attendance-modes/class-atte
 import { AuthModule } from '../auth/auth.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { CalendarNotificationService } from './calendar/calendar-notification.service';
+import { StaffCalendarNotificationService } from './calendar/staff-calendar-notification.service';
 import { CalendarNotificationsController } from './calendar/calendar-notifications.controller';
 import { PayrollController } from './payroll/payroll.controller';
 import { PayrollSelfController } from './payroll/payroll-self.controller';
@@ -63,6 +64,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     HolidayAttendanceSchedulerService,
     ClassAttendanceModesService,
     CalendarNotificationService,
+    StaffCalendarNotificationService,
     PayrollService,
     PayslipPdfService,
     EmployeeProfileResolverService,

@@ -89,20 +89,22 @@ export class SaturdaySchedulesService {
     });
     const alreadyOnDate = new Set(existingOnDate.map((r) => r.employee_id));
 
+    // An employee over the monthly cap is skipped, not fatal to the whole batch —
+    // the rest of the selected employees should still get scheduled.
+    const cappedIds = new Set<number>();
+    const skippedCap: { employee_id: number; full_name: string | null }[] = [];
     for (const employee of employees) {
       const count = countMap.get(employee.id) ?? 0;
       if (count >= 2 && !alreadyOnDate.has(employee.id)) {
-        const name = employee.full_name ?? `Employee #${employee.id}`;
-        throw new BadRequestException(
-          `Maximum two mandatory Saturdays per employee per month (${name})`,
-        );
+        cappedIds.add(employee.id);
+        skippedCap.push({ employee_id: employee.id, full_name: employee.full_name });
       }
     }
 
     const created: Prisma.teacher_saturday_schedulesGetPayload<{ include: typeof scheduleInclude }>[] = [];
 
     for (const employeeId of dto.employeeIds) {
-      if (alreadyOnDate.has(employeeId)) continue;
+      if (alreadyOnDate.has(employeeId) || cappedIds.has(employeeId)) continue;
 
       try {
         const row = await this.prisma.teacher_saturday_schedules.create({
@@ -119,6 +121,32 @@ export class SaturdaySchedulesService {
           continue;
         }
         throw err;
+      }
+    }
+
+    // A mandatory Saturday always overrides an employee-scoped STAFF HOLIDAY
+    // calendar entry for the same date (see CalendarDayResolverService) — flag
+    // it so the admin knows the holiday will be ignored for that employee now,
+    // instead of that happening silently.
+    const holidayConflicts: { employee_id: number; full_name: string | null }[] = [];
+    if (created.length > 0) {
+      const conflictRows = await this.prisma.academic_calendar_days.findMany({
+        where: {
+          employee_id: { in: created.map((r) => r.employee_id) },
+          date,
+          applies_to: 'STAFF',
+          day_type: 'HOLIDAY',
+        },
+        select: { employee_id: true },
+      });
+      const conflictSet = new Set(conflictRows.map((r) => r.employee_id));
+      for (const row of created) {
+        if (conflictSet.has(row.employee_id)) {
+          holidayConflicts.push({
+            employee_id: row.employee_id,
+            full_name: row.employee_profiles.full_name,
+          });
+        }
       }
     }
 
@@ -142,6 +170,23 @@ export class SaturdaySchedulesService {
 
     void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date);
 
+    if (holidayConflicts.length > 0) {
+      const createdById = new Map(created.map((row) => [row.employee_id, row]));
+      const conflictDateLabel = this.formatSaturdayList([date]);
+      for (const conflict of holidayConflicts) {
+        const userId = createdById.get(conflict.employee_id)?.employee_profiles.user_id;
+        if (!userId) continue;
+        void this.noticeBoard
+          .createScheduleNotice(
+            conflict.employee_id,
+            userId,
+            'Attendance Required Despite Day Off',
+            `You have a day off marked for ${conflictDateLabel}, but a mandatory Saturday assignment takes priority — please check in as usual.`,
+          )
+          .catch((err) => console.error('[SaturdaySchedules] Conflict notice failed:', err?.message));
+      }
+    }
+
     if (created.length > 0) {
       const employeeNames = created
         .map((row) => row.employee_profiles.full_name ?? `Employee #${row.employee_profiles.id}`)
@@ -155,7 +200,7 @@ export class SaturdaySchedulesService {
       });
     }
 
-    return created;
+    return { created, skipped_cap: skippedCap, holiday_conflicts: holidayConflicts };
   }
 
   async list(query: ListSaturdaySchedulesQueryDto, user: IJwtStaffPayload) {
@@ -207,7 +252,7 @@ export class SaturdaySchedulesService {
 
     const existing = await this.prisma.teacher_saturday_schedules.findUnique({
       where: { id },
-      include: { employee_profiles: { select: { campus_id: true, full_name: true } } },
+      include: { employee_profiles: { select: { campus_id: true, full_name: true, user_id: true } } },
     });
     if (!existing) throw new NotFoundException('Saturday schedule not found');
 
@@ -221,6 +266,17 @@ export class SaturdaySchedulesService {
       changed_by: user.username,
       note: `Removed Saturday schedule for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
     });
+
+    if (existing.employee_profiles.user_id) {
+      void this.noticeBoard
+        .createScheduleNotice(
+          existing.employee_id,
+          existing.employee_profiles.user_id,
+          'Saturday Attendance Cancelled',
+          `You're no longer required to attend on ${this.formatSaturdayList([existing.date])} — this Saturday has been removed from your schedule.`,
+        )
+        .catch((err) => console.error('[SaturdaySchedules] Removal notice failed:', err?.message));
+    }
 
     return { id };
   }

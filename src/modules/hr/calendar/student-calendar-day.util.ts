@@ -4,6 +4,10 @@ export function isWeekendDate(date: Date): boolean {
   return dow === 0 || dow === 6;
 }
 
+export function isSaturdayDate(date: Date): boolean {
+  return date.getUTCDay() === 6;
+}
+
 export function parseCalendarDateKey(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00.000Z`);
 }
