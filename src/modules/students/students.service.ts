@@ -62,7 +62,7 @@ type ResolvedClass = {
 import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
-import { ProgressionHistoryService } from './progression-history.service';
+import { ProgressionHistoryService, type PrismaTx } from './progression-history.service';
 
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
@@ -1588,6 +1588,58 @@ export class StudentsService {
     });
   }
 
+  /**
+   * When a student returns from LEFT → ENROLLED, record a readmission row in
+   * Application history (student_admissions). Placement is unchanged so no
+   * progression period is opened.
+   */
+  private async createReadmissionAdmission(tx: PrismaTx, studentCc: number): Promise<void> {
+    const student = await tx.students.findUnique({
+      where: { cc: studentCc },
+      select: {
+        academic_year: true,
+        classes: {
+          select: {
+            academic_system: true,
+            description: true,
+          },
+        },
+        student_admissions: {
+          orderBy: { application_date: 'desc' },
+          take: 1,
+          select: {
+            academic_system: true,
+            requested_grade: true,
+            academic_year: true,
+            discipline: true,
+          },
+        },
+      },
+    });
+
+    if (!student) return;
+
+    const lastAdmission = student.student_admissions?.[0];
+    const academicSystem =
+      student.classes?.academic_system || lastAdmission?.academic_system || 'UNKNOWN';
+    const requestedGrade =
+      student.classes?.description || lastAdmission?.requested_grade || '';
+    const academicYear =
+      student.academic_year || lastAdmission?.academic_year || null;
+
+    await tx.student_admissions.create({
+      data: {
+        student_id: studentCc,
+        academic_system: academicSystem.slice(0, 20),
+        requested_grade: requestedGrade.slice(0, 20),
+        academic_year: academicYear,
+        discipline: lastAdmission?.discipline ?? null,
+        application_date: new Date(),
+        is_readmission: true,
+      },
+    });
+  }
+
   async undoLeftStudent(id: number, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
@@ -1614,6 +1666,8 @@ export class StudentsService {
         },
         include: this.assignmentInclude,
       });
+
+      await this.createReadmissionAdmission(tx, id);
 
       // Mark all LEFT_LOG_ flags as done (new timestamped pattern)
       await tx.student_flags.updateMany({
@@ -1680,6 +1734,9 @@ export class StudentsService {
       [StudentStatus.GRADUATED]:      'GRADUATED_LOG',
     };
 
+    const isReadmission =
+      student.status === StudentStatus.LEFT && newStatus === StudentStatus.ENROLLED;
+
     return this.prisma.$transaction(async (tx) => {
       const updateData: any = { status: newStatus };
 
@@ -1699,6 +1756,10 @@ export class StudentsService {
         data: updateData,
         include: this.assignmentInclude,
       });
+
+      if (isReadmission) {
+        await this.createReadmissionAdmission(tx, id);
+      }
 
       await tx.student_flags.create({
         data: {

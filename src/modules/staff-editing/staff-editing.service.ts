@@ -216,7 +216,8 @@ export class StaffEditingService {
         graduated_from_class: true,
         sections: true,
         houses: true,
-        student_admissions: { orderBy: { application_date: 'desc' }, take: 5 },
+        // Full application history (not capped) — promotions must not pollute this list
+        student_admissions: { orderBy: { application_date: 'desc' } },
         student_flags: { orderBy: { created_at: 'desc' } },
         student_guardians: { include: { guardians: true }, orderBy: { guardian_id: 'asc' } },
         student_activities: true,
@@ -298,7 +299,28 @@ export class StaffEditingService {
       },
       select: { id: true },
     });
-    s.has_transfer = !!transferLog || (s.student_admissions && s.student_admissions.length > 1);
+    // Prefer audit/transfer-linked evidence — multi-admission alone (readmissions,
+    // manual rows) must not imply a campus transfer.
+    const hasTransferAdmission = (s.student_admissions ?? []).some(
+      (a: { transfer_order_url?: string | null }) => !!a.transfer_order_url,
+    );
+    s.has_transfer = !!transferLog || hasTransferAdmission;
+
+    // Strip legacy promotion rows (old promote path wrote student_admissions).
+    const promotedPeriods = await this.prisma.student_progression_periods.findMany({
+      where: { student_cc: cc, change_type: 'PROMOTED' },
+      select: { academic_year: true },
+    });
+    const promotedYears = new Set(
+      promotedPeriods.map((p) => p.academic_year).filter((y): y is string => !!y),
+    );
+    s.student_admissions = this.excludePromotionPollutionAdmissions(
+      s.student_admissions ?? [],
+      {
+        promotedYears,
+        hasTransferEvidence: !!s.has_transfer,
+      },
+    );
 
     return this.flattenStudentFull(s);
   }
@@ -1505,6 +1527,56 @@ export class StaffEditingService {
     };
   }
 
+  /**
+   * Application history should not show promote-created admissions (progression is SOT).
+   * Keeps: earliest row, readmissions, transfer-linked rows, and manual rows (empty grade).
+   * Drops: non-earliest rows that match PROMOTED academic years, or look like auto promote
+   * rows (class description in requested_grade) when the student was never transferred.
+   */
+  private excludePromotionPollutionAdmissions(
+    admissions: any[],
+    opts: { promotedYears: Set<string>; hasTransferEvidence: boolean },
+  ): any[] {
+    if (!admissions?.length) return admissions ?? [];
+
+    const sortedAsc = [...admissions].sort((a: any, b: any) => {
+      const at = a?.application_date ? new Date(a.application_date).getTime() : 0;
+      const bt = b?.application_date ? new Date(b.application_date).getTime() : 0;
+      if (at !== bt) return at - bt;
+      return (a?.id ?? 0) - (b?.id ?? 0);
+    });
+    const earliestId = sortedAsc[0]?.id;
+    const earliestYear = String(sortedAsc[0]?.academic_year || '');
+    const fullAy = /^\d{4}-\d{4}$/;
+
+    return admissions.filter((a: any) => {
+      if (a?.id === earliestId) return true;
+      if (a?.is_readmission) return true;
+      if (a?.transfer_order_url) return true;
+
+      const year = a?.academic_year ? String(a.academic_year) : '';
+      if (year && opts.promotedYears.has(year)) return false;
+
+      // Old promote path wrote requested_grade = class description (not empty).
+      // Manual "Add Record" posts requested_grade: "".
+      const grade = (a?.requested_grade ?? '').toString().trim();
+      if (grade && !opts.hasTransferEvidence) return false;
+
+      // Common legacy pattern: original year "2026", promote wrote "2026-2027".
+      if (
+        year &&
+        fullAy.test(year) &&
+        earliestYear &&
+        !fullAy.test(earliestYear) &&
+        !opts.hasTransferEvidence
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
   private buildStudentActionLogs(s: any) {
     const logs: Array<{
       id: string;
@@ -1533,16 +1605,25 @@ export class StaffEditingService {
     admissions.forEach((admission: any, index: number) => {
       const isFirstAdmission = index === 0;
       const grade = admission?.requested_grade || 'Unknown grade';
-      const title = isFirstAdmission
-        ? `Admission recorded in ${grade}`
-        : `Promoted to ${grade}`;
+      let type = 'ADMISSION';
+      let title = `Admission recorded in ${grade}`;
+      if (admission?.is_readmission) {
+        type = 'READMISSION';
+        title = `Readmission in ${grade}`;
+      } else if (admission?.transfer_order_url) {
+        type = 'TRANSFER';
+        title = `Transfer admission in ${grade}`;
+      } else if (!isFirstAdmission) {
+        type = 'ADMISSION';
+        title = `Additional admission in ${grade}`;
+      }
       const details = [admission?.academic_system, admission?.academic_year]
         .filter(Boolean)
         .join(' • ');
 
       logs.push({
         id: `admission-${admission.id}`,
-        type: isFirstAdmission ? 'ADMISSION' : 'PROMOTION',
+        type,
         title,
         description: details || null,
         occurred_at: admission?.application_date ?? null,

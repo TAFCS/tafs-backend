@@ -419,6 +419,7 @@ model student_admissions {
   application_date   DateTime? @default(now()) @db.Timestamp(6)
   discipline         String?   @db.VarChar(50)
   transfer_order_url String?
+  is_readmission     Boolean   @default(false)
   students           students  @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([student_id, application_date(sort: Desc)], map: "idx_student_admissions_student_date")
