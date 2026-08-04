@@ -44,7 +44,7 @@ export class LeaveRequestsService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async create(userId: string, dto: CreateLeaveRequestDto) {
+  async create(userId: string, dto: CreateLeaveRequestDto, changedBy?: string) {
     const profile = await this.prisma.employee_profiles.findUnique({
       where: { user_id: userId },
       select: {
@@ -87,6 +87,16 @@ export class LeaveRequestsService {
         attachment_type: dto.attachmentType?.trim() || null,
       },
       include: LEAVE_INCLUDE,
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'LEAVE_REQUEST',
+      entity_id: String(request.id),
+      action: 'CREATED',
+      field: 'status',
+      new_value: 'PENDING',
+      changed_by: changedBy ?? userId,
+      note: `${profile.full_name ?? 'Employee'} submitted ${leaveType.name} leave ${dto.startDate} → ${dto.endDate}.`,
     });
 
     void this.notifyApprovers(profile.full_name ?? 'Employee', leaveType.name, startDate, profile.campus_id);

@@ -915,6 +915,16 @@ export class PayrollService {
       await this.syncPayrollFlagsForEmployee(run.id, line.employee_id, detected, line.daily_rate);
     }
 
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(run.id),
+      action: existing ? 'UPDATED' : 'CREATED',
+      field: 'status',
+      new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
+      changed_by: user.username,
+      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${employees.length} employee(s)${isTest ? ', test' : ''}).`,
+    });
+
     return this.getRun(run.id, user);
   }
 

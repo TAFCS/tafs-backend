@@ -355,50 +355,12 @@ export class StaffEditingService {
       studentData.cnic = (!c || c === 'NULL' || c === 'XXXXX-XXXXXXX-X') ? null : c;
     }
 
-    // Require why + until when enabling complimentary / endowment; clear when disabling.
-    const nextComplementary =
-      dto.is_complementary !== undefined ? dto.is_complementary : undefined;
-    const nextEndowment =
-      dto.is_fee_endowment !== undefined ? dto.is_fee_endowment : undefined;
-
-    if (nextComplementary === true) {
-      const reason =
-        typeof dto.complementary_reason === 'string'
-          ? dto.complementary_reason.trim()
-          : '';
-      if (!reason || !dto.complementary_until) {
-        throw new BadRequestException(
-          'Complementary students require a reason and an until date',
-        );
-      }
-      studentData.complementary_reason = reason;
-    } else if (nextComplementary === false) {
-      studentData.complementary_reason = null;
-      studentData.complementary_until = null;
-    }
-
-    if (nextEndowment === true) {
-      const reason =
-        typeof dto.fee_endowment_reason === 'string'
-          ? dto.fee_endowment_reason.trim()
-          : '';
-      if (!reason || !dto.fee_endowment_until) {
-        throw new BadRequestException(
-          'Fee endowment students require a reason and an until date',
-        );
-      }
-      studentData.fee_endowment_reason = reason;
-    } else if (nextEndowment === false) {
-      studentData.fee_endowment_reason = null;
-      studentData.fee_endowment_until = null;
-    }
-
     try {
-      const studentFieldChanges: AuditChildPayload[] = [];
+      const fieldChanges: AuditChildPayload[] = [];
       let studentDisplayName: string | null = null;
 
       await this.prisma.$transaction(async (tx) => {
-        // Fetch existing record first for diff logging
+        // Fetch existing record first for diff logging + COMP/FE transition checks
         const existing = await tx.students.findUnique({
           where: { cc },
         });
@@ -407,56 +369,110 @@ export class StaffEditingService {
         }
         studentDisplayName = existing.full_name;
 
-        // Log student field changes including placement FKs and dates
+        // Require reason + until only when enabling COMP/FE (false→true), not on re-saves.
+        const nextComplementary =
+          dto.is_complementary !== undefined ? dto.is_complementary : undefined;
+        const nextEndowment =
+          dto.is_fee_endowment !== undefined ? dto.is_fee_endowment : undefined;
+
+        if (nextComplementary === true) {
+          const enabling = !existing.is_complementary;
+          const reasonFromDto =
+            typeof dto.complementary_reason === 'string'
+              ? dto.complementary_reason.trim()
+              : '';
+          if (enabling) {
+            if (!reasonFromDto || !dto.complementary_until) {
+              throw new BadRequestException(
+                'Complementary students require a reason and an until date',
+              );
+            }
+            studentData.complementary_reason = reasonFromDto;
+          } else if (reasonFromDto) {
+            studentData.complementary_reason = reasonFromDto;
+          }
+        } else if (nextComplementary === false) {
+          studentData.complementary_reason = null;
+          studentData.complementary_until = null;
+        }
+
+        if (nextEndowment === true) {
+          const enabling = !existing.is_fee_endowment;
+          const reasonFromDto =
+            typeof dto.fee_endowment_reason === 'string'
+              ? dto.fee_endowment_reason.trim()
+              : '';
+          if (enabling) {
+            if (!reasonFromDto || !dto.fee_endowment_until) {
+              throw new BadRequestException(
+                'Fee endowment students require a reason and an until date',
+              );
+            }
+            studentData.fee_endowment_reason = reasonFromDto;
+          } else if (reasonFromDto) {
+            studentData.fee_endowment_reason = reasonFromDto;
+          }
+        } else if (nextEndowment === false) {
+          studentData.fee_endowment_reason = null;
+          studentData.fee_endowment_until = null;
+        }
+
+        // Effective values after this update (for date/bool audit diffs)
+        const dateFields = new Set([
+          'dob',
+          'doa',
+          'complementary_until',
+          'fee_endowment_until',
+        ]);
         const TRACKED_STUDENT_FIELDS = [
           'full_name', 'cnic', 'dob', 'doa', 'gender', 'nationality', 'religion',
           'place_of_birth', 'identification_marks', 'medical_info',
           'interests', 'country', 'province', 'city', 'whatsapp_number',
-          'primary_phone', 'email', 'campus_id', 'class_id', 'section_id',
+          'whatsapp_country_code', 'primary_phone', 'primary_phone_country_code',
+          'email', 'campus_id', 'class_id', 'section_id',
           'house_id', 'academic_year', 'gr_number', 'status', 'is_complementary',
           'is_fee_endowment', 'complementary_reason', 'complementary_until',
           'fee_endowment_reason', 'fee_endowment_until',
+          'fee_start_term', 'consent_publicity', 'admission_age_years',
+          'physical_impairment',
         ];
 
+        const effectiveStudentData = { ...studentData };
+
         for (const field of TRACKED_STUDENT_FIELDS) {
-          if ((dto as any)[field] !== undefined) {
-            let oldVal: string | null = null;
-            let newVal: string | null = null;
+          const inDto = (dto as any)[field] !== undefined;
+          const inData = Object.prototype.hasOwnProperty.call(effectiveStudentData, field);
+          if (!inDto && !inData) continue;
 
-            if (
-              field === 'dob' ||
-              field === 'doa' ||
-              field === 'complementary_until' ||
-              field === 'fee_endowment_until'
-            ) {
-              const oldDate = (existing as any)[field];
-              const newDateStr = (dto as any)[field];
-              const oldStr = oldDate ? new Date(oldDate).toISOString().split('T')[0] : null;
-              const newStr = newDateStr ? new Date(newDateStr).toISOString().split('T')[0] : null;
-              if (oldStr !== newStr) {
-                oldVal = oldStr;
-                newVal = newStr;
-              }
-            } else {
-              const oldRaw = (existing as any)[field];
-              const newRaw = (dto as any)[field];
-              if (String(oldRaw ?? '') !== String(newRaw ?? '')) {
-                oldVal = oldRaw !== null && oldRaw !== undefined ? String(oldRaw) : null;
-                newVal = newRaw !== null && newRaw !== undefined ? String(newRaw) : null;
-              }
-            }
+          let oldVal: string | null = null;
+          let newVal: string | null = null;
+          const oldRaw = (existing as any)[field];
+          const newRaw = inData
+            ? (effectiveStudentData as any)[field]
+            : (dto as any)[field];
 
-            if (oldVal !== null || newVal !== null) {
-              studentFieldChanges.push({
-                entity_type: 'STUDENT',
-                entity_id: String(cc),
-                action: 'UPDATED',
-                field: `student.${field}`,
-                old_value: oldVal,
-                new_value: newVal,
-                student_id: cc,
-              });
+          if (dateFields.has(field)) {
+            const oldStr = oldRaw ? new Date(oldRaw).toISOString().split('T')[0] : null;
+            const newStr = newRaw ? new Date(newRaw).toISOString().split('T')[0] : null;
+            if (oldStr !== newStr) {
+              oldVal = oldStr;
+              newVal = newStr;
             }
+          } else if (String(oldRaw ?? '') !== String(newRaw ?? '')) {
+            oldVal = oldRaw !== null && oldRaw !== undefined ? String(oldRaw) : null;
+            newVal = newRaw !== null && newRaw !== undefined ? String(newRaw) : null;
+          }
+
+          if (oldVal !== null || newVal !== null) {
+            fieldChanges.push({
+              entity_type: 'STUDENT',
+              entity_id: String(cc),
+              action: 'UPDATED',
+              field: `student.${field}`,
+              old_value: oldVal,
+              new_value: newVal,
+              student_id: cc,
+            });
           }
         }
 
@@ -559,7 +575,7 @@ export class StaffEditingService {
           return r === 'MOTHER' || (r.includes('MOTHER') && !r.includes('GRAND'));
         };
 
-        // 2. Update/Create Father Info
+        // 2. Update/Create Father Info (diffs collected into same logGroup)
         if (father_name !== undefined || father_cnic !== undefined) {
           const fatherLink = allLinks.find(l => isFather(l.relationship));
           const fCnic = typeof father_cnic === 'string' ? father_cnic.trim() : father_cnic;
@@ -573,26 +589,24 @@ export class StaffEditingService {
             const existingFather = await tx.guardians.findUnique({ where: { id: fatherLink.guardian_id } });
             if (existingFather) {
               if (father_name !== undefined && String(existingFather.full_name ?? '') !== String(father_name)) {
-                await this.auditLogs.log({
+                fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingFather.id),
                   action: 'UPDATED',
                   field: 'guardian.full_name',
                   old_value: existingFather.full_name,
                   new_value: father_name,
-                  changed_by: changedBy,
                   student_id: cc,
                 });
               }
               if (father_cnic !== undefined && String(existingFather.cnic ?? '') !== String(fCnicNormalized ?? '')) {
-                await this.auditLogs.log({
+                fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingFather.id),
                   action: 'UPDATED',
                   field: 'guardian.cnic',
                   old_value: existingFather.cnic,
                   new_value: fCnicNormalized,
-                  changed_by: changedBy,
                   student_id: cc,
                 });
               }
@@ -621,11 +635,12 @@ export class StaffEditingService {
               create: { student_id: cc, guardian_id: guardian.id, relationship: 'FATHER' },
             });
 
-            await this.auditLogs.log({
+            fieldChanges.push({
               entity_type: 'GUARDIAN',
               entity_id: String(guardian.id),
               action: 'CREATED',
-              changed_by: changedBy,
+              field: 'guardian.father',
+              new_value: guardian.full_name,
               student_id: cc,
               note: `Created/linked Father guardian for student #${cc}`,
             });
@@ -646,26 +661,24 @@ export class StaffEditingService {
             const existingMother = await tx.guardians.findUnique({ where: { id: motherLink.guardian_id } });
             if (existingMother) {
               if (mother_name !== undefined && String(existingMother.full_name ?? '') !== String(mother_name)) {
-                await this.auditLogs.log({
+                fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingMother.id),
                   action: 'UPDATED',
                   field: 'guardian.full_name',
                   old_value: existingMother.full_name,
                   new_value: mother_name,
-                  changed_by: changedBy,
                   student_id: cc,
                 });
               }
               if (mother_cnic !== undefined && String(existingMother.cnic ?? '') !== String(mCnicNormalized ?? '')) {
-                await this.auditLogs.log({
+                fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingMother.id),
                   action: 'UPDATED',
                   field: 'guardian.cnic',
                   old_value: existingMother.cnic,
                   new_value: mCnicNormalized,
-                  changed_by: changedBy,
                   student_id: cc,
                 });
               }
@@ -694,11 +707,12 @@ export class StaffEditingService {
               create: { student_id: cc, guardian_id: guardian.id, relationship: 'MOTHER' },
             });
 
-            await this.auditLogs.log({
+            fieldChanges.push({
               entity_type: 'GUARDIAN',
               entity_id: String(guardian.id),
               action: 'CREATED',
-              changed_by: changedBy,
+              field: 'guardian.mother',
+              new_value: guardian.full_name,
               student_id: cc,
               note: `Created/linked Mother guardian for student #${cc}`,
             });
@@ -706,7 +720,7 @@ export class StaffEditingService {
         }
       });
 
-      if (studentFieldChanges.length > 0) {
+      if (fieldChanges.length > 0) {
         const name = studentDisplayName ?? `CC ${cc}`;
         void this.auditLogs.logGroup(
           {
@@ -715,9 +729,9 @@ export class StaffEditingService {
             action: 'UPDATED',
             changed_by: changedBy,
             student_id: cc,
-            note: `Student #${cc} (${name}) updated — ${studentFieldChanges.length} change(s).`,
+            note: `Student #${cc} (${name}) updated — ${fieldChanges.length} change(s).`,
           },
-          studentFieldChanges,
+          fieldChanges,
         );
       }
     } catch (e: any) {
@@ -1640,7 +1654,7 @@ export class StaffEditingService {
         { test: f => f.startsWith('QUICK_ADMISSION_LOG_'), type: 'QUICK_ADMISSION', title: 'Quick admission recorded' },
         { test: f => f.startsWith('SOFT_ADMISSION_LOG_'), type: 'SOFT_ADMISSION', title: 'Soft admission recorded' },
         { test: f => f.startsWith('LEFT_LOG_'),           type: 'LEFT',           title: 'Student left' },
-        { test: f => f.startsWith('UNDO_LEFT_LOG_'),      type: 'UNDO_LEFT',      title: 'Student re-enrolled (left undone)' },
+        { test: f => f.startsWith('UNDO_LEFT_LOG_'),      type: 'READMITTED',     title: 'Student readmitted (from Left)' },
         { test: f => f === 'EXPELLED' || f.startsWith('EXPELLED_LOG_'), type: 'EXPELLED',   title: 'Student expelled' },
         { test: f => f.startsWith('UNEXPELLED_LOG_'),     type: 'UNEXPELLED',     title: 'Student unexpelled' },
         { test: f => f.startsWith('GRADUATED_LOG_'),      type: 'GRADUATED',      title: 'Student graduated' },
@@ -1649,11 +1663,13 @@ export class StaffEditingService {
 
       const matched = statusFlagConfig.find(cfg => cfg.test(upperFlag));
       if (matched) {
+        const comment = flag?.comment || null;
+        const isReadmitComment = typeof comment === 'string' && /readmit/i.test(comment);
         logs.push({
           id: `flag-${flag.id}`,
-          type: matched.type,
-          title: matched.title,
-          description: flag?.comment || null,
+          type: isReadmitComment ? 'READMITTED' : matched.type,
+          title: isReadmitComment ? 'Student readmitted (from Left)' : matched.title,
+          description: comment,
           occurred_at: flag?.created_at ?? flag?.reminder_date ?? null,
         });
       }

@@ -16,6 +16,7 @@ import {
 } from './dto/roll-sessions.dto';
 import { RollCallAnnouncementsService } from './roll-call-announcements.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 /** Fallback IDs used only when no class_attendance_modes rows exist yet. */
 const DEFAULT_ROLL_CALL_CLASS_IDS = [21, 22];
@@ -27,6 +28,7 @@ export class RollSessionsService {
     private readonly prisma: PrismaService,
     private readonly announcements: RollCallAnnouncementsService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -291,6 +293,16 @@ export class RollSessionsService {
       include: this.sessionInclude(),
     });
 
+    void this.auditLogs.log({
+      entity_type: 'ROLL_SESSION',
+      entity_id: String(session.id),
+      action: 'CREATED',
+      field: 'status',
+      new_value: session.status,
+      changed_by: user.username,
+      note: `Roll session opened campus=${dto.campus_id} class=${dto.class_id} section=${dto.section_id} date=${dto.session_date} period=${period}.`,
+    });
+
     return this.enrichWithRoster(session);
   }
 
@@ -396,6 +408,17 @@ export class RollSessionsService {
         },
       });
 
+      void this.auditLogs.log({
+        entity_type: 'ROLL_SESSION',
+        entity_id: String(id),
+        action: 'UPDATED',
+        field: 'status',
+        old_value: session.status,
+        new_value: 'SUBMITTED',
+        changed_by: user.username,
+        note: `Roll session #${id} submitted (${recordCount}/${rosterCount} marked).`,
+      });
+
       await this.announcements.announceSessionTaken(id);
     }
 
@@ -424,6 +447,17 @@ export class RollSessionsService {
         submitted_by_id: user.sub,
         submitted_at: new Date(),
       },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'ROLL_SESSION',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: 'status',
+      old_value: session.status,
+      new_value: 'SKIPPED',
+      changed_by: user.username,
+      note: `Roll session #${id} skipped: ${dto.reason || 'no reason'}.`,
     });
 
     await this.announcements.announceSessionSkipped(id);

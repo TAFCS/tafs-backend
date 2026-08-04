@@ -5,10 +5,43 @@ import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
 
 const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER', 'STUDENT_FLAG'],
-  finance: ['VOUCHER', 'DEPOSIT', 'CLASS_FEE_SCHEDULE', 'STUDENT_FEE_SCHEDULE', 'BULK_VOUCHER', 'CHEQUE', 'DISCOUNT_PRESET', 'STUDENT_FEE_INSTALLMENT', 'BUNDLE_NAME'],
+  finance: [
+    'VOUCHER',
+    'DEPOSIT',
+    'CLASS_FEE_SCHEDULE',
+    'STUDENT_FEE_SCHEDULE',
+    'BULK_VOUCHER',
+    'CHEQUE',
+    'DISCOUNT_PRESET',
+    'SCHOLARSHIP_PRESET',
+    'STUDENT_FEE_INSTALLMENT',
+    'BUNDLE_NAME',
+  ],
   communication: ['NOTICE', 'EMPLOYEE_NOTICE', 'SUPPORT_TICKET', 'CHAT_CONVERSATION', 'CHAT_MESSAGE'],
-  hr: ['EMPLOYEE', 'DEPARTMENT', 'LEAVE_REQUEST', 'PAYROLL_RUN', 'HR_POLICY_SET', 'HR_POLICY_RULE', 'ACADEMIC_CALENDAR_DAY', 'SATURDAY_SCHEDULE'],
-  attendance: ['STUDENT_ATTENDANCE', 'STAFF_ATTENDANCE', 'ATTENDANCE_OBJECTION', 'CLASS_ATTENDANCE_MODE', 'TIMETABLE', 'TIMETABLE_SLOT', 'SUBJECT', 'ZK_ATTENDANCE_MAPPING', 'CLASS_CHECK_IN_SCHEDULE'],
+  hr: [
+    'EMPLOYEE',
+    'DEPARTMENT',
+    'STAFF_CATEGORY',
+    'LEAVE_REQUEST',
+    'PAYROLL_RUN',
+    'HR_POLICY_SET',
+    'HR_POLICY_RULE',
+    'ACADEMIC_CALENDAR_DAY',
+    'SATURDAY_SCHEDULE',
+    'EMPLOYEE_SHIFT_OVERRIDE',
+  ],
+  attendance: [
+    'STUDENT_ATTENDANCE',
+    'STAFF_ATTENDANCE',
+    'ATTENDANCE_OBJECTION',
+    'CLASS_ATTENDANCE_MODE',
+    'TIMETABLE',
+    'TIMETABLE_SLOT',
+    'SUBJECT',
+    'ZK_ATTENDANCE_MAPPING',
+    'CLASS_CHECK_IN_SCHEDULE',
+    'ROLL_SESSION',
+  ],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'FEE_TYPE', 'BANK'],
   'house-balancer': ['HOUSE'],
   system: ['USER', 'PERMISSION', 'BACKUP'],
@@ -102,20 +135,22 @@ export class AuditLogsService {
   /**
    * Find logs matching query criteria.
    * Global feed: top-level parents only (`parent_id` null), with `children` attached.
-   * Student-scoped queries: include matching child rows too (so nested voucher /
-   * promote details still appear on a student timeline).
+   * Student-scoped: top-level rows for that student (parent_id null, or orphans whose
+   * parent is not student-scoped), each with nested children when available.
    */
   async findAll(query: QueryAuditLogsDto, requestingUser?: { role?: string }) {
     const where: any = {};
+    const studentId = query.student_id ? Number(query.student_id) : null;
+    const isStudentScoped = studentId != null && Number.isFinite(studentId);
 
     // Global activity feed hides children (they're nested under parents).
-    // Student timelines include every matching row, including children.
-    if (!query.student_id) {
+    // Student timelines also return top-level rows only; children are nested below.
+    if (!isStudentScoped) {
       where.parent_id = null;
     }
 
-    if (query.student_id) {
-      where.student_id = Number(query.student_id);
+    if (isStudentScoped) {
+      where.student_id = studentId;
     }
     if (query.section === 'house-balancer') {
       where.AND = [
@@ -165,7 +200,7 @@ export class AuditLogsService {
 
     const clauses: any[] = [where];
 
-    if (!query.student_id) {
+    if (!isStudentScoped) {
       clauses.push({
         NOT: {
           AND: [
@@ -186,6 +221,49 @@ export class AuditLogsService {
     const limit = Number(query.limit) || 50;
     const offset = Number(query.offset) || 0;
 
+    // Student-scoped: load matching rows, then collapse children under parents before page.
+    if (isStudentScoped) {
+      const allMatching = await this.prisma.audit_logs.findMany({
+        where: finalWhere,
+        orderBy: { changed_at: 'desc' },
+      });
+
+      const byId = new Map(allMatching.map((r) => [r.id, r]));
+      const childIds = new Set(
+        allMatching.filter((r) => r.parent_id != null && byId.has(r.parent_id)).map((r) => r.id),
+      );
+      // Top-level for student: no parent, or parent not in this student result set (orphan child of bulk).
+      const topLevel = allMatching.filter((r) => !childIds.has(r.id));
+      const total = topLevel.length;
+      const page = topLevel.slice(offset, offset + limit);
+
+      // Hydrate children of page parents (from full student match + any siblings by parent_id).
+      const parentIds = page.map((p) => p.id);
+      const nestedFromMatch = allMatching.filter(
+        (r) => r.parent_id != null && parentIds.includes(r.parent_id),
+      );
+      const extraChildren =
+        parentIds.length === 0
+          ? []
+          : await this.prisma.audit_logs.findMany({
+              where: {
+                parent_id: { in: parentIds },
+                id: { notIn: nestedFromMatch.map((c) => c.id) },
+              },
+              orderBy: { id: 'asc' },
+            });
+      const children = [...nestedFromMatch, ...extraChildren];
+      const childrenByParent = new Map<number, typeof children>();
+      for (const child of children) {
+        if (child.parent_id == null) continue;
+        const list = childrenByParent.get(child.parent_id) ?? [];
+        list.push(child);
+        childrenByParent.set(child.parent_id, list);
+      }
+
+      return this.enrichAndReturn(page, childrenByParent, total);
+    }
+
     const [data, total] = await Promise.all([
       this.prisma.audit_logs.findMany({
         where: finalWhere,
@@ -197,10 +275,8 @@ export class AuditLogsService {
     ]);
 
     const parentIds = data.map((d) => d.id);
-    // Only hydrate children for top-level parents in the global feed.
-    // Student-scoped results already include child rows flat.
     const children =
-      query.student_id || parentIds.length === 0
+      parentIds.length === 0
         ? []
         : await this.prisma.audit_logs.findMany({
             where: { parent_id: { in: parentIds } },
@@ -214,6 +290,29 @@ export class AuditLogsService {
       list.push(child);
       childrenByParent.set(child.parent_id, list);
     }
+
+    return this.enrichAndReturn(data, childrenByParent, total);
+  }
+
+  private async enrichAndReturn(
+    data: Array<{
+      id: number;
+      entity_type: string;
+      entity_id: string;
+      action: string;
+      field: string | null;
+      old_value: string | null;
+      new_value: string | null;
+      changed_by: string;
+      changed_at: Date;
+      note: string | null;
+      student_id: number | null;
+      section: string | null;
+      parent_id: number | null;
+    }>,
+    childrenByParent: Map<number, typeof data>,
+    total: number,
+  ) {
 
     const [allClasses, allCampuses, allSections, allHouses] = await Promise.all([
       this.prisma.classes.findMany({

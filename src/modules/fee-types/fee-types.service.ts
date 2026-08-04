@@ -51,7 +51,7 @@ export class FeeTypesService {
     return record;
   }
 
-  async bulkUpdate(dto: BulkUpdateFeeTypesDto) {
+  async bulkUpdate(dto: BulkUpdateFeeTypesDto, changedBy?: string) {
     if (!dto.items || dto.items.length === 0) {
       return [];
     }
@@ -65,6 +65,11 @@ export class FeeTypesService {
         );
       }
     }
+
+    const beforeRows = await this.prisma.fee_types.findMany({
+      where: { id: { in: dto.items.map((i) => i.id) } },
+    });
+    const beforeById = new Map(beforeRows.map((r) => [r.id, r]));
 
     const updated = await this.prisma.$transaction(
       dto.items.map((item) =>
@@ -94,6 +99,78 @@ export class FeeTypesService {
 
     if (!updated || updated.length !== dto.items.length) {
       throw new NotFoundException('One or more fee types not found');
+    }
+
+    const actor = changedBy ?? 'system';
+    const children = updated.flatMap((row) => {
+      const before = beforeById.get(row.id);
+      if (!before) {
+        return [{
+          entity_type: 'FEE_TYPE',
+          entity_id: String(row.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          new_value: row.description,
+          student_id: null as number | null,
+        }];
+      }
+      const diffs: Array<{
+        entity_type: string;
+        entity_id: string;
+        action: string;
+        section: string;
+        field?: string;
+        old_value?: string | null;
+        new_value?: string | null;
+      }> = [];
+      if (before.description !== row.description) {
+        diffs.push({
+          entity_type: 'FEE_TYPE',
+          entity_id: String(row.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          field: 'description',
+          old_value: before.description,
+          new_value: row.description,
+        });
+      }
+      if (before.freq !== row.freq) {
+        diffs.push({
+          entity_type: 'FEE_TYPE',
+          entity_id: String(row.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          field: 'freq',
+          old_value: String(before.freq),
+          new_value: String(row.freq),
+        });
+      }
+      if (before.priority_order !== row.priority_order) {
+        diffs.push({
+          entity_type: 'FEE_TYPE',
+          entity_id: String(row.id),
+          action: 'UPDATED',
+          section: 'school-setup',
+          field: 'priority_order',
+          old_value: String(before.priority_order ?? ''),
+          new_value: String(row.priority_order ?? ''),
+        });
+      }
+      return diffs;
+    });
+
+    if (children.length > 0) {
+      void this.auditLogs.logGroup(
+        {
+          entity_type: 'FEE_TYPE',
+          entity_id: 'BULK',
+          action: 'UPDATED',
+          section: 'school-setup',
+          changed_by: actor,
+          note: `Bulk updated ${updated.length} fee type(s) — ${children.length} field change(s).`,
+        },
+        children,
+      );
     }
 
     return updated;

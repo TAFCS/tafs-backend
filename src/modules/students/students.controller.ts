@@ -64,6 +64,21 @@ export class StudentsController {
     res.send(buffer);
   }
 
+  @Get('fee-benefit-expiry-alerts')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student') || ability.can(Action.Read, 'Fee'))
+  async feeBenefitExpiryAlerts(
+    @Query('within_days') withinDays: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const days = withinDays != null && withinDays !== '' ? Number(withinDays) : 14;
+    const alerts = await this.studentsService.getFeeBenefitExpiryAlerts(days, user);
+    return createApiResponse(
+      alerts,
+      HttpStatus.OK,
+      'Fee benefit expiry alerts retrieved successfully',
+    );
+  }
+
   @Post('gr-numbers/suggest-for-promotion')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto) {

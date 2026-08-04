@@ -33,7 +33,7 @@ export class LeaveRequestsSelfController {
     @Body() dto: CreateLeaveRequestDto,
   ) {
     assertStaffSelfPermission(user, LEAVE_APPLY);
-    const data = await this.leaveService.create(user.sub, dto);
+    const data = await this.leaveService.create(user.sub, dto, user.username);
     return createApiResponse(data, HttpStatus.CREATED, 'Leave request submitted successfully');
   }
 

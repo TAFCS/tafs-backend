@@ -55,8 +55,9 @@ export class FeeTypesController {
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Fee'))
-  async bulkUpdate(@Body() dto: BulkUpdateFeeTypesDto) {
-    const updated = await this.feeTypesService.bulkUpdate(dto);
+  async bulkUpdate(@Body() dto: BulkUpdateFeeTypesDto, @Req() req: Request) {
+    const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+    const updated = await this.feeTypesService.bulkUpdate(dto, changedBy);
     return createApiResponse(
       updated,
       HttpStatus.OK,

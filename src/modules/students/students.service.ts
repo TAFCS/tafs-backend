@@ -1593,7 +1593,12 @@ export class StudentsService {
    * Application history (student_admissions). Placement is unchanged so no
    * progression period is opened.
    */
-  private async createReadmissionAdmission(tx: PrismaTx, studentCc: number): Promise<void> {
+  private async createReadmissionAdmission(tx: PrismaTx, studentCc: number): Promise<{
+    id: number;
+    academic_system: string;
+    requested_grade: string;
+    academic_year: string | null;
+  } | null> {
     const student = await tx.students.findUnique({
       where: { cc: studentCc },
       select: {
@@ -1617,7 +1622,7 @@ export class StudentsService {
       },
     });
 
-    if (!student) return;
+    if (!student) return null;
 
     const lastAdmission = student.student_admissions?.[0];
     const academicSystem =
@@ -1627,7 +1632,7 @@ export class StudentsService {
     const academicYear =
       student.academic_year || lastAdmission?.academic_year || null;
 
-    await tx.student_admissions.create({
+    const row = await tx.student_admissions.create({
       data: {
         student_id: studentCc,
         academic_system: academicSystem.slice(0, 20),
@@ -1637,7 +1642,14 @@ export class StudentsService {
         application_date: new Date(),
         is_readmission: true,
       },
+      select: {
+        id: true,
+        academic_system: true,
+        requested_grade: true,
+        academic_year: true,
+      },
     });
+    return row;
   }
 
   async undoLeftStudent(id: number, changedBy: string) {
@@ -1647,6 +1659,7 @@ export class StudentsService {
         cc: true,
         status: true,
         deleted_at: true,
+        full_name: true,
       },
     });
 
@@ -1667,7 +1680,7 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
-      await this.createReadmissionAdmission(tx, id);
+      const admission = await this.createReadmissionAdmission(tx, id);
 
       // Mark all LEFT_LOG_ flags as done (new timestamped pattern)
       await tx.student_flags.updateMany({
@@ -1687,20 +1700,37 @@ export class StudentsService {
           flag: `UNDO_LEFT_LOG_${Date.now()}`,
           reminder_date: new Date(),
           work_done: true,
-          comment: 'Student status restored to ENROLLED from LEFT',
+          comment: 'Student readmitted to ENROLLED from LEFT',
         },
       });
 
-      await this.auditLogs.log({
-        entity_type: 'STUDENT',
-        entity_id: String(id),
-        action: 'STATUS_CHANGED',
-        new_value: 'ENROLLED',
-        old_value: 'LEFT',
-        changed_by: changedBy,
-        student_id: id,
-        note: 'Status restored to Enrolled from Left',
-      });
+      const children: AuditLogParams[] = [];
+      if (admission) {
+        children.push({
+          entity_type: 'STUDENT',
+          entity_id: String(id),
+          action: 'CREATED',
+          field: 'admission',
+          new_value: `readmission#${admission.id}`,
+          changed_by: changedBy,
+          student_id: id,
+          note: `Readmission admission #${admission.id} (${admission.requested_grade || '—'}, ${admission.academic_year || '—'}).`,
+        });
+      }
+
+      void this.auditLogs.logGroup(
+        {
+          entity_type: 'STUDENT',
+          entity_id: String(id),
+          action: 'READMITTED',
+          old_value: 'LEFT',
+          new_value: 'ENROLLED',
+          changed_by: changedBy,
+          student_id: id,
+          note: `${student.full_name ?? `Student #${id}`} readmitted (Left → Enrolled).`,
+        },
+        children,
+      );
 
       return updated;
     });
@@ -1709,7 +1739,7 @@ export class StudentsService {
   async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
-      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true },
+      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true, full_name: true },
     });
 
     if (!student || student.deleted_at) {
@@ -1736,6 +1766,7 @@ export class StudentsService {
 
     const isReadmission =
       student.status === StudentStatus.LEFT && newStatus === StudentStatus.ENROLLED;
+    const actor = changedBy || 'system';
 
     return this.prisma.$transaction(async (tx) => {
       const updateData: any = { status: newStatus };
@@ -1757,8 +1788,9 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
+      let admission: { id: number; requested_grade: string; academic_year: string | null } | null = null;
       if (isReadmission) {
-        await this.createReadmissionAdmission(tx, id);
+        admission = await this.createReadmissionAdmission(tx, id);
       }
 
       await tx.student_flags.create({
@@ -1766,22 +1798,55 @@ export class StudentsService {
           student_id: id,
           flag: `${flagPrefixMap[newStatus]}_${Date.now()}`,
           work_done: true,
-          comment: reason?.trim() || null,
+          comment: isReadmission
+            ? (reason?.trim() || 'Student readmitted from Left')
+            : (reason?.trim() || null),
           // Always record the exact date/time this action was performed
           reminder_date: new Date(),
         },
       });
 
-      await this.auditLogs.log({
-        entity_type: 'STUDENT',
-        entity_id: String(id),
-        action: 'STATUS_CHANGED',
-        new_value: newStatus,
-        old_value: student.status,
-        changed_by: changedBy || 'system',
-        student_id: id,
-        note: reason?.trim() || null,
-      });
+      if (isReadmission) {
+        const children: AuditLogParams[] = [];
+        if (admission) {
+          children.push({
+            entity_type: 'STUDENT',
+            entity_id: String(id),
+            action: 'CREATED',
+            field: 'admission',
+            new_value: `readmission#${admission.id}`,
+            changed_by: actor,
+            student_id: id,
+            note: `Readmission admission #${admission.id} (${admission.requested_grade || '—'}, ${admission.academic_year || '—'}).`,
+          });
+        }
+        void this.auditLogs.logGroup(
+          {
+            entity_type: 'STUDENT',
+            entity_id: String(id),
+            action: 'READMITTED',
+            old_value: 'LEFT',
+            new_value: 'ENROLLED',
+            changed_by: actor,
+            student_id: id,
+            note:
+              reason?.trim() ||
+              `${student.full_name ?? `Student #${id}`} readmitted (Left → Enrolled).`,
+          },
+          children,
+        );
+      } else {
+        await this.auditLogs.log({
+          entity_type: 'STUDENT',
+          entity_id: String(id),
+          action: 'STATUS_CHANGED',
+          new_value: newStatus,
+          old_value: student.status,
+          changed_by: actor,
+          student_id: id,
+          note: reason?.trim() || null,
+        });
+      }
 
       return updated;
     });
@@ -3321,5 +3386,97 @@ export class StudentsService {
         .filter(d => d.deposit_allocations.some(a => a.student_fees?.academic_year === academicYear || a.vouchers?.academic_year === academicYear))
         .reduce((s, d) => s + Number(d.total_amount), 0)
     };
+  }
+
+  /**
+   * COMP / FE benefits approaching or past expiry (for home dashboard).
+   * within_days: include until dates on or before today+within_days (default 14).
+   */
+  async getFeeBenefitExpiryAlerts(withinDays = 14, user?: IJwtStaffPayload) {
+    const days = Math.min(Math.max(Number(withinDays) || 14, 1), 90);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const horizon = new Date(today);
+    horizon.setUTCDate(horizon.getUTCDate() + days);
+
+    const campusFilter =
+      user?.campusId != null ? { campus_id: user.campusId } : {};
+
+    const students = await this.prisma.students.findMany({
+      where: {
+        deleted_at: null,
+        ...campusFilter,
+        OR: [
+          {
+            is_complementary: true,
+            complementary_until: { not: null, lte: horizon },
+          },
+          {
+            is_fee_endowment: true,
+            fee_endowment_until: { not: null, lte: horizon },
+          },
+        ],
+      },
+      select: {
+        cc: true,
+        full_name: true,
+        complementary_until: true,
+        complementary_reason: true,
+        fee_endowment_until: true,
+        fee_endowment_reason: true,
+        is_complementary: true,
+        is_fee_endowment: true,
+        classes: { select: { description: true } },
+      },
+      orderBy: { full_name: 'asc' },
+      take: 200,
+    });
+
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const alerts: Array<{
+      student_id: number;
+      student_name: string | null;
+      current_class: string | null;
+      benefit_type: 'COMPLEMENTARY' | 'FEE_ENDOWMENT';
+      until: string;
+      reason: string | null;
+      days_remaining: number;
+    }> = [];
+
+    for (const s of students) {
+      if (s.is_complementary && s.complementary_until) {
+        const until = new Date(s.complementary_until);
+        until.setUTCHours(0, 0, 0, 0);
+        if (until.getTime() <= horizon.getTime()) {
+          alerts.push({
+            student_id: s.cc,
+            student_name: s.full_name,
+            current_class: s.classes?.description ?? null,
+            benefit_type: 'COMPLEMENTARY',
+            until: until.toISOString().slice(0, 10),
+            reason: s.complementary_reason,
+            days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
+          });
+        }
+      }
+      if (s.is_fee_endowment && s.fee_endowment_until) {
+        const until = new Date(s.fee_endowment_until);
+        until.setUTCHours(0, 0, 0, 0);
+        if (until.getTime() <= horizon.getTime()) {
+          alerts.push({
+            student_id: s.cc,
+            student_name: s.full_name,
+            current_class: s.classes?.description ?? null,
+            benefit_type: 'FEE_ENDOWMENT',
+            until: until.toISOString().slice(0, 10),
+            reason: s.fee_endowment_reason,
+            days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
+          });
+        }
+      }
+    }
+
+    alerts.sort((a, b) => a.days_remaining - b.days_remaining);
+    return alerts;
   }
 }

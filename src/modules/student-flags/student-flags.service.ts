@@ -16,7 +16,8 @@ export class StudentFlagsService implements OnModuleInit {
   // ── TRIGGER SETUP ────────────────────────────────────────────────────────
   // This keeps the DB logic firing even without a live NestJS listener.
   private async setupTrigger() {
-    await this.prisma.$executeRawUnsafe(`
+    try {
+      await this.prisma.$executeRawUnsafe(`
       CREATE OR REPLACE FUNCTION public.notify_student_flag()
       RETURNS trigger AS $$
       BEGIN
@@ -36,15 +37,19 @@ export class StudentFlagsService implements OnModuleInit {
       $$ LANGUAGE plpgsql;
     `);
 
-    await this.prisma.$executeRawUnsafe(`
+      await this.prisma.$executeRawUnsafe(`
       DROP TRIGGER IF EXISTS trg_student_flag_notify ON public.student_flags;
     `);
 
-    await this.prisma.$executeRawUnsafe(`
+      await this.prisma.$executeRawUnsafe(`
       CREATE TRIGGER trg_student_flag_notify
       AFTER INSERT OR UPDATE ON public.student_flags
       FOR EACH ROW EXECUTE FUNCTION public.notify_student_flag();
     `);
+    } catch (err) {
+      // Concurrent Nest reloads can race on CREATE OR REPLACE FUNCTION.
+      console.error('[StudentFlags] Trigger setup skipped (non-fatal):', err);
+    }
   }
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
