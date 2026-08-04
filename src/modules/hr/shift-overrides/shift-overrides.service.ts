@@ -4,6 +4,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { CreateShiftOverridesDto, ListShiftOverridesQueryDto } from './dto/shift-overrides.dto';
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
@@ -80,6 +81,7 @@ export class ShiftOverridesService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly noticeBoard: EmployeeNoticeBoardService,
+    private readonly calendarResolver: CalendarDayResolverService,
   ) {}
 
   async bulkCreate(dto: CreateShiftOverridesDto, user: IJwtStaffPayload) {
@@ -92,7 +94,16 @@ export class ShiftOverridesService {
     const uniqueEmployeeIds = [...new Set(dto.employee_ids)];
     const employees = await this.prisma.employee_profiles.findMany({
       where: { id: { in: uniqueEmployeeIds } },
-      select: { id: true, full_name: true, campus_id: true },
+      select: {
+        id: true,
+        full_name: true,
+        campus_id: true,
+        department_id: true,
+        staff_category_id: true,
+        days_per_week: true,
+        staff_categories: { select: { code: true } },
+        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+      },
     });
     if (employees.length !== uniqueEmployeeIds.length) {
       throw new BadRequestException('One or more employee IDs were not found');
@@ -104,6 +115,10 @@ export class ShiftOverridesService {
     const startTime = toTime(dto.override_start_time);
     const endTime = toTime(dto.override_end_time);
     const uniqueDates = [...new Set(dto.dates)];
+    const dateObjs = uniqueDates.map((d) => this.parseDate(d));
+
+    // Shift time only applies on working days — reject day-off pairs before any upsert.
+    await this.assertAllWorkingDays(employees, uniqueDates, dateObjs);
 
     const rows = await Promise.all(
       employees.flatMap((employee) =>
@@ -247,5 +262,114 @@ export class ShiftOverridesService {
     const d = new Date(`${dateStr}T00:00:00.000Z`);
     if (Number.isNaN(d.getTime())) throw new BadRequestException('Invalid date');
     return d;
+  }
+
+  /**
+   * Time overrides only make sense on working days. Uses the same STAFF day
+   * resolution as attendance (calendar scopes + weekly schedule + mandatory
+   * Saturdays) so a holiday / weekend / scheduled off day is rejected.
+   */
+  private async assertAllWorkingDays(
+    employees: {
+      id: number;
+      full_name: string | null;
+      campus_id: number | null;
+      department_id: number | null;
+      staff_category_id: number | null;
+      days_per_week: number | null;
+      staff_categories: { code: string | null } | null;
+      employee_work_schedules: { day_of_week: number; is_working: boolean }[];
+    }[],
+    uniqueDates: string[],
+    dateObjs: Date[],
+  ): Promise<void> {
+    const missingCampus = employees.filter((e) => e.campus_id == null);
+    if (missingCampus.length > 0) {
+      const names = missingCampus
+        .slice(0, 5)
+        .map((e) => e.full_name ?? `Employee #${e.id}`)
+        .join(', ');
+      throw new BadRequestException(
+        `Cannot set a shift time override: ${names}` +
+          (missingCampus.length > 5 ? ` and ${missingCampus.length - 5} more` : '') +
+          ' have no campus assigned.',
+      );
+    }
+
+    const dateFrom = dateObjs.reduce((min, d) => (d < min ? d : min), dateObjs[0]);
+    const dateTo = dateObjs.reduce((max, d) => (d > max ? d : max), dateObjs[0]);
+
+    const byCampus = new Map<number, typeof employees>();
+    for (const employee of employees) {
+      const cid = employee.campus_id!;
+      const bucket = byCampus.get(cid) ?? [];
+      bucket.push(employee);
+      byCampus.set(cid, bucket);
+    }
+
+    const campusRows = new Map<number, Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>>();
+    await Promise.all(
+      [...byCampus.keys()].map(async (campusId) => {
+        campusRows.set(
+          campusId,
+          await this.calendarResolver.loadStaffCalendarRows(campusId, dateFrom, dateTo),
+        );
+      }),
+    );
+
+    const hasSaturday = dateObjs.some((d) => d.getUTCDay() === 6);
+    const mandatoryByEmployee = hasSaturday
+      ? await this.calendarResolver.loadMandatorySaturdayDatesForEmployees(
+          employees.map((e) => e.id),
+          dateFrom,
+          dateTo,
+        )
+      : new Map<number, Set<string>>();
+
+    type OffHit = { name: string; date: string; reason: string };
+    const offHits: OffHit[] = [];
+
+    for (const employee of employees) {
+      const rows = campusRows.get(employee.campus_id!) ?? [];
+      const name = employee.full_name ?? `Employee #${employee.id}`;
+      const saturdaySet = mandatoryByEmployee.get(employee.id);
+
+      for (let i = 0; i < uniqueDates.length; i++) {
+        const date = dateObjs[i];
+        const resolved = this.calendarResolver.resolveStaffDayFromRows(
+          rows,
+          date,
+          employee.id,
+          employee.department_id,
+          employee.staff_category_id,
+          employee.staff_categories?.code ?? null,
+          employee.days_per_week,
+          employee.employee_work_schedules,
+          saturdaySet,
+        );
+
+        if (resolved.isWorkingDay) continue;
+
+        const label =
+          resolved.description ??
+          (resolved.dayType === 'WEEKEND'
+            ? 'Weekend'
+            : resolved.dayType === 'HOLIDAY'
+              ? 'Holiday'
+              : 'Day off');
+        offHits.push({ name, date: uniqueDates[i], reason: label });
+      }
+    }
+
+    if (offHits.length === 0) return;
+
+    const preview = offHits
+      .slice(0, 8)
+      .map((h) => `${h.name} on ${h.date} (${h.reason})`)
+      .join('; ');
+    const more = offHits.length > 8 ? ` …and ${offHits.length - 8} more` : '';
+    throw new BadRequestException(
+      `Cannot set a shift time override on a day off — the employee must be scheduled to work that day. ${preview}${more}`,
+    );
   }
 }
