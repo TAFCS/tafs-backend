@@ -301,7 +301,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async forgotPasswordParent(@Body() dto: ForgotPasswordDto) {
     await this.authService.forgotPasswordParent(dto);
-    return createApiResponse({}, HttpStatus.OK, 'If an account exists for this email, a verification code has been sent');
+    return createApiResponse({}, HttpStatus.OK, 'A verification code has been sent to your email');
   }
 
   @Post('parent/reset-password')

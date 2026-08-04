@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, Inject, forwardRef, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, Inject, forwardRef, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -531,7 +531,7 @@ export class AuthService {
     // A soft-deleted account (deleted_at set) must always be allowed to re-register.
     if (!institutionalFamily.deleted_at && (institutionalFamily.email || institutionalFamily.password_hash)) {
       throw new ConflictException(
-        'Account already registered. Please log in.',
+        this.familyAlreadyHasEmailMessage(institutionalFamily.email),
       );
     }
 
@@ -634,7 +634,7 @@ export class AuthService {
     // A soft-deleted account (deleted_at set) must always be allowed to re-register.
     if (!institutionalFamily.deleted_at && (institutionalFamily.email || institutionalFamily.password_hash)) {
       throw new ConflictException(
-        'Account already registered. Please log in.',
+        this.familyAlreadyHasEmailMessage(institutionalFamily.email),
       );
     }
 
@@ -672,14 +672,15 @@ export class AuthService {
       orderBy: { created_at: 'desc' },
     });
 
-    if (family) {
-      await this.otpService.issue({
-        purpose: otp_purpose.PARENT_FORGOT_PASSWORD,
-        email: normalizedEmail,
-        familyId: family.id,
-      });
+    if (!family) {
+      throw new NotFoundException('Your mail is not linked to any family');
     }
-    // Always return success to prevent email enumeration
+
+    await this.otpService.issue({
+      purpose: otp_purpose.PARENT_FORGOT_PASSWORD,
+      email: normalizedEmail,
+      familyId: family.id,
+    });
   }
 
   async forgotPasswordStaff(dto: ForgotPasswordDto) {
@@ -985,5 +986,14 @@ export class AuthService {
       if (isMatch) return token;
     }
     return null;
+  }
+
+  /** Message when family already completed portal signup with an email. */
+  private familyAlreadyHasEmailMessage(email: string | null | undefined): string {
+    const registered = email?.trim();
+    if (registered) {
+      return `Your family already has a registered email, the email is: ${registered}`;
+    }
+    return 'Your family already has a registered account. Please log in.';
   }
 }
