@@ -25,6 +25,17 @@ export class EnrollmentController {
     );
   }
 
+  @Get('houses')
+  @ApiOperation({ summary: 'Get list of all houses' })
+  async getHouses() {
+    const houses = await this.enrollmentService.getAllHouses();
+    return createApiResponse(
+      houses,
+      HttpStatus.OK,
+      'Houses retrieved successfully'
+    );
+  }
+
   @Get(':cc/suggestions')
   @ApiOperation({ summary: 'Get suggested GR number and balanced House for a student' })
   async getSuggestions(

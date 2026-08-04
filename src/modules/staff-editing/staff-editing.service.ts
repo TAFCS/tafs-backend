@@ -385,10 +385,9 @@ export class StaffEditingService {
         }
         studentDisplayName = existing.full_name;
 
-        // Log student field changes (placement FKs go to progression periods, not audit_logs)
-        const PLACEMENT_FIELDS = new Set(['campus_id', 'class_id', 'section_id', 'house_id']);
+        // Log student field changes including placement FKs and dates
         const TRACKED_STUDENT_FIELDS = [
-          'full_name', 'cnic', 'gender', 'nationality', 'religion',
+          'full_name', 'cnic', 'dob', 'doa', 'gender', 'nationality', 'religion',
           'place_of_birth', 'identification_marks', 'medical_info',
           'interests', 'country', 'province', 'city', 'whatsapp_number',
           'primary_phone', 'email', 'campus_id', 'class_id', 'section_id',
@@ -398,7 +397,6 @@ export class StaffEditingService {
         ];
 
         for (const field of TRACKED_STUDENT_FIELDS) {
-          if (PLACEMENT_FIELDS.has(field)) continue;
           if ((dto as any)[field] !== undefined) {
             let oldVal: string | null = null;
             let newVal: string | null = null;
@@ -411,10 +409,11 @@ export class StaffEditingService {
             ) {
               const oldDate = (existing as any)[field];
               const newDateStr = (dto as any)[field];
-              const newDate = newDateStr ? new Date(newDateStr) : null;
-              if (oldDate?.getTime() !== newDate?.getTime()) {
-                oldVal = oldDate ? oldDate.toISOString().split('T')[0] : null;
-                newVal = newDate ? newDate.toISOString().split('T')[0] : null;
+              const oldStr = oldDate ? new Date(oldDate).toISOString().split('T')[0] : null;
+              const newStr = newDateStr ? new Date(newDateStr).toISOString().split('T')[0] : null;
+              if (oldStr !== newStr) {
+                oldVal = oldStr;
+                newVal = newStr;
               }
             } else {
               const oldRaw = (existing as any)[field];

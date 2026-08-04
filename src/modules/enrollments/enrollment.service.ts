@@ -88,8 +88,8 @@ export class EnrollmentService {
       },
     });
 
-    if (!student || student.status !== 'SOFT_ADMISSION') {
-      throw new NotFoundException(`Valid candidate with CC #${cc} not found`);
+    if (!student) {
+      throw new NotFoundException(`Student #${cc} not found`);
     }
 
     // Resolve class_id once — students.class_id is null post-registration,
@@ -949,5 +949,11 @@ export class EnrollmentService {
       campus_name: student.campuses?.campus_name || '',
       campus_address: student.campuses?.address || 'C-61 - 65, Block # 13, Gulistan-e-Jauhar, Karachi, Pakistan.',
     };
+  }
+
+  async getAllHouses() {
+    return this.prisma.houses.findMany({
+      orderBy: { house_name: 'asc' },
+    });
   }
 }
