@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -346,13 +346,20 @@ export class VouchersService {
                     validity_date: validityDate,
                     late_fee_charge: dto.late_fee_charge,
                     reprint_fee_charge: dto.reprint_fee_charge ?? false,
-                    // Always derive from the voucher's own fee_date server-side, mirroring
-                    // bulk-voucher-logic.service.ts — the client's academic-year selector is a
-                    // page-level default that doesn't track per-voucher fee dates (e.g. arrear
-                    // groups from a prior session), so it can't be trusted as the source of truth.
-                    academic_year: feeDate
-                        ? deriveAcademicYear(feeDate.toISOString(), dto.class_id ?? undefined)
-                        : dto.academic_year,
+                    // Prefer the fee heads' own academic_year when they all agree so the
+                    // challan header matches head month labels (e.g. AUG 25 → 2025-2026).
+                    // Client academic-year selector is only a last-resort fallback — fee_date
+                    // derivation covers mixed/prior-session groups when heads disagree.
+                    academic_year: resolveVoucherAcademicYear(
+                        feeRecords
+                            .filter((f: any) => !f.is_discount)
+                            .map((f: any) => f.academic_year),
+                        {
+                            feeDate,
+                            classId: dto.class_id ?? undefined,
+                            stored: dto.academic_year,
+                        },
+                    ),
                     month: dto.month ?? null,
                     fee_date: feeDate,
                     total_payable_before_due: 0,
@@ -1620,9 +1627,18 @@ export class VouchersService {
                     sectionName: s.sections?.description || 'N/A',
                 })),
                 campusName: voucher.campuses?.campus_name || 'Main Campus',
-                academicYear: (isSpecial(voucher.class_id) && voucher.fee_date)
-                    ? deriveAcademicYear(new Date(voucher.fee_date).toISOString(), voucher.class_id ?? undefined)
-                    : (voucher.academic_year || 'N/A'),
+                // Same rule as create: uniform head years win so regenerating a PDF for a
+                // voucher whose fees are tagged 2025-2026 prints that session, not fee_date's.
+                academicYear: resolveVoucherAcademicYear(
+                    heads
+                        .filter((h: any) => !h.isDiscount)
+                        .map((h: any) => h.academic_year),
+                    {
+                        feeDate: voucher.fee_date,
+                        classId: voucher.class_id ?? undefined,
+                        stored: voucher.academic_year,
+                    },
+                ),
                 month: monthLabel,
                 issueDate: voucher.issue_date.toISOString().split('T')[0],
                 dueDate: voucher.due_date.toISOString().split('T')[0],

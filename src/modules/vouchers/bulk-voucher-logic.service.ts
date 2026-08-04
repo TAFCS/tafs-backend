@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { deriveAcademicYear } from '../../common/utils/academic-labels';
+import { resolveVoucherAcademicYear } from '../../common/utils/academic-labels';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
 
 @Injectable()
@@ -154,7 +154,16 @@ export class BulkVoucherLogicService {
                     // If the existing voucher for this period is PARTIALLY_PAID, never touch/regenerate
                     // it — instead split off a brand-new voucher containing just the newly unpaid heads,
                     // and record a SKIPPED entry noting the partially-paid voucher was left untouched.
-                    const itemAcademicYear = params.academic_year_override || deriveAcademicYear(dateStr, student.class_id ?? undefined);
+                    const itemAcademicYear = resolveVoucherAcademicYear(
+                        feesInThisMonth
+                            .filter((f: any) => !f.is_discount)
+                            .map((f: any) => f.academic_year),
+                        {
+                            feeDate: dateStr,
+                            classId: student.class_id ?? undefined,
+                            stored: params.academic_year_override,
+                        },
+                    );
                     workItems.push({
                         cc,
                         dateStr,

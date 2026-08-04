@@ -17,6 +17,43 @@ export function deriveAcademicYear(dateStr: string, classId?: number): string {
 }
 
 /**
+ * Resolve the academic year printed on a voucher challan header.
+ *
+ * Prefer a single shared academic_year from the fee heads being billed so the
+ * header matches month labels (e.g. AUG 25 → 2025-2026). When heads span
+ * multiple sessions or have no year, fall back to fee_date derivation, then an
+ * explicit stored/client value.
+ */
+export function resolveVoucherAcademicYear(
+    feeAcademicYears: Array<string | null | undefined>,
+    fallback: {
+        feeDate?: string | Date | null;
+        classId?: number;
+        stored?: string | null;
+    } = {},
+): string {
+    const years = [
+        ...new Set(
+            feeAcademicYears
+                .map((y) => (y ?? '').trim())
+                .filter((y) => y.length > 0),
+        ),
+    ];
+    if (years.length === 1) return years[0];
+
+    if (fallback.feeDate != null && fallback.feeDate !== '') {
+        const dateStr =
+            fallback.feeDate instanceof Date
+                ? fallback.feeDate.toISOString()
+                : String(fallback.feeDate);
+        return deriveAcademicYear(dateStr, fallback.classId);
+    }
+
+    if (fallback.stored?.trim()) return fallback.stored.trim();
+    return 'N/A';
+}
+
+/**
  * Returns a short month+year label for a PDF head, e.g. "Sep 25" or "Jan 26".
  * Special classes (IDs 15-19) use an April-March year; all others use August-July.
  */
