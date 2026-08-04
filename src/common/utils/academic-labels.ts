@@ -54,6 +54,43 @@ export function resolveVoucherAcademicYear(
 }
 
 /**
+ * Resolve the academic term(s) *displayed* on the voucher challan header.
+ *
+ * Same single-shared-year fast path as resolveVoucherAcademicYear, but when
+ * the billed fee heads span multiple distinct sessions (e.g. an arrear head
+ * tagged 2025-2026 alongside a current head tagged 2026-2027), the header
+ * lists every distinct year involved — chronologically, comma-separated —
+ * instead of collapsing to a single derived/fallback year. This is purely a
+ * display label: the persisted vouchers.academic_year column (VarChar(10),
+ * and used elsewhere for single-year comparisons) still uses
+ * resolveVoucherAcademicYear and must never receive this joined string.
+ */
+export function resolveVoucherAcademicYearLabel(
+    feeAcademicYears: Array<string | null | undefined>,
+    fallback: {
+        feeDate?: string | Date | null;
+        classId?: number;
+        stored?: string | null;
+    } = {},
+): string {
+    const years = [
+        ...new Set(
+            feeAcademicYears
+                .map((y) => (y ?? '').trim())
+                .filter((y) => y.length > 0),
+        ),
+    ];
+
+    if (years.length > 1) {
+        return years
+            .sort((a, b) => (parseInt(a.split('-')[0], 10) || 0) - (parseInt(b.split('-')[0], 10) || 0))
+            .join(', ');
+    }
+
+    return resolveVoucherAcademicYear(feeAcademicYears, fallback);
+}
+
+/**
  * Returns a short month+year label for a PDF head, e.g. "Sep 25" or "Jan 26".
  * Special classes (IDs 15-19) use an April-March year; all others use August-July.
  */

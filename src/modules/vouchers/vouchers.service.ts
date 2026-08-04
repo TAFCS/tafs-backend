@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -1629,7 +1629,10 @@ export class VouchersService {
                 campusName: voucher.campuses?.campus_name || 'Main Campus',
                 // Same rule as create: uniform head years win so regenerating a PDF for a
                 // voucher whose fees are tagged 2025-2026 prints that session, not fee_date's.
-                academicYear: resolveVoucherAcademicYear(
+                // When heads span multiple sessions (e.g. an arrear head from 2025-2026
+                // alongside a current head from 2026-2027), list every year involved instead
+                // of collapsing to one — see resolveVoucherAcademicYearLabel.
+                academicYear: resolveVoucherAcademicYearLabel(
                     heads
                         .filter((h: any) => !h.isDiscount)
                         .map((h: any) => h.academic_year),
