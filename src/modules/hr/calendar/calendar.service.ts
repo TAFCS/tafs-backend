@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
-import { isWeekendDate, parseCalendarDateKey } from './student-calendar-day.util';
+import { isWeekendDate, isSaturdayDate, parseCalendarDateKey } from './student-calendar-day.util';
 import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service';
 import { CalendarNotificationService } from './calendar-notification.service';
+import { StaffCalendarNotificationService } from './staff-calendar-notification.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
 import { IsInt, IsDateString, IsString, IsOptional, IsIn, IsArray, ArrayMinSize, ArrayMaxSize } from 'class-validator';
@@ -101,6 +102,14 @@ export interface EmployeeCalendarDaysResult {
   skipped: number;
   failed: number;
   errors: { employee_id: number; date: string; message: string }[];
+  /** Saturday-scoped HOLIDAY entries created for an employee who already has a
+   *  mandatory Saturday schedule for that date — the mandatory Saturday wins,
+   *  so the holiday will have no effect for them on that date. */
+  conflicts: { employee_id: number; date: string; message: string }[];
+  /** Always empty on the bulk-employees path — attendance re-sync runs in the
+   *  background after the response. Kept for API shape compatibility; failures
+   *  are logged server-side (retry from Academic Calendar if needed). */
+  sync_failed: { campus_id: number; date: string }[];
 }
 
 export class SyncCalendarAttendanceDto {
@@ -125,6 +134,8 @@ export interface BulkCalendarCreateResult {
   skipped: number;
   failed: number;
   errors: { campus_id: number; message: string }[];
+  /** Campuses where the calendar row saved but the attendance re-sync failed. */
+  sync_failed: number;
 }
 
 @Injectable()
@@ -133,6 +144,7 @@ export class CalendarService {
     private readonly prisma: PrismaService,
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly notificationService: CalendarNotificationService,
+    private readonly staffNotificationService: StaffCalendarNotificationService,
     private readonly auditLogs: AuditLogsService,
   ) {}
 
@@ -236,6 +248,29 @@ export class CalendarService {
     return row.date.toISOString().slice(0, 10);
   }
 
+  /**
+   * A Saturday-scoped STAFF HOLIDAY entry for a specific employee has no effect
+   * if that employee already has a mandatory Saturday schedule for the same date —
+   * applyMandatorySaturday() in the resolver always wins. Surface that instead of
+   * letting the override silently do nothing.
+   */
+  private async checkSaturdayConflict(day: {
+    applies_to: string;
+    day_type: string;
+    employee_id: number | null;
+    date: Date;
+  }): Promise<string | null> {
+    if (day.applies_to !== 'STAFF' || day.day_type !== 'HOLIDAY' || day.employee_id == null) return null;
+    if (!isSaturdayDate(day.date)) return null;
+
+    const mandatory = await this.prisma.teacher_saturday_schedules.findUnique({
+      where: { employee_id_date: { employee_id: day.employee_id, date: day.date } },
+    });
+    if (!mandatory) return null;
+
+    return 'This employee has a mandatory Saturday schedule for this date, which takes priority — this holiday will have no effect unless the mandatory Saturday is removed first.';
+  }
+
   async create(
     dto: CreateCalendarDayDto,
     createdBy?: string,
@@ -268,15 +303,29 @@ export class CalendarService {
       },
     });
 
+    let syncWarning: string | null = null;
     if (!options?.skipSync) {
-      await this.holidaySync.syncAfterCalendarChange(day.campus_id, dto.date);
+      const syncResult = await this.holidaySync.syncAfterCalendarChange(day.campus_id, dto.date);
+      if (syncResult === null) {
+        syncWarning = 'Calendar entry saved, but the attendance re-sync failed — use "Apply holiday attendance manually" to retry.';
+      }
     }
+    const conflictWarning = await this.checkSaturdayConflict(day);
 
     if (day.applies_to === 'STUDENT') {
       if (day.day_type === 'HOLIDAY') {
         await this.notificationService.notifyFamiliesForCalendarDay(day);
       } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
         await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      }
+    } else if (day.applies_to === 'STAFF') {
+      void this.staffNotificationService
+        .notifyForCalendarChange(day, 'CREATED')
+        .catch((err) => console.error('[Calendar] Staff notice (created) failed:', err?.message));
+      if (conflictWarning && day.employee_id != null) {
+        void this.staffNotificationService
+          .notifySaturdayConflict(day.employee_id, day.date)
+          .catch((err) => console.error('[Calendar] Staff conflict notice failed:', err?.message));
       }
     }
 
@@ -288,7 +337,7 @@ export class CalendarService {
       note: `${day.day_type} on ${this.dateKeyFromRow(day)} for ${day.applies_to}, campus #${day.campus_id}.${day.description ? ` ${day.description}` : ''}`,
     });
 
-    return day;
+    return { ...day, sync_warning: syncWarning, conflict_warning: conflictWarning };
   }
 
   async createBulk(dto: CreateBulkCalendarDayDto, createdBy?: string, changedBy?: string): Promise<BulkCalendarCreateResult> {
@@ -307,12 +356,14 @@ export class CalendarService {
       skipped: 0,
       failed: 0,
       errors: [],
+      sync_failed: 0,
     };
 
     for (const campus of campuses) {
       try {
-        await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy);
+        const day = await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy);
         result.created++;
+        if (day.sync_warning) result.sync_failed++;
       } catch (err) {
         const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
         if (message.includes('same scope already exists')) {
@@ -338,12 +389,20 @@ export class CalendarService {
    * `employee_id` scope already outranks every other STAFF calendar scope
    * (campus/department/staff_category) in CalendarDayResolverService's
    * specificity ranking, so this always wins for the employees it targets.
+   *
+   * Hot path: prefetch existing scopes → createMany in chunks → fire-and-forget
+   * campus attendance sync. Avoids the old employees×dates sequential create()
+   * loop that blocked on per-row lookups and full-roster syncs.
    */
   async createForEmployees(
     dto: CreateEmployeeCalendarDaysDto,
     createdBy?: string,
     changedBy?: string,
   ): Promise<EmployeeCalendarDaysResult> {
+    if (dto.day_type !== 'HOLIDAY' && dto.day_type !== 'WORKDAY') {
+      throw new BadRequestException('Employee overrides only support HOLIDAY or WORKDAY');
+    }
+
     const uniqueEmployeeIds = [...new Set(dto.employee_ids)];
     const employees = await this.prisma.employee_profiles.findMany({
       where: { id: { in: uniqueEmployeeIds } },
@@ -352,14 +411,9 @@ export class CalendarService {
     if (employees.length !== uniqueEmployeeIds.length) {
       throw new BadRequestException('One or more employee IDs were not found');
     }
-    const missingCampus = employees.filter((e) => e.campus_id == null);
-    if (missingCampus.length > 0) {
-      throw new BadRequestException(
-        `Employee(s) with no campus assigned cannot have a calendar override: ${missingCampus.map((e) => e.full_name ?? `#${e.id}`).join(', ')}`,
-      );
-    }
 
     const uniqueDates = [...new Set(dto.dates)];
+    const dateObjs = uniqueDates.map((d) => parseCalendarDateKey(d));
     const result: EmployeeCalendarDaysResult = {
       employees_total: employees.length,
       dates_total: uniqueDates.length,
@@ -367,46 +421,176 @@ export class CalendarService {
       skipped: 0,
       failed: 0,
       errors: [],
+      conflicts: [],
+      // Sync is kicked off asynchronously — failures are logged server-side.
+      // Callers should retry from Academic Calendar if attendance looks stale.
+      sync_failed: [],
     };
 
-    // syncAfterCalendarChange rescans the whole campus for a given date and doesn't
-    // depend on which employee triggered the change, so it's deduped to run once per
-    // (campus_id, date) pair after the loop instead of once per employee — the naive
-    // per-row version made this endpoint scale as employees × dates × campus roster size.
+    // Employees with no campus assigned can't get a campus-scoped calendar row —
+    // skip just them (one failed entry per date) instead of aborting the whole
+    // batch, so the rest of the selection still gets processed.
+    const missingCampus = employees.filter((e) => e.campus_id == null);
+    for (const employee of missingCampus) {
+      for (const date of uniqueDates) {
+        result.failed++;
+        result.errors.push({
+          employee_id: employee.id,
+          date,
+          message: `${employee.full_name ?? `Employee #${employee.id}`} has no campus assigned`,
+        });
+      }
+    }
+    const eligibleEmployees = employees.filter((e) => e.campus_id != null);
+    if (eligibleEmployees.length === 0) {
+      throw new BadRequestException(
+        `Failed to create any calendar override (${result.failed} failed, ${result.skipped} skipped).`,
+      );
+    }
+
+    const eligibleIds = eligibleEmployees.map((e) => e.id);
+
+    // One query for all existing employee-scoped rows in this batch.
+    const existingRows = await this.prisma.academic_calendar_days.findMany({
+      where: {
+        applies_to: 'STAFF',
+        employee_id: { in: eligibleIds },
+        date: { in: dateObjs },
+        class_id: null,
+        section_id: null,
+        department_id: null,
+        staff_category_id: null,
+      },
+      select: { employee_id: true, date: true },
+    });
+    const existingKeys = new Set(
+      existingRows.map((r) => `${r.employee_id}:${this.dateKeyFromRow(r)}`),
+    );
+
+    type RowInput = {
+      campus_id: number;
+      date: Date;
+      day_type: string;
+      description: string | null;
+      applies_to: string;
+      employee_id: number;
+      class_id: null;
+      section_id: null;
+      department_id: null;
+      staff_category_id: null;
+      created_by: string | null;
+    };
+
+    const toCreate: RowInput[] = [];
     const syncPairs = new Map<string, { campusId: number; date: string }>();
 
-    for (const employee of employees) {
-      for (const date of uniqueDates) {
-        try {
-          await this.create(
+    for (const employee of eligibleEmployees) {
+      for (let i = 0; i < uniqueDates.length; i++) {
+        const date = uniqueDates[i];
+        const key = `${employee.id}:${date}`;
+        if (existingKeys.has(key)) {
+          result.skipped++;
+          continue;
+        }
+        toCreate.push({
+          campus_id: employee.campus_id!,
+          date: dateObjs[i],
+          day_type: dto.day_type,
+          description: dto.description || null,
+          applies_to: 'STAFF',
+          employee_id: employee.id,
+          class_id: null,
+          section_id: null,
+          department_id: null,
+          staff_category_id: null,
+          created_by: createdBy ?? null,
+        });
+        syncPairs.set(`${employee.campus_id}:${date}`, { campusId: employee.campus_id!, date });
+      }
+    }
+
+    const CHUNK = 500;
+    for (let i = 0; i < toCreate.length; i += CHUNK) {
+      const chunk = toCreate.slice(i, i + CHUNK);
+      const inserted = await this.prisma.academic_calendar_days.createMany({
+        data: chunk,
+        skipDuplicates: true,
+      });
+      result.created += inserted.count;
+      // Race: another request may have inserted between our prefetch and createMany.
+      result.skipped += chunk.length - inserted.count;
+
+      // Staff notices are fire-and-forget so they don't block the HTTP response.
+      for (const row of chunk) {
+        void this.staffNotificationService
+          .notifyForCalendarChange(
             {
-              campus_id: employee.campus_id!,
-              date,
-              day_type: dto.day_type,
-              description: dto.description,
+              campus_id: row.campus_id,
+              date: row.date,
               applies_to: 'STAFF',
-              employee_id: employee.id,
+              day_type: row.day_type,
+              description: row.description,
+              department_id: null,
+              staff_category_id: null,
+              employee_id: row.employee_id,
             },
-            createdBy,
-            changedBy,
-            { skipSync: true },
-          );
-          result.created++;
-          syncPairs.set(`${employee.campus_id}:${date}`, { campusId: employee.campus_id!, date });
-        } catch (err) {
-          const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
-          if (message.includes('same scope already exists')) {
-            result.skipped++;
-          } else {
-            result.failed++;
-            result.errors.push({ employee_id: employee.id, date, message });
-          }
+            'CREATED',
+          )
+          .catch((err) => console.error('[Calendar] Staff notice (bulk created) failed:', err?.message));
+      }
+    }
+
+    // Saturday HOLIDAY + mandatory Saturday schedule → override has no effect.
+    if (dto.day_type === 'HOLIDAY' && toCreate.length > 0) {
+      const saturdayDateObjs = dateObjs.filter((d) => isSaturdayDate(d));
+      if (saturdayDateObjs.length > 0) {
+        const createdKeys = new Set(toCreate.map((r) => `${r.employee_id}:${this.dateKeyFromRow(r)}`));
+        const mandatory = await this.prisma.teacher_saturday_schedules.findMany({
+          where: {
+            employee_id: { in: eligibleIds },
+            date: { in: saturdayDateObjs },
+          },
+          select: { employee_id: true, date: true },
+        });
+        const conflictMsg =
+          'This employee has a mandatory Saturday schedule for this date, which takes priority — this holiday will have no effect unless the mandatory Saturday is removed first.';
+        for (const row of mandatory) {
+          const dateKey = this.dateKeyFromRow(row);
+          // Only warn for rows we attempted to create (not pre-existing skips).
+          if (!createdKeys.has(`${row.employee_id}:${dateKey}`)) continue;
+          result.conflicts.push({
+            employee_id: row.employee_id,
+            date: dateKey,
+            message: conflictMsg,
+          });
+          void this.staffNotificationService
+            .notifySaturdayConflict(row.employee_id, row.date)
+            .catch((err) => console.error('[Calendar] Staff conflict notice failed:', err?.message));
         }
       }
     }
 
+    // Attendance re-sync rescans the whole campus roster — kick it off in the
+    // background (deduped per campus×date) so Apply returns immediately.
     for (const { campusId, date } of syncPairs.values()) {
-      await this.holidaySync.syncAfterCalendarChange(campusId, date);
+      void this.holidaySync
+        .syncAfterCalendarChange(campusId, date)
+        .catch((err) =>
+          console.error(
+            `[Calendar] Background attendance sync failed for campus ${campusId} on ${date}:`,
+            (err as Error)?.message,
+          ),
+        );
+    }
+
+    if (result.created > 0) {
+      void this.auditLogs.log({
+        entity_type: 'ACADEMIC_CALENDAR_DAY',
+        entity_id: 'bulk-employees',
+        action: 'CREATED',
+        changed_by: changedBy ?? createdBy ?? 'system',
+        note: `Bulk employee ${dto.day_type}: ${result.created} created, ${result.skipped} skipped across ${eligibleEmployees.length} employee(s) × ${uniqueDates.length} date(s).${dto.description ? ` ${dto.description}` : ''}`,
+      });
     }
 
     if (result.created === 0 && result.failed > 0) {
@@ -467,13 +651,38 @@ export class CalendarService {
       },
     });
 
-    await this.holidaySync.syncAfterCalendarChange(day.campus_id, merged.date);
+    const syncResult = await this.holidaySync.syncAfterCalendarChange(day.campus_id, merged.date);
+    const syncWarning =
+      syncResult === null
+        ? 'Calendar entry updated, but the attendance re-sync failed — use "Apply holiday attendance manually" to retry.'
+        : null;
+    const conflictWarning = await this.checkSaturdayConflict(day);
 
     if (day.applies_to === 'STUDENT') {
       if (day.day_type === 'HOLIDAY') {
         await this.notificationService.notifyFamiliesForCalendarDay(day);
       } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
         await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      }
+    } else if (day.applies_to === 'STAFF') {
+      const dateChanged = this.dateKeyFromRow(day) !== this.dateKeyFromRow(existing);
+      const onNotifyError = (err: any) => console.error('[Calendar] Staff notice (updated) failed:', err?.message);
+      if (dateChanged) {
+        // The old date is no longer covered by this entry — tell the same
+        // audience it moved, then notify for the new date as a fresh change.
+        void this.staffNotificationService
+          .notifyForCalendarChange(existing, 'REMOVED', existing.day_type)
+          .catch(onNotifyError);
+        void this.staffNotificationService.notifyForCalendarChange(day, 'CREATED').catch(onNotifyError);
+      } else {
+        void this.staffNotificationService
+          .notifyForCalendarChange(day, 'UPDATED', existing.day_type)
+          .catch(onNotifyError);
+      }
+      if (conflictWarning && day.employee_id != null) {
+        void this.staffNotificationService
+          .notifySaturdayConflict(day.employee_id, day.date)
+          .catch((err) => console.error('[Calendar] Staff conflict notice failed:', err?.message));
       }
     }
 
@@ -500,7 +709,7 @@ export class CalendarService {
       note: changes.length > 0 ? changes.join('; ') : 'No field changes detected.',
     });
 
-    return day;
+    return { ...day, sync_warning: syncWarning, conflict_warning: conflictWarning };
   }
 
   async remove(id: number, changedBy: string) {
@@ -512,7 +721,17 @@ export class CalendarService {
       where: { id },
     });
 
-    await this.holidaySync.syncAfterCalendarChange(campusId, dateKey);
+    const syncResult = await this.holidaySync.syncAfterCalendarChange(campusId, dateKey);
+    const syncWarning =
+      syncResult === null
+        ? 'Calendar entry deleted, but the attendance re-sync failed — use "Apply holiday attendance manually" to retry.'
+        : null;
+
+    if (existing.applies_to === 'STAFF') {
+      void this.staffNotificationService
+        .notifyForCalendarChange(existing, 'REMOVED', existing.day_type)
+        .catch((err) => console.error('[Calendar] Staff notice (removed) failed:', err?.message));
+    }
 
     void this.auditLogs.log({
       entity_type: 'ACADEMIC_CALENDAR_DAY',
@@ -522,6 +741,6 @@ export class CalendarService {
       note: `Deleted ${existing.day_type} on ${dateKey} for ${existing.applies_to}, campus #${campusId}.`,
     });
 
-    return deleted;
+    return { ...deleted, sync_warning: syncWarning };
   }
 }

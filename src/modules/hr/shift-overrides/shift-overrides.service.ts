@@ -2,14 +2,75 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CreateShiftOverridesDto, ListShiftOverridesQueryDto } from './dto/shift-overrides.dto';
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
 
+function formatDatePKT(date: Date): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'Asia/Karachi',
+  }).format(date);
+}
+
+function formatTimeUTC(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'UTC',
+  }).format(date);
+}
+
+function minutesOfDay(date: Date): number {
+  return date.getUTCHours() * 60 + date.getUTCMinutes();
+}
+
+/** Describes what an override actually changes relative to the employee's normal
+ *  reporting/leaving time, so the notice can say "earlier start" / "early leave"
+ *  instead of just restating the new time with no context. */
+function describeShiftChange(
+  newStart: Date | null,
+  newEnd: Date | null,
+  baseStart: Date | null,
+  baseEnd: Date | null,
+): string {
+  const parts: string[] = [];
+
+  if (newStart) {
+    const label = formatTimeUTC(newStart);
+    if (baseStart) {
+      const diff = minutesOfDay(newStart) - minutesOfDay(baseStart);
+      if (diff > 0) parts.push(`check-in moved to ${label} (later start)`);
+      else if (diff < 0) parts.push(`check-in moved to ${label} (earlier start)`);
+      else parts.push(`check-in at ${label}`);
+    } else {
+      parts.push(`check-in at ${label}`);
+    }
+  }
+
+  if (newEnd) {
+    const label = formatTimeUTC(newEnd);
+    if (baseEnd) {
+      const diff = minutesOfDay(newEnd) - minutesOfDay(baseEnd);
+      if (diff < 0) parts.push(`check-out moved to ${label} (early leave)`);
+      else if (diff > 0) parts.push(`check-out moved to ${label} (extended day)`);
+      else parts.push(`check-out at ${label}`);
+    } else {
+      parts.push(`check-out at ${label}`);
+    }
+  }
+
+  return parts.join(', ');
+}
+
 const overrideInclude = {
   employee_profiles: {
-    select: { id: true, full_name: true, campus_id: true },
+    select: { id: true, full_name: true, campus_id: true, user_id: true, reporting_time: true, leaving_time: true },
   },
 } satisfies Prisma.employee_shift_overridesInclude;
 
@@ -18,6 +79,7 @@ export class ShiftOverridesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly noticeBoard: EmployeeNoticeBoardService,
   ) {}
 
   async bulkCreate(dto: CreateShiftOverridesDto, user: IJwtStaffPayload) {
@@ -78,6 +140,25 @@ export class ShiftOverridesService {
       note: `Set shift override for ${employeeNames} on ${uniqueDates.length} day(s): ${uniqueDates.join(', ')}.`,
     });
 
+    for (const row of rows) {
+      const userId = row.employee_profiles.user_id;
+      if (!userId) continue;
+      const changeSummary = describeShiftChange(
+        startTime,
+        endTime,
+        row.employee_profiles.reporting_time,
+        row.employee_profiles.leaving_time,
+      );
+      void this.noticeBoard
+        .createScheduleNotice(
+          row.employee_id,
+          userId,
+          `Schedule Update for ${formatDatePKT(row.date)}`,
+          `Your hours on ${formatDatePKT(row.date)} have been changed: ${changeSummary}.`,
+        )
+        .catch((err) => console.error('[ShiftOverrides] Schedule notice failed:', err?.message));
+    }
+
     return rows;
   }
 
@@ -112,7 +193,7 @@ export class ShiftOverridesService {
   async remove(id: number, user: IJwtStaffPayload) {
     const existing = await this.prisma.employee_shift_overrides.findUnique({
       where: { id },
-      include: { employee_profiles: { select: { campus_id: true, full_name: true } } },
+      include: { employee_profiles: { select: { campus_id: true, full_name: true, user_id: true } } },
     });
     if (!existing) throw new NotFoundException('Shift override not found');
 
@@ -127,6 +208,17 @@ export class ShiftOverridesService {
       changed_by: user.username,
       note: `Removed shift override for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
     });
+
+    if (existing.employee_profiles.user_id) {
+      void this.noticeBoard
+        .createScheduleNotice(
+          existing.employee_id,
+          existing.employee_profiles.user_id,
+          `Schedule Update for ${formatDatePKT(existing.date)}`,
+          `Your schedule change for ${formatDatePKT(existing.date)} has been removed — your normal hours apply.`,
+        )
+        .catch((err) => console.error('[ShiftOverrides] Removal notice failed:', err?.message));
+    }
 
     return { id };
   }
