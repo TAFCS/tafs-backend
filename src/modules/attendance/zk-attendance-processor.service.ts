@@ -30,6 +30,16 @@ const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival ar
  */
 export const MANUAL_DEVICE_SN = 'MANUAL';
 
+/**
+ * Kill switch for student LATE marking, paused campus-wide by request. While
+ * false, every student check-in classifies as PRESENT regardless of expected
+ * check-in time or grace period. Flip back to true to restore lateness
+ * classification. Must stay in sync with the matching flag in
+ * student-attendance-status.util.ts's resolveStudentAttendanceStatus, which
+ * independently re-derives LATE at read time for rows with no stored status.
+ */
+export const STUDENT_LATE_MARKING_ENABLED = false;
+
 interface ParsedAttLogRow {
   pin: string;
   scanTime: Date;
@@ -590,7 +600,8 @@ export class ZkAttendanceProcessorService {
     expectedCheckIn: Date | null,
     graceMinutes: number,
   ): RollRecordStatus {
-    if (!expectedCheckIn) return RollRecordStatus.PRESENT;
+    // Student LATE marking is paused campus-wide — see STUDENT_LATE_MARKING_ENABLED.
+    if (!STUDENT_LATE_MARKING_ENABLED || !expectedCheckIn) return RollRecordStatus.PRESENT;
     const expectedMinutes = expectedCheckIn.getUTCHours() * 60 + expectedCheckIn.getUTCMinutes();
     const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
     return checkInMinutes > expectedMinutes + graceMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;

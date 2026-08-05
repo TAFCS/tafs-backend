@@ -1,4 +1,5 @@
 import { RollRecordStatus, AttendanceSource } from '@prisma/client';
+import { STUDENT_LATE_MARKING_ENABLED } from './zk-attendance-processor.service';
 
 export function resolveStudentAttendanceStatus(input: {
   dateKey: string;          // YYYY-MM-DD UTC
@@ -30,7 +31,8 @@ export function resolveStudentAttendanceStatus(input: {
 
   // 3. If has check-in scans -> PRESENT or LATE (fallback inference)
   if (input.hasCheckIn) {
-    if (input.checkInAt && input.expectedCheckIn) {
+    // Student LATE marking is paused campus-wide — see STUDENT_LATE_MARKING_ENABLED.
+    if (STUDENT_LATE_MARKING_ENABLED && input.checkInAt && input.expectedCheckIn) {
       const expectedMinutes = input.expectedCheckIn.getUTCHours() * 60 + input.expectedCheckIn.getUTCMinutes();
       const actualMinutes = input.checkInAt.getUTCHours() * 60 + input.checkInAt.getUTCMinutes();
       const grace = input.graceMinutes ?? 0;
