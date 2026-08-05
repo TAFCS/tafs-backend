@@ -582,7 +582,7 @@ export class StudentAttendanceService {
     });
     const existingMap = new Map(existingRecords.map((r) => [r.student_cc, r]));
 
-    const upserts = dto.records.map(async (mark) => {
+    const upserts = dto.records.map((mark) => {
       const studentCc = mark.student_cc;
       const resolved = resolvedByStudent.get(studentCc);
       if (!resolved) {
