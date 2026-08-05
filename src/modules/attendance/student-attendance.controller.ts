@@ -10,6 +10,7 @@ import { createApiResponse } from '../../utils/serializer.util';
 import { StudentAttendanceService } from './student-attendance.service';
 import {
   GetStudentAttendanceQueryDto,
+  BulkManualStudentAttendanceDto,
   GetStudentTimelineQueryDto,
   ManualStudentScanDto,
   ResolveStudentAttendanceDto,
@@ -89,5 +90,15 @@ export class StudentAttendanceController {
   ) {
     const data = await this.studentAttendanceService.resolveAttendance(studentCc, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Student attendance resolved');
+  }
+
+  @Put('bulk-manual')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  async bulkManualMark(
+    @Body() dto: BulkManualStudentAttendanceDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.studentAttendanceService.bulkManualMark(dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Student attendance marked');
   }
 }

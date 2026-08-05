@@ -9,6 +9,7 @@ import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
 import {
   GetStudentAttendanceQueryDto,
+  BulkManualStudentAttendanceDto,
   GetStudentTimelineQueryDto,
   ManualStudentScanDto,
   ResolveStudentAttendanceDto,
@@ -515,5 +516,130 @@ export class StudentAttendanceService {
       student_id: studentCc,
     });
     return { resolved: true, student_cc: studentCc, date: dto.date };
+  }
+
+  async bulkManualMark(dto: BulkManualStudentAttendanceDto, user: IJwtStaffPayload) {
+    const date = this.parseDate(dto.date);
+    this.assertCampusAccess(user, dto.campus_id);
+
+    if (!dto.records?.length) {
+      throw new BadRequestException('records are required');
+    }
+
+    const requestedCcs = dto.records.map((r) => r.student_cc);
+    const uniqueRequestedCcs = Array.from(new Set(requestedCcs));
+
+    // Validate students are enrolled in the requested campus.
+    const students = await this.prisma.students.findMany({
+      where: {
+        cc: { in: uniqueRequestedCcs },
+        campus_id: dto.campus_id,
+        status: 'ENROLLED',
+        deleted_at: null,
+      },
+      select: { cc: true, class_id: true, section_id: true },
+    });
+
+    const found = new Set(students.map((s) => s.cc));
+    const missing = uniqueRequestedCcs.filter((cc) => !found.has(cc));
+    if (missing.length) {
+      throw new BadRequestException(
+        `Some students are not enrolled in campus ${dto.campus_id}: ${missing.join(', ')}`,
+      );
+    }
+
+    // Resolve working day status per student (based on their class/section calendars).
+    const resolvedByStudent = new Map<number, { isWorkingDay: boolean; description: string | null; dayType: string | null }>();
+    await Promise.all(
+      students.map(async (s) => {
+        const resolved = await this.calendarResolver.resolveStudentDay(
+          dto.campus_id,
+          s.class_id,
+          s.section_id,
+          date,
+        );
+        resolvedByStudent.set(s.cc, {
+          isWorkingDay: resolved.isWorkingDay,
+          description: resolved.description,
+          dayType: resolved.dayType,
+        });
+      }),
+    );
+
+    // Fetch existing manual timestamps so we can preserve them when re-marking PRESENT/LATE.
+    const existingRecords = await this.prisma.attendance_student_daily.findMany({
+      where: {
+        date,
+        student_cc: { in: uniqueRequestedCcs },
+      },
+      select: {
+        student_cc: true,
+        source: true,
+        check_in_at: true,
+        check_out_at: true,
+        last_scan_at: true,
+      },
+    });
+    const existingMap = new Map(existingRecords.map((r) => [r.student_cc, r]));
+
+    const upserts = dto.records.map(async (mark) => {
+      const studentCc = mark.student_cc;
+      const resolved = resolvedByStudent.get(studentCc);
+      if (!resolved) {
+        throw new BadRequestException(`Student CC ${studentCc} not found in campus roster.`);
+      }
+
+      if (!resolved.isWorkingDay && mark.status !== RollRecordStatus.EXCUSED) {
+        throw new BadRequestException(
+          `Cannot set ${mark.status} on a non-working day for student ${studentCc}: ${
+            resolved.description ?? resolved.dayType ?? 'Holiday'
+          }`,
+        );
+      }
+
+      const existing = existingMap.get(studentCc);
+      const preserveTimes = existing?.source === AttendanceSource.MANUAL;
+
+      const shouldHaveTimes =
+        mark.status === RollRecordStatus.PRESENT || mark.status === RollRecordStatus.LATE;
+
+      return this.prisma.attendance_student_daily.upsert({
+        where: { student_cc_date: { student_cc: studentCc, date } },
+        create: {
+          student_cc: studentCc,
+          campus_id: dto.campus_id,
+          date,
+          status: mark.status,
+          source: AttendanceSource.MANUAL,
+          marked_by: user.sub,
+          check_in_at: shouldHaveTimes && preserveTimes ? existing?.check_in_at : null,
+          check_out_at: shouldHaveTimes && preserveTimes ? existing?.check_out_at : null,
+          last_scan_at: shouldHaveTimes && preserveTimes ? existing?.last_scan_at : null,
+        },
+        update: {
+          status: mark.status,
+          source: AttendanceSource.MANUAL,
+          marked_by: user.sub,
+          check_in_at: shouldHaveTimes && preserveTimes ? existing?.check_in_at : null,
+          check_out_at: shouldHaveTimes && preserveTimes ? existing?.check_out_at : null,
+          last_scan_at: shouldHaveTimes && preserveTimes ? existing?.last_scan_at : null,
+        },
+      });
+    });
+
+    await this.prisma.$transaction(upserts);
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_ATTENDANCE',
+      entity_id: `BULK:${dto.campus_id}:${dto.date}`,
+      action: 'UPDATED',
+      section: 'attendance',
+      new_value: `bulk manual mark (${uniqueRequestedCcs.length})`,
+      changed_by: user.username || user.sub,
+      student_id: null,
+      note: `Marked ${uniqueRequestedCcs.length} student(s) for ${dto.date} (manual).`,
+    });
+
+    return { saved_count: uniqueRequestedCcs.length };
   }
 }

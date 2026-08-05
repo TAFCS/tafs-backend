@@ -1,6 +1,14 @@
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-import { ScanDirection } from '@prisma/client';
+import { RollRecordStatus, ScanDirection } from '@prisma/client';
 
 export class GetStudentAttendanceQueryDto {
   @IsDateString()
@@ -44,6 +52,29 @@ export class ResolveStudentAttendanceDto {
 
   @IsString()
   check_out_time: string;
+}
+
+export class BulkManualStudentAttendanceRecordDto {
+  @Type(() => Number)
+  @IsInt()
+  student_cc: number;
+
+  @IsEnum(RollRecordStatus)
+  status: RollRecordStatus;
+}
+
+export class BulkManualStudentAttendanceDto {
+  @IsDateString()
+  date: string;
+
+  @Type(() => Number)
+  @IsInt()
+  campus_id: number;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BulkManualStudentAttendanceRecordDto)
+  records: BulkManualStudentAttendanceRecordDto[];
 }
 
 /**
