@@ -10,9 +10,11 @@ import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-at
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
+  ManualStudentScanDto,
   ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
+import { MANUAL_DEVICE_SN, ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 
 @Injectable()
 export class StudentAttendanceService {
@@ -22,6 +24,7 @@ export class StudentAttendanceService {
     private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly policyResolver: AttendancePolicyResolverService,
     private readonly auditLogs: AuditLogsService,
+    private readonly processor: ZkAttendanceProcessorService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -341,6 +344,112 @@ export class StudentAttendanceService {
     return {
       student: { cc: student.cc, full_name: student.full_name },
       days,
+    };
+  }
+
+  // ── Gate-desk quick check-in / check-out ───────────────────────────────────
+
+  // Shared by getQuickCheckState and manualScan: resolves the student, asserts
+  // the caller may act on them, and reports whether today is a working day.
+  private async loadQuickCheckContext(studentCc: number, user: IJwtStaffPayload) {
+    const student = await this.prisma.students.findFirst({
+      where: { cc: studentCc, deleted_at: null },
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+        photograph_url: true,
+        status: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
+        classes: { select: { description: true } },
+        sections: { select: { description: true } },
+      },
+    });
+    if (!student) throw new NotFoundException('Student not found');
+    if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
+    if (student.class_id) assertClassInScope(user, student.class_id);
+
+    const date = this.parseDate(getTodayKeyKarachi());
+    const day = student.campus_id
+      ? await this.calendarResolver.resolveStudentDay(
+          student.campus_id,
+          student.class_id,
+          student.section_id,
+          date,
+        )
+      : null;
+
+    return { student, date, day };
+  }
+
+  async getQuickCheckState(studentCc: number, user: IJwtStaffPayload) {
+    const { student, date, day } = await this.loadQuickCheckContext(studentCc, user);
+    const state = await this.processor.getStudentDayState(studentCc, date);
+
+    return {
+      student: {
+        cc: student.cc,
+        full_name: student.full_name,
+        gr_number: student.gr_number,
+        photo_url: student.photograph_url,
+        status: student.status,
+        class: student.classes?.description ?? null,
+        section: student.sections?.description ?? null,
+      },
+      date: date.toISOString().slice(0, 10),
+      is_working_day: day?.isWorkingDay ?? true,
+      day_description: day?.description ?? day?.dayType ?? null,
+      next_direction: state.next_direction,
+      scan_count: state.scan_count,
+      status: state.record?.status ?? null,
+      source: state.record?.source ?? null,
+      check_in_at: state.record?.check_in_at ?? null,
+      check_out_at: state.record?.check_out_at ?? null,
+      scans: state.scans.map((s) => ({
+        id: s.id,
+        scan_time: s.scan_time,
+        direction: s.direction,
+        is_manual: s.device_sn === MANUAL_DEVICE_SN,
+      })),
+    };
+  }
+
+  async manualScan(studentCc: number, dto: ManualStudentScanDto, user: IJwtStaffPayload) {
+    const { student, day } = await this.loadQuickCheckContext(studentCc, user);
+
+    if (student.status !== 'ENROLLED') {
+      throw new BadRequestException(
+        `${student.full_name} is not currently enrolled (status: ${student.status}).`,
+      );
+    }
+    if (!student.campus_id) {
+      throw new BadRequestException(`${student.full_name} has no campus assigned.`);
+    }
+    if (day && !day.isWorkingDay) {
+      throw new BadRequestException(
+        `Cannot record attendance on a non-working day: ${day.description ?? day.dayType ?? 'Holiday'}`,
+      );
+    }
+
+    const result = await this.processor.recordManualStudentScan(
+      studentCc,
+      dto.direction,
+      user.username || user.sub,
+    );
+
+    return {
+      student_cc: studentCc,
+      full_name: student.full_name,
+      direction: result.direction,
+      scan_time: result.scan.scan_time,
+      status: result.record?.status ?? null,
+      check_in_at: result.record?.check_in_at ?? null,
+      check_out_at: result.record?.check_out_at ?? null,
+      // Next punch flips, so the panel can re-label its buttons without a refetch.
+      next_direction: result.direction === 'IN' ? 'OUT' : 'IN',
+      notified: result.notified,
     };
   }
 

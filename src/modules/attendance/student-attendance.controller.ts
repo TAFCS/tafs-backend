@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -11,6 +11,7 @@ import { StudentAttendanceService } from './student-attendance.service';
 import {
   GetStudentAttendanceQueryDto,
   GetStudentTimelineQueryDto,
+  ManualStudentScanDto,
   ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 
@@ -50,6 +51,33 @@ export class StudentAttendanceController {
   ) {
     const data = await this.studentAttendanceService.getTimeline(studentCc, query, user);
     return createApiResponse(data, HttpStatus.OK, 'Student attendance timeline retrieved');
+  }
+
+  /** Gate-desk panel: today's punch state for one student. */
+  @Get(':studentCc/quick-check')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  async getQuickCheckState(
+    @Param('studentCc', ParseIntPipe) studentCc: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.studentAttendanceService.getQuickCheckState(studentCc, user);
+    return createApiResponse(data, HttpStatus.OK, 'Student check-in state retrieved');
+  }
+
+  /** Gate-desk panel: record a check-in or check-out at the current time. */
+  @Post(':studentCc/quick-check')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  async manualScan(
+    @Param('studentCc', ParseIntPipe) studentCc: number,
+    @Body() dto: ManualStudentScanDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.studentAttendanceService.manualScan(studentCc, dto, user);
+    return createApiResponse(
+      data,
+      HttpStatus.CREATED,
+      data.direction === 'IN' ? 'Student checked in' : 'Student checked out',
+    );
   }
 
   @Put(':studentCc/resolve')

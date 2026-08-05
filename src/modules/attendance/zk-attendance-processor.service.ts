@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import {
+  attendance_student_daily,
   AttendanceSource,
   DevicePersonType,
   Prisma,
@@ -19,6 +20,15 @@ import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-no
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
+
+/**
+ * Pseudo-device serial for gate-desk check-ins punched by a staff member in the
+ * webapp rather than by a real ZKTeco unit. Manual punches ride the same
+ * zk_attendance_scans pipeline (sequence, day segments, timeline, parent
+ * notifications) so a student with no biometric enrolment is handled exactly
+ * like one who scanned — this SN is what tells the two apart afterwards.
+ */
+export const MANUAL_DEVICE_SN = 'MANUAL';
 
 interface ParsedAttLogRow {
   pin: string;
@@ -493,7 +503,12 @@ export class ZkAttendanceProcessorService {
 
   // Returns this scan's own direction (for the live-notification decision), or
   // null if nothing should be notified (manual override or no campus on record).
-  async upsertStudentDaily(studentCc: number, date: Date, seg: DaySegment): Promise<ScanDirection | null> {
+  async upsertStudentDaily(
+    studentCc: number,
+    date: Date,
+    seg: DaySegment,
+    changedBy = 'zk-device',
+  ): Promise<ScanDirection | null> {
     if (!seg.lastScanAt) return null;
 
     const student = await this.prisma.students.findUnique({
@@ -561,8 +576,8 @@ export class ZkAttendanceProcessorService {
         field: 'status',
         old_value: existing?.status ?? null,
         new_value: status,
-        note: `Biometric scan ${isCreate ? 'created' : 'updated'} student attendance for CC ${studentCc} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
-        changed_by: 'zk-device',
+        note: `${changedBy === 'zk-device' ? 'Biometric scan' : 'Manual check-in/out'} ${isCreate ? 'created' : 'updated'} student attendance for CC ${studentCc} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        changed_by: changedBy,
         student_id: studentCc,
       });
     }
@@ -579,6 +594,145 @@ export class ZkAttendanceProcessorService {
     const expectedMinutes = expectedCheckIn.getUTCHours() * 60 + expectedCheckIn.getUTCMinutes();
     const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
     return checkInMinutes > expectedMinutes + graceMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;
+  }
+
+  /**
+   * "Now", expressed in the same naive-local (Asia/Karachi wall-clock stored via
+   * Date.UTC) convention every scan_time uses.
+   */
+  nowAsDeviceTime(): Date {
+    return new Date(this.toNaiveLocalMs(new Date()));
+  }
+
+  /**
+   * Current state of a student's day, for the gate-desk panel: what the next
+   * punch would be, and the times already recorded.
+   */
+  async getStudentDayState(studentCc: number, date?: Date) {
+    const attendanceDate = date ?? this.startOfUTCDay(this.nowAsDeviceTime());
+
+    const [scans, daily] = await Promise.all([
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          person_type: DevicePersonType.STUDENT,
+          student_cc: studentCc,
+          attendance_date: attendanceDate,
+          is_duplicate: false,
+        },
+        orderBy: { scan_time: 'asc' },
+        select: { id: true, scan_time: true, direction: true, device_sn: true },
+      }),
+      this.prisma.attendance_student_daily.findUnique({
+        where: { student_cc_date: { student_cc: studentCc, date: attendanceDate } },
+      }),
+    ]);
+
+    return {
+      attendance_date: attendanceDate,
+      // Even scan count -> the next punch opens a new IN/OUT pair.
+      next_direction: scans.length % 2 === 0 ? ScanDirection.IN : ScanDirection.OUT,
+      scan_count: scans.length,
+      scans,
+      record: daily,
+    };
+  }
+
+  /**
+   * Gate-desk punch: the operator picks IN or OUT explicitly, unlike device
+   * scans where direction is inferred from scan order. The chosen direction must
+   * match what the next scan of the day would be anyway — otherwise the day's
+   * IN/OUT pairing would be corrupted, so we reject rather than silently flip it.
+   *
+   * The caller is responsible for authorization, campus scope, and the
+   * working-day check before getting here.
+   */
+  async recordManualStudentScan(
+    studentCc: number,
+    direction: ScanDirection,
+    actor: string,
+  ): Promise<{
+    scan: zk_attendance_scans;
+    record: attendance_student_daily | null;
+    direction: ScanDirection;
+    notified: boolean;
+  }> {
+    const scanTime = this.nowAsDeviceTime();
+    const attendanceDate = this.startOfUTCDay(scanTime);
+
+    const state = await this.getStudentDayState(studentCc, attendanceDate);
+    if (state.next_direction !== direction) {
+      throw new ConflictException(
+        direction === ScanDirection.IN
+          ? 'This student is already checked in — record a check-out first.'
+          : 'This student is not checked in — record a check-in first.',
+      );
+    }
+    // resolveAttendance / holiday sync own the day once they've written it;
+    // a punch here would insert a scan that never reaches the daily record.
+    if (
+      state.record?.source === AttendanceSource.MANUAL ||
+      state.record?.source === AttendanceSource.SYSTEM
+    ) {
+      throw new ConflictException(
+        `Today's attendance for this student was already set manually (${state.record.status}). Edit it from the student's attendance page instead.`,
+      );
+    }
+
+    let scanRow: zk_attendance_scans;
+    try {
+      scanRow = await this.prisma.zk_attendance_scans.create({
+        data: {
+          device_sn: MANUAL_DEVICE_SN,
+          device_pin: String(studentCc),
+          person_type: DevicePersonType.STUDENT,
+          student_cc: studentCc,
+          scan_time: scanTime,
+          attendance_date: attendanceDate,
+          verify_mode: 'MANUAL',
+          is_duplicate: false,
+          is_live: true,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('A punch for this student was just recorded — please wait a moment.');
+      }
+      throw err;
+    }
+
+    const seg = await this.recomputeDaySequence(
+      DevicePersonType.STUDENT,
+      null,
+      studentCc,
+      attendanceDate,
+    );
+    await this.upsertStudentDaily(studentCc, attendanceDate, seg, actor);
+
+    const notified = await this.sendScanNotification(studentCc, scanRow, direction);
+    if (notified) {
+      await this.prisma.zk_attendance_scans.update({
+        where: { id: scanRow.id },
+        data: { notified_at: new Date() },
+      });
+    }
+
+    const record = await this.prisma.attendance_student_daily.findUnique({
+      where: { student_cc_date: { student_cc: studentCc, date: attendanceDate } },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_ATTENDANCE',
+      entity_id: String(studentCc),
+      action: 'CREATED',
+      section: 'attendance',
+      field: direction === ScanDirection.IN ? 'check_in_at' : 'check_out_at',
+      new_value: scanTime.toISOString(),
+      note: `Manual ${direction === ScanDirection.IN ? 'check-in' : 'check-out'} recorded for CC ${studentCc} at ${scanTime.toISOString().slice(11, 16)} (scan #${scanRow.id}).`,
+      changed_by: actor,
+      student_id: studentCc,
+    });
+
+    return { scan: scanRow, record, direction, notified };
   }
 
   private async sendScanNotification(

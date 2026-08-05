@@ -1,5 +1,6 @@
-import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ScanDirection } from '@prisma/client';
 
 export class GetStudentAttendanceQueryDto {
   @IsDateString()
@@ -43,4 +44,14 @@ export class ResolveStudentAttendanceDto {
 
   @IsString()
   check_out_time: string;
+}
+
+/**
+ * Manual gate-desk check-in/check-out — the operator picks the direction
+ * explicitly instead of it being derived from scan order (see
+ * ZkAttendanceProcessorService.recordManualStudentScan).
+ */
+export class ManualStudentScanDto {
+  @IsEnum(ScanDirection)
+  direction: ScanDirection;
 }
