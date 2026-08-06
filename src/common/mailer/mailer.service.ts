@@ -1,29 +1,44 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { Resend } from 'resend';
+import * as nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 type OtpEmailPurpose = 'signup' | 'forgot-password';
 
 @Injectable()
 export class MailerService implements OnModuleInit {
-  private client: Resend | null = null;
+  private transporter: Transporter | null = null;
   private fromEmail: string;
   private fromName: string;
 
   onModuleInit() {
-    const apiKey = process.env.RESEND_API_KEY;
-    this.fromEmail = process.env.RESEND_FROM_EMAIL || 'noreply@tafs.edu.pk';
-    this.fromName = process.env.RESEND_FROM_NAME || 'TAFS';
+    const host = process.env.BREVO_SMTP_HOST || 'smtp-relay.brevo.com';
+    const port = Number(process.env.BREVO_SMTP_PORT || 587);
+    const user = process.env.BREVO_SMTP_USER;
+    const pass = process.env.BREVO_SMTP_KEY;
+    this.fromEmail =
+      process.env.BREVO_FROM_EMAIL || 'no-reply@snaeducationalservices.com';
+    this.fromName = process.env.BREVO_FROM_NAME || 'TAFS';
 
-    if (!apiKey) {
-      console.warn('[Mailer] RESEND_API_KEY not set — email sending disabled.');
+    if (!user || !pass) {
+      console.warn(
+        '[Mailer] BREVO_SMTP_USER / BREVO_SMTP_KEY not set — email sending disabled.',
+      );
       return;
     }
 
     try {
-      this.client = new Resend(apiKey);
-      console.log('[Mailer] Resend client initialized');
+      this.transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+      });
+      console.log('[Mailer] Brevo SMTP transporter initialized');
     } catch (e) {
-      console.warn('[Mailer] Failed to initialize Resend client:', e.message);
+      console.warn(
+        '[Mailer] Failed to initialize Brevo SMTP transporter:',
+        e.message,
+      );
     }
   }
 
@@ -32,9 +47,9 @@ export class MailerService implements OnModuleInit {
     code: string,
     purpose: OtpEmailPurpose,
   ): Promise<void> {
-    if (!this.client) {
+    if (!this.transporter) {
       console.error(
-        `[Mailer] Resend not initialized — cannot send OTP to ${to}`,
+        `[Mailer] Brevo SMTP not initialized — cannot send OTP to ${to}`,
       );
       throw new Error('Email service is not configured');
     }
@@ -62,18 +77,14 @@ export class MailerService implements OnModuleInit {
     `;
 
     try {
-      const { data, error } = await this.client.emails.send({
+      const info = await this.transporter.sendMail({
         from: `${this.fromName} <${this.fromEmail}>`,
-        to: [to],
+        to,
         subject,
         html: htmlBody,
       });
-      // Resend reports rejections (unverified domain, quota, bad payload) in
-      // `error` rather than by throwing — these never reach the Resend logs UI,
-      // so the name is the only breadcrumb we get.
-      if (error) throw new Error(`${error.name}: ${error.message}`);
       console.log(
-        `[Mailer] OTP email sent to ${to} (purpose=${purpose}, id=${data?.id})`,
+        `[Mailer] OTP email sent to ${to} (purpose=${purpose}, id=${info.messageId})`,
       );
     } catch (e) {
       console.error(`[Mailer] Failed to send OTP email to ${to}:`, e.message);

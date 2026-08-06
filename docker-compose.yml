@@ -19,9 +19,12 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
       - JWT_SECRET=${JWT_SECRET:-change_me_to_a_random_string_123}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-change_me_to_a_random_string_456}
-      - RESEND_API_KEY=${RESEND_API_KEY}
-      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-noreply@tafs.edu.pk}
-      - RESEND_FROM_NAME=${RESEND_FROM_NAME:-TAFS}
+      - BREVO_SMTP_HOST=${BREVO_SMTP_HOST:-smtp-relay.brevo.com}
+      - BREVO_SMTP_PORT=${BREVO_SMTP_PORT:-587}
+      - BREVO_SMTP_USER=${BREVO_SMTP_USER}
+      - BREVO_SMTP_KEY=${BREVO_SMTP_KEY}
+      - BREVO_FROM_EMAIL=${BREVO_FROM_EMAIL:-no-reply@snaeducationalservices.com}
+      - BREVO_FROM_NAME=${BREVO_FROM_NAME:-TAFS}
       # DigitalOcean Spaces (S3-compatible object storage for files/photos)
       - DO_SPACES_REGION=${DO_SPACES_REGION}
       - DO_SPACES_ENDPOINT=${DO_SPACES_ENDPOINT}
