@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel } from '../../common/utils/academic-labels';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -1004,11 +1004,6 @@ export class VouchersService {
 
     /** Helper to prepare data for VoucherPdfService */
     private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false) {
-        const monthNames = [
-            'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December'
-        ];
-
         // 1. Fetch siblings if family_id exists
         let siblings: any[] = [];
         if (voucher.students?.family_id) {
@@ -1584,14 +1579,14 @@ export class VouchersService {
             };
         });
 
-        // Main Label: Consolidate ALL heads in the voucher
-        const headsForMainLabel = heads.filter(h => h.target_month != null);
-        const monthLabel = headsForMainLabel.length > 0
-            ? getConsolidatedMonthsLabel(
-                headsForMainLabel.map(h => ({ month: h.target_month!, academicYear: h.academic_year || '' })),
-                voucher.class_id,
-            )
-            : (voucher.month ? monthNames[voucher.month - 1] : (voucher.fee_date ? new Date(voucher.fee_date).toLocaleString('default', { month: 'long' }) : 'N/A'));
+        // Main Label: Consolidate ALL heads in the voucher.
+        // Shared with the parent-app payload (normalizeVoucher) so the challan
+        // and the app can never disagree about the months being billed.
+        const monthLabel = buildVoucherMonthsLabel(voucher.voucher_heads, {
+            month: voucher.month,
+            feeDate: voucher.fee_date,
+            classId: voucher.class_id,
+        });
 
         const feeDateStr = voucher.fee_date
             ? new Date(voucher.fee_date).toISOString().slice(0, 10)
@@ -1723,12 +1718,8 @@ export class VouchersService {
                         const total = f.student_fee_installments?.installment_count || group.length;
                         const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
                         const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
-                        const parts = (f.academic_year || '').split('-');
-                        const year = f.target_month != null && f.target_month >= cutoff
-                            ? parts[0]
-                            : (parts[1] || parts[0]);
                         const month = f.target_month
-                            ? `${monthNames[f.target_month - 1].slice(0, 3).toUpperCase()} ${year.slice(-2)}`
+                            ? getMonthYearLabel(f.target_month, f.academic_year || '', voucher.class_id).toUpperCase()
                             : 'N/A';
                         return {
                             head: getInstallmentLabel(feeType, seqNum, total),
@@ -4255,6 +4246,16 @@ export class VouchersService {
     private normalizeVoucher(voucher: any) {
         if (!voucher) return null;
 
+        // The months actually being billed, consolidated into ranges — same string
+        // the challan PDF prints under "FOR MONTH(S) OF". Clients must render this
+        // rather than deriving a month from vouchers.month, which names at most one
+        // month of a multi-month voucher and is often null. See buildVoucherMonthsLabel.
+        const monthsLabel = buildVoucherMonthsLabel(voucher.voucher_heads, {
+            month: voucher.month,
+            feeDate: voucher.fee_date,
+            classId: voucher.class_id,
+        });
+
         // VOID is a manual override (superseded voucher) — never recalculate it.
         // PAID is also definitional — hardcoded by deposit flow or split transaction.
         // EXPIRED is set by the validity-date cron and must not be overridden back to OVERDUE.
@@ -4310,7 +4311,7 @@ export class VouchersService {
                     has_installment_merged: hasInstallmentMerged
                 };
             });
-            return { ...voucher, voucher_heads: mappedHeads };
+            return { ...voucher, voucher_heads: mappedHeads, months_label: monthsLabel };
         }
 
         const originalHeads: any[] = voucher.voucher_heads || [];
@@ -4485,6 +4486,7 @@ export class VouchersService {
         return {
             ...voucher,
             voucher_heads: updatedHeads,
+            months_label: monthsLabel,
             sf_net_total: sfNetTotal.add(surchargeNetTotal).toFixed(2),
             sf_gross_total: sfGrossTotal.add(surchargeNetTotal).toFixed(2),
             sf_discount_total: sfDiscountTotal.toFixed(2),

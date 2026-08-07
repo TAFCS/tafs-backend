@@ -136,6 +136,63 @@ export function getInstallmentLabel(
     return `${base} - ${getFullMonthYearLabel(month, academicYear, classId)}`;
 }
 
+const CALENDAR_MONTHS = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/**
+ * Builds the "FOR MONTH(S) OF" label — the one printed on the challan and shown
+ * on the parent app's voucher cards, e.g. "AUG 25 - OCT 25, JAN 26".
+ *
+ * Months come from the billed fee rows (student_fees.target_month), never from
+ * vouchers.month: that column is header metadata picked in the /fee-challan UI
+ * at creation time and nothing reconciles it against the heads that land on the
+ * voucher, so on a multi-month challan it names at most one of them (and is
+ * nullable besides). Falls back to it only when no head carries a month.
+ *
+ * Takes raw voucher_heads (with student_fees included) so both the PDF pipeline
+ * and the API response derive the label from one implementation.
+ */
+export function buildVoucherMonthsLabel(
+    voucherHeads: Array<{
+        student_fees?: {
+            target_month?: number | null;
+            academic_year?: string | null;
+            fee_date?: Date | string | null;
+        } | null;
+    }> | null | undefined,
+    fallback: {
+        month?: number | null;
+        feeDate?: Date | string | null;
+        classId?: number | null;
+    } = {},
+): string {
+    const classId = fallback.classId ?? undefined;
+
+    const billed = (voucherHeads ?? [])
+        .map((h) => {
+            const sf = h?.student_fees;
+            if (!sf || sf.target_month == null) return null;
+            // Mirrors the per-head resolution in prepareVoucherPdfData: special
+            // classes with no stored year derive it from the fee's own date.
+            const academicYear =
+                sf.academic_year ||
+                (isSpecial(classId) && sf.fee_date
+                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), classId)
+                    : '');
+            return { month: sf.target_month, academicYear };
+        })
+        .filter((x): x is { month: number; academicYear: string } => x !== null);
+
+    if (billed.length > 0) return getConsolidatedMonthsLabel(billed, classId);
+    if (fallback.month) return CALENDAR_MONTHS[fallback.month - 1] ?? 'N/A';
+    if (fallback.feeDate) {
+        return new Date(fallback.feeDate).toLocaleString('default', { month: 'long' });
+    }
+    return 'N/A';
+}
+
 /**
  * Collapses a list of month+academicYear items into a human-readable label
  * that consolidates consecutive months into ranges, e.g. "AUG 25 - OCT 25".
