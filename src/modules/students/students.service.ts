@@ -3065,6 +3065,10 @@ export class StudentsService {
           cc: true,
           full_name: true,
           gr_number: true,
+          photograph_url: true,
+          classes: { select: { description: true } },
+          sections: { select: { description: true } },
+          campuses: { select: { campus_name: true } },
         },
       });
       if (exactMatch) results.push(exactMatch);
@@ -3091,6 +3095,10 @@ export class StudentsService {
         cc: true,
         full_name: true,
         gr_number: true,
+        photograph_url: true,
+        classes: { select: { description: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } },
       },
       orderBy: { full_name: 'asc' },
     });
