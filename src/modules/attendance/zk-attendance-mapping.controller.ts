@@ -23,16 +23,18 @@ export class ZkAttendanceMappingController {
 
   @Get()
   @UseGuards(PoliciesGuard)
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Student'))
   async getMappings(
     @Query('employee_id') employeeId: string | undefined,
+    @Query('student_cc') studentCc: string | undefined,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    if (!employeeId && user.role !== StaffRole.SUPER_ADMIN) {
+    if (!employeeId && !studentCc && user.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can list all device mappings');
     }
-    const parsed = employeeId ? parseInt(employeeId, 10) : undefined;
-    return this.mappingService.getMappings(parsed);
+    const parsedEmployeeId = employeeId ? parseInt(employeeId, 10) : undefined;
+    const parsedStudentCc = studentCc ? parseInt(studentCc, 10) : undefined;
+    return this.mappingService.getMappings(parsedEmployeeId, parsedStudentCc);
   }
 
   @Get('unmapped')
@@ -43,7 +45,7 @@ export class ZkAttendanceMappingController {
 
   @Post()
   @UseGuards(PoliciesGuard)
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async createMapping(@Body() dto: CreateDeviceMappingDto, @CurrentUser() user: IJwtStaffPayload) {
     return this.mappingService.createMapping(dto, user.sub);
   }
@@ -56,7 +58,7 @@ export class ZkAttendanceMappingController {
 
   @Patch(':id')
   @UseGuards(PoliciesGuard)
-  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async updateMapping(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateDeviceMappingDto,

@@ -13,9 +13,11 @@ export class ZkAttendanceMappingService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async getMappings(employeeId?: number) {
+  async getMappings(employeeId?: number, studentCc?: number) {
+    const where =
+      employeeId != null ? { employee_id: employeeId } : studentCc != null ? { student_cc: studentCc } : undefined;
     return this.prisma.device_user_mappings.findMany({
-      where: employeeId != null ? { employee_id: employeeId } : undefined,
+      where,
       orderBy: [{ device_sn: 'asc' }, { device_pin: 'asc' }],
       include: {
         employee_profiles: { select: { id: true, full_name: true, employee_code: true } },
