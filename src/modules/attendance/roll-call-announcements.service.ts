@@ -69,7 +69,11 @@ export class RollCallAnnouncementsService {
   async announceSessionSkipped(sessionId: number): Promise<void> {
     const session = await this.prisma.attendance_roll_sessions.findUnique({
       where: { id: sessionId },
-      include: { classes: true, sections: true },
+      include: {
+        classes: true,
+        sections: true,
+        teaching_groups: { include: { subjects: true } },
+      },
     });
     if (!session?.classes) return;
 
@@ -78,7 +82,10 @@ export class RollCallAnnouncementsService {
 
     const dateStr = session.session_date.toISOString().slice(0, 10);
     const reason = session.skip_reason ? ` Reason: ${session.skip_reason}` : '';
-    const content = `Roll call was not taken for ${session.classes.class_code} Section ${session.sections?.description ?? ''} (Period ${session.period}, ${dateStr}).${reason}`;
+    const scopeLabel = session.teaching_groups
+      ? session.teaching_groups.subjects.name
+      : `Section ${session.sections?.description ?? ''}`;
+    const content = `Roll call was not taken for ${session.classes.class_code} ${scopeLabel} (Period ${session.period}, ${dateStr}).${reason}`;
 
     await this.chatGateway.publishAnnouncement({
       content,
