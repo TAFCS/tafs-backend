@@ -1778,7 +1778,7 @@ export class StudentsService {
   async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
-      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true, full_name: true },
+      select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true, full_name: true, graduated_from_class_id: true },
     });
 
     if (!student || student.deleted_at) {
@@ -1819,6 +1819,12 @@ export class StudentsService {
         updateData.graduated_at = new Date();
         // Auto-increment academic year (e.g. 2023-2024 → 2024-2025)
         updateData.academic_year = this.incrementAcademicYear(student.academic_year);
+      } else if (student.status === StudentStatus.GRADUATED && newStatus === StudentStatus.ENROLLED) {
+        // Re-enrolling a graduated student: restore their class from graduated_from_class_id
+        if (student.graduated_from_class_id) {
+          updateData.class_id = student.graduated_from_class_id;
+        }
+        updateData.graduated_at = null;
       }
 
       const updated = await tx.students.update({
