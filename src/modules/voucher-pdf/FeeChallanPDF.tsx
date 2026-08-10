@@ -45,13 +45,38 @@ const QrCodeView = ({ url, size = 36 }: { url: string; size?: number }) => {
     }
 };
 
+// Landscape A4 in points. CONTENT_HEIGHT is the page height minus the vertical padding
+// declared on styles.page — the absolutely-positioned challan block needs this as an
+// explicit height, because with pagination enabled a `bottom: 0` would instead resolve
+// against the unbounded document height and split the copies across pages.
+const PAGE_WIDTH = 841.89;
+const PAGE_HEIGHT = 595.28;
+const PAGE_PADDING_V = 6;
+const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_PADDING_V * 2;
+// Vertical strip the fixed QR block occupies at the bottom of every page. It is reserved via
+// the Page's own paddingBottom (not the column's) because only page padding applies to *every*
+// page — a paddingBottom on the flowing column reserves space once, at the very end, which lets
+// rows on continuation pages run underneath the QR.
+const QR_RESERVE = 72;
+
+// History sections are kept atomic (wrap={false}) so a table is never split across pages.
+// That breaks down for the two unbounded ledgers — arrears and payment history — because a
+// section taller than a whole page cannot be placed anywhere and react-pdf clips it, silently
+// dropping rows. Above this row count the table is guaranteed not to fit a page, so we let it
+// split and repeat its header instead. Below it, the table always fits and stays atomic.
+// ~483pt of usable column height at ~11pt per (typically two-line) row leaves ample margin.
+const LONG_TABLE_ROWS = 35;
+
 // Define styles
 const styles = StyleSheet.create({
     page: {
-        flexDirection: 'row',
+        // Column direction: the three challan copies are absolutely positioned, so the
+        // history column is the only child in normal flow and positions itself via marginLeft.
+        flexDirection: 'column',
         backgroundColor: '#ffffff',
         paddingHorizontal: 5,
-        paddingVertical: 6,
+        paddingTop: PAGE_PADDING_V,
+        paddingBottom: PAGE_PADDING_V + QR_RESERVE,
         fontSize: 8,
         fontFamily: 'Helvetica',
     },
@@ -741,22 +766,38 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
 export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, paymentHistory, qrUrl }: FeeChallanPDFProps) => (
     <Document>
-        <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
-            {/* Left 85% for the 3 Challan Copies */}
-            <View style={{ width: '85%', flexDirection: 'row' }}>
-                <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
+        <Page size={[PAGE_WIDTH, PAGE_HEIGHT]} style={styles.page} wrap>
+            {/* Left 85% for the 3 Challan Copies.
+                Absolutely positioned so it sits outside normal flow — it renders on page 1 only
+                and never participates in pagination, leaving the history column free to overflow
+                onto page 2 on its own. The height must be explicit (not `bottom: 0`, which would
+                resolve against the unbounded document height and split the copies across pages).
+
+                The nesting is deliberate: react-pdf still counts an absolute box's overflow when
+                deciding page breaks, so the OUTER box is sized to the flow area to avoid forcing
+                a spurious extra page, while the INNER box is given the full content height so the
+                copies still occupy the whole page. The inner overflow is purely visual. */}
+            <View style={{ position: 'absolute', top: 0, left: 0, width: '85%', height: CONTENT_HEIGHT - QR_RESERVE }}>
+                <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: CONTENT_HEIGHT, flexDirection: 'row' }}>
+                    <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
+                    <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
+                    <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
+                </View>
             </View>
 
-            {/* Right 15% for the 4th Column - History & Metadata */}
-            <View style={{ width: '15%', paddingLeft: 8, borderLeftWidth: 1, borderLeftColor: '#e4e4e4', borderLeftStyle: 'solid', flexDirection: 'column', height: '100%' }}>
+            {/* Right 15% for the 4th Column - History & Metadata.
+                The only child in normal flow, so this is what paginates. `marginLeft: '85%'`
+                (rather than being a flex sibling) is what holds it in the right-hand slot on
+                page 2, where the challan block no longer exists. The QR strip is reserved by the
+                Page's paddingBottom, and the left divider is drawn as a fixed rule below, so
+                neither depends on how far the content happens to flow. */}
+            <View style={{ marginLeft: '85%', width: '15%', paddingLeft: 8, flexDirection: 'column' }}>
 
                 {/* ARREAR'S HISTORY */}
-                <View style={styles.historySection}>
+                <View style={styles.historySection} wrap={(arrearsHistory?.length ?? 0) > LONG_TABLE_ROWS}>
                     <Text style={styles.historyTitle}>ARREAR'S HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
+                        <View style={styles.historyTableHeader} fixed={(arrearsHistory?.length ?? 0) > LONG_TABLE_ROWS}>
                             <Text style={styles.historyTableHeaderCell}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
                             <Text style={[styles.historyTableHeaderCell, { textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
@@ -808,10 +849,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* PAYMENT HISTORY */}
-                <View style={styles.historySection}>
+                <View style={styles.historySection} wrap={(paymentHistory?.length ?? 0) > LONG_TABLE_ROWS}>
                     <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
+                        <View style={styles.historyTableHeader} fixed={(paymentHistory?.length ?? 0) > LONG_TABLE_ROWS}>
                             <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>DATE</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
@@ -853,7 +894,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* INSTALLMENTS PLAN */}
-                <View style={styles.historySection}>
+                <View style={styles.historySection} wrap={false}>
                     <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
@@ -898,7 +939,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* SIBLINGS Section */}
-                <View style={styles.historySection}>
+                <View style={styles.historySection} wrap={false}>
                     <Text style={styles.historyTitle}>SIBLINGS</Text>
                     <View style={styles.historyTable}>
                         <View style={styles.historyTableHeader}>
@@ -926,14 +967,24 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 </View>
 
-                {/* QR CODE — scans directly to the challan PDF */}
-                {qrUrl && (
-                    <View style={{ marginTop: 'auto', alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
-                        <QrCodeView url={qrUrl} size={52} />
-                        <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
-                    </View>
-                )}
             </View>
+
+            {/* Divider between the challan copies and the history column. Drawn as a fixed rule
+                rather than a border on the column so it spans the full page height on every
+                page, regardless of how far the column's content flows. */}
+            <View fixed style={{ position: 'absolute', top: 0, left: '85%', width: 1, height: CONTENT_HEIGHT, backgroundColor: '#e4e4e4' }} />
+
+            {/* QR CODE — scans directly to the challan PDF.
+                `fixed` + absolute keeps it anchored to the bottom of the history column on
+                every page. It sits outside the column (as a direct Page child) so the column's
+                own pagination can't push it around, and is positioned from the top so it lands
+                exactly in the strip reserved by the Page's paddingBottom. */}
+            {qrUrl && (
+                <View fixed style={{ position: 'absolute', top: CONTENT_HEIGHT - QR_RESERVE, height: QR_RESERVE, left: '85%', width: '15%', paddingLeft: 8, alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
+                    <QrCodeView url={qrUrl} size={52} />
+                    <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
+                </View>
+            )}
         </Page>
     </Document>
 );
