@@ -37,7 +37,8 @@ export class ProgressionHistoryService {
       open.campus_id === params.campusId &&
       open.class_id === params.classId &&
       open.section_id === params.sectionId &&
-      open.house_id === params.houseId;
+      open.house_id === params.houseId &&
+      open.change_type === params.changeType;
 
     if (unchanged) return;
 

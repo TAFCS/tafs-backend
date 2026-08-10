@@ -1532,6 +1532,13 @@ export class StudentsService {
         cc: true,
         status: true,
         deleted_at: true,
+        full_name: true,
+        class_id: true,
+        section_id: true,
+        house_id: true,
+        campus_id: true,
+        academic_year: true,
+        gr_number: true,
       },
     });
 
@@ -1550,6 +1557,19 @@ export class StudentsService {
           status: StudentStatus.ENROLLED,
         },
         include: this.assignmentInclude,
+      });
+
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: id,
+        campusId: updated.campus_id,
+        classId: updated.class_id,
+        sectionId: updated.section_id,
+        houseId: updated.house_id,
+        academicYear: updated.academic_year,
+        grNumber: updated.gr_number,
+        changeType: StudentStatus.ENROLLED,
+        changedBy,
+        notes: 'Status unexpelled back to Enrolled',
       });
 
       await tx.student_flags.updateMany({
@@ -1660,6 +1680,12 @@ export class StudentsService {
         status: true,
         deleted_at: true,
         full_name: true,
+        class_id: true,
+        section_id: true,
+        house_id: true,
+        campus_id: true,
+        academic_year: true,
+        gr_number: true,
       },
     });
 
@@ -1678,6 +1704,19 @@ export class StudentsService {
           status: StudentStatus.ENROLLED,
         },
         include: this.assignmentInclude,
+      });
+
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: id,
+        campusId: updated.campus_id,
+        classId: updated.class_id,
+        sectionId: updated.section_id,
+        houseId: updated.house_id,
+        academicYear: updated.academic_year,
+        grNumber: updated.gr_number,
+        changeType: StudentStatus.ENROLLED,
+        changedBy,
+        notes: 'Student readmitted to ENROLLED from LEFT',
       });
 
       const admission = await this.createReadmissionAdmission(tx, id);
@@ -1786,6 +1825,19 @@ export class StudentsService {
         where: { cc: id },
         data: updateData,
         include: this.assignmentInclude,
+      });
+
+      await this.progressionHistory.recordProgressionChange(tx, {
+        studentCc: id,
+        campusId: updated.campus_id,
+        classId: updated.class_id ?? student.class_id,
+        sectionId: updated.section_id,
+        houseId: updated.house_id,
+        academicYear: updated.academic_year,
+        grNumber: updated.gr_number,
+        changeType: newStatus,
+        changedBy: actor,
+        notes: reason?.trim() || null,
       });
 
       let admission: { id: number; requested_grade: string; academic_year: string | null } | null = null;
