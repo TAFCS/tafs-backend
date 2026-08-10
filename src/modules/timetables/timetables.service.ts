@@ -248,6 +248,75 @@ export class TimetablesService {
     };
   }
 
+  /** Group-scoped counterpart of getDaySlots, used by roll-call to find a
+   * teaching group's scheduled block(s) on a given date. */
+  async getDaySlotsByGroup(
+    teachingGroupId: number,
+    dateStr: string,
+    user?: IJwtStaffPayload,
+  ) {
+    const group = await this.prisma.teaching_groups.findUnique({
+      where: { id: teachingGroupId },
+    });
+    if (!group) throw new NotFoundException('Teaching group not found');
+    if (user) {
+      this.assertCampusAccess(user, group.campus_id);
+      assertClassInScope(user, group.class_id);
+    }
+
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('Invalid date');
+    }
+    date.setUTCHours(0, 0, 0, 0);
+
+    const dayOfWeek = date.getUTCDay();
+    const academicYear = this.deriveAcademicYear(date);
+    const [blocks, timetable] = await Promise.all([
+      this.listBlocks(),
+      this.prisma.timetables.findFirst({
+        where: {
+          campus_id: group.campus_id,
+          teaching_group_id: teachingGroupId,
+          is_active: true,
+          academic_year: academicYear,
+        },
+        orderBy: { effective_from: 'desc' },
+      }),
+    ]);
+
+    const slots = timetable
+      ? await this.prisma.timetable_slots.findMany({
+          where: { timetable_id: timetable.id, day_of_week: dayOfWeek },
+          include: this.slotInclude(),
+          orderBy: [{ block_number: 'asc' }, { slot_order: 'asc' }],
+        })
+      : [];
+
+    const slotsByBlock = new Map<number, typeof slots>();
+    for (const slot of slots) {
+      const list = slotsByBlock.get(slot.block_number) ?? [];
+      list.push(slot);
+      slotsByBlock.set(slot.block_number, list);
+    }
+
+    return {
+      dayOfWeek,
+      blocks: blocks.map((block) => ({
+        block_number: block.block_number,
+        start_time: block.start_time,
+        end_time: block.end_time,
+        label: block.label,
+        slots: (slotsByBlock.get(block.block_number) ?? []).map((slot) => ({
+          id: slot.id,
+          slot_order: slot.slot_order,
+          subject: slot.subjects,
+          employee: slot.employee_profiles,
+        })),
+      })),
+    };
+  }
+
   async getGrid(
     campusId: number,
     classId: number,

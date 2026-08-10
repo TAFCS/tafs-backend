@@ -26,6 +26,7 @@ import {
   CreateGroupTimetableDto,
   CreateTimetableDto,
   DaySlotsQueryDto,
+  GroupDaySlotsQueryDto,
   TeachingGroupGridQueryDto,
   TimetableGridQueryDto,
   UpsertSlotDto,
@@ -80,6 +81,20 @@ export class TimetablesController {
       req.user,
     );
     return createApiResponse(data, HttpStatus.OK, 'Timetable grid retrieved');
+  }
+
+  @Get('group-day-slots')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  async getDaySlotsByGroup(
+    @Query() query: GroupDaySlotsQueryDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.service.getDaySlotsByGroup(
+      query.teaching_group_id,
+      query.date,
+      req.user,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'Teaching group day slots retrieved');
   }
 
   @Get('group-grid')

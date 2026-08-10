@@ -43,6 +43,11 @@ export class ListRollSessionsQueryDto {
   @Type(() => Number)
   @IsInt()
   timetable_slot_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  teaching_group_id?: number;
 }
 
 export class CreateRollSessionDto {
@@ -57,9 +62,18 @@ export class CreateRollSessionDto {
   @IsInt()
   class_id: number;
 
+  /** Required unless teaching_group_id is provided (mutually exclusive scope). */
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
-  section_id: number;
+  section_id?: number;
+
+  /** Required unless section_id is provided. When set, the roster is the
+   * teaching group's enrolled students instead of the whole section. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  teaching_group_id?: number;
 
   @IsOptional()
   @Type(() => Number)

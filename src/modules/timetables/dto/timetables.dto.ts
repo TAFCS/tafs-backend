@@ -114,6 +114,15 @@ export class CreateTimetableDto {
   academic_year: string;
 }
 
+export class GroupDaySlotsQueryDto {
+  @Type(() => Number)
+  @IsInt()
+  teaching_group_id: number;
+
+  @IsString()
+  date: string;
+}
+
 export class TeachingGroupGridQueryDto {
   @Type(() => Number)
   @IsInt()

@@ -90,6 +90,14 @@ export class RollSessionsService {
       classes:   { select: { id: true, description: true, class_code: true, academic_system: true } },
       sections:  { select: { id: true, description: true } },
       campuses:  { select: { id: true, campus_name: true, campus_code: true } },
+      teaching_groups: {
+        select: {
+          id: true,
+          label: true,
+          subjects: { select: { id: true, name: true, code: true } },
+          employee_profiles: { select: { id: true, full_name: true } },
+        },
+      },
       users_attendance_roll_sessions_created_by_idTousers:   { select: { id: true, full_name: true } },
       users_attendance_roll_sessions_submitted_by_idTousers: { select: { id: true, full_name: true } },
       attendance_roll_records: {
@@ -134,6 +142,9 @@ export class RollSessionsService {
       ...(query.timetable_slot_id !== undefined
         ? { timetable_slot_id: query.timetable_slot_id }
         : {}),
+      ...(query.teaching_group_id !== undefined
+        ? { teaching_group_id: query.teaching_group_id }
+        : {}),
     };
 
     return this.prisma.attendance_roll_sessions.findMany({
@@ -159,8 +170,31 @@ export class RollSessionsService {
   private async getRosterStudents(
     campusId: number,
     classId: number,
-    sectionId: number,
+    sectionId: number | null,
+    teachingGroupId: number | null,
   ) {
+    if (teachingGroupId) {
+      const enrollments = await this.prisma.student_subject_enrollments.findMany({
+        where: {
+          teaching_group_id: teachingGroupId,
+          students: { status: ENROLLED, deleted_at: null },
+        },
+        select: {
+          students: {
+            select: {
+              cc: true,
+              full_name: true,
+              gr_number: true,
+              class_id: true,
+              section_id: true,
+            },
+          },
+        },
+        orderBy: { students: { full_name: 'asc' } },
+      });
+      return enrollments.map((e) => e.students);
+    }
+
     return this.prisma.students.findMany({
       where: {
         campus_id: campusId,
@@ -185,6 +219,7 @@ export class RollSessionsService {
       session.campus_id,
       session.class_id,
       session.section_id,
+      session.teaching_group_id,
     );
     const markedByCc = new Map(
       (session.attendance_roll_records ?? []).map((r: any) => [r.student_cc, r]),
@@ -202,7 +237,32 @@ export class RollSessionsService {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
     await this.assertRollCallClass(dto.class_id);
-    await this.assertCampusSection(dto.campus_id, dto.class_id, dto.section_id);
+
+    if (!dto.section_id && !dto.teaching_group_id) {
+      throw new BadRequestException('Either section_id or teaching_group_id is required');
+    }
+    if (dto.section_id && dto.teaching_group_id) {
+      throw new BadRequestException('Provide only one of section_id or teaching_group_id');
+    }
+
+    let sectionId: number | null = null;
+    let teachingGroupId: number | null = null;
+
+    if (dto.teaching_group_id) {
+      const group = await this.prisma.teaching_groups.findUnique({
+        where: { id: dto.teaching_group_id },
+      });
+      if (!group) throw new NotFoundException('Teaching group not found');
+      if (group.campus_id !== dto.campus_id || group.class_id !== dto.class_id) {
+        throw new BadRequestException(
+          'Teaching group does not belong to this campus/class',
+        );
+      }
+      teachingGroupId = group.id;
+    } else {
+      await this.assertCampusSection(dto.campus_id, dto.class_id, dto.section_id!);
+      sectionId = dto.section_id!;
+    }
 
     const sessionDate = this.parseDate(dto.session_date);
     let period = dto.period ?? 1;
@@ -217,13 +277,14 @@ export class RollSessionsService {
         throw new NotFoundException('Timetable slot not found');
       }
       const tt = slot.timetables;
-      if (
-        tt.campus_id !== dto.campus_id ||
-        tt.class_id !== dto.class_id ||
-        tt.section_id !== dto.section_id
-      ) {
+      const scopeMatches = teachingGroupId
+        ? tt.campus_id === dto.campus_id && tt.teaching_group_id === teachingGroupId
+        : tt.campus_id === dto.campus_id &&
+          tt.class_id === dto.class_id &&
+          tt.section_id === sectionId;
+      if (!scopeMatches) {
         throw new BadRequestException(
-          'Timetable slot does not match campus/class/section',
+          'Timetable slot does not match campus/class/section (or teaching group)',
         );
       }
       if (slot.day_of_week !== sessionDate.getUTCDay()) {
@@ -238,7 +299,7 @@ export class RollSessionsService {
     const dayResolved = await this.calendarResolver.resolveStudentDay(
       dto.campus_id,
       dto.class_id,
-      dto.section_id,
+      sectionId,
       sessionDate,
     );
 
@@ -246,7 +307,8 @@ export class RollSessionsService {
       where: {
         campus_id: dto.campus_id,
         class_id: dto.class_id,
-        section_id: dto.section_id,
+        section_id: sectionId,
+        teaching_group_id: teachingGroupId,
         session_date: sessionDate,
         period,
         timetable_slot_id: timetableSlotId,
@@ -264,7 +326,8 @@ export class RollSessionsService {
         data: {
           campus_id: dto.campus_id,
           class_id: dto.class_id,
-          section_id: dto.section_id,
+          section_id: sectionId,
+          teaching_group_id: teachingGroupId,
           session_date: sessionDate,
           period,
           timetable_slot_id: timetableSlotId,
@@ -284,7 +347,8 @@ export class RollSessionsService {
       data: {
         campus_id: dto.campus_id,
         class_id: dto.class_id,
-        section_id: dto.section_id,
+        section_id: sectionId,
+        teaching_group_id: teachingGroupId,
         session_date: sessionDate,
         period,
         timetable_slot_id: timetableSlotId,
@@ -300,7 +364,7 @@ export class RollSessionsService {
       field: 'status',
       new_value: session.status,
       changed_by: user.username,
-      note: `Roll session opened campus=${dto.campus_id} class=${dto.class_id} section=${dto.section_id} date=${dto.session_date} period=${period}.`,
+      note: `Roll session opened campus=${dto.campus_id} class=${dto.class_id} scope=${teachingGroupId ? `teaching_group=${teachingGroupId}` : `section=${sectionId}`} date=${dto.session_date} period=${period}.`,
     });
 
     return this.enrichWithRoster(session);
@@ -349,6 +413,7 @@ export class RollSessionsService {
         session.campus_id,
         session.class_id,
         session.section_id,
+        session.teaching_group_id,
       );
       const rosterCcs = new Set(roster.map((s) => s.cc));
 
@@ -383,15 +448,22 @@ export class RollSessionsService {
       const recordCount = await this.prisma.attendance_roll_records.count({
         where: { session_id: id },
       });
-      const rosterCount = await this.prisma.students.count({
-        where: {
-          campus_id: session.campus_id,
-          class_id: session.class_id,
-          section_id: session.section_id,
-          status: ENROLLED,
-          deleted_at: null,
-        },
-      });
+      const rosterCount = session.teaching_group_id
+        ? await this.prisma.student_subject_enrollments.count({
+            where: {
+              teaching_group_id: session.teaching_group_id,
+              students: { status: ENROLLED, deleted_at: null },
+            },
+          })
+        : await this.prisma.students.count({
+            where: {
+              campus_id: session.campus_id,
+              class_id: session.class_id,
+              section_id: session.section_id,
+              status: ENROLLED,
+              deleted_at: null,
+            },
+          });
 
       if (recordCount < rosterCount) {
         throw new BadRequestException(

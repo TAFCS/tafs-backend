@@ -374,6 +374,7 @@ model teaching_groups {
   employee_profiles            employee_profiles              @relation(fields: [employee_id], references: [id])
   timetables                   timetables[]
   student_subject_enrollments  student_subject_enrollments[]
+  attendance_roll_sessions     attendance_roll_sessions[]
 
   @@unique([campus_id, class_id, subject_id, employee_id, academic_year], map: "teaching_groups_scope_key")
   @@index([class_id, subject_id])
@@ -1438,7 +1439,7 @@ model attendance_roll_sessions {
   id                                                    Int                       @id @default(autoincrement())
   campus_id                                             Int
   class_id                                              Int
-  section_id                                            Int
+  section_id                                            Int?
   session_date                                          DateTime                  @db.Date
   period                                                Int                       @default(1)
   status                                                RollSessionStatus         @default(DRAFT)
@@ -1449,17 +1450,20 @@ model attendance_roll_sessions {
   created_at                                            DateTime                  @default(now()) @db.Timestamp(6)
   updated_at                                            DateTime                  @updatedAt @db.Timestamp(6)
   timetable_slot_id                                     Int?
+  teaching_group_id                                     Int?
   attendance_roll_records                               attendance_roll_records[]
   campuses                                              campuses                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                                              sections                  @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                                              sections?                 @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
+  teaching_groups                                       teaching_groups?          @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
 
-  @@unique([campus_id, class_id, section_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
+  @@unique([campus_id, class_id, section_id, teaching_group_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
   @@index([session_date, campus_id])
   @@index([status, session_date])
+  @@index([teaching_group_id])
 }
 
 model attendance_staff_daily {
