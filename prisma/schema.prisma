@@ -121,6 +121,7 @@ model campuses {
   student_academic_history    student_academic_history[]
   student_progression_periods student_progression_periods[]
   students                    students[]
+  teaching_groups             teaching_groups[]
   timetables                  timetables[]
   unconfirmed_admissions      unconfirmed_admissions[]
   users                       users[]
@@ -161,6 +162,7 @@ model classes {
   student_progression_periods        student_progression_periods[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
+  teaching_groups                    teaching_groups[]
   timetables                         timetables[]
   vouchers                           vouchers[]
 }
@@ -348,27 +350,68 @@ model subjects {
   academic_system String?           @db.VarChar(20)
   is_active       Boolean           @default(true)
   timetable_slots timetable_slots[]
+  teaching_groups teaching_groups[]
 
   @@unique([name, academic_system])
 }
 
+// A subject class: one teacher teaching one subject to one class-level,
+// pulling students from across home sections (e.g. "AS Maths — Zubair Jawaid").
+model teaching_groups {
+  id                           Int                            @id @default(autoincrement())
+  campus_id                    Int
+  class_id                     Int
+  subject_id                   Int
+  employee_id                  Int
+  academic_year                String                         @db.VarChar(10)
+  label                        String?                        @db.VarChar(100)
+  is_active                    Boolean                        @default(true)
+  created_at                   DateTime                       @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime                       @updatedAt @db.Timestamp(6)
+  campuses                     campuses                       @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes                      classes                        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  subjects                     subjects                       @relation(fields: [subject_id], references: [id])
+  employee_profiles            employee_profiles              @relation(fields: [employee_id], references: [id])
+  timetables                   timetables[]
+  student_subject_enrollments  student_subject_enrollments[]
+
+  @@unique([campus_id, class_id, subject_id, employee_id, academic_year], map: "teaching_groups_scope_key")
+  @@index([class_id, subject_id])
+}
+
+model student_subject_enrollments {
+  id                Int             @id @default(autoincrement())
+  student_id        Int
+  teaching_group_id Int
+  academic_year     String          @db.VarChar(10)
+  created_at        DateTime        @default(now()) @db.Timestamp(6)
+  students          students        @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  teaching_groups   teaching_groups @relation(fields: [teaching_group_id], references: [id], onDelete: Cascade)
+
+  @@unique([student_id, teaching_group_id, academic_year], map: "student_subject_enrollments_key")
+  @@index([teaching_group_id])
+}
+
 model timetables {
-  id              Int               @id @default(autoincrement())
-  campus_id       Int
-  class_id        Int
-  section_id      Int
-  academic_year   String            @db.VarChar(10)
-  effective_from  DateTime          @db.Date
-  is_active       Boolean           @default(true)
-  created_by      String?
-  created_at      DateTime          @default(now()) @db.Timestamp(6)
-  updated_at      DateTime          @updatedAt @db.Timestamp(6)
-  timetable_slots timetable_slots[]
-  campuses        campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes         classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  sections        sections          @relation(fields: [section_id], references: [id], onDelete: Cascade)
+  id                Int               @id @default(autoincrement())
+  campus_id         Int
+  class_id          Int
+  section_id        Int?
+  teaching_group_id Int?
+  academic_year     String            @db.VarChar(10)
+  effective_from    DateTime          @db.Date
+  is_active         Boolean           @default(true)
+  created_by        String?
+  created_at        DateTime          @default(now()) @db.Timestamp(6)
+  updated_at        DateTime          @updatedAt @db.Timestamp(6)
+  timetable_slots   timetable_slots[]
+  campuses          campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes           classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  sections          sections?         @relation(fields: [section_id], references: [id], onDelete: Cascade)
+  teaching_groups   teaching_groups?  @relation(fields: [teaching_group_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, class_id, section_id, academic_year], map: "timetables_scope_year_key")
+  @@unique([campus_id, teaching_group_id, academic_year], map: "timetables_group_scope_year_key")
   @@index([campus_id, class_id, section_id])
 }
 
@@ -677,6 +720,7 @@ model students {
   graduated_from_class        classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
   houses                      houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                    sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student_subject_enrollments student_subject_enrollments[]
   support_tickets             support_tickets[]
   voucher_notifications       voucher_notifications[]
   vouchers                    vouchers[]
@@ -1108,6 +1152,7 @@ model employee_profiles {
   payroll_flags                      payroll_flags[]
   payroll_run_lines                  payroll_run_lines[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
+  teaching_groups                    teaching_groups[]
   timetable_slots                    timetable_slots[]
   zk_attendance_scans                zk_attendance_scans[]
 

@@ -23,8 +23,10 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { TimetablesService } from './timetables.service';
 import { EmployeeExpectedTimesService } from './employee-expected-times.service';
 import {
+  CreateGroupTimetableDto,
   CreateTimetableDto,
   DaySlotsQueryDto,
+  TeachingGroupGridQueryDto,
   TimetableGridQueryDto,
   UpsertSlotDto,
 } from './dto/timetables.dto';
@@ -78,6 +80,34 @@ export class TimetablesController {
       req.user,
     );
     return createApiResponse(data, HttpStatus.OK, 'Timetable grid retrieved');
+  }
+
+  @Get('group-grid')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  async getGridByGroup(
+    @Query() query: TeachingGroupGridQueryDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.service.getGridByGroup(
+      query.teaching_group_id,
+      query.academic_year,
+      req.user,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'Teaching group timetable grid retrieved');
+  }
+
+  @Post('group')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  async getOrCreateByGroup(
+    @Body() dto: CreateGroupTimetableDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.service.getOrCreateByGroup(
+      dto.teaching_group_id,
+      dto.academic_year,
+      req.user,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'Teaching group timetable ready');
   }
 
   @Post()

@@ -55,6 +55,12 @@ export class TimetablesService {
         select: { id: true, description: true, class_code: true, academic_system: true },
       },
       sections: { select: { id: true, description: true } },
+      teaching_groups: {
+        include: {
+          subjects: { select: { id: true, name: true, code: true } },
+          employee_profiles: { select: { id: true, full_name: true } },
+        },
+      },
       campuses: { select: { id: true, campus_name: true, campus_code: true } },
       timetable_slots: {
         include: this.slotInclude(),
@@ -65,6 +71,92 @@ export class TimetablesService {
         ],
       },
     } satisfies Prisma.timetablesInclude;
+  }
+
+  private async assertTeachingGroupAccess(
+    teachingGroupId: number,
+    user: IJwtStaffPayload,
+  ) {
+    const group = await this.prisma.teaching_groups.findUnique({
+      where: { id: teachingGroupId },
+    });
+    if (!group) throw new NotFoundException('Teaching group not found');
+    this.assertCampusAccess(user, group.campus_id);
+    assertClassInScope(user, group.class_id);
+    return group;
+  }
+
+  /** Group-scoped counterpart of getGrid — a weekly timetable owned by a
+   * teaching group (cross-section subject class) instead of a home section. */
+  async getGridByGroup(teachingGroupId: number, academicYear: string, user: IJwtStaffPayload) {
+    const group = await this.assertTeachingGroupAccess(teachingGroupId, user);
+
+    const [blocks, timetable] = await Promise.all([
+      this.listBlocks(),
+      this.prisma.timetables.findUnique({
+        where: {
+          campus_id_teaching_group_id_academic_year: {
+            campus_id: group.campus_id,
+            teaching_group_id: teachingGroupId,
+            academic_year: academicYear,
+          },
+        },
+        include: this.timetableInclude(),
+      }),
+    ]);
+
+    return {
+      timetable,
+      blocks,
+      slots: timetable?.timetable_slots ?? [],
+    };
+  }
+
+  /** Group-scoped counterpart of getOrCreate. */
+  async getOrCreateByGroup(
+    teachingGroupId: number,
+    academicYear: string,
+    user: IJwtStaffPayload,
+  ) {
+    const group = await this.assertTeachingGroupAccess(teachingGroupId, user);
+
+    const existing = await this.prisma.timetables.findUnique({
+      where: {
+        campus_id_teaching_group_id_academic_year: {
+          campus_id: group.campus_id,
+          teaching_group_id: teachingGroupId,
+          academic_year: academicYear,
+        },
+      },
+      include: this.timetableInclude(),
+    });
+    if (existing) return existing;
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const created = await this.prisma.timetables.create({
+      data: {
+        campus_id: group.campus_id,
+        class_id: group.class_id,
+        teaching_group_id: teachingGroupId,
+        academic_year: academicYear,
+        effective_from: today,
+        is_active: true,
+        created_by: user.sub,
+      },
+      include: this.timetableInclude(),
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'TIMETABLE',
+      entity_id: String(created.id),
+      action: 'CREATED',
+      changed_by: user.username,
+      note: `Timetable for teaching group #${teachingGroupId} at ${created.campuses?.campus_name ?? `campus #${group.campus_id}`}, academic year ${academicYear}.`,
+    });
+
+    return created;
   }
 
   async listBlocks() {

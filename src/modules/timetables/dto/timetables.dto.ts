@@ -114,6 +114,26 @@ export class CreateTimetableDto {
   academic_year: string;
 }
 
+export class TeachingGroupGridQueryDto {
+  @Type(() => Number)
+  @IsInt()
+  teaching_group_id: number;
+
+  @IsString()
+  @MaxLength(10)
+  academic_year: string;
+}
+
+export class CreateGroupTimetableDto {
+  @Type(() => Number)
+  @IsInt()
+  teaching_group_id: number;
+
+  @IsString()
+  @MaxLength(10)
+  academic_year: string;
+}
+
 export class UpsertSlotDto {
   @Type(() => Number)
   @IsInt()
