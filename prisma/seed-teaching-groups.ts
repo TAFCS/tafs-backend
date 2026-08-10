@@ -10,10 +10,13 @@
  * deliberate later step once real subject-choice data has been entered via
  * the admin UI (see TIMETABLE_PLAN follow-up, Plan D sequencing).
  *
- * Several A-Level (TAFSAL) teacher names from the xlsx have no matching
- * employee_profiles row yet (HR hasn't onboarded them) -- those are skipped
- * and logged, not fabricated. Re-run this script after onboarding to fill
- * them in (upsert is idempotent).
+ * All named teachers now have an employee_profiles row (backfilled by
+ * seed-backfill-teachers.ts). SIR ADEEL and SIR GHULAM MUSTAFA are excluded
+ * from ENTRIES on purpose: their xlsx grid cells only show "CHEMISTRY
+ * PRACTICAL" / "PHYSICS PRACTICAL" / "BIOLOGY PRACTICAL" labels, not an
+ * AS/A2 class -- they read as lab-practical support staff shared across
+ * subjects, not a single subject+class owner, so they don't fit the
+ * teaching_groups model as-is. Confirm their actual role before adding them.
  *
  * Run: npx ts-node prisma/seed-teaching-groups.ts
  */
@@ -50,29 +53,30 @@ const ENTRIES: Entry[] = [
   { teacherNameContains: 'MUHAMMAD UNAIS', subjectName: 'BUSINESS STUDIES', subjectSystem: CAMBRIDGE, classCodes: ['OI', 'OII', 'OIII'] },
   { teacherNameContains: 'SYEDA SABIKAH HASSAN NAQVI', subjectName: 'ENGLISH', subjectSystem: CAMBRIDGE, classCodes: ['OI', 'OII', 'SRIII'] },
 
-  // A-Level (TAFSAL) -- only teachers who already have an employee_profiles row.
+  // A-Level (TAFSAL) -- includes teachers backfilled by seed-backfill-teachers.ts.
+  // AS/A2 split below is ground truth: which of "AS"/"A2" actually appears
+  // in that teacher's own grid cells in the xlsx (not assumed).
   { teacherNameContains: 'ZUBAIR JAWAID', subjectName: 'MATHEMATICS', subjectSystem: A_LEVEL, classCodes: ['AS'] },
+  { teacherNameContains: 'MANSOOR ALI KHAN', subjectName: 'MATHEMATICS', subjectSystem: A_LEVEL, classCodes: ['A2'] },
+  { teacherNameContains: 'QAMAR HUSSAIN', subjectName: 'PHYSICS', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'ABDUL REHMAN', subjectName: 'CHEMISTRY', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'NOMAN', subjectName: 'BIOLOGY', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'AQEEL AHMED', subjectName: 'COMPUTER SCIENCE', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'ZEESHAN MALIK', subjectName: 'ACCOUNTING', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'HUSSAIN RAZA', subjectName: 'ECONOMICS', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+  { teacherNameContains: 'TAIMOOR SHAHID', subjectName: 'BUSINESS', subjectSystem: A_LEVEL, classCodes: ['AS', 'A2'] },
+
+  // O-Level -- includes teachers backfilled by seed-backfill-teachers.ts.
+  { teacherNameContains: 'TABASSUM SIKANDER', subjectName: 'ISLAMIYAT', subjectSystem: CAMBRIDGE, classCodes: ['OI', 'OII'] },
+  { teacherNameContains: 'KASHIF KHAN', subjectName: 'PHYSICS', subjectSystem: CAMBRIDGE, classCodes: ['OI', 'OII'] },
 ];
 
-// A-Level (TAFSAL) teachers from the xlsx with NO employee_profiles match yet.
-// Not seeded -- create their HR/employee records first, then re-run this script.
+// Backfilled (seed-backfill-teachers.ts) but subject/class-split still unconfirmed
+// -- appeared in the xlsx teacher list with no subject header to go by. Confirm
+// with the user, then add explicit ENTRIES rows for them.
 const UNMATCHED_A_LEVEL_TEACHERS = [
-  'SIR MANSOOR ALI KHAN (subject unconfirmed, likely Mathematics A2)',
-  'SIR QAMAR HUSSAIN (Physics)',
-  'SIR ABDUL REHMAN (Chemistry)',
-  'SIR NOMAN (Biology)',
-  'SIR AQEEL AHMED (Computer Science)',
-  'SIR ZEESHAN MALIK (Accounting)',
-  'SIR HUSSAIN RAZA (Economics)',
-  'SIR TAIMOOR SHAHID (Business)',
   'SIR ADEEL (subject unconfirmed)',
   'SIR GHULAM MUSTAFA (subject unconfirmed)',
-];
-
-// O-Level teachers from the PDF with no employee_profiles match yet.
-const UNMATCHED_O_LEVEL_TEACHERS = [
-  'MS. TABASSUM SIKANDER (Islamiyat O-I & O-II)',
-  'SIR KASHIF KHAN (Physics O-I & O-II)',
 ];
 
 async function main() {
@@ -140,9 +144,9 @@ async function main() {
   }
 
   console.log(`\nDone. ${created} teaching group(s) created/confirmed, ${skipped} entries skipped.`);
-  if (UNMATCHED_A_LEVEL_TEACHERS.length + UNMATCHED_O_LEVEL_TEACHERS.length > 0) {
-    console.log('\nTeachers with no employee_profiles record (onboard in HR, then re-run this script):');
-    [...UNMATCHED_A_LEVEL_TEACHERS, ...UNMATCHED_O_LEVEL_TEACHERS].forEach((t) => console.log(`  - ${t}`));
+  if (UNMATCHED_A_LEVEL_TEACHERS.length > 0) {
+    console.log('\nStill excluded (role/subject unconfirmed, see comment above ENTRIES):');
+    UNMATCHED_A_LEVEL_TEACHERS.forEach((t) => console.log(`  - ${t}`));
   }
 }
 
