@@ -602,12 +602,24 @@ export class VouchersService {
                     // Fetch every head of every candidate in one query.
                     const allCandidateHeads = await tx.voucher_heads.findMany({
                         where: { voucher_id: { in: candidateIds } },
-                        select: { voucher_id: true, student_fee_id: true },
+                        select: {
+                            voucher_id: true,
+                            student_fee_id: true,
+                            student_fees: { select: { is_discount: true } },
+                        },
                     });
 
+                    // Discount/scholarship heads are excluded from "every head" completeness:
+                    // their student_fees row stays in status DISCOUNT forever (see step 4 above)
+                    // and computeArrears() deliberately never carries DISCOUNT/is_discount rows
+                    // forward as arrears, so they could never re-appear in a later voucher's
+                    // orderedFeeIds. Counting them here would make any voucher with a discount
+                    // head permanently un-supersedable (e.g. an EXPIRED voucher with a
+                    // scholarship line would never be voidable by a subsequent voucher).
                     const headsByVoucher = new Map<number, number[]>();
                     for (const h of allCandidateHeads) {
                         if (h.student_fee_id === null) continue;
+                        if (h.student_fees?.is_discount) continue;
                         if (!headsByVoucher.has(h.voucher_id)) headsByVoucher.set(h.voucher_id, []);
                         headsByVoucher.get(h.voucher_id)!.push(h.student_fee_id);
                     }
