@@ -278,6 +278,10 @@ export class StudentsService {
         where.family_id = null;
       } else if (auditType === 'missing_guardian') {
         where.student_guardians = { none: {} };
+      } else if (auditType === 'no_biometric') {
+        where.device_user_mappings = { none: { is_active: true } };
+      } else if (auditType === 'has_biometric') {
+        where.device_user_mappings = { some: { is_active: true } };
       } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
           SELECT student_id FROM public.student_guardians
@@ -582,6 +586,7 @@ export class StudentsService {
       selectArgs.graduated_at = true;
       selectArgs.sections  = { select: { description: true } };
       selectArgs.houses    = { select: { house_name: true, house_color: true } };
+      selectArgs.device_user_mappings = { select: { id: true, is_active: true } };
       selectArgs.family_id = true;
       selectArgs.families  = {
         include: {
@@ -803,6 +808,7 @@ export class StudentsService {
       const mappedData: any = { id: s.cc, cc: s.cc };
 
       if (requestedFields.has('core')) {
+        const hasBiometric = Boolean(s.device_user_mappings?.some((m: any) => m.is_active !== false));
         mappedData.core = {
           cc: s.cc,
           full_name: s.full_name,
@@ -827,7 +833,9 @@ export class StudentsService {
           primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
           guardian_relationship: primaryGuardianNode?.relationship,
           primary_guardian_cnic: primaryGuardianNode?.guardians?.cnic,
+          has_biometric: hasBiometric,
         };
+        mappedData.has_biometric = hasBiometric;
       }
 
       if (requestedFields.has('academic')) {
