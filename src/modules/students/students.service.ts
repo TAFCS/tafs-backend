@@ -281,9 +281,23 @@ export class StudentsService {
       } else if (auditType === 'no_house') {
         where.house_id = null;
       } else if (auditType === 'no_biometric') {
-        where.device_user_mappings = { none: { is_active: true } };
+        // No active PIN mapping AND no linked attendance scans.
+        // Push into AND so we do not clobber search's where.OR.
+        if (!where.AND) where.AND = [];
+        (where.AND as Prisma.studentsWhereInput[]).push({
+          device_user_mappings: { none: { is_active: true } },
+          zk_attendance_scans: { none: {} },
+        });
       } else if (auditType === 'has_biometric') {
-        where.device_user_mappings = { some: { is_active: true } };
+        // Active PIN mapping OR any linked attendance scan.
+        // Push into AND so we do not clobber search's where.OR.
+        if (!where.AND) where.AND = [];
+        (where.AND as Prisma.studentsWhereInput[]).push({
+          OR: [
+            { device_user_mappings: { some: { is_active: true } } },
+            { zk_attendance_scans: { some: {} } },
+          ],
+        });
       } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
           SELECT student_id FROM public.student_guardians
@@ -589,6 +603,7 @@ export class StudentsService {
       selectArgs.sections  = { select: { description: true } };
       selectArgs.houses    = { select: { house_name: true, house_color: true } };
       selectArgs.device_user_mappings = { select: { id: true, is_active: true } };
+      selectArgs.zk_attendance_scans = { take: 1, select: { id: true } };
       selectArgs.family_id = true;
       selectArgs.families  = {
         include: {
@@ -810,7 +825,10 @@ export class StudentsService {
       const mappedData: any = { id: s.cc, cc: s.cc };
 
       if (requestedFields.has('core')) {
-        const hasBiometric = Boolean(s.device_user_mappings?.some((m: any) => m.is_active !== false));
+        const hasBiometric = Boolean(
+          s.device_user_mappings?.some((m: any) => m.is_active === true) ||
+          (s.zk_attendance_scans && s.zk_attendance_scans.length > 0)
+        );
         mappedData.core = {
           cc: s.cc,
           full_name: s.full_name,
