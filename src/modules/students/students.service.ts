@@ -278,6 +278,8 @@ export class StudentsService {
         where.family_id = null;
       } else if (auditType === 'missing_guardian') {
         where.student_guardians = { none: {} };
+      } else if (auditType === 'no_house') {
+        where.house_id = null;
       } else if (auditType === 'no_biometric') {
         where.device_user_mappings = { none: { is_active: true } };
       } else if (auditType === 'has_biometric') {

@@ -76,6 +76,7 @@ export class EnrollmentService {
       select: {
         campus_id: true,
         class_id: true,
+        section_id: true,
         status: true,
         student_admissions: {
           orderBy: { application_date: 'desc' },
@@ -116,9 +117,10 @@ export class EnrollmentService {
     const admission = student.student_admissions?.[0];
     const isALevel = admission?.academic_system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
 
-    const [suggested_gr, suggested_house, balanced_section, min_gr] = await Promise.all([
+    const targetSectionId = sectionId ?? student.section_id ?? undefined;
+    const [suggested_gr, houseDetails, balanced_section, min_gr] = await Promise.all([
       this.computeNextGr(student.campus_id, isALevel),
-      this.computeBalancedHouse(resolvedClassId, sectionId),
+      this.computeBalancedHouseDetails(resolvedClassId, targetSectionId, student.campus_id),
       this.computeBalancedSection(student.campus_id, resolvedClassId),
       this.computeMinGr(student.campus_id),
     ]);
@@ -230,7 +232,8 @@ export class EnrollmentService {
 
     return {
       suggested_gr,
-      suggested_house,
+      suggested_house: houseDetails.suggested_house,
+      house_counts: houseDetails.house_counts,
       suggested_section,
       min_gr,
       all_houses,
@@ -702,42 +705,76 @@ export class EnrollmentService {
     return finalGr;
   }
 
-  private async computeBalancedHouse(classId: number | null, sectionId?: number): Promise<number | null> {
-    if (!classId) return null;
-
+  private async computeBalancedHouseDetails(
+    classId: number | null,
+    sectionId?: number,
+    campusId?: number | null,
+  ): Promise<{ suggested_house: number | null; house_counts: Record<number, number> }> {
     const allHouses = await this.prisma.houses.findMany({
-      orderBy: { id: 'asc' }
+      orderBy: { id: 'asc' },
     });
-    if (allHouses.length === 0) return null;
+    if (allHouses.length === 0) return { suggested_house: null, house_counts: {} };
 
-    const houseCounts = await this.prisma.students.groupBy({
-      by: ['house_id'],
-      where: { 
-        class_id: classId, 
-        section_id: sectionId ? Number(sectionId) : undefined,
-        house_id: { not: null }, 
-        status: 'ENROLLED' 
-      },
-      _count: { _all: true },
-    });
+    const getCounts = async (scope: { class_id?: number; section_id?: number; campus_id?: number }) => {
+      const houseCounts = await this.prisma.students.groupBy({
+        by: ['house_id'],
+        where: {
+          house_id: { not: null },
+          deleted_at: null,
+          status: { notIn: ['EXPELLED', 'GRADUATED', 'LEFT'] },
+          ...scope,
+        },
+        _count: { _all: true },
+      });
+      const countMap: Record<number, number> = {};
+      for (const h of allHouses) {
+        countMap[h.id] = 0;
+      }
+      let totalCount = 0;
+      houseCounts.forEach((hc) => {
+        if (hc.house_id) {
+          countMap[hc.house_id] = hc._count._all;
+          totalCount += hc._count._all;
+        }
+      });
+      return { countMap, totalCount };
+    };
 
-    const countMap = new Map<number, number>();
-    houseCounts.forEach((hc) => {
-      if (hc.house_id) countMap.set(hc.house_id, hc._count._all);
-    });
+    let result = { countMap: {} as Record<number, number>, totalCount: 0 };
+
+    if (sectionId) {
+      result = await getCounts({ section_id: Number(sectionId) });
+    }
+
+    if (result.totalCount === 0 && classId) {
+      result = await getCounts({ class_id: Number(classId) });
+    }
+
+    if (result.totalCount === 0 && campusId) {
+      result = await getCounts({ campus_id: Number(campusId) });
+    }
+
+    if (result.totalCount === 0) {
+      result = await getCounts({});
+    }
+
+    const { countMap } = result;
 
     let minCount = Infinity;
     let selectedHouseId = allHouses[0].id;
 
     for (const house of allHouses) {
-      const count = countMap.get(house.id) || 0;
+      const count = countMap[house.id] || 0;
       if (count < minCount) {
         minCount = count;
         selectedHouseId = house.id;
       }
     }
 
-    return selectedHouseId;
+    return {
+      suggested_house: selectedHouseId,
+      house_counts: countMap,
+    };
   }
 
   private async computeBalancedSection(campusId: number | null, classId: number | null): Promise<number | null> {
