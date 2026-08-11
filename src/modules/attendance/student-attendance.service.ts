@@ -1,14 +1,18 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RollRecordStatus, zk_attendance_scans, AttendanceSource } from '@prisma/client';
+import ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
+import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
+import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from '../hr/payroll/payroll-excel.util';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
 import {
   GetStudentAttendanceQueryDto,
+  GetStudentAttendanceMatrixQueryDto,
   BulkManualStudentAttendanceDto,
   GetStudentTimelineQueryDto,
   ManualStudentScanDto,
@@ -16,6 +20,29 @@ import {
 } from './dto/student-attendance.dto';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { MANUAL_DEVICE_SN, ZkAttendanceProcessorService } from './zk-attendance-processor.service';
+
+type StudentMatrixLine = {
+  student_cc: number;
+  campus_id: number;
+  campus_name: string;
+  is_mapped: boolean;
+  has_punches: boolean;
+  present_days: number;
+  late_days: number;
+  absent_days: number;
+  excused_days: number;
+  unresolved_days: number;
+  total_break_minutes: number;
+  daily_breakdown: DayBreakdownEntry[];
+  student: {
+    cc: number;
+    full_name: string;
+    gr_number: string | null;
+    photo_url: string | null;
+    class: string | null;
+    section: string | null;
+  };
+};
 
 @Injectable()
 export class StudentAttendanceService {
@@ -346,6 +373,281 @@ export class StudentAttendanceService {
       student: { cc: student.cc, full_name: student.full_name },
       days,
     };
+  }
+
+  // ── Attendance matrix (payroll-cycle-independent, mirrors PayrollService#getAttendanceMatrix) ──
+
+  private parseMatrixPeriod(periodStartStr: string, periodEndStr: string): { periodStart: Date; periodEnd: Date } {
+    const periodStart = new Date(`${periodStartStr}T00:00:00.000Z`);
+    const periodEnd = new Date(`${periodEndStr}T00:00:00.000Z`);
+    if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
+      throw new BadRequestException('Invalid period_start/period_end');
+    }
+    return { periodStart, periodEnd };
+  }
+
+  // campus_id omitted -> "every campus the caller can see": a campus-scoped
+  // user (has user.campusId) is pinned to their own campus regardless; only
+  // a multi-campus user (SUPER_ADMIN, user.campusId null) sees every campus
+  // combined, same convention as the HR payroll matrix.
+  private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusId?: number): Promise<number[]> {
+    if (requestedCampusId != null) {
+      this.assertCampusAccess(user, requestedCampusId);
+      return [requestedCampusId];
+    }
+    if (user.campusId != null) return [user.campusId];
+    const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });
+    return campuses.map((c) => c.id);
+  }
+
+  private async computeStudentMatrixLinesForCampus(
+    campusId: number,
+    classId: number | undefined,
+    sectionId: number | undefined,
+    periodStart: Date,
+    periodEnd: Date,
+    user: IJwtStaffPayload,
+  ): Promise<StudentMatrixLine[]> {
+    const [campus, students] = await Promise.all([
+      this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
+      this.getStudentsInScope(campusId, classId, sectionId, user),
+    ]);
+    if (students.length === 0) return [];
+
+    const ccs = students.map((s) => s.cc);
+
+    const [records, scans, mappings] = await Promise.all([
+      this.prisma.attendance_student_daily.findMany({
+        where: { student_cc: { in: ccs }, date: { gte: periodStart, lte: periodEnd } },
+      }),
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          student_cc: { in: ccs },
+          person_type: 'STUDENT',
+          is_duplicate: false,
+          attendance_date: { gte: periodStart, lte: periodEnd },
+        },
+        orderBy: { scan_time: 'asc' },
+      }),
+      this.prisma.device_user_mappings.findMany({
+        where: { student_cc: { in: ccs }, person_type: 'STUDENT', is_active: true },
+        select: { student_cc: true },
+      }),
+    ]);
+
+    const mappedSet = new Set(mappings.map((m) => m.student_cc));
+
+    const recordsByStudent = new Map<number, typeof records>();
+    for (const r of records) {
+      const bucket = recordsByStudent.get(r.student_cc);
+      if (bucket) bucket.push(r);
+      else recordsByStudent.set(r.student_cc, [r]);
+    }
+    const scansByStudent = new Map<number, zk_attendance_scans[]>();
+    for (const s of scans) {
+      if (s.student_cc == null) continue;
+      const bucket = scansByStudent.get(s.student_cc);
+      if (bucket) bucket.push(s);
+      else scansByStudent.set(s.student_cc, [s]);
+    }
+
+    // Calendar rows are loaded once per date (not once per student) — every
+    // student on the campus shares the same day's rows; only the best-match
+    // row (class/section-specific vs campus-wide) differs per student.
+    const calendarRowsByDate = new Map<string, Awaited<ReturnType<CalendarDayResolverService['loadStudentCalendarRowsForDate']>>>();
+    for (
+      let d = new Date(periodStart);
+      d <= periodEnd;
+      d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
+    ) {
+      const key = d.toISOString().slice(0, 10);
+      calendarRowsByDate.set(key, await this.calendarResolver.loadStudentCalendarRowsForDate(campusId, new Date(d)));
+    }
+
+    return students.map((student) => {
+      const recordByDate = new Map(
+        (recordsByStudent.get(student.cc) ?? []).map((r) => [r.date.toISOString().slice(0, 10), r]),
+      );
+      const scansByDate = this.groupScansByDateKey(scansByStudent.get(student.cc) ?? []);
+
+      const dailyBreakdown: DayBreakdownEntry[] = [];
+      for (
+        let d = new Date(periodStart);
+        d <= periodEnd;
+        d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
+      ) {
+        const key = d.toISOString().slice(0, 10);
+        const rows = calendarRowsByDate.get(key) ?? [];
+        const resolved = this.calendarResolver.resolveStudentDayFromRows(rows, student.class_id, student.section_id, d);
+        const record = recordByDate.get(key) ?? null;
+        const dayScans = scansByDate.get(key) ?? [];
+        const isManual = record?.source === AttendanceSource.MANUAL;
+
+        let classification: DayBreakdownEntry['classification'];
+        if (!resolved.isWorkingDay) {
+          classification = 'DAY_OFF';
+        } else if (isManual && record) {
+          classification = record.status as DayBreakdownEntry['classification'];
+        } else if (dayScans.length === 0 && !record?.check_in_at) {
+          classification = 'ABSENT';
+        } else if (dayScans.length % 2 !== 0 && !record?.check_out_at) {
+          classification = 'UNRESOLVED';
+        } else if (record?.status === RollRecordStatus.LATE) {
+          classification = 'LATE';
+        } else {
+          classification = 'PRESENT';
+        }
+
+        let segments: NonNullable<DayBreakdownEntry['segments']>;
+        if (isManual && record?.check_in_at) {
+          const inISO = record.check_in_at.toISOString();
+          if (record.check_out_at) {
+            segments = [{ type: 'WORK', start: inISO, end: record.check_out_at.toISOString() }];
+          } else {
+            const syntheticEnd = new Date(record.check_in_at.getTime() + 10 * 60 * 1000);
+            segments = [{ type: 'WORK', start: inISO, end: syntheticEnd.toISOString(), isMissingOut: true }];
+          }
+        } else {
+          segments = this.buildDaySegments(dayScans);
+        }
+        if (!resolved.isWorkingDay && segments.length === 0) {
+          segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
+        }
+
+        const checkInAt = isManual
+          ? (record?.check_in_at ?? null)
+          : (dayScans[0]?.scan_time ?? record?.check_in_at ?? null);
+        const checkOutAt = isManual
+          ? (record?.check_out_at ?? null)
+          : dayScans.length > 0 && dayScans.length % 2 === 0
+            ? dayScans[dayScans.length - 1].scan_time
+            : (record?.check_out_at ?? null);
+
+        const breakMinutes = Math.round(
+          segments
+            .filter((s) => s.type === 'BREAK')
+            .reduce((sum, s) => sum + Math.max(0, (new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000), 0),
+        );
+
+        dailyBreakdown.push({
+          date: key,
+          is_working_day: resolved.isWorkingDay,
+          day_type: resolved.dayType,
+          day_description: resolved.description,
+          classification,
+          check_in_at: checkInAt?.toISOString() ?? null,
+          check_out_at: checkOutAt?.toISOString() ?? null,
+          break_minutes: breakMinutes,
+          late_minutes: 0,
+          source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
+          segments,
+        });
+      }
+
+      const presentDays = dailyBreakdown.filter((d) => d.classification === 'PRESENT' || d.classification === 'LATE').length;
+      const lateDays = dailyBreakdown.filter((d) => d.classification === 'LATE').length;
+      const absentDays = dailyBreakdown.filter((d) => d.classification === 'ABSENT').length;
+      const excusedDays = dailyBreakdown.filter((d) => d.classification === 'EXCUSED').length;
+      const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
+      const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);
+
+      return {
+        student_cc: student.cc,
+        campus_id: campusId,
+        campus_name: campus?.campus_name ?? `Campus #${campusId}`,
+        is_mapped: mappedSet.has(student.cc),
+        has_punches: (scansByStudent.get(student.cc) ?? []).length > 0,
+        present_days: presentDays,
+        late_days: lateDays,
+        absent_days: absentDays,
+        excused_days: excusedDays,
+        unresolved_days: unresolvedDays,
+        total_break_minutes: totalBreakMinutes,
+        daily_breakdown: dailyBreakdown,
+        student: {
+          cc: student.cc,
+          full_name: student.full_name,
+          gr_number: student.gr_number,
+          photo_url: student.photograph_url,
+          class: student.classes?.description ?? null,
+          section: student.sections?.description ?? null,
+        },
+      };
+    });
+  }
+
+  private groupScansByDateKey(scans: zk_attendance_scans[]): Map<string, zk_attendance_scans[]> {
+    const byDate = new Map<string, zk_attendance_scans[]>();
+    for (const scan of scans) {
+      const key = scan.attendance_date.toISOString().slice(0, 10);
+      const bucket = byDate.get(key);
+      if (bucket) bucket.push(scan);
+      else byDate.set(key, [scan]);
+    }
+    return byDate;
+  }
+
+  async getAttendanceMatrix(query: GetStudentAttendanceMatrixQueryDto, user: IJwtStaffPayload) {
+    const { periodStart, periodEnd } = this.parseMatrixPeriod(query.period_start, query.period_end);
+    const campusIds = await this.resolveMatrixCampusIds(user, query.campus_id);
+
+    const perCampusLines = await Promise.all(
+      campusIds.map((campusId) =>
+        this.computeStudentMatrixLinesForCampus(campusId, query.class_id, query.section_id, periodStart, periodEnd, user),
+      ),
+    );
+
+    return {
+      campus_id: query.campus_id ?? null,
+      period_start: query.period_start,
+      period_end: query.period_end,
+      lines: perCampusLines.flat(),
+    };
+  }
+
+  // Same sheet layout as the HR payroll matrix export (reuses its ExcelJS
+  // helpers by shaping student lines into the generic ExportableAttendanceLine
+  // contract), so admins get a consistent file whether they're exporting
+  // staff or student attendance.
+  async exportAttendanceMatrix(query: GetStudentAttendanceMatrixQueryDto, user: IJwtStaffPayload): Promise<Buffer> {
+    const matrix = await this.getAttendanceMatrix(query, user);
+    const includeCampusColumn = query.campus_id == null;
+
+    const exportableLines = matrix.lines.map((l) => ({
+      employee_id: l.student_cc,
+      campus_name: l.campus_name,
+      employee_profiles: { full_name: l.student.full_name, employee_code: l.student.gr_number },
+      has_salary: true,
+      is_mapped: l.is_mapped,
+      has_punches: l.has_punches,
+      present_days: l.present_days,
+      absent_days: l.absent_days,
+      excused_days: l.excused_days,
+      unresolved_days: l.unresolved_days,
+      daily_breakdown: l.daily_breakdown,
+    }));
+    type Line = (typeof exportableLines)[number];
+
+    const columns: EmployeeLineColumn<Line>[] = [
+      { header: 'Student', width: 26, getValue: (l) => l.employee_profiles?.full_name ?? `Student #${l.employee_id}` },
+      { header: 'GR Number', width: 14, getValue: (l) => l.employee_profiles?.employee_code ?? '' },
+    ];
+    if (includeCampusColumn) {
+      columns.push({ header: 'Campus', width: 20, getValue: (l) => l.campus_name ?? '' });
+    }
+    columns.push(
+      { header: 'Present', width: 10, getValue: (l) => l.present_days },
+      { header: 'Absent', width: 10, getValue: (l) => l.absent_days },
+      { header: 'Excused', width: 10, getValue: (l) => l.excused_days },
+      { header: 'Unresolved', width: 12, getValue: (l) => l.unresolved_days },
+      { header: 'Tags', width: 24, getValue: (l) => tagLabels(l) },
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    addEmployeeLinesSheet(workbook, exportableLines, columns);
+    addMatrixSheet(workbook, exportableLines, matrix.period_start, matrix.period_end, includeCampusColumn);
+
+    return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
   // ── Gate-desk quick check-in / check-out ───────────────────────────────────

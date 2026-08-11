@@ -38,6 +38,36 @@ export class GetStudentTimelineQueryDto {
   date_to: string;
 }
 
+/**
+ * Payroll-cycle-independent attendance matrix for students — mirrors
+ * AttendanceMatrixQueryDto in the HR payroll module, but campus_id omitted
+ * means "every campus the caller can see" (see StudentAttendanceService
+ * #resolveMatrixCampusIds) rather than defaulting to the caller's own
+ * campus like the daily dashboard/summary endpoints do.
+ */
+export class GetStudentAttendanceMatrixQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  campus_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  class_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  section_id?: number;
+
+  @IsDateString()
+  period_start: string;
+
+  @IsDateString()
+  period_end: string;
+}
+
 export class ResolveStudentAttendanceDto {
   @IsDateString()
   date: string;

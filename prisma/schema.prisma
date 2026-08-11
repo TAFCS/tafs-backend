@@ -349,32 +349,30 @@ model subjects {
   name            String            @db.VarChar(100)
   academic_system String?           @db.VarChar(20)
   is_active       Boolean           @default(true)
-  timetable_slots timetable_slots[]
   teaching_groups teaching_groups[]
+  timetable_slots timetable_slots[]
 
   @@unique([name, academic_system])
 }
 
-// A subject class: one teacher teaching one subject to one class-level,
-// pulling students from across home sections (e.g. "AS Maths — Zubair Jawaid").
 model teaching_groups {
-  id                           Int                            @id @default(autoincrement())
-  campus_id                    Int
-  class_id                     Int
-  subject_id                   Int
-  employee_id                  Int
-  academic_year                String                         @db.VarChar(10)
-  label                        String?                        @db.VarChar(100)
-  is_active                    Boolean                        @default(true)
-  created_at                   DateTime                       @default(now()) @db.Timestamp(6)
-  updated_at                   DateTime                       @updatedAt @db.Timestamp(6)
-  campuses                     campuses                       @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes                      classes                        @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  subjects                     subjects                       @relation(fields: [subject_id], references: [id])
-  employee_profiles            employee_profiles              @relation(fields: [employee_id], references: [id])
-  timetables                   timetables[]
-  student_subject_enrollments  student_subject_enrollments[]
-  attendance_roll_sessions     attendance_roll_sessions[]
+  id                          Int                           @id @default(autoincrement())
+  campus_id                   Int
+  class_id                    Int
+  subject_id                  Int
+  employee_id                 Int
+  academic_year               String                        @db.VarChar(10)
+  label                       String?                       @db.VarChar(100)
+  is_active                   Boolean                       @default(true)
+  created_at                  DateTime                      @default(now()) @db.Timestamp(6)
+  updated_at                  DateTime                      @updatedAt @db.Timestamp(6)
+  attendance_roll_sessions    attendance_roll_sessions[]
+  student_subject_enrollments student_subject_enrollments[]
+  campuses                    campuses                      @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes                     classes                       @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id])
+  subjects                    subjects                      @relation(fields: [subject_id], references: [id])
+  timetables                  timetables[]
 
   @@unique([campus_id, class_id, subject_id, employee_id, academic_year], map: "teaching_groups_scope_key")
   @@index([class_id, subject_id])
@@ -398,13 +396,13 @@ model timetables {
   campus_id         Int
   class_id          Int
   section_id        Int?
-  teaching_group_id Int?
   academic_year     String            @db.VarChar(10)
   effective_from    DateTime          @db.Date
   is_active         Boolean           @default(true)
   created_by        String?
   created_at        DateTime          @default(now()) @db.Timestamp(6)
   updated_at        DateTime          @updatedAt @db.Timestamp(6)
+  teaching_group_id Int?
   timetable_slots   timetable_slots[]
   campuses          campuses          @relation(fields: [campus_id], references: [id], onDelete: Cascade)
   classes           classes           @relation(fields: [class_id], references: [id], onDelete: Cascade)
@@ -715,13 +713,13 @@ model students {
   student_languages           student_languages[]
   student_previous_schools    student_previous_schools[]
   student_progression_periods student_progression_periods[]
+  student_subject_enrollments student_subject_enrollments[]
   campuses                    campuses?                     @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                     classes?                      @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   families                    families?                     @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   graduated_from_class        classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
   houses                      houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                    sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student_subject_enrollments student_subject_enrollments[]
   support_tickets             support_tickets[]
   voucher_notifications       voucher_notifications[]
   vouchers                    vouchers[]
@@ -1457,8 +1455,8 @@ model attendance_roll_sessions {
   users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                                              sections?                 @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
   teaching_groups                                       teaching_groups?          @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
+  timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
 
   @@unique([campus_id, class_id, section_id, teaching_group_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
   @@index([session_date, campus_id])
