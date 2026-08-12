@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
+import { student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
@@ -24,13 +25,15 @@ export class NoticeBoardService {
   async getPostsForFamily(familyId: number, cursor?: number) {
     const students = await this.prisma.students.findMany({
       where: { family_id: familyId, deleted_at: null },
-      select: { cc: true, campus_id: true, class_id: true, section_id: true },
+      select: { cc: true, campus_id: true, class_id: true, section_id: true, status: true, academic_year: true },
     });
 
     const studentCcs = students.map((s) => s.cc);
     const campusIds = [...new Set(students.map((s) => s.campus_id).filter(Boolean))] as number[];
     const classIds  = [...new Set(students.map((s) => s.class_id).filter(Boolean))] as number[];
     const sectionIds = [...new Set(students.map((s) => s.section_id).filter(Boolean))] as number[];
+    const statuses = [...new Set(students.map((s) => s.status).filter(Boolean))];
+    const academicYears = [...new Set(students.map((s) => s.academic_year).filter(Boolean))] as string[];
 
     const scopeFilter = {
       AND: [
@@ -50,6 +53,18 @@ export class NoticeBoardService {
           OR: [
             { section_ids: { isEmpty: true } },
             ...(sectionIds.length ? [{ section_ids: { hasSome: sectionIds } }] : []),
+          ],
+        },
+        {
+          OR: [
+            { student_statuses: { isEmpty: true } },
+            ...(statuses.length ? [{ student_statuses: { hasSome: statuses } }] : []),
+          ],
+        },
+        {
+          OR: [
+            { academic_years: { isEmpty: true } },
+            ...(academicYears.length ? [{ academic_years: { hasSome: academicYears } }] : []),
           ],
         },
       ],
@@ -173,6 +188,8 @@ export class NoticeBoardService {
         class_ids: h.class_id ? [h.class_id] : [],
         section_ids: h.section_id ? [h.section_id] : [],
         student_ccs: [],
+        student_statuses: [],
+        academic_years: [],
         media_urls: [],
         media_types: [],
         is_pinned: isPinned,
@@ -201,6 +218,8 @@ export class NoticeBoardService {
     const campusIds = studentCcs.length ? [] : (dto.campus_ids ?? []);
     const classIds = studentCcs.length ? [] : (dto.class_ids ?? []);
     const sectionIds = studentCcs.length ? [] : (dto.section_ids ?? []);
+    const studentStatuses = studentCcs.length ? [] : ((dto.student_statuses ?? []) as student_status[]);
+    const academicYears = studentCcs.length ? [] : (dto.academic_years ?? []);
 
     const post = await this.prisma.notice_board_posts.create({
       data: {
@@ -211,6 +230,8 @@ export class NoticeBoardService {
         class_ids: classIds,
         section_ids: sectionIds,
         student_ccs: studentCcs,
+        student_statuses: studentStatuses,
+        academic_years: academicYears,
         media_urls: dto.media_urls ?? [],
         media_types: dto.media_types ?? [],
         is_pinned: dto.is_pinned ?? false,
@@ -249,6 +270,8 @@ export class NoticeBoardService {
     class_ids: unknown;
     section_ids: unknown;
     student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
   }) {
     const familyIds = await this._resolveAudienceFamilyIds(post);
     if (!familyIds.length) return;
@@ -285,11 +308,15 @@ export class NoticeBoardService {
     class_ids: unknown;
     section_ids: unknown;
     student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
   }): Promise<number[]> {
     const campusIds = (post.campus_ids as number[]) ?? [];
     const classIds = (post.class_ids as number[]) ?? [];
     const sectionIds = (post.section_ids as number[]) ?? [];
     const studentCcs = (post.student_ccs as number[]) ?? [];
+    const studentStatuses = (post.student_statuses as student_status[]) ?? [];
+    const academicYears = (post.academic_years as string[]) ?? [];
 
     // Student targeting is exclusive — same as feed filtering.
     if (studentCcs.length) {
@@ -311,7 +338,8 @@ export class NoticeBoardService {
     }
 
     const hasScope =
-      campusIds.length > 0 || classIds.length > 0 || sectionIds.length > 0;
+      campusIds.length > 0 || classIds.length > 0 || sectionIds.length > 0 ||
+      studentStatuses.length > 0 || academicYears.length > 0;
 
     if (hasScope) {
       const families = await this.prisma.families.findMany({
@@ -324,6 +352,8 @@ export class NoticeBoardService {
                 campusIds.length ? { campus_id: { in: campusIds } } : {},
                 classIds.length ? { class_id: { in: classIds } } : {},
                 sectionIds.length ? { section_id: { in: sectionIds } } : {},
+                studentStatuses.length ? { status: { in: studentStatuses } } : {},
+                academicYears.length ? { academic_year: { in: academicYears } } : {},
               ],
             },
           },
@@ -504,6 +534,8 @@ export class NoticeBoardService {
         class_ids: true,
         section_ids: true,
         student_ccs: true,
+        student_statuses: true,
+        academic_years: true,
         _count: { select: { post_reads: true } },
       },
     });
@@ -514,6 +546,8 @@ export class NoticeBoardService {
     const classIds  = post.class_ids as number[];
     const sectionIds = post.section_ids as number[];
     const studentCcs = post.student_ccs as number[];
+    const studentStatuses = post.student_statuses as student_status[];
+    const academicYears = post.academic_years as string[];
 
     let reachedCount = 0;
     let targetedReads: any[] = [];
@@ -571,6 +605,8 @@ export class NoticeBoardService {
                 campusIds.length ? { campus_id: { in: campusIds } } : {},
                 classIds.length ? { class_id: { in: classIds } } : {},
                 sectionIds.length ? { section_id: { in: sectionIds } } : {},
+                studentStatuses.length ? { status: { in: studentStatuses } } : {},
+                academicYears.length ? { academic_year: { in: academicYears } } : {},
               ],
             },
           },

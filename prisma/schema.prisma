@@ -1669,6 +1669,8 @@ model notice_board_posts {
   deleted_at        DateTime?           @db.Timestamp(6)
   student_ccs       Int[]               @default([])
   notification_only Boolean             @default(false)
+  student_statuses  student_status[]    @default([])
+  academic_years    String[]            @default([])
   users             users               @relation(fields: [posted_by], references: [id])
   post_reads        notice_post_reads[]
 
@@ -1677,6 +1679,8 @@ model notice_board_posts {
   @@index([class_ids], type: Gin)
   @@index([section_ids], type: Gin)
   @@index([student_ccs], type: Gin)
+  @@index([student_statuses], type: Gin)
+  @@index([academic_years], type: Gin)
 }
 
 model notice_post_reads {

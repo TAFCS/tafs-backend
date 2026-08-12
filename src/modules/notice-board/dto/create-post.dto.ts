@@ -5,8 +5,18 @@ import {
   IsBoolean,
   IsDateString,
   IsInt,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+const STUDENT_STATUSES = [
+  'SOFT_ADMISSION',
+  'ENROLLED',
+  'EXPELLED',
+  'GRADUATED',
+  'LEFT',
+  'QUICK_ADMISSION',
+];
 
 export class CreatePostDto {
   @IsOptional()
@@ -39,6 +49,16 @@ export class CreatePostDto {
   @IsInt({ each: true })
   @Type(() => Number)
   student_ccs?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsIn(STUDENT_STATUSES, { each: true })
+  student_statuses?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  academic_years?: string[];
 
   @IsOptional()
   @IsArray()
