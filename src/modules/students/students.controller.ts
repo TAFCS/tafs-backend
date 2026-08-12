@@ -10,6 +10,8 @@ import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { SuggestGrNumbersDto } from './dto/suggest-gr-numbers.dto';
 import { ChangeStatusDto } from './dto/change-status.dto';
+import { ReturnStudentDto } from './dto/return-student.dto';
+import { StudentReturnMode } from '../../constants/student-return-mode.constant';
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -162,6 +164,21 @@ export class StudentsController {
       updated,
       HttpStatus.OK,
       'Student restored from left successfully',
+    );
+  }
+
+  @Post(':id/return')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  async returnStudent(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReturnStudentDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const updated = await this.studentsService.returnStudent(id, dto, user.username, user);
+    return createApiResponse(
+      updated,
+      HttpStatus.OK,
+      `Student ${dto.mode === StudentReturnMode.READMITTED ? 'readmitted' : 'reinstated'} successfully`,
     );
   }
 

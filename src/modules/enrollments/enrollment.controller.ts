@@ -41,8 +41,13 @@ export class EnrollmentController {
   async getSuggestions(
     @Param('cc', ParseIntPipe) cc: number,
     @Query('section_id') sectionId?: number,
+    @Query('class_id') classId?: number,
   ) {
-    const suggestions = await this.enrollmentService.getSuggestions(cc, sectionId);
+    const suggestions = await this.enrollmentService.getSuggestions(
+      cc,
+      sectionId ? Number(sectionId) : undefined,
+      classId ? Number(classId) : undefined,
+    );
     return createApiResponse(
       suggestions,
       HttpStatus.OK,

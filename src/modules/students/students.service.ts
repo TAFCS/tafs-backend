@@ -9,6 +9,12 @@ import { ClassSelectorDto } from './dto/class-selector.dto';
 import { PromoteSingleStudentDto } from './dto/promote-single-student.dto';
 import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
+import {
+  DEPARTURE_FLAG_PREFIXES,
+  StudentReturnMode,
+  isDepartureStatus,
+} from '../../constants/student-return-mode.constant';
+import { ReturnStudentDto } from './dto/return-student.dto';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { allocateSequentialGrNumbers, resolveCampusGrPrefix } from '../../common/utils/gr-number.util';
@@ -63,6 +69,7 @@ import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
 import { ProgressionHistoryService, type PrismaTx } from './progression-history.service';
+import { EnrollmentService } from '../enrollments/enrollment.service';
 
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
@@ -73,6 +80,7 @@ export class StudentsService {
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
     private readonly progressionHistory: ProgressionHistoryService,
+    private readonly enrollment: EnrollmentService,
   ) { }
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
@@ -1553,93 +1561,42 @@ export class StudentsService {
     return updated;
   }
 
+  /**
+   * Legacy shortcut kept for the student-table row action. Unexpelling *is* a
+   * reinstatement — the student resumes the placement they held — so it delegates
+   * to the single return path.
+   */
   async unexpelStudent(id: number, changedBy: string) {
+    await this.assertCurrentStatus(
+      id,
+      StudentStatus.EXPELLED,
+      'Only expelled students can be unexpelled',
+    );
+    return this.returnStudent(
+      id,
+      { mode: StudentReturnMode.REINSTATED, reason: 'Status unexpelled back to Enrolled' },
+      changedBy,
+    );
+  }
+
+  private async assertCurrentStatus(id: number, expected: StudentStatus, message: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
-      select: {
-        cc: true,
-        status: true,
-        deleted_at: true,
-        full_name: true,
-        class_id: true,
-        section_id: true,
-        house_id: true,
-        campus_id: true,
-        academic_year: true,
-        gr_number: true,
-      },
+      select: { status: true, deleted_at: true },
     });
-
     if (!student || student.deleted_at) {
       throw new NotFoundException(`Student #${id} not found`);
     }
-
-    if (student.status !== StudentStatus.EXPELLED) {
-      throw new BadRequestException('Only expelled students can be unexpelled');
+    if (student.status !== expected) {
+      throw new BadRequestException(message);
     }
-
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.students.update({
-        where: { cc: id },
-        data: {
-          status: StudentStatus.ENROLLED,
-        },
-        include: this.assignmentInclude,
-      });
-
-      await this.progressionHistory.recordProgressionChange(tx, {
-        studentCc: id,
-        campusId: updated.campus_id,
-        classId: updated.class_id,
-        sectionId: updated.section_id,
-        houseId: updated.house_id,
-        academicYear: updated.academic_year,
-        grNumber: updated.gr_number,
-        changeType: StudentStatus.ENROLLED,
-        changedBy,
-        notes: 'Status unexpelled back to Enrolled',
-      });
-
-      await tx.student_flags.updateMany({
-        where: {
-          student_id: id,
-          flag: 'EXPELLED',
-          work_done: false,
-        },
-        data: {
-          work_done: true,
-        },
-      });
-
-      await tx.student_flags.create({
-        data: {
-          student_id: id,
-          flag: `UNEXPELLED_LOG_${Date.now()}`,
-          reminder_date: new Date(),
-          work_done: true,
-          comment: 'Status changed back to Enrolled',
-        },
-      });
-
-      await this.auditLogs.log({
-        entity_type: 'STUDENT',
-        entity_id: String(id),
-        action: 'STATUS_CHANGED',
-        new_value: 'ENROLLED',
-        old_value: 'EXPELLED',
-        changed_by: changedBy,
-        student_id: id,
-        note: 'Status unexpelled back to Enrolled',
-      });
-
-      return updated;
-    });
   }
 
   /**
-   * When a student returns from LEFT → ENROLLED, record a readmission row in
-   * Application history (student_admissions). Placement is unchanged so no
-   * progression period is opened.
+   * When a student is READMITTED, record a readmission row in Application
+   * history (student_admissions). Reads the student's post-update placement so
+   * the row reflects the grade/year they are returning *into*, not the stale one
+   * they left with.
    */
   private async createReadmissionAdmission(tx: PrismaTx, studentCc: number): Promise<{
     id: number;
@@ -1700,7 +1657,56 @@ export class StudentsService {
     return row;
   }
 
+  /**
+   * Legacy shortcut kept for the student-table row action. Undoing a LEFT is a
+   * reinstatement — the student resumes the placement they held — so it delegates
+   * to the single return path.
+   */
   async undoLeftStudent(id: number, changedBy: string) {
+    await this.assertCurrentStatus(
+      id,
+      StudentStatus.LEFT,
+      'Only students requested as left can be restored',
+    );
+    return this.returnStudent(
+      id,
+      { mode: StudentReturnMode.REINSTATED, reason: 'Student reinstated to ENROLLED from LEFT' },
+      changedBy,
+    );
+  }
+
+  /** "1 year 2 months", "18 days", "less than a day" — for audit notes. */
+  private formatAwayDuration(from: Date, to: Date): string {
+    const ms = to.getTime() - from.getTime();
+    if (ms < 86_400_000) return 'less than a day';
+    const days = Math.floor(ms / 86_400_000);
+    const years = Math.floor(days / 365);
+    const months = Math.floor((days % 365) / 30);
+    const parts: string[] = [];
+    if (years) parts.push(`${years} year${years === 1 ? '' : 's'}`);
+    if (months) parts.push(`${months} month${months === 1 ? '' : 's'}`);
+    if (!years && !months) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+    return parts.join(' ');
+  }
+
+  /**
+   * Bring a departed student (LEFT / EXPELLED / GRADUATED) back to ENROLLED.
+   *
+   * REINSTATED restores the exact placement held at departure, so the absence
+   * reads as a gap inside one continuous enrollment and no admission record is
+   * created. READMITTED re-assigns class/section/house/GR/academic year (fully
+   * revalidated against campus GR rules and section capacity) and writes a new
+   * `student_admissions` row flagged `is_readmission`.
+   *
+   * Either way the departure's open progression period is closed at this instant
+   * — that closed window *is* the leaving period rendered in Academic Progression.
+   */
+  async returnStudent(
+    id: number,
+    dto: ReturnStudentDto,
+    changedBy?: string,
+    user?: IJwtStaffPayload,
+  ) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
       select: {
@@ -1708,7 +1714,9 @@ export class StudentsService {
         status: true,
         deleted_at: true,
         full_name: true,
+        gender: true,
         class_id: true,
+        graduated_from_class_id: true,
         section_id: true,
         house_id: true,
         campus_id: true,
@@ -1721,19 +1729,71 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (student.status !== StudentStatus.LEFT) {
-      throw new BadRequestException('Only students requested as left can be restored');
+    if (user && user.campusId != null && student.campus_id !== user.campusId) {
+      throw new ForbiddenException('You do not have access to this student\'s campus');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    if (!isDepartureStatus(student.status)) {
+      throw new BadRequestException(
+        `Student #${id} is ${student.status}. Only students who have left, been expelled or graduated can be returned.`,
+      );
+    }
+
+    const departureStatus = student.status as StudentStatus;
+    const isReadmission = dto.mode === StudentReturnMode.READMITTED;
+    const actor = changedBy || 'system';
+    const reason = dto.reason?.trim() || null;
+
+    // The open period was opened by the departure, so its start is when the
+    // student left. Closing it below yields the exact away window.
+    const openPeriod = await this.prisma.student_progression_periods.findFirst({
+      where: { student_cc: id, valid_to: null },
+      select: { valid_from: true },
+    });
+    const departedAt = openPeriod?.valid_from ?? null;
+
+    // Graduation moves class_id aside; fall back to it so returns restore a class.
+    const priorClassId = student.class_id ?? student.graduated_from_class_id;
+
+    const nextClassId = isReadmission ? dto.class_id ?? priorClassId : priorClassId;
+    const nextSectionId = isReadmission ? dto.section_id ?? student.section_id : student.section_id;
+    const nextHouseId = isReadmission ? dto.house_id ?? student.house_id : student.house_id;
+    const nextGrNumber = isReadmission ? dto.gr_number ?? student.gr_number : student.gr_number;
+    const nextAcademicYear = isReadmission
+      ? dto.academic_year ?? student.academic_year
+      : student.academic_year;
+
+    if (isReadmission) {
+      if (!nextGrNumber) {
+        throw new BadRequestException('A GR number is required to readmit a student');
+      }
+      if (!nextHouseId) {
+        throw new BadRequestException('A house is required to readmit a student');
+      }
+      await this.enrollment.validateGrNumber(student.campus_id, id, nextGrNumber);
+    }
+
+    const updateData: Prisma.studentsUpdateInput | any = {
+      status: StudentStatus.ENROLLED,
+    };
+    if (nextClassId != null) updateData.class_id = nextClassId;
+    if (departureStatus === StudentStatus.GRADUATED) updateData.graduated_at = null;
+    if (isReadmission) {
+      updateData.gr_number = nextGrNumber;
+      updateData.house_id = nextHouseId;
+      updateData.academic_year = nextAcademicYear;
+      if (nextSectionId != null) updateData.section_id = nextSectionId;
+      updateData.doa = new Date();
+    }
+
+    const run = async (tx: PrismaTx) => {
       const updated = await tx.students.update({
         where: { cc: id },
-        data: {
-          status: StudentStatus.ENROLLED,
-        },
+        data: updateData,
         include: this.assignmentInclude,
       });
 
+      // Closes the departure period at `now` and opens the return period.
       await this.progressionHistory.recordProgressionChange(tx, {
         studentCc: id,
         campusId: updated.campus_id,
@@ -1742,32 +1802,34 @@ export class StudentsService {
         houseId: updated.house_id,
         academicYear: updated.academic_year,
         grNumber: updated.gr_number,
-        changeType: StudentStatus.ENROLLED,
-        changedBy,
-        notes: 'Student readmitted to ENROLLED from LEFT',
+        changeType: dto.mode,
+        changedBy: actor,
+        notes: reason,
       });
 
-      const admission = await this.createReadmissionAdmission(tx, id);
+      const admission = isReadmission ? await this.createReadmissionAdmission(tx, id) : null;
 
-      // Mark all LEFT_LOG_ flags as done (new timestamped pattern)
+      // Retire every flag the departure opened (incl. the bare legacy 'EXPELLED').
       await tx.student_flags.updateMany({
         where: {
           student_id: id,
-          flag: { startsWith: 'LEFT_LOG_' },
           work_done: false,
+          OR: [
+            ...DEPARTURE_FLAG_PREFIXES.map((prefix) => ({ flag: { startsWith: prefix } })),
+            { flag: 'EXPELLED' },
+          ],
         },
-        data: {
-          work_done: true,
-        },
+        data: { work_done: true },
       });
 
+      const verb = isReadmission ? 'readmitted' : 'reinstated';
       await tx.student_flags.create({
         data: {
           student_id: id,
-          flag: `UNDO_LEFT_LOG_${Date.now()}`,
+          flag: `${dto.mode}_LOG_${Date.now()}`,
           reminder_date: new Date(),
           work_done: true,
-          comment: 'Student readmitted to ENROLLED from LEFT',
+          comment: reason || `Student ${verb} from ${departureStatus}`,
         },
       });
 
@@ -1779,28 +1841,77 @@ export class StudentsService {
           action: 'CREATED',
           field: 'admission',
           new_value: `readmission#${admission.id}`,
-          changed_by: changedBy,
+          changed_by: actor,
           student_id: id,
           note: `Readmission admission #${admission.id} (${admission.requested_grade || '—'}, ${admission.academic_year || '—'}).`,
         });
       }
 
+      const fieldChanges: Array<[string, unknown, unknown]> = [
+        ['class_id', student.class_id, updated.class_id],
+        ['section_id', student.section_id, updated.section_id],
+        ['house_id', student.house_id, updated.house_id],
+        ['gr_number', student.gr_number, updated.gr_number],
+        ['academic_year', student.academic_year, updated.academic_year],
+      ];
+      for (const [field, oldValue, newValue] of fieldChanges) {
+        if (String(oldValue ?? '') === String(newValue ?? '')) continue;
+        children.push({
+          entity_type: 'STUDENT',
+          entity_id: String(id),
+          action: 'UPDATED',
+          field: `student.${field}`,
+          old_value: oldValue == null ? null : String(oldValue),
+          new_value: newValue == null ? null : String(newValue),
+          changed_by: actor,
+          student_id: id,
+          note: `${field.replace(/_/g, ' ')} changed on ${verb}.`,
+        });
+      }
+
+      const awayText = departedAt
+        ? ` after ${this.formatAwayDuration(departedAt, new Date())} away`
+        : '';
       void this.auditLogs.logGroup(
         {
           entity_type: 'STUDENT',
           entity_id: String(id),
-          action: 'READMITTED',
-          old_value: 'LEFT',
-          new_value: 'ENROLLED',
-          changed_by: changedBy,
+          action: dto.mode,
+          old_value: departureStatus,
+          new_value: StudentStatus.ENROLLED,
+          changed_by: actor,
           student_id: id,
-          note: `${student.full_name ?? `Student #${id}`} readmitted (Left → Enrolled).`,
+          note: `${student.full_name ?? `Student #${id}`} ${verb}${awayText} (${departureStatus} → ENROLLED).${reason ? ` Reason: ${reason}` : ''}`,
         },
         children,
       );
 
       return updated;
-    });
+    };
+
+    const placement = {
+      campusId: student.campus_id,
+      classId: nextClassId,
+      sectionId: nextSectionId,
+    };
+
+    // Only a readmission re-competes for a seat. A reinstatement reverses the
+    // departure, so it must not be blocked by a full section — note that section
+    // occupancy counts ENROLLED only, so the seat was released while the student
+    // was away and reinstating can push a section one over capacity. That is
+    // deliberate: the alternative is being unable to undo a mistaken departure.
+    if (isReadmission && this.allocation.shouldValidatePlacement(placement)) {
+      return this.allocation.withSectionLock(placement, async (tx) => {
+        await this.allocation.assertPlacementAllowed(
+          placement,
+          { studentCc: id, gender: student.gender, countsTowardCapacity: true },
+          tx,
+        );
+        return run(tx);
+      });
+    }
+
+    return this.prisma.$transaction(run);
   }
 
   async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload) {
@@ -1821,6 +1932,14 @@ export class StudentsService {
       throw new BadRequestException(`Student is already in ${newStatus} status`);
     }
 
+    // Returning from a departure is not a plain status flip — the caller has to
+    // declare whether it is a reinstatement or a readmission.
+    if (newStatus === StudentStatus.ENROLLED && isDepartureStatus(student.status)) {
+      throw new BadRequestException(
+        `Student #${id} is ${student.status}. Use POST /students/${id}/return and choose whether they are being reinstated or readmitted.`,
+      );
+    }
+
     // Each status maps to a timestamped flag prefix so every transition is individually logged.
     const flagPrefixMap: Record<StudentStatus, string> = {
       [StudentStatus.QUICK_ADMISSION]: 'QUICK_ADMISSION_LOG',
@@ -1831,8 +1950,6 @@ export class StudentsService {
       [StudentStatus.GRADUATED]:      'GRADUATED_LOG',
     };
 
-    const isReadmission =
-      student.status === StudentStatus.LEFT && newStatus === StudentStatus.ENROLLED;
     const actor = changedBy || 'system';
 
     return this.prisma.$transaction(async (tx) => {
@@ -1874,65 +1991,27 @@ export class StudentsService {
         notes: reason?.trim() || null,
       });
 
-      let admission: { id: number; requested_grade: string; academic_year: string | null } | null = null;
-      if (isReadmission) {
-        admission = await this.createReadmissionAdmission(tx, id);
-      }
-
       await tx.student_flags.create({
         data: {
           student_id: id,
           flag: `${flagPrefixMap[newStatus]}_${Date.now()}`,
           work_done: true,
-          comment: isReadmission
-            ? (reason?.trim() || 'Student readmitted from Left')
-            : (reason?.trim() || null),
+          comment: reason?.trim() || null,
           // Always record the exact date/time this action was performed
           reminder_date: new Date(),
         },
       });
 
-      if (isReadmission) {
-        const children: AuditLogParams[] = [];
-        if (admission) {
-          children.push({
-            entity_type: 'STUDENT',
-            entity_id: String(id),
-            action: 'CREATED',
-            field: 'admission',
-            new_value: `readmission#${admission.id}`,
-            changed_by: actor,
-            student_id: id,
-            note: `Readmission admission #${admission.id} (${admission.requested_grade || '—'}, ${admission.academic_year || '—'}).`,
-          });
-        }
-        void this.auditLogs.logGroup(
-          {
-            entity_type: 'STUDENT',
-            entity_id: String(id),
-            action: 'READMITTED',
-            old_value: 'LEFT',
-            new_value: 'ENROLLED',
-            changed_by: actor,
-            student_id: id,
-            note:
-              reason?.trim() ||
-              `${student.full_name ?? `Student #${id}`} readmitted (Left → Enrolled).`,
-          },
-          children,
-        );
-      } else {
-        await this.auditLogs.log({
-          entity_type: 'STUDENT',
-          entity_id: String(id),
-          action: 'STATUS_CHANGED',
-          new_value: newStatus,
-          old_value: student.status,
-          changed_by: actor,
-          student_id: id,
-          note: reason?.trim() || null,
-        });
-      }
+      await this.auditLogs.log({
+        entity_type: 'STUDENT',
+        entity_id: String(id),
+        action: 'STATUS_CHANGED',
+        new_value: newStatus,
+        old_value: student.status,
+        changed_by: actor,
+        student_id: id,
+        note: reason?.trim() || null,
+      });
 
       return updated;
     });

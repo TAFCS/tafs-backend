@@ -70,12 +70,13 @@ export class EnrollmentService {
     return updated;
   }
 
-  async getSuggestions(cc: number, sectionId?: number) {
+  async getSuggestions(cc: number, sectionId?: number, classId?: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: {
         campus_id: true,
         class_id: true,
+        graduated_from_class_id: true,
         section_id: true,
         status: true,
         student_admissions: {
@@ -93,9 +94,10 @@ export class EnrollmentService {
       throw new NotFoundException(`Student #${cc} not found`);
     }
 
-    // Resolve class_id once — students.class_id is null post-registration,
-    // so fall back to matching requested_grade against classes.class_code
-    let resolvedClassId = student.class_id;
+    // Resolve class_id once — students.class_id is null post-registration (and
+    // for graduates, where it moved to graduated_from_class_id), so fall back to
+    // that and then to matching requested_grade against classes.class_code
+    let resolvedClassId = classId ?? student.class_id ?? student.graduated_from_class_id;
     if (!resolvedClassId) {
       const requestedGrade = student.student_admissions?.[0]?.requested_grade;
       if (requestedGrade) {
@@ -432,6 +434,49 @@ export class EnrollmentService {
     };
   }
 
+  /**
+   * Campus-scoped GR rules shared by first enrollment and readmission:
+   *  1. the GR must not already belong to another student in the campus, and
+   *  2. it must not fall below the lowest GR sequence already in use there.
+   */
+  async validateGrNumber(campusId: number | null, cc: number, grNumber: string): Promise<void> {
+    const existingGr = await this.prisma.students.findFirst({
+      where: {
+        campus_id: campusId,
+        gr_number: grNumber,
+        cc: { not: cc },
+        deleted_at: null,
+      },
+    });
+    if (existingGr) {
+      throw new BadRequestException(`GR Number ${grNumber} is already assigned to another student in this campus`);
+    }
+
+    const matchNew = grNumber.match(/^(.*?)([0-9]+)$/);
+    if (!matchNew) return;
+    const newNum = parseInt(matchNew[2], 10);
+
+    // Find the minimum numeric GR currently in the campus
+    const campusStudents = await this.prisma.students.findMany({
+      where: { campus_id: campusId, gr_number: { not: null } },
+      select: { gr_number: true },
+    });
+
+    let minNum = Infinity;
+    for (const s of campusStudents) {
+      if (!s.gr_number) continue;
+      const m = s.gr_number.match(/^(.*?)([0-9]+)$/);
+      if (m) {
+        const n = parseInt(m[2], 10);
+        if (n < minNum) minNum = n;
+      }
+    }
+
+    if (minNum !== Infinity && newNum < minNum) {
+      throw new BadRequestException(`GR Number ${grNumber} is less than the lowest sequence in this campus (Starting from ${minNum})`);
+    }
+  }
+
   async enroll(cc: number, dto: EnrollStudentDto, changedBy: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
@@ -448,44 +493,7 @@ export class EnrollmentService {
       throw new BadRequestException(`Student #${cc} is not eligible for enrollment`);
     }
 
-    // 1. Check for Duplicate GR in the same campus
-    const existingGr = await this.prisma.students.findFirst({
-      where: {
-        campus_id: student.campus_id,
-        gr_number: dto.gr_number,
-        cc: { not: cc },
-        deleted_at: null,
-      },
-    });
-    if (existingGr) {
-      throw new BadRequestException(`GR Number ${dto.gr_number} is already assigned to another student in this campus`);
-    }
-
-    // 2. Minimum GR Constraint: Ensure new GR is not less than the lowest GR in the campus
-    const matchNew = dto.gr_number.match(/^(.*?)([0-9]+)$/);
-    if (matchNew) {
-      const newNum = parseInt(matchNew[2], 10);
-      
-      // Find the minimum numeric GR currently in the campus
-      const campusStudents = await this.prisma.students.findMany({
-        where: { campus_id: student.campus_id, gr_number: { not: null } },
-        select: { gr_number: true },
-      });
-
-      let minNum = Infinity;
-      for (const s of campusStudents) {
-        if (!s.gr_number) continue;
-        const m = s.gr_number.match(/^(.*?)([0-9]+)$/);
-        if (m) {
-          const n = parseInt(m[2], 10);
-          if (n < minNum) minNum = n;
-        }
-      }
-
-      if (minNum !== Infinity && newNum < minNum) {
-        throw new BadRequestException(`GR Number ${dto.gr_number} is less than the lowest sequence in this campus (Starting from ${minNum})`);
-      }
-    }
+    await this.validateGrNumber(student.campus_id, cc, dto.gr_number);
 
     // Persist the resolved class_id on the student record during enrollment
     let resolvedClassId = student.class_id;

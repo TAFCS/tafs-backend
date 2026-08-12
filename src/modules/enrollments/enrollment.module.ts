@@ -9,5 +9,6 @@ import { ProgressionHistoryModule } from '../students/progression-history.module
   imports: [PrismaModule, StudentAllocationModule, ProgressionHistoryModule],
   controllers: [EnrollmentController],
   providers: [EnrollmentService],
+  exports: [EnrollmentService],
 })
 export class EnrollmentModule {}

@@ -1659,12 +1659,20 @@ export class StaffEditingService {
         { test: f => f.startsWith('UNEXPELLED_LOG_'),     type: 'UNEXPELLED',     title: 'Student unexpelled' },
         { test: f => f.startsWith('GRADUATED_LOG_'),      type: 'GRADUATED',      title: 'Student graduated' },
         { test: f => f.startsWith('PROMOTION_LOG_'),      type: 'PROMOTION',      title: 'Student promoted' },
+        { test: f => f.startsWith('REINSTATED_LOG_'),     type: 'REINSTATED',     title: 'Student reinstated' },
+        { test: f => f.startsWith('READMITTED_LOG_'),     type: 'READMITTED',     title: 'Student readmitted' },
       ];
 
       const matched = statusFlagConfig.find(cfg => cfg.test(upperFlag));
       if (matched) {
         const comment = flag?.comment || null;
-        const isReadmitComment = typeof comment === 'string' && /readmit/i.test(comment);
+        // Legacy fallback only: pre-REINSTATED/READMITTED flags encoded the
+        // distinction in the comment. Explicit flags carry their own type, so
+        // never let a free-text reason override them.
+        const isExplicitReturnFlag =
+          upperFlag.startsWith('REINSTATED_LOG_') || upperFlag.startsWith('READMITTED_LOG_');
+        const isReadmitComment =
+          !isExplicitReturnFlag && typeof comment === 'string' && /readmit/i.test(comment);
         logs.push({
           id: `flag-${flag.id}`,
           type: isReadmitComment ? 'READMITTED' : matched.type,
