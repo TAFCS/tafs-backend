@@ -19,6 +19,7 @@ import { CreateGuardianDto } from './dto/create-guardian.dto';
 import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
+import { HardDeleteStudentDto } from './dto/hard-delete-student.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -69,9 +70,10 @@ export class StaffEditingController {
   @Delete('students/:id/hard-delete')
   async hardDeleteStudent(
     @Param('id', ParseIntPipe) id: number,
+    @Body() dto: HardDeleteStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const result = await this.staffEditingService.hardDeleteStudent(id, user.username);
+    const result = await this.staffEditingService.hardDeleteStudent(id, user.username, dto.reason);
     return createApiResponse(
       result,
       HttpStatus.OK,

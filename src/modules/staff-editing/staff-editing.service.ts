@@ -1953,13 +1953,36 @@ export class StaffEditingService {
     return result;
   }
 
-  async hardDeleteStudent(cc: number, changedBy?: string) {
-    // 1. Verify student exists
+  async hardDeleteStudent(cc: number, changedBy?: string, reason?: string) {
+    // 1. Verify student exists and snapshot identifying details — once the row
+    // is gone this audit note is the only place this information survives.
     const student = await this.prisma.students.findUnique({
       where: { cc },
-      select: { cc: true, full_name: true }
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+        status: true,
+        academic_year: true,
+        classes: { select: { description: true } },
+        graduated_from_class: { select: { description: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } },
+      },
     });
     if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
+
+    const actor = changedBy ?? 'system';
+    const snapshot = [
+      `GR ${student.gr_number || '—'}`,
+      (student.classes ?? student.graduated_from_class)?.description || null,
+      student.sections?.description ? `Section ${student.sections.description}` : null,
+      student.campuses?.campus_name || null,
+      student.academic_year || null,
+      student.status,
+    ]
+      .filter(Boolean)
+      .join(' · ');
 
     // 2. Comprehensive Transactional Wipe
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1999,20 +2022,28 @@ export class StaffEditingService {
       await tx.student_previous_schools.deleteMany({ where: { student_id: cc } });
       await tx.relatives_attending_tafs.deleteMany({ where: { student_id: cc } });
 
-      // D. Final Punch: Delete the Student
+      // D. Log the deletion inside the same transaction so it is guaranteed —
+      // if this write fails, the whole deletion rolls back rather than leaving
+      // a silently unlogged wipe. `student_id` is deliberately left unset: the
+      // FK to students(cc) is ON DELETE SET NULL, so it would be nulled out the
+      // instant the row below is deleted anyway. `entity_id` plus the snapshot
+      // in `note` are what stays queryable in Universal/System Logs afterwards.
+      await tx.audit_logs.create({
+        data: {
+          entity_type: 'STUDENT',
+          entity_id: String(cc),
+          action: 'DELETED',
+          section: 'student',
+          changed_by: actor,
+          note: `${actor} permanently deleted ${student.full_name ?? `student #${cc}`} (CC ${cc}, ${snapshot}) — including vouchers, deposits, admissions, activities, languages, previous schools, and guardian links. Reason: ${reason}`,
+        },
+      });
+
+      // E. Final Punch: Delete the Student
       // This will cascade delete: student_flags, student_fees, student_fee_bundles
       await tx.students.delete({ where: { cc } });
 
       return { success: true, message: `Student ${student.full_name} (${cc}) permanently deleted.` };
-    });
-
-    await this.auditLogs.log({
-      entity_type: 'STUDENT',
-      entity_id: String(cc),
-      action: 'DELETED',
-      changed_by: changedBy ?? 'system',
-      student_id: cc,
-      note: `Permanently hard-deleted student #${cc} (${student.full_name ?? 'unnamed'}) including vouchers, deposits, admissions, activities, languages, previous schools, and guardian links.`,
     });
 
     return result;
