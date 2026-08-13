@@ -4,9 +4,10 @@ import { AppPortalService } from './app-portal.service';
 import { PrismaModule } from '../../../prisma/prisma.module';
 import { HrModule } from '../hr/hr.module';
 import { AttendanceModule } from '../attendance/attendance.module';
+import { TimetablesModule } from '../timetables/timetables.module';
 
 @Module({
-  imports: [PrismaModule, HrModule, AttendanceModule],
+  imports: [PrismaModule, HrModule, AttendanceModule, TimetablesModule],
   controllers: [AppPortalController],
   providers: [AppPortalService],
   exports: [AppPortalService],

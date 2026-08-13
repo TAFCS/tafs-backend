@@ -297,7 +297,12 @@ export class TeachingGroupsService {
           subjects: { select: { id: true, name: true, code: true } },
           employee_profiles: { select: { id: true, full_name: true } },
           timetables: {
-            select: { teaching_group_id: true, teaching_groups: { select: { id: true, label: true } } },
+            select: {
+              campus_id: true,
+              class_id: true,
+              teaching_group_id: true,
+              teaching_groups: { select: { id: true, label: true } },
+            },
           },
         },
         orderBy: [{ day_of_week: 'asc' }, { block_number: 'asc' }, { slot_order: 'asc' }],
@@ -319,6 +324,9 @@ export class TeachingGroupsService {
           room: slot.room,
           subject: slot.subjects,
           teacher: slot.employee_profiles,
+          campus_id: slot.timetables.campus_id,
+          class_id: slot.timetables.class_id,
+          teaching_group_id: slot.timetables.teaching_group_id,
           teaching_group_label: slot.timetables.teaching_groups?.label ?? null,
         };
       }),

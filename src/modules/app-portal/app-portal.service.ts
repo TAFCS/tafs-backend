@@ -4,6 +4,7 @@ import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from '../attendance/student-attendance-status.util';
 import { AttendancePolicyResolverService } from '../attendance/attendance-policy-resolver.service';
+import { TeachingGroupsService } from '../timetables/teaching-groups.service';
 
 @Injectable()
 export class AppPortalService {
@@ -11,6 +12,7 @@ export class AppPortalService {
     private prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly policyResolver: AttendancePolicyResolverService,
+    private readonly teachingGroups: TeachingGroupsService,
   ) {}
 
   async getStudentLedger(studentCc: number) {
@@ -181,6 +183,10 @@ export class AppPortalService {
       select: { campus_id: true, class_id: true, section_id: true },
     });
 
+    if (await this.isRollCallClass(student?.class_id ?? null)) {
+      return this.getStudentRollCallHistory(studentCc, student!, dateFrom, dateTo, monthStr);
+    }
+
     const [schedules, policySets] = student?.campus_id != null
       ? await Promise.all([
           this.prisma.class_check_in_schedules.findMany({
@@ -301,6 +307,123 @@ export class AppPortalService {
     return {
       student_cc: studentCc,
       month: monthStr,
+      mode: 'BIOMETRIC_DAILY',
+      days,
+    };
+  }
+
+  /** Fallback IDs used only when no class_attendance_modes rows exist yet
+   * (mirrors roll-sessions.service.ts's DEFAULT_ROLL_CALL_CLASS_IDS). */
+  private async isRollCallClass(classId: number | null): Promise<boolean> {
+    if (classId == null) return false;
+    const mode = await this.prisma.class_attendance_modes.findUnique({
+      where: { class_id: classId },
+    });
+    if (mode) return mode.mode === 'ROLL_CALL_SESSION';
+    return [20, 21].includes(classId);
+  }
+
+  /** Attendance history for AS/A2-style roll-call classes: each day's
+   * scheduled periods (from the student's teaching-group enrollments)
+   * annotated with that day's actual roll-call status, if taken. */
+  private async getStudentRollCallHistory(
+    studentCc: number,
+    student: { campus_id: number | null; class_id: number | null; section_id: number | null },
+    dateFrom: Date,
+    dateTo: Date,
+    monthStr: string,
+  ) {
+    const weekly = await this.teachingGroups.getStudentWeeklySlots(studentCc);
+    const slotsByDay = new Map<number, typeof weekly.blocks>();
+    for (const slot of weekly.blocks) {
+      const list = slotsByDay.get(slot.day_of_week) ?? [];
+      list.push(slot);
+      slotsByDay.set(slot.day_of_week, list);
+    }
+
+    const groupIds = [...new Set(weekly.blocks.map((b) => b.teaching_group_id))].filter(
+      (id): id is number => id != null,
+    );
+    const sessions = await this.prisma.attendance_roll_sessions.findMany({
+      where: {
+        teaching_group_id: { in: groupIds },
+        session_date: { gte: dateFrom, lte: dateTo },
+      },
+      include: {
+        attendance_roll_records: { where: { student_cc: studentCc } },
+      },
+    });
+    const sessionByKey = new Map(
+      sessions.map((s) => [
+        `${s.session_date.toISOString().slice(0, 10)}|${s.teaching_group_id}|${s.period}`,
+        s,
+      ]),
+    );
+
+    const calendarMap =
+      student.campus_id != null
+        ? await this.calendarResolver.loadStudentCalendarMap(
+            student.campus_id,
+            student.class_id,
+            student.section_id,
+            dateFrom,
+            dateTo,
+          )
+        : new Map();
+
+    const days: any[] = [];
+    for (let d = new Date(dateFrom); d <= dateTo; d.setUTCDate(d.getUTCDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      const resolved = calendarMap.get(key) ?? {
+        isWorkingDay: d.getUTCDay() !== 0 && d.getUTCDay() !== 6,
+        dayType: d.getUTCDay() === 0 || d.getUTCDay() === 6 ? 'WEEKEND' : null,
+        description: null,
+        source: 'DEFAULT',
+      };
+      const { holiday_type, holiday_description } = this.calendarResolver.toHolidayDisplay(resolved);
+
+      const daySlots = resolved.isWorkingDay ? slotsByDay.get(d.getUTCDay()) ?? [] : [];
+      const periods = daySlots.map((slot) => {
+        const session = sessionByKey.get(`${key}|${slot.teaching_group_id}|${slot.block_number}`);
+        const record = session?.attendance_roll_records?.[0];
+        const status = session?.status === 'SKIPPED' ? 'SKIPPED' : record?.status ?? 'NOT_MARKED';
+        return {
+          block_number: slot.block_number,
+          start_time: slot.start_time,
+          end_time: slot.end_time,
+          label: slot.label,
+          subject: slot.subject,
+          teacher: slot.teacher,
+          room: slot.room,
+          status,
+          skip_reason: session?.status === 'SKIPPED' ? session.skip_reason : null,
+        };
+      });
+
+      // Day-level rollup so the existing calendar month-grid (built around
+      // one status per day) keeps working unchanged.
+      let status: string | null = null;
+      if (resolved.isWorkingDay && periods.length > 0) {
+        if (periods.some((p) => p.status === 'ABSENT')) status = 'ABSENT';
+        else if (periods.some((p) => p.status === 'LATE')) status = 'LATE';
+        else if (periods.every((p) => p.status === 'PRESENT')) status = 'PRESENT';
+        else if (periods.every((p) => p.status === 'NOT_MARKED')) status = null;
+        else status = 'EXCUSED';
+      }
+
+      days.push({
+        date: key,
+        status,
+        periods,
+        holiday_type: resolved.isWorkingDay ? null : holiday_type,
+        holiday_description: resolved.isWorkingDay ? null : holiday_description ?? resolved.description,
+      });
+    }
+
+    return {
+      student_cc: studentCc,
+      month: monthStr,
+      mode: 'ROLL_CALL_SESSION',
       days,
     };
   }
