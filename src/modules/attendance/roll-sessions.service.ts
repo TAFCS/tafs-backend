@@ -386,10 +386,6 @@ export class RollSessionsService {
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
 
-    if (session.status === 'SKIPPED') {
-      throw new BadRequestException('Cannot modify a skipped roll session');
-    }
-
     if (session.status === 'SUBMITTED' && !canEditLocked) {
       throw new ForbiddenException(
         'This roll session is locked. You need attendance.student.edit_locked permission to edit.',
@@ -406,6 +402,22 @@ export class RollSessionsService {
       throw new BadRequestException(
         `Cannot mark attendance on a holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`,
       );
+    }
+
+    // A SKIPPED session on an actual working day (almost always
+    // auto-skipped by the cutoff-time job because nobody submitted it in
+    // time, not a deliberate holiday/no-class decision — those stay
+    // protected by the isWorkingDay check above) can be reopened by
+    // marking it. This is routine correction of a missed roll call, not
+    // an exceptional admin override.
+    if (session.status === 'SKIPPED') {
+      if (!dto.records?.length) {
+        throw new BadRequestException('Cannot modify a skipped roll session');
+      }
+      await this.prisma.attendance_roll_sessions.update({
+        where: { id },
+        data: { status: 'DRAFT', skip_reason: null },
+      });
     }
 
     if (dto.records?.length) {
