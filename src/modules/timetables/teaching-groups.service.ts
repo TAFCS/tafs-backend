@@ -261,4 +261,67 @@ export class TeachingGroupsService {
       orderBy: { academic_year: 'desc' },
     });
   }
+
+  private deriveCurrentAcademicYear(): string {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth(); // 0-indexed; Aug = 7
+    const startYear = month >= 7 ? year : year - 1;
+    return `${startYear}-${startYear + 1}`;
+  }
+
+  /** A student's own weekly schedule, merged across every teaching group
+   * they're enrolled in (each subject can have a different teacher/room). */
+  async getStudentWeeklySlots(studentId: number) {
+    const academicYear = this.deriveCurrentAcademicYear();
+
+    const enrollments = await this.prisma.student_subject_enrollments.findMany({
+      where: { student_id: studentId, academic_year: academicYear },
+      select: { teaching_group_id: true },
+    });
+    const groupIds = [...new Set(enrollments.map((e) => e.teaching_group_id))];
+    if (groupIds.length === 0) return { blocks: [] };
+
+    const timetables = await this.prisma.timetables.findMany({
+      where: { teaching_group_id: { in: groupIds }, is_active: true, academic_year: academicYear },
+      select: { id: true, teaching_group_id: true },
+    });
+    const timetableIds = timetables.map((t) => t.id);
+    if (timetableIds.length === 0) return { blocks: [] };
+
+    const [blocks, slots] = await Promise.all([
+      this.prisma.timetable_blocks.findMany({ orderBy: { block_number: 'asc' } }),
+      this.prisma.timetable_slots.findMany({
+        where: { timetable_id: { in: timetableIds } },
+        include: {
+          subjects: { select: { id: true, name: true, code: true } },
+          employee_profiles: { select: { id: true, full_name: true } },
+          timetables: {
+            select: { teaching_group_id: true, teaching_groups: { select: { id: true, label: true } } },
+          },
+        },
+        orderBy: [{ day_of_week: 'asc' }, { block_number: 'asc' }, { slot_order: 'asc' }],
+      }),
+    ]);
+
+    const blockByNumber = new Map(blocks.map((b) => [b.block_number, b]));
+
+    return {
+      blocks: slots.map((slot) => {
+        const block = blockByNumber.get(slot.block_number);
+        return {
+          id: slot.id,
+          day_of_week: slot.day_of_week,
+          block_number: slot.block_number,
+          start_time: block?.start_time ?? null,
+          end_time: block?.end_time ?? null,
+          label: block?.label ?? null,
+          room: slot.room,
+          subject: slot.subjects,
+          teacher: slot.employee_profiles,
+          teaching_group_label: slot.timetables.teaching_groups?.label ?? null,
+        };
+      }),
+    };
+  }
 }

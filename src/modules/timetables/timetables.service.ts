@@ -578,6 +578,7 @@ export class TimetablesService {
             academic_year: true,
             classes: { select: { id: true, description: true, class_code: true } },
             sections: { select: { id: true, description: true } },
+            teaching_groups: { select: { id: true, label: true } },
           },
         },
       },

@@ -8,10 +8,18 @@ import { TeacherCheckinDerivationService } from './teacher-checkin-derivation.se
 import { EmployeeExpectedTimesService } from './employee-expected-times.service';
 import { TeachingGroupsController } from './teaching-groups.controller';
 import { TeachingGroupsService } from './teaching-groups.service';
+import { TimetablesSelfController } from './timetables-self.controller';
+import { TimetablesParentController } from './timetables-parent.controller';
 
 @Module({
   imports: [AuthModule],
-  controllers: [TimetablesController, SubjectsController, TeachingGroupsController],
+  controllers: [
+    TimetablesController,
+    SubjectsController,
+    TeachingGroupsController,
+    TimetablesSelfController,
+    TimetablesParentController,
+  ],
   providers: [
     TimetablesService,
     SubjectsService,
