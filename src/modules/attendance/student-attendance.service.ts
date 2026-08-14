@@ -7,7 +7,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { assertClassInScope } from '../../common/staff-scope';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
-import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
+import { MAX_MATRIX_DAYS, type DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from '../hr/payroll/payroll-excel.util';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
 import {
@@ -382,6 +382,12 @@ export class StudentAttendanceService {
     const periodEnd = new Date(`${periodEndStr}T00:00:00.000Z`);
     if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
       throw new BadRequestException('Invalid period_start/period_end');
+    }
+    // Same bound as the HR payroll matrix — one column per day, one
+    // daily_breakdown entry per student per day.
+    const days = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+    if (days > MAX_MATRIX_DAYS) {
+      throw new BadRequestException(`Date range too large — pick ${MAX_MATRIX_DAYS} days or fewer.`);
     }
     return { periodStart, periodEnd };
   }

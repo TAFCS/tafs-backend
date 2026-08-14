@@ -1,5 +1,6 @@
 import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { toNumberArray } from '../../../../common/transforms/query-array.transform';
 
 /**
  * The payroll period is always the fixed school cycle — 26th of the
@@ -57,6 +58,14 @@ export class AttendanceMatrixQueryDto {
   @Type(() => Number)
   @IsInt()
   campus_id?: number;
+
+  // Omitted -> every department on the resolved campuses. Narrowing here cuts
+  // the work in computeEmployeeLinesForRange, not just the rendered row count.
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  department_id?: number[];
 
   @IsDateString()
   period_start: string;

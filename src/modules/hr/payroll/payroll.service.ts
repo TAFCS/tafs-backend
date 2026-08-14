@@ -17,6 +17,9 @@ import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
 
+/** Longest date range the live attendance matrix will compute — two pay cycles. */
+export const MAX_MATRIX_DAYS = 62;
+
 interface EmployeeLineInput {
   id: number;
   monthly_pay: Prisma.Decimal | null;
@@ -940,6 +943,13 @@ export class PayrollService {
     if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
       throw new BadRequestException('Invalid period_start/period_end');
     }
+    // The matrix renders one column per day, and daily_breakdown carries one
+    // object per employee per day — an unbounded range is a payload and
+    // render bomb. Two pay cycles is well past any real use of this view.
+    const days = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+    if (days > MAX_MATRIX_DAYS) {
+      throw new BadRequestException(`Date range too large — pick ${MAX_MATRIX_DAYS} days or fewer.`);
+    }
     return { periodStart, periodEnd };
   }
 
@@ -957,11 +967,22 @@ export class PayrollService {
     return campuses.map((c) => c.id);
   }
 
-  private async computeMatrixLinesForCampus(campusId: number, periodStart: Date, periodEnd: Date) {
+  private async computeMatrixLinesForCampus(
+    campusId: number,
+    periodStart: Date,
+    periodEnd: Date,
+    departmentIds?: number[],
+  ) {
     const [campus, employees] = await Promise.all([
       this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
       this.prisma.employee_profiles.findMany({
-        where: { campus_id: campusId },
+        where: {
+          campus_id: campusId,
+          // Matches generateRun's employee scope — terminated staff have no
+          // attendance to show and only inflate the matrix.
+          employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+          ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
+        },
         select: {
           id: true,
           full_name: true,
@@ -1019,7 +1040,9 @@ export class PayrollService {
     const campusIds = await this.resolveMatrixCampusIds(user, query.campus_id);
 
     const perCampusLines = await Promise.all(
-      campusIds.map((campusId) => this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd)),
+      campusIds.map((campusId) =>
+        this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd, query.department_id),
+      ),
     );
 
     return {
