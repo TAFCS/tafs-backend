@@ -880,6 +880,15 @@ model vouchers {
   academic_year             String?                     @db.VarChar(10)
   month                     Int?
   pdf_url                   String?
+  /// WRITE-ONCE. The frozen PAID receipt, minted lazily on the first request
+  /// (admin download or parent app) and never re-rendered afterwards. Cleared
+  /// only by a genuine payment reversal in clearDeposit().
+  paid_pdf_url              String?
+  /// WRITE-ONCE. The download filename frozen alongside paid_pdf_url. Clients
+  /// MUST use this rather than rebuilding the name from the live gr_number,
+  /// which is mutable — see buildVoucherFilename / voucher-filename.util.ts.
+  paid_pdf_filename         String?                     @db.VarChar(255)
+  paid_pdf_generated_at     DateTime?                   @db.Timestamp(6)
   total_payable_before_due  Decimal?                    @default(0) @db.Decimal(12, 2)
   total_payable_after_due   Decimal?                    @default(0) @db.Decimal(12, 2)
   late_fee_deposited        Decimal?                    @default(0) @db.Decimal(12, 2)

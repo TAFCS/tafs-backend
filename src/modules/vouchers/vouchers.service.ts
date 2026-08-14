@@ -1610,7 +1610,11 @@ export class VouchersService {
         const paidSuffix = [paidStamp ? 'paid' : null, forceHeadsAsCurrent ? 'main-receipt' : null]
             .filter(Boolean)
             .join('-');
-        const key = `vouchers/${voucher.student_id}/${buildVoucherFilename({ grNumber: grOrCc, feeDate: feeDateStr, voucherId: voucher.id, suffix: paidSuffix || undefined })}`;
+        // Kept separate from `key` so callers can hand the exact download name to
+        // clients instead of parsing it back out of the URL — gr_number is free
+        // text, so a GR containing "/" would make the basename wrong.
+        const filename = buildVoucherFilename({ grNumber: grOrCc, feeDate: feeDateStr, voucherId: voucher.id, suffix: paidSuffix || undefined });
+        const key = `vouchers/${voucher.student_id}/${filename}`;
         const qrUrl = this.storage.getPublicUrl(key);
 
         return {
@@ -1742,7 +1746,8 @@ export class VouchersService {
                     }),
                 paymentHistory,
             },
-            key
+            key,
+            filename
         };
     }
 
@@ -1784,6 +1789,57 @@ export class VouchersService {
             orderBy: { issue_date: 'asc' },
         });
         return vouchers.map((v) => this.normalizeVoucher(v));
+    }
+
+    /**
+     * Parent-facing: return the frozen PAID receipt for one voucher, minting it
+     * on the first request.
+     *
+     * Deliberately a per-voucher endpoint rather than lazy work inside
+     * findByStudentCC — that list returns EVERY voucher for a student, most of
+     * them PAID for a student a couple of years in. Rendering them all on a
+     * ledger open would take seconds to minutes and would freeze names for
+     * receipts nobody asked for. Here the mint is one bounded PDF behind an
+     * explicit tap, and already-frozen vouchers never reach this at all because
+     * paid_pdf_url comes back on the list for free.
+     */
+    async ensurePaidPdfForParent(voucherId: number, studentCc: number, familyId: number) {
+        const student = await this.prisma.students.findFirst({
+            where: { cc: studentCc, family_id: familyId, deleted_at: null },
+            select: { cc: true },
+        });
+
+        if (!student) {
+            throw new ForbiddenException(`Student #${studentCc} not linked to your family`);
+        }
+
+        // Scoped by student_id so a parent cannot mint another family's receipt
+        // by guessing a voucher id.
+        const voucher = await this.prisma.vouchers.findFirst({
+            where: { id: voucherId, student_id: studentCc },
+            select: { id: true, status: true, paid_pdf_url: true, paid_pdf_filename: true },
+        });
+
+        if (!voucher) {
+            throw new NotFoundException(`Voucher ${voucherId} not found`);
+        }
+
+        if (voucher.paid_pdf_url) {
+            return {
+                pdf_url: voucher.paid_pdf_url,
+                filename: voucher.paid_pdf_filename ?? undefined,
+                frozen: true,
+            };
+        }
+
+        if (voucher.status !== 'PAID') {
+            throw new BadRequestException('This challan is not marked paid yet.');
+        }
+
+        // generatedByName intentionally omitted — ensureVoucherGenerationMeta's
+        // existing rule then leaves the footer as "TAFSync System" rather than
+        // attributing the voucher to a parent.
+        return this.generatePdf(voucherId, true, true, undefined);
     }
 
     async resolveVoucherForParentByMonth(
@@ -1899,6 +1955,11 @@ export class VouchersService {
                 ...(dto.late_fee_charge !== undefined ? { late_fee_charge: dto.late_fee_charge } : {}),
                 ...(dto.bank_account_id ? { bank_account_id: dto.bank_account_id } : {}),
                 ...(dto.section_id !== undefined ? { section_id: dto.section_id } : {}),
+                // Only the unpaid render is invalidated here. paid_pdf_url is a
+                // frozen record of a payment that already happened, not a cache —
+                // it is never invalidated on an edit, not even when dto.status is
+                // set. The sole exception is a real payment reversal; see
+                // clearDeposit() / reverseDeposit().
                 ...(needsPdfInvalidation ? { pdf_url: null } : {}),
             },
             include: VOUCHER_INCLUDE,
@@ -2585,7 +2646,17 @@ export class VouchersService {
 
                 await tx.vouchers.update({
                     where: { id: vId },
-                    data: { status: nextStatus, late_fee_deposited: lateFeeDeposited } as any,
+                    data: {
+                        status: nextStatus,
+                        late_fee_deposited: lateFeeDeposited,
+                        // Same rule as clearDeposit: reversing the payment unfreezes
+                        // the paid receipt so a later re-payment of a different
+                        // amount can't resurface the old one. `refreshed` was read
+                        // before this write, so its status is the pre-reversal one.
+                        ...(refreshed.status === 'PAID' && nextStatus !== 'PAID'
+                            ? { paid_pdf_url: null, paid_pdf_filename: null, paid_pdf_generated_at: null }
+                            : {}),
+                    } as any,
                 });
             }
         }, { timeout: 15000 });
@@ -2830,9 +2901,27 @@ export class VouchersService {
                     nextStatus = 'UNPAID';
                 }
 
+                // `refreshed` was read before the status write below, so its status
+                // is still the pre-reversal one.
+                const wasPaid = refreshed.status === 'PAID';
+
                 await tx.vouchers.update({
                     where: { id: voucherId },
-                    data: { status: nextStatus, late_fee_deposited: lateFeeDeposited } as any,
+                    data: {
+                        status: nextStatus,
+                        late_fee_deposited: lateFeeDeposited,
+                        // A payment reversal is the ONLY thing that unfreezes a paid
+                        // receipt. A receipt documenting a payment that no longer
+                        // exists must not survive to be re-served if the voucher is
+                        // later paid again for a different amount — the next full
+                        // payment mints a fresh one. A gr_number change never reaches
+                        // here, so the frozen-name guarantee is untouched.
+                        // The Spaces object is intentionally left in place, never
+                        // deleted (see the orphan note in generateMainColumnReceipt).
+                        ...(wasPaid && nextStatus !== 'PAID'
+                            ? { paid_pdf_url: null, paid_pdf_filename: null, paid_pdf_generated_at: null }
+                            : {}),
+                    } as any,
                 });
             }
         }, { timeout: 15000 });
@@ -3182,6 +3271,8 @@ export class VouchersService {
     /**
      * Generate a voucher PDF server-side, upload it, persist pdf_url, and return the URL.
      * Used by both the single-voucher challan flow and the PAID-stamp download on the vouchers list.
+     *
+     * The PAID render is generated at most once — see the frozen-receipt block below.
      */
     async generatePdf(voucherId: number, showDiscount = true, paidStamp = false, generatedByName?: string) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -3195,7 +3286,28 @@ export class VouchersService {
         const isActuallyPaid = voucher.status === 'PAID';
         const finalPaidStamp = paidStamp || isActuallyPaid;
 
-        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        // ── FROZEN PAID RECEIPT ──────────────────────────────────────────────
+        // A paid receipt is a permanent artifact of a payment that happened, not
+        // a cache. Once minted we serve the stored object forever: no re-render,
+        // no upload, and — the point of the exercise — a filename that cannot
+        // drift when the student's gr_number is corrected later on.
+        //
+        // This must short-circuit BEFORE prepareVoucherPdfData(), which is the
+        // expensive part (siblings, arrears, installment + payment history). It
+        // also keeps the QR honest: the QR encodes storage.getPublicUrl(key), so
+        // as long as the only path that renders is the path that computes the
+        // key, the frozen key is by construction the key baked into the PDF.
+        //
+        // Cleared only by a genuine payment reversal — see clearDeposit().
+        if (finalPaidStamp && voucher.paid_pdf_url) {
+            return {
+                pdf_url: voucher.paid_pdf_url,
+                filename: voucher.paid_pdf_filename ?? undefined,
+                frozen: true,
+            };
+        }
+
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
         voucherData.showDiscount = showDiscount;
         // Prefer persisted stamp; if missing and a name was passed (first generate),
         // write it once so regenerations stay stable.
@@ -3205,7 +3317,43 @@ export class VouchersService {
         const pdfUrl = await this.storage.upload(key, pdfBuffer);
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
 
-        return { pdf_url: pdfUrl };
+        if (finalPaidStamp) {
+            const frozen = await this.freezePaidPdf(voucherId, pdfUrl, filename);
+            return { pdf_url: frozen.pdf_url, filename: frozen.filename, frozen: false };
+        }
+
+        return { pdf_url: pdfUrl, filename, frozen: false };
+    }
+
+    /**
+     * Write-once persistence of the PAID receipt, mirroring
+     * ensureVoucherGenerationMeta's never-overwrite rule.
+     *
+     * The `paid_pdf_url: null` guard on the updateMany makes this safe under
+     * concurrent first requests: both would have computed the SAME deterministic
+     * key, so whichever transaction lands first wins and the loser's identical
+     * upload is harmless. We then read back so every caller returns the value
+     * that actually won.
+     */
+    private async freezePaidPdf(voucherId: number, pdfUrl: string, filename: string) {
+        await this.prisma.vouchers.updateMany({
+            where: { id: voucherId, paid_pdf_url: null },
+            data: {
+                paid_pdf_url: pdfUrl,
+                paid_pdf_filename: filename,
+                paid_pdf_generated_at: new Date(),
+            },
+        });
+
+        const row = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: { paid_pdf_url: true, paid_pdf_filename: true },
+        });
+
+        return {
+            pdf_url: row?.paid_pdf_url ?? pdfUrl,
+            filename: row?.paid_pdf_filename ?? filename,
+        };
     }
 
     /**
@@ -3284,12 +3432,17 @@ export class VouchersService {
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
 
-        // Deliberately NOT persisted to vouchers.pdf_url or any other column —
-        // this is a stateless, on-demand alternate render of an existing PAID
-        // voucher, not a new canonical artifact. Known accepted trade-off: if
-        // the underlying deposit is later reversed via clearDeposit (which
-        // hard-deletes a PAID split voucher), a previously generated receipt
-        // becomes a harmless orphaned object in storage.
+        // Deliberately NOT persisted to vouchers.pdf_url, vouchers.paid_pdf_url,
+        // or any other column — this is a stateless, on-demand alternate render
+        // of an existing PAID voucher, not a new canonical artifact. Its key
+        // suffix ('paid-main-receipt') cannot collide with the frozen paid
+        // receipt's ('paid'), so the two never overwrite each other. Known
+        // accepted trade-off: if the underlying deposit is later reversed via
+        // clearDeposit (which hard-deletes a PAID split voucher), a previously
+        // generated receipt becomes a harmless orphaned object in storage — as
+        // does a frozen paid receipt whose voucher is unfrozen or deleted. We
+        // never delete from storage: a receipt a parent already downloaded, or
+        // whose QR they scanned, must keep resolving.
         this.logger.log(
             `generateMainColumnReceipt: ${changedBy} generated a main-column receipt for voucher #${voucherId} (key=${key}).`,
         );
@@ -3310,11 +3463,35 @@ export class VouchersService {
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
         const finalPaidStamp = paidStamp || voucher.status === 'PAID';
-        const { voucherData, key } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+
+        // Frozen paid receipt (see generatePdf): honouring "never re-render"
+        // means fetching the stored bytes rather than rendering them again.
+        if (finalPaidStamp && voucher.paid_pdf_url) {
+            try {
+                const { buffer } = await this.storage.getFile(
+                    this.storage.extractKeyFromUrl(voucher.paid_pdf_url),
+                );
+                return { buffer, url: voucher.paid_pdf_url };
+            } catch (err: any) {
+                // Object missing, or storage unconfigured in dev. Fall through and
+                // re-render so a bulk export never 500s — but deliberately do NOT
+                // re-freeze under a new key; the frozen name stays authoritative.
+                this.logger.warn(
+                    `Frozen paid PDF unreadable for voucher #${voucherId}; re-rendering. ${err?.message}`,
+                );
+            }
+        }
+
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
         await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
         await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
+
+        if (finalPaidStamp) {
+            const frozen = await this.freezePaidPdf(voucherId, url, filename);
+            return { buffer, url: frozen.pdf_url };
+        }
 
         return { buffer, url };
     }
@@ -3336,9 +3513,12 @@ export class VouchersService {
                         const { buffer } = await this.generatePdfBuffer(id, false, generatedByName);
                         const voucher = await this.prisma.vouchers.findUnique({
                             where: { id },
-                            select: { student_id: true, academic_year: true, month: true, fee_date: true, students: { select: { gr_number: true } } }
+                            select: { student_id: true, academic_year: true, month: true, fee_date: true, paid_pdf_filename: true, students: { select: { gr_number: true } } }
                         });
-                        const filename = buildVoucherFilename({
+                        // A frozen paid receipt keeps the name it was issued
+                        // under; only unfrozen vouchers get a name rebuilt from
+                        // the live gr_number.
+                        const filename = voucher?.paid_pdf_filename ?? buildVoucherFilename({
                             grNumber: voucher?.students?.gr_number,
                             studentId: voucher?.student_id,
                             feeDate: voucher?.fee_date,
@@ -4173,7 +4353,19 @@ export class VouchersService {
         ]);
 
         await Promise.all([
-            this.prisma.vouchers.update({ where: { id: paidVoucher.id }, data: { pdf_url: pUrl } }),
+            this.prisma.vouchers.update({
+                where: { id: paidVoucher.id },
+                data: {
+                    pdf_url: pUrl,
+                    // This child is born PAID, so its receipt is final the moment
+                    // it renders — freeze it here rather than waiting for someone
+                    // to download it. No write-once guard needed: the row was
+                    // created inside the transaction above, so these are null.
+                    paid_pdf_url: pUrl,
+                    paid_pdf_filename: pData.filename,
+                    paid_pdf_generated_at: new Date(),
+                },
+            }),
             this.prisma.vouchers.update({ where: { id: unpaidVoucher.id }, data: { pdf_url: uUrl } }),
         ]);
 
@@ -4252,6 +4444,11 @@ export class VouchersService {
             unpaid_voucher_id: unpaidVoucher.id,
             paid_pdf_url: pUrl,
             unpaid_pdf_url: uUrl,
+            // Each child is keyed off its OWN fee_date, which for the balance
+            // child is frequently not the original voucher's — so callers must
+            // use these rather than rebuilding a name from the parent voucher.
+            paid_pdf_filename: pData.filename,
+            unpaid_pdf_filename: uData.filename,
         };
     }
 

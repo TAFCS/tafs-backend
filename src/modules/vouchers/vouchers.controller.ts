@@ -332,6 +332,31 @@ export class VouchersController {
         };
     }
 
+    /**
+     * Lazily mint (first call) or return (every call after) the frozen PAID
+     * receipt for one voucher. POST because the first call has a side effect —
+     * it renders and uploads a PDF and freezes its filename forever.
+     */
+    @Post('parent/student/:cc/voucher/:id/paid-pdf')
+    @UseGuards(JwtParentGuard)
+    @HttpCode(HttpStatus.OK)
+    async ensurePaidPdfForParent(
+        @Param('cc', ParseIntPipe) cc: number,
+        @Param('id', ParseIntPipe) id: number,
+        @Req() req: any,
+    ) {
+        const result = await this.vouchersService.ensurePaidPdfForParent(
+            id,
+            cc,
+            req.user.familyId,
+        );
+        return {
+            success: true,
+            message: 'Paid challan ready.',
+            data: result,
+        };
+    }
+
     @Get('parent/student/:cc/resolve')
     @UseGuards(JwtParentGuard)
     @HttpCode(HttpStatus.OK)
