@@ -10,7 +10,8 @@ import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
 import { StudentsService } from '../students/students.service';
-import { isSpecial } from '../../common/utils/academic-labels';
+import { resolveTermStartMonth, DEFAULT_TERM_START_MONTH } from '../../common/utils/academic-labels';
+import { getClassTermMap, termStartMonthForClass } from '../../common/utils/class-terms.util';
 
 // An audit-log entry queued during a transaction/multi-step operation and
 // flushed once the whole operation has committed.
@@ -595,6 +596,15 @@ export class StudentFeesService {
             throw new NotFoundException(`Student with ID ${student_id} not found`);
         }
 
+        // Term stamped on newly created heads. Taken from the student's current
+        // class, which is the same class the client used to compute each row's
+        // fee_date, so the two always agree. Only ever set on create: re-stamping
+        // on update would rewrite the term of a head created before the student
+        // moved between term systems, which is exactly the history this column
+        // exists to preserve.
+        const classTerms = await getClassTermMap(this.prisma);
+        const termStartMonth = termStartMonthForClass(student.class_id, classTerms);
+
         // Get the unique years involved in this save
         const years = Array.from(new Set(items.map((i) => i.academic_year)));
         if (items.length === 0 && dto.academic_year) {
@@ -785,6 +795,7 @@ export class StudentFeesService {
                             scholarship_type_id: scholarshipTypeId,
                             academic_year: item.academic_year,
                             target_month: targetMonth,
+                            term_start_month: termStartMonth,
                             fee_date: feeDate,
                             status: 'NOT_ISSUED',
                         },
@@ -1215,10 +1226,44 @@ export class StudentFeesService {
         });
     }
 
-    private getCalendarYear(academicYear: string, month: number, classId?: number): number {
+    /**
+     * Calendar year of `month` within `academicYear`, for building a fee_date.
+     *
+     * Takes the class term map explicitly rather than reading a cached field:
+     * the result depends on it, so an implicit "somebody loaded this earlier in
+     * the request" contract would silently return a different date depending on
+     * call order. Omitting it falls back to the legacy special-class list.
+     */
+    private getCalendarYear(
+        academicYear: string,
+        month: number,
+        classId?: number,
+        classTerms?: ReadonlyMap<number, number>,
+    ): number {
         const startYear = parseInt(academicYear.split('-')[0]);
-        const cutoff = isSpecial(classId) ? 4 : 8;
+        const cutoff = resolveTermStartMonth({ classId, classTerms });
         return month >= cutoff ? startYear : startYear + 1;
+    }
+
+    /**
+     * student_id -> term_start_month of the student's current class, for stamping
+     * newly created heads. Bulk paths span many students across many classes, so
+     * this resolves them in one query rather than per row.
+     */
+    private async resolveTermsForStudents(
+        studentIds: number[],
+    ): Promise<{ termByStudent: Map<number, number>; classTerms: ReadonlyMap<number, number> }> {
+        const classTerms = await getClassTermMap(this.prisma);
+        const students = await this.prisma.students.findMany({
+            where: { cc: { in: studentIds } },
+            select: { cc: true, class_id: true },
+        });
+        return {
+            classTerms,
+            termByStudent: new Map(
+                students.map((s) => [s.cc, termStartMonthForClass(s.class_id, classTerms)]),
+            ),
+        };
     }
 
     private isValidDayForMonth(year: number, month: number, day: number): boolean {
@@ -1275,6 +1320,7 @@ export class StudentFeesService {
     async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto, changedBy: string = 'system') {
         const { academic_year, fee_type_id, month, fee_date, amount, student_ids } = dto;
         const targetDate = new Date(fee_date);
+        const { termByStudent } = await this.resolveTermsForStudents(student_ids);
 
         // Use a single createMany with skipDuplicates instead of N parallel transactions.
         // Opening one transaction per student in parallel exhausts the connection pool.
@@ -1284,6 +1330,7 @@ export class StudentFeesService {
                 fee_type_id,
                 month,
                 target_month: month,
+                term_start_month: termByStudent.get(studentId) ?? DEFAULT_TERM_START_MONTH,
                 academic_year,
                 amount: new Prisma.Decimal(amount),
                 amount_before_discount: new Prisma.Decimal(amount),
@@ -1388,6 +1435,8 @@ export class StudentFeesService {
         let totalAddedNum = 0;
         let totalSkippedNum = 0;
 
+        const { termByStudent } = await this.resolveTermsForStudents(student_ids);
+
         const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
         const startIndex = ACADEMIC_ORDER.indexOf(start_month);
         const endIndex = ACADEMIC_ORDER.indexOf(end_month);
@@ -1408,6 +1457,7 @@ export class StudentFeesService {
                 fee_type_id,
                 month,
                 target_month: month,
+                term_start_month: termByStudent.get(studentId) ?? DEFAULT_TERM_START_MONTH,
                 academic_year,
                 amount: new Prisma.Decimal(amount),
                 amount_before_discount: new Prisma.Decimal(amount),
@@ -1683,6 +1733,8 @@ export class StudentFeesService {
             feeDate = parsed;
         }
 
+        const { termByStudent: discountTerms } = await this.resolveTermsForStudents([dto.student_id]);
+
         const created = await this.prisma.student_fees.create({
             data: {
                 student_id: dto.student_id,
@@ -1693,6 +1745,7 @@ export class StudentFeesService {
                 amount_paid: new Prisma.Decimal(0),
                 academic_year: dto.academic_year,
                 target_month: dto.target_month,
+                term_start_month: discountTerms.get(dto.student_id) ?? DEFAULT_TERM_START_MONTH,
                 fee_date: feeDate,
                 status: 'DISCOUNT' as any,
             },

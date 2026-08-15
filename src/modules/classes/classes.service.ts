@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
 import { CreateClassDto } from './dto/create-class.dto';
+import { resetClassTermMapCache } from '../../common/utils/class-terms.util';
 
 @Injectable()
 export class ClassesService {
@@ -53,8 +54,14 @@ export class ClassesService {
         description: dto.description,
         class_code: dto.class_code,
         academic_system: dto.academic_system,
+        ...(dto.term_start_month !== undefined && {
+          term_start_month: dto.term_start_month,
+        }),
       },
     });
+    // The class term map is memoised for the process lifetime on the assumption
+    // that nothing writes term_start_month — now something does.
+    resetClassTermMapCache();
     this.auditLogs.log({ entity_type: 'CLASS', entity_id: String(record.id), action: 'CREATED', section: 'school-setup', new_value: `${dto.class_code} – ${dto.description}`, changed_by: changedBy ?? 'system' });
     return record;
   }
@@ -84,10 +91,14 @@ export class ClassesService {
             ...(item.academic_system !== undefined && {
               academic_system: item.academic_system,
             }),
+            ...(item.term_start_month !== undefined && {
+              term_start_month: item.term_start_month,
+            }),
           },
         }),
       ),
     );
+    resetClassTermMapCache();
 
     // Simple safeguard: if any item resulted in null (should not happen with update),
     // throw a not found to indicate bad IDs.

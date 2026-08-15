@@ -14,7 +14,8 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, isSpecial, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, type TermContext } from '../../common/utils/academic-labels';
+import { getClassTermMap } from '../../common/utils/class-terms.util';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -356,7 +357,7 @@ export class VouchersService {
                             .map((f: any) => f.academic_year),
                         {
                             feeDate,
-                            classId: dto.class_id ?? undefined,
+                            term: { classId: dto.class_id ?? null },
                             stored: dto.academic_year,
                         },
                     ),
@@ -986,11 +987,10 @@ export class VouchersService {
      * rules, which would risk the guard drifting out of sync with the real
      * rendering logic below).
      */
-    private headIsArrear(h: any, voucher: any): boolean {
+    private headIsArrear(h: any, voucher: any, classTerms?: ReadonlyMap<number, number>): boolean {
         let isArrear = false;
 
-        const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
-        const getAcademicSortIndex = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
+        const voucherTerm: TermContext = { classId: voucher.class_id, classTerms };
 
         const feeDateStr = h.student_fees?.fee_date ? new Date(h.student_fees.fee_date).toISOString().slice(0, 10) : null;
         const voucherDateStr = voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : null;
@@ -1003,8 +1003,14 @@ export class VouchersService {
             const vYear = voucher.academic_year;
 
             if (fYear && vYear && fMonth != null && vMonth != null) {
-                if (fYear < vYear) isArrear = true;
-                else if (fYear === vYear && getAcademicSortIndex(fMonth) < getAcademicSortIndex(vMonth)) isArrear = true;
+                // Compare on absolute calendar position rather than (year string,
+                // term-relative slot). The old pair-wise comparison assumed both
+                // sides shared one term, which breaks the moment a head written
+                // under an Aug-Jul class is billed on an Apr-Mar voucher: the
+                // same slot number then means a different real month on each side.
+                const fIdx = monthAbsoluteIndex(fMonth, fYear, termOfHead(h.student_fees, { classId: voucher.class_id, classTerms }));
+                const vIdx = monthAbsoluteIndex(vMonth, vYear, voucherTerm);
+                if (fIdx != null && vIdx != null && fIdx < vIdx) isArrear = true;
             }
             if (!isArrear && h.student_fees?.fee_date && voucher.fee_date) {
                 isArrear = new Date(h.student_fees.fee_date) < new Date(voucher.fee_date);
@@ -1016,6 +1022,20 @@ export class VouchersService {
 
     /** Helper to prepare data for VoucherPdfService */
     private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false) {
+        // 0. Term resolution.
+        //
+        // Every month label and every chronological sort below needs to know where
+        // the academic year starts, because (target_month, academic_year) alone is
+        // ambiguous: "June of 2025-2026" is Jun 2026 on an Aug-Jul term and Jun 2025
+        // on an Apr-Mar one. This voucher's class is only the *fallback* — a head
+        // carries the term it was written under in student_fees.term_start_month,
+        // and that wins. Without it, a student moved between term systems has every
+        // pre-move head in the arrears and payment-history columns relabelled a year
+        // out, because those columns list heads from across the student's whole life.
+        const classTerms = await getClassTermMap(this.prisma);
+        const voucherTerm: TermContext = { classId: voucher.class_id, classTerms };
+        const termOf = (sf: any): TermContext => termOfHead(sf, { classId: voucher.class_id, classTerms });
+
         // 1. Fetch siblings if family_id exists
         let siblings: any[] = [];
         if (voucher.students?.family_id) {
@@ -1052,14 +1072,14 @@ export class VouchersService {
             })
             : [];
 
-        // Term cutoff: class IDs 15–19 run Apr–Mar (cutoff=4); all others run Aug–Jul (cutoff=8).
-        // Installment sequence order is derived from target_month relative to the term start,
-        // so APR is slot 0 for Apr-Mar classes and AUG is slot 0 for Aug-Jul classes.
-        const termCutoff = isSpecial(voucher.class_id) ? 4 : 8;
-        const installmentSlot = (m: number) => m >= termCutoff ? m - termCutoff : m + (12 - termCutoff);
+        // Installment sequence order is the position of the month *within its own term* —
+        // APR is slot 0 on an Apr-Mar term, AUG is slot 0 on an Aug-Jul one — so unlike
+        // the chronological sorts below this one stays term-relative by design. It takes
+        // each head's own term so a plan is numbered under the term it was created in.
+        const installmentSlot = (f: any) => termRelativeSlot(f.target_month ?? DEFAULT_TERM_START_MONTH, termOf(f));
 
         studentInstallmentFees.sort((a: any, b: any) =>
-            installmentSlot(a.target_month ?? 8) - installmentSlot(b.target_month ?? 8)
+            installmentSlot(a) - installmentSlot(b)
         );
 
         // Group by installment_id for sequence lookup
@@ -1087,7 +1107,7 @@ export class VouchersService {
             const standalones = group
                 .filter((f: any) => f.fee_type_id === instFeeTypeId)
                 .sort((a: any, b: any) =>
-                    installmentSlot(a.target_month ?? 8) - installmentSlot(b.target_month ?? 8)
+                    installmentSlot(a) - installmentSlot(b)
                 );
             standalones.forEach((f: any, idx: number) => standaloneSequenceMap.set(f.id, idx + 1));
         });
@@ -1141,9 +1161,10 @@ export class VouchersService {
                     baseDescription: presetTitle,
                     feeDate: sf?.fee_date?.toISOString().split('T')[0],
                     target_month: sf?.target_month,
+                    term_start_month: sf?.term_start_month ?? null,
                     academic_year: sf?.academic_year ||
-                        ((isSpecial(voucher.class_id) && sf?.fee_date)
-                            ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                        ((resolveTermStartMonth(termOf(sf)) !== DEFAULT_TERM_START_MONTH && sf?.fee_date)
+                            ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), termOf(sf))
                             : null),
                 };
             }
@@ -1152,12 +1173,13 @@ export class VouchersService {
             const feeTypeDesc = sf?.fee_types?.description || 'Fee';
             const prefixStr = h.description_prefix ? `${h.description_prefix} ` : '';
             const sfFeeDate = h.student_fees?.fee_date;
+            const sfTerm = termOf(sf);
             const effectiveAcadYear = sf?.academic_year ||
-                ((isSpecial(voucher.class_id) && sfFeeDate)
-                    ? deriveAcademicYear(new Date(sfFeeDate).toISOString(), voucher.class_id ?? undefined)
+                ((resolveTermStartMonth(sfTerm) !== DEFAULT_TERM_START_MONTH && sfFeeDate)
+                    ? deriveAcademicYear(new Date(sfFeeDate).toISOString(), sfTerm)
                     : '');
             const monthSuffix = sf?.target_month != null
-                ? ` (${getMonthYearLabel(sf.target_month, effectiveAcadYear, voucher.class_id).toUpperCase()})`
+                ? ` (${getMonthYearLabel(sf.target_month, effectiveAcadYear, sfTerm).toUpperCase()})`
                 : '';
 
             let description = prefixStr + feeTypeDesc + monthSuffix;
@@ -1176,7 +1198,7 @@ export class VouchersService {
                 if (seqNum != null) {
                     const installmentLabel = `${prefixStr}${getInstallmentLabel(feeTypeDesc, seqNum, total)}`;
                     description = sf?.target_month != null
-                        ? `${prefixStr}${getInstallmentLabel(feeTypeDesc, seqNum, total, sf.target_month, effectiveAcadYear, voucher.class_id)}`
+                        ? `${prefixStr}${getInstallmentLabel(feeTypeDesc, seqNum, total, sf.target_month, effectiveAcadYear, sfTerm)}`
                         : installmentLabel;
                     baseDescription = installmentLabel;
                 }
@@ -1184,7 +1206,7 @@ export class VouchersService {
 
             // Surcharges no longer appear in voucher_heads — they live in voucher_arrear_surcharges.
             const isSurcharge = false;
-            let isArrear = this.headIsArrear(h, voucher);
+            let isArrear = this.headIsArrear(h, voucher, classTerms);
 
             // ── SPECIAL ADMIN WORKFLOW OVERRIDE ─────────────────────────────
             // See VouchersService.generateMainColumnReceipt() for the full
@@ -1247,6 +1269,10 @@ export class VouchersService {
                 isSurcharge,
                 feeDate: h.student_fees?.fee_date?.toISOString().split('T')[0],
                 target_month: h.student_fees?.target_month,
+                // Carried so downstream consolidation, sorting and the 4th-column
+                // history can each resolve this head's own term rather than the
+                // voucher's — they run long after `sf` is out of scope.
+                term_start_month: h.student_fees?.term_start_month ?? null,
                 academic_year: effectiveAcadYear || h.student_fees?.academic_year,
             };
         });
@@ -1259,22 +1285,21 @@ export class VouchersService {
             (sum: number, s: any) => sum + Number(s.amount), 0
         );
 
-        const cutoff = isSpecial(voucher.class_id) ? 4 : 8;
-        const getMonthAbsoluteIndex = (targetMonth: number, academicYear: string) => {
-            const startYear = Number((academicYear || '').split('-')[0]);
-            if (!Number.isFinite(startYear)) return null;
-            const calendarYear = targetMonth >= cutoff ? startYear : startYear + 1;
-            return calendarYear * 12 + targetMonth;
-        };
+        // Each head resolves its own term, so a list spanning a term change still
+        // orders and ranges on real calendar time.
+        const getMonthAbsoluteIndex = (targetMonth: number, academicYear: string, term?: TermContext) =>
+            monthAbsoluteIndex(targetMonth, academicYear, term ?? voucherTerm);
 
         const buildRangeLabel = (
             startMonth: number,
             startYear: string,
             endMonth: number,
             endYear: string,
+            startTerm?: TermContext,
+            endTerm?: TermContext,
         ) => {
-            const start = getMonthYearLabel(startMonth, startYear, voucher.class_id).toUpperCase();
-            const end = getMonthYearLabel(endMonth, endYear, voucher.class_id).toUpperCase();
+            const start = getMonthYearLabel(startMonth, startYear, startTerm ?? voucherTerm).toUpperCase();
+            const end = getMonthYearLabel(endMonth, endYear, endTerm ?? voucherTerm).toUpperCase();
             return start === end ? `(${start})` : `(${start} - ${end})`;
         };
 
@@ -1309,7 +1334,7 @@ export class VouchersService {
             const sorted = [...groupHeads]
                 .map((h) => ({
                     ...h,
-                    __absIndex: getMonthAbsoluteIndex(h.target_month, h.academic_year),
+                    __absIndex: getMonthAbsoluteIndex(h.target_month, h.academic_year, termOf(h)),
                 }))
                 .filter((h) => h.__absIndex != null)
                 .sort((a, b) => a.__absIndex - b.__absIndex);
@@ -1351,12 +1376,16 @@ export class VouchersService {
                         rangeStart.academic_year,
                         rangeEnd.target_month,
                         rangeEnd.academic_year,
+                        termOf(rangeStart),
+                        termOf(rangeEnd),
                     )}`,
                     originalDescription: `${rangeStart.baseDescription} ${buildRangeLabel(
                         rangeStart.target_month,
                         rangeStart.academic_year,
                         rangeEnd.target_month,
                         rangeEnd.academic_year,
+                        termOf(rangeStart),
+                        termOf(rangeEnd),
                     )}`,
                     amount: aggregate.amount,
                     discount: aggregate.discount,
@@ -1390,12 +1419,16 @@ export class VouchersService {
                     rangeStart.academic_year,
                     rangeEnd.target_month,
                     rangeEnd.academic_year,
+                    termOf(rangeStart),
+                    termOf(rangeEnd),
                 )}`,
                 originalDescription: `${rangeStart.baseDescription} ${buildRangeLabel(
                     rangeStart.target_month,
                     rangeStart.academic_year,
                     rangeEnd.target_month,
                     rangeEnd.academic_year,
+                    termOf(rangeStart),
+                    termOf(rangeEnd),
                 )}`,
                 amount: aggregate.amount,
                 discount: aggregate.discount,
@@ -1411,7 +1444,6 @@ export class VouchersService {
 
         // Standalone installments that are past + unpaid but absent from this voucher's heads
         // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
-        const installmentSortIdx = (m: number) => m >= cutoff ? m - cutoff : m + (12 - cutoff);
         const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
             if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
             if (f.status === 'PAID') return false;
@@ -1423,7 +1455,11 @@ export class VouchersService {
             const fYear = f.academic_year, vYear = voucher.academic_year;
             const fMonth = f.target_month, vMonth = voucher.month;
             if (!fYear || !vYear || fMonth == null || vMonth == null) return false;
-            return fYear < vYear || (fYear === vYear && installmentSortIdx(fMonth) < installmentSortIdx(vMonth));
+            // Absolute calendar position, not (year string, term-relative slot):
+            // this head and the voucher can sit on different terms.
+            const fIdx = monthAbsoluteIndex(fMonth, fYear, termOf(f));
+            const vIdx = monthAbsoluteIndex(vMonth, vYear, voucherTerm);
+            return fIdx != null && vIdx != null && fIdx < vIdx;
         });
 
         const missedArrearFeeItems = missedArrearInstallments.map((f: any) => {
@@ -1431,7 +1467,7 @@ export class VouchersService {
             const total = f.student_fee_installments?.installment_count || group.length;
             const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
             const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
-            const desc = getInstallmentLabel(feeType, seqNum, total, f.target_month, f.academic_year, voucher.class_id);
+            const desc = getInstallmentLabel(feeType, seqNum, total, f.target_month, f.academic_year, termOf(f));
             const amount = Number(f.amount || 0);
             return {
                 description: desc,
@@ -1447,6 +1483,7 @@ export class VouchersService {
                 isDiscount: false,
                 feeDate: f.fee_date?.toISOString().split('T')[0],
                 target_month: f.target_month,
+                term_start_month: f.term_start_month ?? null,
                 academic_year: f.academic_year,
             };
         });
@@ -1457,8 +1494,12 @@ export class VouchersService {
         const arrearHeadsForLabel = nonSurcharges.filter(h => h.isArrear && h.target_month != null);
         const arrearsLabel = arrearHeadsForLabel.length > 0
             ? `ARREARS (${getConsolidatedMonthsLabel(
-                arrearHeadsForLabel.map(h => ({ month: h.target_month!, academicYear: h.academic_year || '' })),
-                voucher.class_id,
+                arrearHeadsForLabel.map(h => ({
+                    month: h.target_month!,
+                    academicYear: h.academic_year || '',
+                    term: termOf(h),
+                })),
+                voucherTerm,
             )})`
             : 'TOTAL ARREARS';
 
@@ -1506,12 +1547,18 @@ export class VouchersService {
 
                 const feeTypeDesc = sf?.fee_types?.description || 'Fee';
                 const prefixStr = sf.description_prefix ? `${sf.description_prefix} ` : '';
+                // This list is all-time — every paid head the student has ever had,
+                // including ones billed years ago under a different class and a
+                // different term. Resolve each head's own term; falling back to the
+                // voucher's class here is what printed "JUN 25" for a Jun-2026
+                // Cambridge head once the student moved to an Apr-Mar class.
+                const sfTerm = termOf(sf);
                 const sfEffectiveYear = sf?.academic_year ||
-                    ((isSpecial(voucher.class_id) && sf?.fee_date)
-                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), voucher.class_id ?? undefined)
+                    ((resolveTermStartMonth(sfTerm) !== DEFAULT_TERM_START_MONTH && sf?.fee_date)
+                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), sfTerm)
                         : '');
                 const monthSuffix = sf?.target_month != null
-                    ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, voucher.class_id).toUpperCase()}`
+                    ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, sfTerm).toUpperCase()}`
                     : '';
 
                 const head = `${prefixStr}${feeTypeDesc}${monthSuffix}`;
@@ -1598,6 +1645,7 @@ export class VouchersService {
             month: voucher.month,
             feeDate: voucher.fee_date,
             classId: voucher.class_id,
+            classTerms,
         });
 
         const feeDateStr = voucher.fee_date
@@ -1649,7 +1697,7 @@ export class VouchersService {
                         .map((h: any) => h.academic_year),
                     {
                         feeDate: voucher.fee_date,
-                        classId: voucher.class_id ?? undefined,
+                        term: voucherTerm,
                         stored: voucher.academic_year,
                     },
                 ),
@@ -1678,6 +1726,11 @@ export class VouchersService {
                 surchargeWaived: voucher.surcharge_waived,
                 totalSurcharge: surchargeRows.reduce((sum: number, s: any) => sum + Number(s.amount), 0),
                 arrearsLabel,
+                // `monthLabel` is resolved here rather than in the PDF components:
+                // both of them used to re-derive it from the *student's current*
+                // class_id, which is one step worse than the voucher's, and neither
+                // can see student_fees.term_start_month. Shipping the finished
+                // string keeps one implementation of the rule.
                 arrearsHistory: [
                     ...nonSurcharges
                         .filter(fh => fh.isArrear && !fh.isDiscount)
@@ -1688,6 +1741,12 @@ export class VouchersService {
                             totalAmount: fh.netAmount.toLocaleString(),
                             target_month: fh.target_month,
                             academic_year: fh.academic_year,
+                            monthLabel: fh.target_month != null
+                                ? getMonthYearLabel(fh.target_month, fh.academic_year || '', termOf(fh)).toUpperCase()
+                                : null,
+                            __sortIndex: fh.target_month != null
+                                ? (getMonthAbsoluteIndex(fh.target_month, fh.academic_year ?? '', termOf(fh)) ?? 0)
+                                : 0,
                         })),
                     ...missedArrearInstallments.map((f: any) => {
                         const group = installmentGroups.get(f.installment_id!) || [];
@@ -1701,13 +1760,15 @@ export class VouchersService {
                             totalAmount: Number(f.amount || 0).toLocaleString(),
                             target_month: f.target_month,
                             academic_year: f.academic_year,
+                            monthLabel: f.target_month != null
+                                ? getMonthYearLabel(f.target_month, f.academic_year || '', termOf(f)).toUpperCase()
+                                : null,
+                            __sortIndex: f.target_month != null
+                                ? (getMonthAbsoluteIndex(f.target_month, f.academic_year ?? '', termOf(f)) ?? 0)
+                                : 0,
                         };
                     }),
-                ].sort((a, b) => {
-                    const aIdx = a.target_month != null ? (getMonthAbsoluteIndex(a.target_month, a.academic_year ?? '') ?? 0) : 0;
-                    const bIdx = b.target_month != null ? (getMonthAbsoluteIndex(b.target_month, b.academic_year ?? '') ?? 0) : 0;
-                    return aIdx - bIdx;
-                }),
+                ].sort((a, b) => a.__sortIndex - b.__sortIndex),
                 installmentsHistory: (studentInstallmentFees as any[])
                     .filter(f => {
                         const isStandalone = f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id;
@@ -1735,7 +1796,7 @@ export class VouchersService {
                         const seqNum = standaloneSequenceMap.get(f.id) ?? 0;
                         const feeType = f.student_fee_installments?.fee_types?.description || 'Fee';
                         const month = f.target_month
-                            ? getMonthYearLabel(f.target_month, f.academic_year || '', voucher.class_id).toUpperCase()
+                            ? getMonthYearLabel(f.target_month, f.academic_year || '', termOf(f)).toUpperCase()
                             : 'N/A';
                         return {
                             head: getInstallmentLabel(feeType, seqNum, total),
@@ -3419,7 +3480,8 @@ export class VouchersService {
         if (realHeads.length === 0) {
             throw new BadRequestException('This voucher has no fee heads to render.');
         }
-        if (!realHeads.every((h) => this.headIsArrear(h, voucher))) {
+        const receiptClassTerms = await getClassTermMap(this.prisma);
+        if (!realHeads.every((h) => this.headIsArrear(h, voucher, receiptClassTerms))) {
             throw new BadRequestException(
                 'This voucher still has a current-period head — the main-column receipt is only for paid vouchers made up entirely of old (arrear) heads.',
             );
@@ -3905,6 +3967,10 @@ export class VouchersService {
                         status: 'PAID',
                         amount_before_discount: paidGross,
                         target_month: oldFee.target_month,
+                        // Inherited, never re-derived from the student's current class:
+                        // this row is the paid half of an existing head and must keep
+                        // labelling under the term that head was written with.
+                        term_start_month: oldFee.term_start_month,
                         amount: totalPaidOnFee,
                         bundle_id: oldFee.bundle_id,
                         fee_date: oldFee.fee_date,
