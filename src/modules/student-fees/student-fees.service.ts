@@ -10,7 +10,12 @@ import { Prisma } from '@prisma/client';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
 import { StudentsService } from '../students/students.service';
-import { resolveTermStartMonth, DEFAULT_TERM_START_MONTH } from '../../common/utils/academic-labels';
+import {
+    resolveTermStartMonth,
+    DEFAULT_TERM_START_MONTH,
+    getMonthYearLabel,
+    termOfHead,
+} from '../../common/utils/academic-labels';
 import { getClassTermMap, termStartMonthForClass } from '../../common/utils/class-terms.util';
 
 // An audit-log entry queued during a transaction/multi-step operation and
@@ -1682,6 +1687,258 @@ export class StudentFeesService {
         }
 
         return { deleted: canDelete.length, blocked: blocked.length };
+    }
+
+    // ─── Fee-head Year Transfer ───────────────────────────────────────────────
+
+    /**
+     * Loads the heads for a transfer and works out, for each one, what its month
+     * label reads today and what it would read at the destination.
+     *
+     * Shared by the preview and the transfer itself so the two can never drift:
+     * whatever the admin approved in the preview is what gets written.
+     */
+    private async buildTransferRows(
+        studentFeeIds: number[],
+        targetAcademicYear: string,
+        targetTermStartMonth: number,
+    ) {
+        const fees = await this.prisma.student_fees.findMany({
+            where: { id: { in: studentFeeIds } },
+            select: {
+                id: true,
+                student_id: true,
+                fee_type_id: true,
+                target_month: true,
+                academic_year: true,
+                term_start_month: true,
+                amount: true,
+                status: true,
+                fee_types: { select: { description: true } },
+                students: { select: { class_id: true, full_name: true, gr_number: true } },
+                voucher_heads: {
+                    select: {
+                        vouchers: {
+                            select: { id: true, class_id: true, status: true, paid_pdf_url: true },
+                        },
+                    },
+                },
+            },
+            orderBy: [{ academic_year: 'asc' }, { target_month: 'asc' }],
+        });
+
+        const classTerms = await getClassTermMap(this.prisma);
+
+        // Heads already sitting at the destination period — a transfer would put
+        // two heads of the same fee type on the same month of the same year.
+        const studentIds = [...new Set(fees.map((f) => f.student_id))];
+        const existingAtTarget = studentIds.length
+            ? await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    academic_year: targetAcademicYear,
+                    id: { notIn: studentFeeIds },
+                },
+                select: { id: true, student_id: true, fee_type_id: true, target_month: true },
+            })
+            : [];
+        const occupied = new Map<string, number>();
+        for (const e of existingAtTarget) {
+            occupied.set(`${e.student_id}|${e.fee_type_id ?? 'x'}|${e.target_month}`, e.id);
+        }
+
+        return fees.map((f) => {
+            const vouchers = f.voucher_heads
+                .map((vh) => vh.vouchers)
+                .filter((v): v is NonNullable<typeof v> => v != null);
+            const paidVoucher = vouchers.find((v) => v.status === 'PAID');
+            const frozen = vouchers.find((v) => v.paid_pdf_url != null);
+
+            // "Before" is the label as the fee schedule renders it — through the
+            // student's *current* class. That is the screen the admin is looking
+            // at when they decide to transfer, and the one showing the wrong
+            // month for a student who has moved between term systems.
+            const before = getMonthYearLabel(
+                f.target_month,
+                f.academic_year,
+                termOfHead(f, { classId: f.students?.class_id ?? null, classTerms }),
+            );
+            // A voucher renders the same head through the class it was issued
+            // against, so it can already disagree with the schedule. Surfaced
+            // separately rather than folded into "before", which would hide the
+            // change the admin is about to make.
+            const onVoucher = vouchers.length
+                ? getMonthYearLabel(
+                    f.target_month,
+                    f.academic_year,
+                    termOfHead(f, { classId: vouchers[0].class_id, classTerms }),
+                )
+                : null;
+            const after = getMonthYearLabel(f.target_month, targetAcademicYear, {
+                termStartMonth: targetTermStartMonth,
+                classId: null,
+                classTerms: null,
+            });
+
+            const collisionWith = occupied.get(
+                `${f.student_id}|${f.fee_type_id ?? 'x'}|${f.target_month}`,
+            );
+
+            return {
+                id: f.id,
+                student_id: f.student_id,
+                student_name: f.students?.full_name ?? null,
+                gr_number: f.students?.gr_number ?? null,
+                fee_type: f.fee_types?.description ?? null,
+                target_month: f.target_month,
+                amount: f.amount,
+                status: f.status,
+                from_academic_year: f.academic_year,
+                from_term_start_month: f.term_start_month,
+                to_academic_year: targetAcademicYear,
+                to_term_start_month: targetTermStartMonth,
+                label_before: before,
+                label_after: after,
+                label_on_voucher: onVoucher,
+                flags: {
+                    on_voucher: vouchers.length > 0,
+                    on_paid_voucher: paidVoucher != null,
+                    frozen_receipt: frozen != null,
+                    collision: collisionWith != null,
+                    label_unchanged: before === after,
+                    voucher_label_differs: onVoucher != null && onVoucher !== before,
+                },
+                voucher_ids: vouchers.map((v) => v.id),
+                collision_with_fee_id: collisionWith ?? null,
+            };
+        });
+    }
+
+    /**
+     * Read-only preview of a year transfer.
+     *
+     * Deliberately does NOT reuse the bulk-delete guard, which blocks any head
+     * that sits on a voucher. Heads on vouchers are precisely the ones that need
+     * moving here — a head stranded in the wrong academic year is one that was
+     * billed before the student changed term systems. They surface as warnings
+     * for the admin to weigh, never as blocks.
+     */
+    async transferPreview(params: {
+        student_fee_ids: number[];
+        target_academic_year: string;
+        target_term_start_month: number;
+    }) {
+        const { student_fee_ids, target_academic_year, target_term_start_month } = params;
+        if (!student_fee_ids.length) {
+            throw new BadRequestException('student_fee_ids is required.');
+        }
+        if (![4, 8].includes(target_term_start_month)) {
+            throw new BadRequestException('target_term_start_month must be 4 (Apr-Mar) or 8 (Aug-Jul).');
+        }
+
+        const rows = await this.buildTransferRows(
+            student_fee_ids,
+            target_academic_year,
+            target_term_start_month,
+        );
+
+        return {
+            rows,
+            total: rows.length,
+            changes: rows.filter((r) => !r.flags.label_unchanged).length,
+            unchanged: rows.filter((r) => r.flags.label_unchanged).length,
+            on_paid_voucher: rows.filter((r) => r.flags.on_paid_voucher).length,
+            frozen_receipts: rows.filter((r) => r.flags.frozen_receipt).length,
+            collisions: rows.filter((r) => r.flags.collision).length,
+        };
+    }
+
+    /**
+     * Move fee heads to another academic year.
+     *
+     * Writes academic_year and term_start_month together, always. Leaving the
+     * term NULL would hand the head back to the class-derived fallback, which is
+     * the exact ambiguity this column exists to remove.
+     */
+    async transferHeads(
+        dto: import('./dto/transfer-heads.dto').TransferHeadsDto,
+        changedBy?: string,
+    ) {
+        const { student_fee_ids, target_academic_year, target_term_start_month } = dto;
+
+        if (!dto.acknowledgement) {
+            throw new BadRequestException('acknowledgement is required to transfer fee heads.');
+        }
+        if (![4, 8].includes(target_term_start_month)) {
+            throw new BadRequestException('target_term_start_month must be 4 (Apr-Mar) or 8 (Aug-Jul).');
+        }
+
+        // Re-read at execute time: the preview the admin approved may be stale.
+        const rows = await this.buildTransferRows(
+            student_fee_ids,
+            target_academic_year,
+            target_term_start_month,
+        );
+        if (rows.length === 0) {
+            throw new NotFoundException('No fee heads found for the given ids.');
+        }
+
+        const ids = rows.map((r) => r.id);
+        await this.prisma.$transaction([
+            this.prisma.student_fees.updateMany({
+                where: { id: { in: ids } },
+                data: {
+                    academic_year: target_academic_year,
+                    term_start_month: target_term_start_month,
+                },
+            }),
+        ]);
+
+        // One entry per head, carrying both old values, so the move can be
+        // reversed from the audit log alone.
+        const distinctStudents = new Set(rows.map((r) => r.student_id));
+        const changed = rows.filter((r) => !r.flags.label_unchanged);
+        const summary: FeeAuditEvent = {
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: ids.join(','),
+            action: 'TRANSFERRED',
+            field: 'academic_year+term_start_month',
+            old_value: [...new Set(rows.map((r) => r.from_academic_year))].join(', '),
+            new_value: target_academic_year,
+            note: `Transferred ${ids.length} fee head(s) across ${distinctStudents.size} student(s) ` +
+                `to ${target_academic_year} (${target_term_start_month === 4 ? 'Apr-Mar' : 'Aug-Jul'} term); ` +
+                `${changed.length} month label(s) changed. ` +
+                `${rows.filter((r) => r.flags.on_paid_voucher).length} on a PAID voucher, ` +
+                `${rows.filter((r) => r.flags.frozen_receipt).length} with a frozen receipt, ` +
+                `${rows.filter((r) => r.flags.collision).length} colliding at the destination.`,
+        };
+        const events: FeeAuditEvent[] = rows.map((r) => ({
+            entity_type: 'STUDENT_FEE_SCHEDULE',
+            entity_id: String(r.id),
+            action: 'TRANSFERRED',
+            field: 'academic_year+term_start_month',
+            old_value: `${r.from_academic_year} / term ${r.from_term_start_month ?? 'NULL'}`,
+            new_value: `${target_academic_year} / term ${target_term_start_month}`,
+            note: `Transferred ${r.fee_type ?? 'fee'} (${this.fmtMoney(r.amount)}, ${r.status}) ` +
+                `from ${r.from_academic_year} to ${target_academic_year}: ` +
+                `label "${r.label_before}" -> "${r.label_after}"` +
+                (r.flags.on_paid_voucher ? '; head is on a PAID voucher' : '') +
+                (r.flags.frozen_receipt ? '; receipt PDF is frozen and keeps the old label' : '') +
+                (r.flags.collision ? `; collides with fee #${r.collision_with_fee_id} at the destination` : ''),
+        }));
+        await this.flushAuditEvents(
+            [summary, ...events],
+            distinctStudents.size === 1 ? ([...distinctStudents][0] as number) : null,
+            changedBy ?? 'system',
+        );
+
+        return {
+            transferred: ids.length,
+            student_fee_ids: ids,
+            target_academic_year,
+            target_term_start_month,
+            rows,
+        };
     }
 
     // ─── Discount Row Operations ──────────────────────────────────────────────

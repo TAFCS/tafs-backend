@@ -22,6 +22,7 @@ import { Action } from '../auth/casl/actions';
 import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateDiscountDto } from './dto/create-discount.dto';
 import { ApplyScholarshipDto } from './dto/apply-scholarship.dto';
+import { TransferHeadsDto } from './dto/transfer-heads.dto';
 
 @Controller('student-fees')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -281,6 +282,37 @@ export class StudentFeesController {
     async bulkDelete(@Body() dto: any, @Req() req: Request) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.bulkDelete(dto, changedBy);
+        return { success: true, data };
+    }
+
+    // ─── Fee-head Year Transfer ───────────────────────────────────────────────
+
+    @Get('transfer-preview')
+    @CheckPolicies((ability) => ability.can(Action.Read, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async transferPreview(
+        @Query('student_fee_ids') student_fee_ids: string,
+        @Query('target_academic_year') target_academic_year: string,
+        @Query('target_term_start_month', ParseIntPipe) target_term_start_month: number,
+    ) {
+        const ids = (student_fee_ids ?? '')
+            .split(',')
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isInteger(n) && n > 0);
+        const data = await this.studentFeesService.transferPreview({
+            student_fee_ids: ids,
+            target_academic_year,
+            target_term_start_month,
+        });
+        return { success: true, data };
+    }
+
+    // Admin-only: this rewrites records that may already be paid and receipted.
+    @Patch('transfer')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Manage, 'all'))
+    async transferHeads(@Body() dto: TransferHeadsDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.transferHeads(dto, changedBy);
         return { success: true, data };
     }
 
