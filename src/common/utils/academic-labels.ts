@@ -1,17 +1,110 @@
 const PDF_MONTHS = ['August','September','October','November','December','January','February','March','April','May','June','July'];
 const PDF_MONTH_TO_NUM: Record<string, number> = { August:8,September:9,October:10,November:11,December:12,January:1,February:2,March:3,April:4,May:5,June:6,July:7 };
 
+/** Aug-Jul. The term every class runs on unless it says otherwise. */
+export const DEFAULT_TERM_START_MONTH = 8;
+
+/**
+ * Legacy fallback for classes whose term we can't look up.
+ *
+ * These are the Secondary VI-X classes, seeded to term_start_month = 4 by
+ * migration 20260510000000_add_term_start_month_and_test_data. Prefer passing
+ * `classTerms` (a class_id -> classes.term_start_month map) so the DB column is
+ * the authority; this array only covers callers that have no class data loaded.
+ * It cannot see Apr-Mar classes created after it was written.
+ */
 const SPECIAL_CLASS_IDS = [15, 16, 17, 18, 19];
 
 export function isSpecial(classId?: number): boolean {
     return !!classId && SPECIAL_CLASS_IDS.includes(Number(classId));
 }
 
-export function deriveAcademicYear(dateStr: string, classId?: number): string {
+/**
+ * Where a term cutoff comes from, in priority order.
+ *
+ * This is an object rather than a bare number on purpose. Every one of these
+ * call sites used to take `classId?: number`, and a cutoff is also a number, so
+ * a plain-number parameter would let a stray `voucher.class_id` be silently
+ * read as "term starts in month 17". Making it an object turns every missed
+ * call site into a compile error.
+ */
+export interface TermContext {
+    /** From student_fees.term_start_month — the term in force when the head was written. Wins. */
+    termStartMonth?: number | null;
+    /** Fallback: infer from a class. Only correct when the head has never crossed term systems. */
+    classId?: number | null;
+    /** class_id -> classes.term_start_month. Supply it and the DB column beats SPECIAL_CLASS_IDS. */
+    classTerms?: ReadonlyMap<number, number> | null;
+}
+
+/** Resolve the month a term starts in (8 = Aug-Jul, 4 = Apr-Mar). */
+export function resolveTermStartMonth(term?: TermContext | null): number {
+    if (term?.termStartMonth != null) return Number(term.termStartMonth);
+
+    const classId = term?.classId;
+    if (classId != null) {
+        const fromDb = term?.classTerms?.get(Number(classId));
+        if (fromDb != null) return Number(fromDb);
+        if (isSpecial(Number(classId))) return 4;
+    }
+
+    return DEFAULT_TERM_START_MONTH;
+}
+
+/**
+ * Build a TermContext for one fee head, preferring the term stamped on the head
+ * and falling back to the class it is being viewed through.
+ */
+export function termOfHead(
+    head: { term_start_month?: number | null } | null | undefined,
+    fallback?: Omit<TermContext, 'termStartMonth'>,
+): TermContext {
+    return {
+        termStartMonth: head?.term_start_month ?? null,
+        classId: fallback?.classId ?? null,
+        classTerms: fallback?.classTerms ?? null,
+    };
+}
+
+/**
+ * THE derivation. `(target_month, academic_year)` alone is ambiguous — "June of
+ * 2025-2026" is June 2026 on an Aug-Jul term and June 2025 on an Apr-Mar one —
+ * and this is the only place that ambiguity gets resolved.
+ */
+export function calendarYearOf(month: number, academicYear: string, term?: TermContext): number | null {
+    const parts = (academicYear || '').split('-').map(y => y.trim());
+    const startYear = parseInt(parts[0], 10);
+    if (!Number.isFinite(startYear)) return null;
+
+    const cutoff = resolveTermStartMonth(term);
+    return month >= cutoff ? startYear : startYear + 1;
+}
+
+/**
+ * A totally-ordered index for sorting heads by when they fall in real time.
+ *
+ * Deliberately calendar-absolute rather than term-relative: a list that mixes
+ * heads from two term systems (a student moved between them) has no consistent
+ * term-relative ordering, because "slot 0" means a different month for each.
+ * Use `termRelativeSlot` only where the position *within* a term is the point.
+ */
+export function monthAbsoluteIndex(month: number, academicYear: string, term?: TermContext): number | null {
+    const year = calendarYearOf(month, academicYear, term);
+    if (year == null) return null;
+    return year * 12 + month;
+}
+
+/** Position of a month within its own term: 0 = first month of the term. */
+export function termRelativeSlot(month: number, term?: TermContext): number {
+    const cutoff = resolveTermStartMonth(term);
+    return month >= cutoff ? month - cutoff : month + (12 - cutoff);
+}
+
+export function deriveAcademicYear(dateStr: string, term?: TermContext): string {
     const d = new Date(dateStr);
     const m = d.getUTCMonth() + 1;
     const y = d.getUTCFullYear();
-    const cutoff = isSpecial(classId) ? 4 : 8;
+    const cutoff = resolveTermStartMonth(term);
     const startYear = m >= cutoff ? y : y - 1;
     return `${startYear}-${startYear + 1}`;
 }
@@ -28,7 +121,7 @@ export function resolveVoucherAcademicYear(
     feeAcademicYears: Array<string | null | undefined>,
     fallback: {
         feeDate?: string | Date | null;
-        classId?: number;
+        term?: TermContext;
         stored?: string | null;
     } = {},
 ): string {
@@ -46,7 +139,7 @@ export function resolveVoucherAcademicYear(
             fallback.feeDate instanceof Date
                 ? fallback.feeDate.toISOString()
                 : String(fallback.feeDate);
-        return deriveAcademicYear(dateStr, fallback.classId);
+        return deriveAcademicYear(dateStr, fallback.term);
     }
 
     if (fallback.stored?.trim()) return fallback.stored.trim();
@@ -69,7 +162,7 @@ export function resolveVoucherAcademicYearLabel(
     feeAcademicYears: Array<string | null | undefined>,
     fallback: {
         feeDate?: string | Date | null;
-        classId?: number;
+        term?: TermContext;
         stored?: string | null;
     } = {},
 ): string {
@@ -92,14 +185,13 @@ export function resolveVoucherAcademicYearLabel(
 
 /**
  * Returns a short month+year label for a PDF head, e.g. "Sep 25" or "Jan 26".
- * Special classes (IDs 15-19) use an April-March year; all others use August-July.
  */
-export function getMonthYearLabel(m: number, academicYear: string, classId?: number): string {
+export function getMonthYearLabel(m: number, academicYear: string, term?: TermContext): string {
     const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
-    const parts = academicYear.split('-').map(y => y.trim());
-    const cutoff = isSpecial(classId) ? 4 : 8;
-    const year = m >= cutoff ? parts[0] : (parts[1] || parts[0]);
-    return `${monthName.slice(0, 3)} ${year.slice(-2)}`;
+    const parts = (academicYear || '').split('-').map(y => y.trim());
+    const year = calendarYearOf(m, academicYear, term);
+    const yearStr = year != null ? String(year) : (parts[0] || '');
+    return `${monthName.slice(0, 3)} ${yearStr.slice(-2)}`;
 }
 
 /**
@@ -107,12 +199,11 @@ export function getMonthYearLabel(m: number, academicYear: string, classId?: num
  * Same academic-year resolution as getMonthYearLabel, but unabbreviated —
  * used for installment row wording on challans.
  */
-export function getFullMonthYearLabel(m: number, academicYear: string, classId?: number): string {
+export function getFullMonthYearLabel(m: number, academicYear: string, term?: TermContext): string {
     const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
-    const parts = academicYear.split('-').map(y => y.trim());
-    const cutoff = isSpecial(classId) ? 4 : 8;
-    const year = m >= cutoff ? parts[0] : (parts[1] || parts[0]);
-    return `${monthName.toUpperCase()} ${year}`;
+    const parts = (academicYear || '').split('-').map(y => y.trim());
+    const year = calendarYearOf(m, academicYear, term);
+    return `${monthName.toUpperCase()} ${year != null ? year : (parts[0] || '')}`;
 }
 
 /**
@@ -128,12 +219,12 @@ export function getInstallmentLabel(
     total: number,
     month?: number | null,
     academicYear?: string | null,
-    classId?: number,
+    term?: TermContext,
 ): string {
     const pad = (n: number) => String(n).padStart(2, '0');
     const base = `${feeTypeDesc} INSTALLMENTS PLAN - ${pad(seqNum)} OF ${pad(total)}`;
     if (month == null || !academicYear) return base;
-    return `${base} - ${getFullMonthYearLabel(month, academicYear, classId)}`;
+    return `${base} - ${getFullMonthYearLabel(month, academicYear, term)}`;
 }
 
 const CALENDAR_MONTHS = [
@@ -160,32 +251,35 @@ export function buildVoucherMonthsLabel(
             target_month?: number | null;
             academic_year?: string | null;
             fee_date?: Date | string | null;
+            term_start_month?: number | null;
         } | null;
     }> | null | undefined,
     fallback: {
         month?: number | null;
         feeDate?: Date | string | null;
         classId?: number | null;
+        classTerms?: ReadonlyMap<number, number> | null;
     } = {},
 ): string {
-    const classId = fallback.classId ?? undefined;
+    const classFallback = { classId: fallback.classId, classTerms: fallback.classTerms };
 
     const billed = (voucherHeads ?? [])
         .map((h) => {
             const sf = h?.student_fees;
             if (!sf || sf.target_month == null) return null;
-            // Mirrors the per-head resolution in prepareVoucherPdfData: special
-            // classes with no stored year derive it from the fee's own date.
+            const term = termOfHead(sf, classFallback);
+            // Mirrors the per-head resolution in prepareVoucherPdfData: heads on
+            // an Apr-Mar term with no stored year derive it from the fee's own date.
             const academicYear =
                 sf.academic_year ||
-                (isSpecial(classId) && sf.fee_date
-                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), classId)
+                (resolveTermStartMonth(term) !== DEFAULT_TERM_START_MONTH && sf.fee_date
+                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), term)
                     : '');
-            return { month: sf.target_month, academicYear };
+            return { month: sf.target_month, academicYear, term };
         })
-        .filter((x): x is { month: number; academicYear: string } => x !== null);
+        .filter((x): x is { month: number; academicYear: string; term: TermContext } => x !== null);
 
-    if (billed.length > 0) return getConsolidatedMonthsLabel(billed, classId);
+    if (billed.length > 0) return getConsolidatedMonthsLabel(billed, classFallback);
     if (fallback.month) return CALENDAR_MONTHS[fallback.month - 1] ?? 'N/A';
     if (fallback.feeDate) {
         return new Date(fallback.feeDate).toLocaleString('default', { month: 'long' });
@@ -196,35 +290,36 @@ export function buildVoucherMonthsLabel(
 /**
  * Collapses a list of month+academicYear items into a human-readable label
  * that consolidates consecutive months into ranges, e.g. "AUG 25 - OCT 25".
+ *
+ * Each item may carry its own term; a list spanning a term change is ordered and
+ * ranged on calendar time, so a Jun-2026 Cambridge head and a Jul-2026 Secondary
+ * head still read as consecutive.
  */
 export function getConsolidatedMonthsLabel(
-    items: { month: number; academicYear: string }[],
-    classId?: number,
+    items: { month: number; academicYear: string; term?: TermContext }[],
+    fallbackTerm?: TermContext,
 ): string {
     if (!items || items.length === 0) return '';
 
-    const getSeq = (month: number, ay: string) => {
-        const startYear = parseInt(ay.split('-')[0]) || 0;
-        const cutoff = isSpecial(classId) ? 4 : 8;
-        const rel = month >= cutoff ? month - cutoff : month + (12 - cutoff);
-        return startYear * 12 + rel;
-    };
+    const termFor = (item: { term?: TermContext }) => item.term ?? fallbackTerm;
+    const seqOf = (item: { month: number; academicYear: string; term?: TermContext }) =>
+        monthAbsoluteIndex(item.month, item.academicYear, termFor(item)) ?? 0;
 
     const uniqueMonths = Array.from(
-        new Set(items.map(f => JSON.stringify({ m: f.month, ay: f.academicYear }))),
-    )
-        .map(s => JSON.parse(s) as { m: number; ay: string })
-        .sort((a, b) => getSeq(a.m, a.ay) - getSeq(b.m, b.ay));
+        new Map(
+            items.map(f => [`${f.month}|${f.academicYear}`, f]),
+        ).values(),
+    ).sort((a, b) => seqOf(a) - seqOf(b));
 
-    const ranges: { m: number; ay: string }[][] = [];
-    let current: { m: number; ay: string }[] = [];
+    const ranges: (typeof uniqueMonths)[] = [];
+    let current: typeof uniqueMonths = [];
 
     uniqueMonths.forEach((item, idx) => {
         if (idx === 0) {
             current.push(item);
         } else {
             const prev = uniqueMonths[idx - 1];
-            if (getSeq(item.m, item.ay) === getSeq(prev.m, prev.ay) + 1) {
+            if (seqOf(item) === seqOf(prev) + 1) {
                 current.push(item);
             } else {
                 ranges.push(current);
@@ -236,9 +331,10 @@ export function getConsolidatedMonthsLabel(
 
     return ranges
         .map(range => {
-            const first = getMonthYearLabel(range[0].m, range[0].ay, classId).toUpperCase();
+            const first = getMonthYearLabel(range[0].month, range[0].academicYear, termFor(range[0])).toUpperCase();
             if (range.length === 1) return first;
-            const last = getMonthYearLabel(range[range.length - 1].m, range[range.length - 1].ay, classId).toUpperCase();
+            const lastItem = range[range.length - 1];
+            const last = getMonthYearLabel(lastItem.month, lastItem.academicYear, termFor(lastItem)).toUpperCase();
             return `${first} - ${last}`;
         })
         .join(', ');

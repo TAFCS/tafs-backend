@@ -160,7 +160,7 @@ export class BulkVoucherLogicService {
                             .map((f: any) => f.academic_year),
                         {
                             feeDate: dateStr,
-                            classId: student.class_id ?? undefined,
+                            term: { classId: student.class_id ?? null },
                             stored: params.academic_year_override,
                         },
                     );

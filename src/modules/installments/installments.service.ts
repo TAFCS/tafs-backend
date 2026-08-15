@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateInstallmentDto } from './dto/create-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
+import { getClassTermMap, termStartMonthForClass } from '../../common/utils/class-terms.util';
 
 @Injectable()
 export class InstallmentsService {
@@ -13,6 +14,15 @@ export class InstallmentsService {
 
   async create(dto: CreateInstallmentDto, userId: string) {
     try {
+      // Term stamped on the heads this plan creates, from the student's current
+      // class. Resolved before the transaction so it costs no transaction time.
+      const classTerms = await getClassTermMap(this.prisma);
+      const student = await this.prisma.students.findUnique({
+        where: { cc: dto.student_id },
+        select: { class_id: true },
+      });
+      const termStartMonth = termStartMonthForClass(student?.class_id, classTerms);
+
       const result = await this.prisma.$transaction(async (tx) => {
         const installmentGroup = await tx.student_fee_installments.create({
           data: {
@@ -71,6 +81,7 @@ export class InstallmentsService {
                 fee_type_id: dto.fee_type_id,
                 academic_year: dto.academic_year,
                 target_month: item.target_month,
+                term_start_month: termStartMonth,
                 fee_date: new Date(item.fee_date),
                 amount: item.amount,
                 installment_amount: item.amount,

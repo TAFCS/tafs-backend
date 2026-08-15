@@ -85,6 +85,13 @@ export interface VoucherPdfData {
         totalAmount: string;
         target_month?: number;
         academic_year?: string;
+        /**
+         * Rendered month+year, e.g. "JUN 26". Resolved server-side because only
+         * prepareVoucherPdfData knows the term each head was written under; the
+         * PDF components can see the student's current class at best. Null when
+         * the row carries no month — the components fall back to `date`.
+         */
+        monthLabel?: string | null;
     }>;
     surchargeWaived?: boolean;
     totalSurcharge?: number;

@@ -776,15 +776,13 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         </View>
                         {arrearsHistory && arrearsHistory.length > 0 ? (() => {
                             const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                            // Apr–Mar classes (IDs 15–19): term starts in April (cutoff=4).
-                            // All others: Aug–Jul term (cutoff=8).
-                            const termCutoff = [15, 16, 17, 18, 19].includes(student?.class_id) ? 4 : 8;
+                            // `monthLabel` is resolved by prepareVoucherPdfData, which knows the
+                            // term each head was written under (student_fees.term_start_month).
+                            // This component only ever saw the student's *current* class, so it
+                            // could not label a head billed before a move between term systems.
+                            // The date fallback is for legacy rows with no month/year.
                             const getMonthLabel = (r: any) => {
-                                if (r.target_month && r.academic_year) {
-                                    const parts = r.academic_year.split('-');
-                                    const year = r.target_month >= termCutoff ? parts[0] : parts[1];
-                                    return `${MONTHS_SHORT[r.target_month - 1].toUpperCase()} ${year.slice(-2)}`;
-                                }
+                                if (r.monthLabel) return r.monthLabel;
                                 const [y, m] = r.date.split('-');
                                 return `${MONTHS_SHORT[parseInt(m) - 1].toUpperCase()} ${y.slice(-2)}`;
                             };

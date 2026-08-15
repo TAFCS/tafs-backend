@@ -551,6 +551,13 @@ model student_fees {
   status                   fee_status_enum?          @default(NOT_ISSUED)
   amount_before_discount   Decimal?                  @db.Decimal(12, 2)
   target_month             Int
+  /// Term start month (8 = Aug-Jul, 4 = Apr-Mar) of the class this head was
+  /// written under. Pairs with target_month + academic_year to fix the calendar
+  /// year: "June of 2025-2026" is Jun 2026 under an Aug-Jul term but Jun 2025
+  /// under an Apr-Mar one. NULL means unknown — readers fall back to deriving
+  /// the cutoff from whichever class they happen to be viewing the head through,
+  /// which is what every caller did before this column existed.
+  term_start_month         Int?                      @db.SmallInt
   bundle_id                Int?
   fee_date                 DateTime?                 @db.Date
   amount_paid              Decimal?                  @default(0) @db.Decimal(12, 2)
