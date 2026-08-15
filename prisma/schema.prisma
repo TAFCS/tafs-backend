@@ -168,11 +168,12 @@ model classes {
 }
 
 model segments {
-  id            Int       @id @default(autoincrement())
-  code          String    @unique @db.VarChar(30)
-  name          String    @db.VarChar(50)
-  display_order Int       @default(0)
-  classes       classes[]
+  id                Int                 @id @default(autoincrement())
+  code              String              @unique @db.VarChar(30)
+  name              String              @db.VarChar(50)
+  display_order     Int                 @default(0)
+  classes           classes[]
+  employee_profiles employee_profiles[]
 }
 
 model deposit_allocations {
@@ -1141,6 +1142,7 @@ model employee_profiles {
   employee_code_dep                  String?                              @db.VarChar(10)
   employee_code_number               String?                              @db.VarChar(20)
   staff_category_id                  Int?
+  segment_id                         Int?
   father_photo_url                   String?
   mother_photo_url                   String?
   spouse_cnic                        String?                              @db.VarChar(50)
@@ -1160,6 +1162,7 @@ model employee_profiles {
   reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
+  segments                           segments?                            @relation(fields: [segment_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]

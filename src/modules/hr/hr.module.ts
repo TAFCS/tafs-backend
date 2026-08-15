@@ -4,6 +4,8 @@ import { EmployeesSelfController } from './employees/employees-self.controller';
 import { EmployeesService } from './employees/employees.service';
 import { DepartmentsController } from './departments/departments.controller';
 import { DepartmentsService } from './departments/departments.service';
+import { SegmentsController } from './segments/segments.controller';
+import { SegmentsService } from './segments/segments.service';
 import { PoliciesController } from './policies/policies.controller';
 import { PoliciesService } from './policies/policies.service';
 import { CalendarController } from './calendar/calendar.controller';
@@ -46,6 +48,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     EmployeesSelfController,
     EmployeesController,
     DepartmentsController,
+    SegmentsController,
     PoliciesController,
     CalendarController,
     ClassAttendanceModesController,
@@ -57,6 +60,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
   providers: [
     EmployeesService,
     DepartmentsService,
+    SegmentsService,
     PoliciesService,
     CalendarService,
     CalendarDayResolverService,

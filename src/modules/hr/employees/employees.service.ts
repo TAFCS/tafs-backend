@@ -79,6 +79,9 @@ export class CreateEmployeeDto {
   @IsOptional() @IsInt()
   staff_category_id?: number | null;
 
+  @IsOptional() @IsInt()
+  segment_id?: number | null;
+
   @IsOptional() @IsString()
   job_description?: string;
 
@@ -229,6 +232,7 @@ const includeRelations = {
   },
   departments: true,
   staff_categories: true,
+  segments: true,
   campuses: true,
   reporting_manager: {
     include: { users: { select: { full_name: true } } }
@@ -387,6 +391,7 @@ export class EmployeesService {
         personal_email: rest.personal_email || null,
         job_title: upperOrNull(rest.job_title),
         staff_category_id: rest.staff_category_id ?? null,
+        segment_id: rest.segment_id ?? null,
         job_description: upperOrNull(rest.job_description),
         notes: rest.notes || null,
         reporting_time: toTime(rest.reporting_time),
@@ -510,6 +515,7 @@ export class EmployeesService {
           personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
           job_title: rest.job_title !== undefined ? upperOrNull(rest.job_title) : undefined,
           staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
+          segment_id: rest.segment_id !== undefined ? rest.segment_id : undefined,
           job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
           reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
