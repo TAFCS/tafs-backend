@@ -1026,11 +1026,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.emitToTicketRoom(ticket.id, 'ticketClosed', { ticket });
   }
 
-  async broadcastTicketMessageDeleted(ticket: any, messageId: string) {
+  async broadcastTicketMessageDeleted(
+    ticket: any,
+    messageId: string,
+    message?: unknown,
+  ) {
     const payload = {
       ticketId: ticket.id,
       messageId,
       ticket,
+      ...(message ? { message } : {}),
     };
     this.server
       .to(`family_app_${ticket.family_id}`)

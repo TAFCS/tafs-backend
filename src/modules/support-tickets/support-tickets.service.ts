@@ -294,7 +294,10 @@ export class SupportTicketsService {
               (!!parentLastRead && m.created_at <= parentLastRead)
             : m.is_read ||
               (!!staffLastRead && m.created_at <= staffLastRead);
-        return { ...m, is_read: isReadByRecipient };
+        return {
+          ...this.presentTicketMessage(m),
+          is_read: isReadByRecipient,
+        };
       }),
       messageTotal,
       events,
@@ -1077,8 +1080,12 @@ export class SupportTicketsService {
     return this.createParentMessage(ticketId, payload, dto);
   }
 
-  /** Staff soft-delete of own ticket message only. */
+  /** Super Admin soft-delete of own ticket message. Clients show a tombstone. */
   async deleteOwnStaffMessage(messageId: string, staff: IJwtStaffPayload) {
+    if (staff.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only Super Admin can delete messages');
+    }
+
     const message = await this.prisma.ticket_messages.findUnique({
       where: { id: messageId },
       include: {
@@ -1087,6 +1094,9 @@ export class SupportTicketsService {
       },
     });
     if (!message) throw new NotFoundException('Message not found');
+    if (message.ticket.status === TicketStatus.CLOSED) {
+      throw new BadRequestException('Cannot delete messages on a closed ticket');
+    }
     if (message.deleted_at) {
       throw new BadRequestException('Message already deleted');
     }
@@ -1154,12 +1164,34 @@ export class SupportTicketsService {
       ].join(' — '),
     });
 
+    const tombstone = this.presentTicketMessage({
+      id: message.id,
+      ticket_id: message.ticket_id,
+      sender_type: message.sender_type,
+      sender_user_id: message.sender_user_id,
+      sender_guardian_id: message.sender_guardian_id,
+      message_type: message.message_type,
+      content: message.content,
+      media_metadata: message.media_metadata,
+      status: message.status,
+      is_read: message.is_read,
+      created_at: message.created_at,
+      sender_user: message.sender_user,
+      deleted_at: new Date(),
+    });
+
     await this.chatGateway.broadcastTicketMessageDeleted(
       updatedTicket,
       messageId,
+      tombstone,
     );
 
-    return { success: true, messageId, ticket: updatedTicket };
+    return {
+      success: true,
+      messageId,
+      ticket: updatedTicket,
+      message: tombstone,
+    };
   }
 
   private async closeTicket(
@@ -1281,15 +1313,19 @@ export class SupportTicketsService {
     };
   }
 
+  /**
+   * Approved deleted staff messages stay in the thread as tombstones.
+   * Pending/rejected deletes (never shown to the parent) remain hidden.
+   * Original content is stripped in presentTicketMessage().
+   */
   private messageVisibilityWhere(
     actor: IJwtStaffPayload | IJwtParentPayload,
-    ticket: { id: string },
+    _ticket: { id: string },
   ): Prisma.ticket_messagesWhereInput {
     if (actor.userType === 'PARENT') {
       return {
-        deleted_at: null,
         OR: [
-          { sender_type: 'GUARDIAN' },
+          { sender_type: 'GUARDIAN', deleted_at: null },
           { sender_type: 'STAFF', status: MessageStatus.APPROVED },
         ],
       };
@@ -1297,16 +1333,40 @@ export class SupportTicketsService {
 
     const staff = actor as IJwtStaffPayload;
     if (staff.role === 'SUPER_ADMIN') {
-      return { deleted_at: null };
+      return {};
     }
 
     return {
-      deleted_at: null,
       OR: [
-        { sender_type: 'GUARDIAN' },
+        { sender_type: 'GUARDIAN', deleted_at: null },
         { sender_type: 'STAFF', status: MessageStatus.APPROVED },
-        { sender_type: 'STAFF', sender_user_id: staff.sub },
+        {
+          sender_type: 'STAFF',
+          sender_user_id: staff.sub,
+          deleted_at: null,
+        },
       ],
+    };
+  }
+
+  /** Strip original body/media for deleted rows so clients can only show a placeholder. */
+  private presentTicketMessage<
+    T extends {
+      content: string;
+      deleted_at?: Date | string | null;
+      media_metadata?: unknown;
+    },
+  >(message: T): T & { is_deleted: boolean } {
+    const isDeleted =
+      message.deleted_at != null && message.deleted_at !== '';
+    if (!isDeleted) {
+      return { ...message, is_deleted: false };
+    }
+    return {
+      ...message,
+      content: '',
+      media_metadata: null,
+      is_deleted: true,
     };
   }
 

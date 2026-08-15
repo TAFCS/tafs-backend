@@ -177,8 +177,8 @@ export class SupportTicketsController {
 
   @Delete('messages/:messageId')
   @UseGuards(JwtStaffGuard, PoliciesGuard)
-  @CheckPolicies(canViewTickets)
-  @ApiOperation({ summary: 'Staff soft-delete own ticket message' })
+  @CheckPolicies(canManageTickets)
+  @ApiOperation({ summary: 'Super Admin soft-delete own ticket message (tombstone)' })
   deleteMessage(
     @Param('messageId') messageId: string,
     @CurrentUser() staff: any,

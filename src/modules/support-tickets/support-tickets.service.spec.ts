@@ -63,18 +63,71 @@ describe('SupportTicketsService leak-proofing', () => {
     );
   });
 
-  it('parent message filter excludes pending staff replies', () => {
+  it('parent message filter excludes pending staff replies but keeps approved tombstones', () => {
     const where = (service as any).messageVisibilityWhere(
       { userType: 'PARENT', familyId: 1 },
       { id: 't1' },
     );
     expect(where).toEqual({
-      deleted_at: null,
       OR: [
-        { sender_type: 'GUARDIAN' },
+        { sender_type: 'GUARDIAN', deleted_at: null },
         { sender_type: 'STAFF', status: MessageStatus.APPROVED },
       ],
     });
+  });
+
+  it('staff message filter keeps approved tombstones and own non-deleted pending', () => {
+    const where = (service as any).messageVisibilityWhere(
+      { userType: 'STAFF', sub: 'staff-1', role: 'PRINCIPAL' },
+      { id: 't1' },
+    );
+    expect(where).toEqual({
+      OR: [
+        { sender_type: 'GUARDIAN', deleted_at: null },
+        { sender_type: 'STAFF', status: MessageStatus.APPROVED },
+        {
+          sender_type: 'STAFF',
+          sender_user_id: 'staff-1',
+          deleted_at: null,
+        },
+      ],
+    });
+  });
+
+  it('super admin message filter includes deleted rows', () => {
+    const where = (service as any).messageVisibilityWhere(
+      { userType: 'STAFF', sub: 'admin-1', role: 'SUPER_ADMIN' },
+      { id: 't1' },
+    );
+    expect(where).toEqual({});
+  });
+
+  it('presentTicketMessage strips content and media for deleted rows', () => {
+    const presented = (service as any).presentTicketMessage({
+      id: 'm1',
+      content: 'secret body',
+      deleted_at: new Date('2026-08-15'),
+      media_metadata: { url: 'https://example.com/file.png' },
+    });
+    expect(presented).toEqual({
+      id: 'm1',
+      content: '',
+      deleted_at: new Date('2026-08-15'),
+      media_metadata: null,
+      is_deleted: true,
+    });
+  });
+
+  it('non-super-admin cannot delete ticket messages', async () => {
+    await expect(
+      service.deleteOwnStaffMessage('m1', {
+        sub: 'staff-1',
+        role: 'PRINCIPAL',
+        userType: 'STAFF',
+        username: 'principal',
+      } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.ticket_messages.findUnique).not.toHaveBeenCalled();
   });
 
   it('parent event filter hides internal workflow events', () => {
