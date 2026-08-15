@@ -155,6 +155,22 @@ export class NoticeBoardService {
         .filter(Boolean),
     }));
 
+    let schoolWideReached: number | null = null;
+    const postsWithReach = await Promise.all(
+      postsWithStudents.map(async (post) => {
+        if (this._isSchoolWide(post)) {
+          if (schoolWideReached == null) {
+            schoolWideReached = await this._countAudienceFamilies(post);
+          }
+          return { ...post, total_reached: schoolWideReached };
+        }
+        return {
+          ...post,
+          total_reached: await this._countAudienceFamilies(post),
+        };
+      }),
+    );
+
     const holidays = await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
@@ -199,10 +215,11 @@ export class NoticeBoardService {
         deleted_at: null,
         users: { full_name: creatorName || h.created_by || 'System' },
         _count: { post_reads: 0 },
+        total_reached: 0,
       };
     });
 
-    const merged = [...postsWithStudents, ...holidayPosts];
+    const merged = [...postsWithReach, ...holidayPosts];
     merged.sort((a, b) => {
       if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
@@ -244,12 +261,21 @@ export class NoticeBoardService {
       },
     });
 
-    this.auditLogs.log({
+    const noteParts = [
+      `Posted "${dto.title?.trim() || 'untitled'}"`,
+      this._audienceSummary(post),
+      `Body: ${this._snippet(dto.body)}`,
+    ];
+    if (dto.is_pinned) noteParts.push('Pinned');
+    if (dto.notification_only) noteParts.push('Notification only');
+
+    await this.auditLogs.log({
       entity_type: 'NOTICE',
       entity_id: String(post.id),
       action: 'CREATED',
       section: 'communication',
-      new_value: dto.title ?? dto.body?.slice(0, 80),
+      new_value: dto.title ?? this._snippet(dto.body, 80),
+      note: noteParts.join(' | '),
       changed_by: creatorUsername || postedBy,
     });
 
@@ -258,7 +284,10 @@ export class NoticeBoardService {
       console.error('Notice board FCM dispatch failed:', err.message),
     );
 
-    return post;
+    return {
+      ...post,
+      total_reached: await this._countAudienceFamilies(post),
+    };
   }
 
   private async _sendPostNotifications(post: {
@@ -486,6 +515,16 @@ export class NoticeBoardService {
         },
       });
 
+      await this.auditLogs.log({
+        entity_type: 'NOTICE',
+        entity_id: `holiday-${holidayId}`,
+        action: 'DELETED',
+        section: 'communication',
+        old_value: deleted.description ?? deleted.day_type,
+        note: `Deleted holiday notice "${deleted.description || deleted.day_type}" (${deleted.date.toISOString().slice(0, 10)}).`,
+        changed_by: deletedBy ?? 'system',
+      });
+
       return { id: `holiday-${deleted.id}` };
     }
 
@@ -499,12 +538,17 @@ export class NoticeBoardService {
       where: { id: numericId },
       data: { deleted_at: new Date() },
     });
-    this.auditLogs.log({
+    await this.auditLogs.log({
       entity_type: 'NOTICE',
       entity_id: String(numericId),
       action: 'DELETED',
       section: 'communication',
-      old_value: post.title ?? post.body?.slice(0, 80),
+      old_value: post.title ?? this._snippet(post.body, 80),
+      note: [
+        `Deleted "${post.title?.trim() || 'untitled'}"`,
+        this._audienceSummary(post),
+        `Body: ${this._snippet(post.body)}`,
+      ].join(' | '),
       changed_by: deletedBy ?? 'system',
     });
     return result;
@@ -541,32 +585,11 @@ export class NoticeBoardService {
     });
     if (!post) throw new NotFoundException('Post not found');
 
-    // Count families whose students are in scope
-    const campusIds = post.campus_ids as number[];
-    const classIds  = post.class_ids as number[];
-    const sectionIds = post.section_ids as number[];
+    const reachedCount = await this._countAudienceFamilies(post);
     const studentCcs = post.student_ccs as number[];
-    const studentStatuses = post.student_statuses as student_status[];
-    const academicYears = post.academic_years as string[];
-
-    let reachedCount = 0;
     let targetedReads: any[] = [];
 
     if (studentCcs && studentCcs.length) {
-      const targetedFamilies = await this.prisma.families.findMany({
-        where: {
-          deleted_at: null,
-          students: {
-            some: {
-              cc: { in: studentCcs },
-              deleted_at: null,
-            },
-          },
-        },
-        select: { id: true },
-      });
-      reachedCount = targetedFamilies.length;
-
       // Query targeted student read statuses
       const studentsInScope = await this.prisma.students.findMany({
         where: { cc: { in: studentCcs } },
@@ -594,26 +617,6 @@ export class NoticeBoardService {
         household_name: s.families?.household_name || null,
         read_at: s.families?.notice_post_reads?.[0]?.read_at || null,
       }));
-    } else {
-      const scopedFamilies = await this.prisma.families.findMany({
-        where: {
-          deleted_at: null,
-          students: {
-            some: {
-              deleted_at: null,
-              AND: [
-                campusIds.length ? { campus_id: { in: campusIds } } : {},
-                classIds.length ? { class_id: { in: classIds } } : {},
-                sectionIds.length ? { section_id: { in: sectionIds } } : {},
-                studentStatuses.length ? { status: { in: studentStatuses } } : {},
-                academicYears.length ? { academic_year: { in: academicYears } } : {},
-              ],
-            },
-          },
-        },
-        select: { id: true },
-      });
-      reachedCount = scopedFamilies.length;
     }
 
     return {
@@ -638,5 +641,114 @@ export class NoticeBoardService {
     const url = await this.storage.upload(key, file.buffer, file.mimetype);
 
     return { url, type };
+  }
+
+  // ── Audience / log helpers ────────────────────────────────────────────────
+
+  private _snippet(text: string | null | undefined, max = 120): string {
+    const value = (text ?? '').replace(/\s+/g, ' ').trim();
+    if (!value) return '—';
+    return value.length > max ? value.slice(0, max - 1) + '…' : value;
+  }
+
+  private _isSchoolWide(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): boolean {
+    const campusIds = (post.campus_ids as number[]) ?? [];
+    const classIds = (post.class_ids as number[]) ?? [];
+    const sectionIds = (post.section_ids as number[]) ?? [];
+    const studentCcs = (post.student_ccs as number[]) ?? [];
+    const studentStatuses = (post.student_statuses as student_status[]) ?? [];
+    const academicYears = (post.academic_years as string[]) ?? [];
+    return (
+      studentCcs.length === 0 &&
+      campusIds.length === 0 &&
+      classIds.length === 0 &&
+      sectionIds.length === 0 &&
+      studentStatuses.length === 0 &&
+      academicYears.length === 0
+    );
+  }
+
+  private _audienceSummary(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): string {
+    const studentCcs = (post.student_ccs as number[]) ?? [];
+    if (studentCcs.length) {
+      return `${studentCcs.length} student${studentCcs.length === 1 ? '' : 's'} targeted`;
+    }
+    if (this._isSchoolWide(post)) return 'school-wide';
+    const parts: string[] = [];
+    const campusIds = (post.campus_ids as number[]) ?? [];
+    const classIds = (post.class_ids as number[]) ?? [];
+    const sectionIds = (post.section_ids as number[]) ?? [];
+    const studentStatuses = (post.student_statuses as student_status[]) ?? [];
+    const academicYears = (post.academic_years as string[]) ?? [];
+    if (campusIds.length) parts.push(`${campusIds.length} campus${campusIds.length === 1 ? '' : 'es'}`);
+    if (classIds.length) parts.push(`${classIds.length} class${classIds.length === 1 ? '' : 'es'}`);
+    if (sectionIds.length) parts.push(`${sectionIds.length} section${sectionIds.length === 1 ? '' : 's'}`);
+    if (studentStatuses.length) parts.push(`status ${studentStatuses.join(', ')}`);
+    if (academicYears.length) parts.push(academicYears.join(', '));
+    return parts.join(', ') || 'targeted';
+  }
+
+  private async _countAudienceFamilies(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): Promise<number> {
+    const studentCcs = (post.student_ccs as number[]) ?? [];
+    if (studentCcs.length) {
+      const students = await this.prisma.students.findMany({
+        where: {
+          cc: { in: studentCcs },
+          deleted_at: null,
+          family_id: { not: null },
+        },
+        select: { family_id: true },
+      });
+      return new Set(
+        students
+          .map((s) => s.family_id)
+          .filter((id): id is number => id != null),
+      ).size;
+    }
+
+    const campusIds = (post.campus_ids as number[]) ?? [];
+    const classIds = (post.class_ids as number[]) ?? [];
+    const sectionIds = (post.section_ids as number[]) ?? [];
+    const studentStatuses = (post.student_statuses as student_status[]) ?? [];
+    const academicYears = (post.academic_years as string[]) ?? [];
+
+    return this.prisma.families.count({
+      where: {
+        deleted_at: null,
+        students: {
+          some: {
+            deleted_at: null,
+            AND: [
+              campusIds.length ? { campus_id: { in: campusIds } } : {},
+              classIds.length ? { class_id: { in: classIds } } : {},
+              sectionIds.length ? { section_id: { in: sectionIds } } : {},
+              studentStatuses.length ? { status: { in: studentStatuses } } : {},
+              academicYears.length ? { academic_year: { in: academicYears } } : {},
+            ],
+          },
+        },
+      },
+    });
   }
 }

@@ -13,6 +13,10 @@ export class QueryAuditLogsDto {
 
   @IsOptional()
   @IsString()
+  entity_id?: string;
+
+  @IsOptional()
+  @IsString()
   section?: string;
 
   @IsOptional()

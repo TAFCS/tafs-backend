@@ -184,6 +184,9 @@ export class AuditLogsService {
         where.entity_type = types[0];
       }
     }
+    if (query.entity_id) {
+      where.entity_id = query.entity_id;
+    }
     if (query.changed_by) {
       where.changed_by = { contains: query.changed_by, mode: 'insensitive' };
     }

@@ -16,6 +16,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { SupportTicketsService } from '../support-tickets/support-tickets.service';
 
 @WebSocketGateway({
@@ -43,11 +44,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   // (mid-session re-validation — auth is otherwise only checked at handshake).
   private expiryTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(
+    constructor(
     private readonly chatService: ChatService,
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
+    private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => SupportTicketsService))
     private readonly supportTicketsService: SupportTicketsService,
   ) {}
@@ -614,6 +616,22 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       },
     });
 
+    const actor = payload?.username || payload?.sub || 'system';
+    const target = data.targetSection
+      ? `section ${data.targetSection}`
+      : data.targetGrade
+        ? `grade ${data.targetGrade}`
+        : 'all parents';
+    void this.auditLogs.log({
+      entity_type: 'CHAT_MESSAGE',
+      entity_id: announcement.id,
+      action: 'CREATED',
+      section: 'communication',
+      new_value: (data.content ?? '').slice(0, 80),
+      note: `Chat announcement (${target}) | Body: ${(data.content ?? '').slice(0, 120)}${(data.content?.length ?? 0) > 120 ? '…' : ''}`,
+      changed_by: actor,
+    });
+
     const conversation = await this.prisma.chat_conversations.findUnique({
       where: { id: ANNOUNCEMENT_CONV_ID }
     });
@@ -667,9 +685,29 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     console.log('[ChatGateway] Received deleteMessage:', data);
     try {
       const familyId = Number(data.familyId);
+      const existing = await this.prisma.chat_messages.findUnique({
+        where: { id: data.messageId },
+      });
+
       // 1. Delete from DB
       await this.prisma.chat_messages.delete({
         where: { id: data.messageId },
+      });
+
+      const actor =
+        client?.data?.tafsPayload?.username ||
+        client?.data?.tafsPayload?.sub ||
+        'system';
+      void this.auditLogs.log({
+        entity_type: 'CHAT_MESSAGE',
+        entity_id: data.messageId,
+        action: 'DELETED',
+        section: 'communication',
+        old_value: existing?.content?.slice(0, 80) ?? null,
+        note: existing?.is_announcement
+          ? `Deleted announcement | Body: ${(existing.content ?? '').slice(0, 120)}`
+          : `Deleted chat message | Body: ${(existing?.content ?? '').slice(0, 120)}`,
+        changed_by: actor,
       });
 
       // 2. Broadcast deletion

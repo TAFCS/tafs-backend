@@ -236,7 +236,15 @@ export class EmployeeNoticeBoardService {
       where: { id },
       data: { deleted_at: new Date() },
     });
-    this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(id), action: 'DELETED', section: 'communication', old_value: post.title ?? undefined, changed_by: deletedBy ?? 'system' });
+    await this.auditLogs.log({
+      entity_type: 'EMPLOYEE_NOTICE',
+      entity_id: String(id),
+      action: 'DELETED',
+      section: 'communication',
+      old_value: post.title ?? post.body?.slice(0, 80),
+      note: `Deleted "${post.title?.trim() || 'untitled'}" | Body: ${(post.body ?? '').slice(0, 120)}${(post.body?.length ?? 0) > 120 ? '…' : ''}`,
+      changed_by: deletedBy ?? 'system',
+    });
     return result;
   }
 
