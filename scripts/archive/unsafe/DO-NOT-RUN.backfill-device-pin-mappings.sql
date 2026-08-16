@@ -1,3 +1,30 @@
+-- ============================================================================
+-- ARCHIVED — DO NOT RUN. Kept only as a record of what was executed historically.
+--
+-- WHY THIS IS UNSAFE
+--
+-- 1. Reconstructs employee_code from device_pin via a string heuristic
+--    ("030056" -> "03-0056") that its own header admits was inferred from just
+--    two examples. It is unvalidated for any other pin shape.
+--
+-- 2. Inserts is_active = true STAFF mappings with no uniqueness guard on the
+--    employee side, and no collision check against student CCs/GR numbers that
+--    may occupy the same pin values on the same device fleet.
+--
+-- 3. Writes mappings without recomputing attendance, so scan attribution and
+--    attendance_*_daily silently disagree afterwards.
+--
+-- WHAT TO USE INSTEAD
+--   * Mapping changes:  POST / PATCH / DELETE /attendance/zk-device-mappings
+--                       (collision-guarded, and re-resolves history inline)
+--   * Bulk repair:      POST /attendance/zk-scan-resolution/resolve  (dry_run first)
+--   * Diagnosis:        npx ts-node scripts/audit-zk-scan-attribution.ts
+--
+-- psql aborts here before executing anything below.
+-- ============================================================================
+\echo '*** ARCHIVED — DO NOT RUN. See header; use the zk-scan-resolution endpoint. ***'
+\quit
+
 -- backfill-device-pin-mappings.sql
 --
 -- Fills in device_user_mappings for unmapped ZK device pins by reconstructing
