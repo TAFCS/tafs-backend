@@ -58,6 +58,10 @@ const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_PADDING_V * 2;
 // page — a paddingBottom on the flowing column reserves space once, at the very end, which lets
 // rows on continuation pages run underneath the QR.
 const QR_RESERVE = 72;
+// Nudges the whole challan block (copy tags, logo, header and all) down from the page top.
+// The block's height is reduced by the same amount so its bottom edge — and the footer pinned
+// to it via `marginTop: 'auto'` — stays put rather than drifting into the page margin.
+const CHALLAN_TOP_OFFSET = 4;
 
 // History sections are kept atomic (wrap={false}) so a table is never split across pages.
 // That breaks down for the two unbounded ledgers — arrears and payment history — because a
@@ -778,7 +782,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 a spurious extra page, while the INNER box is given the full content height so the
                 copies still occupy the whole page. The inner overflow is purely visual. */}
             <View style={{ position: 'absolute', top: 0, left: 0, width: '85%', height: CONTENT_HEIGHT - QR_RESERVE }}>
-                <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: CONTENT_HEIGHT, flexDirection: 'row' }}>
+                <View style={{ position: 'absolute', top: CHALLAN_TOP_OFFSET, left: 0, width: '100%', height: CONTENT_HEIGHT - CHALLAN_TOP_OFFSET, flexDirection: 'row' }}>
                     <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
                     <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
                     <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
