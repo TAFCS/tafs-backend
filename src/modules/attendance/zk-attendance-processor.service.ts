@@ -18,6 +18,7 @@ import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-notice-board.service';
 import { personDayKey, resolvePersonRef } from './device-mapping-resolution.util';
+import { ExternalAttendanceForwarderService } from './external-attendance-forwarder.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -148,6 +149,7 @@ export class ZkAttendanceProcessorService {
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
     private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
+    private readonly externalForwarder: ExternalAttendanceForwarderService,
   ) {}
 
   /**
@@ -406,6 +408,15 @@ export class ZkAttendanceProcessorService {
         return; // exact duplicate (device_sn, device_pin, scan_time) already processed
       }
       throw err;
+    }
+
+    // Sub-office forwarding. Deliberately above the unmapped-PIN return: the
+    // sub-office's staff are not TAFS employees, so most of these PINs resolve
+    // to no person here and would never reach the code below. Skipped for
+    // duplicates (double-tap) and for backfill, so a device reconnecting after
+    // downtime doesn't replay weeks of stale punches at the receiver in one burst.
+    if (!isDuplicate && isLive) {
+      void this.externalForwarder.forward(input.sn, input.pin, input.scanTime);
     }
 
     if (!personType || isDuplicate) return; // unmapped PIN or accidental double-scan: stop here

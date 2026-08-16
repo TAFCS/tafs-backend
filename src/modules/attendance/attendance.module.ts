@@ -28,6 +28,7 @@ import { AttendancePolicyResolverService } from './attendance-policy-resolver.se
 import { ClassCheckInScheduleService } from './class-check-in-schedule.service';
 import { ClassCheckInScheduleController } from './class-check-in-schedule.controller';
 import { RecomputeLateController } from './recompute-late.controller';
+import { ExternalAttendanceForwarderService } from './external-attendance-forwarder.service';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { RecomputeLateController } from './recompute-late.controller';
     AttendanceNotificationsService,
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
+    ExternalAttendanceForwarderService,
   ],
   exports: [
     RollSessionsService,
