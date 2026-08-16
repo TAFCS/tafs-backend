@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -65,6 +65,19 @@ export class ZkAttendanceMappingController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     return this.mappingService.updateMapping(id, dto, user.username || user.sub);
+  }
+
+  /**
+   * Deletes a mapping and releases every scan it owned, rebuilding the affected
+   * daily attendance. Supersedes the ad-hoc delete scripts, which left scans
+   * attributed to people who no longer had a mapping.
+   */
+  @Delete(':id')
+  @UseGuards(PoliciesGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  async deleteMapping(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    return this.mappingService.deleteMapping(id, user.username || user.sub);
   }
 
   private assertSuperAdmin(user: IJwtStaffPayload) {

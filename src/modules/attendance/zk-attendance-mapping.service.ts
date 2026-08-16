@@ -1,9 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { device_user_mappings, DevicePersonType } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
+import { ZkScanResolutionService, ResolutionReport } from './zk-scan-resolution.service';
 import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
+
+/**
+ * Above this, re-attribution is too slow to run inside the HTTP request that
+ * changed the mapping. The mapping edit still succeeds; the caller is told to
+ * finish the job via POST /attendance/zk-scan-resolution/resolve.
+ */
+const INLINE_RESOLVE_SCAN_LIMIT = 2000;
 
 @Injectable()
 export class ZkAttendanceMappingService {
@@ -11,6 +19,7 @@ export class ZkAttendanceMappingService {
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
     private readonly auditLogs: AuditLogsService,
+    private readonly resolution: ZkScanResolutionService,
   ) {}
 
   async getMappings(employeeId?: number, studentCc?: number) {
@@ -32,6 +41,16 @@ export class ZkAttendanceMappingService {
     const before = await this.prisma.device_user_mappings.findUnique({
       where: { device_sn_device_pin: { device_sn: dto.device_sn, device_pin: dto.device_pin } },
     });
+
+    // This endpoint is an upsert, so POSTing over a deliberately deactivated
+    // mapping used to silently revive it (and re-attach its history) with no
+    // signal to the caller. Make reactivation explicit.
+    if (before && !before.is_active && dto.is_active !== true) {
+      throw new ConflictException(
+        `Mapping #${before.id} for ${dto.device_sn}/${dto.device_pin} exists but is deactivated. ` +
+          `Pass is_active: true to reactivate it, or PATCH the mapping directly.`,
+      );
+    }
 
     const mapping = await this.prisma.device_user_mappings.upsert({
       where: { device_sn_device_pin: { device_sn: dto.device_sn, device_pin: dto.device_pin } },
@@ -73,9 +92,9 @@ export class ZkAttendanceMappingService {
           (mapping.display_name ? ` ("${mapping.display_name}")` : '') + '.',
     });
 
-    await this.reprocessOrphanScans(mapping);
+    const resolution = await this.resolvePin(mapping.device_sn, mapping.device_pin, userId);
 
-    return mapping;
+    return { ...mapping, resolution };
   }
 
   async updateMapping(id: number, dto: UpdateDeviceMappingDto, changedBy?: string) {
@@ -131,11 +150,12 @@ export class ZkAttendanceMappingService {
       });
     }
 
-    if (updated.is_active) {
-      await this.reprocessOrphanScans(updated);
-    }
+    // Unconditional: deactivating is exactly the case that must RELEASE history.
+    // The old `if (updated.is_active)` guard made deactivation forward-only,
+    // so a student kept attendance from a pin that was no longer theirs.
+    const resolution = await this.resolvePin(updated.device_sn, updated.device_pin, changedBy ?? 'system');
 
-    return updated;
+    return { ...updated, resolution };
   }
 
   async getUnmappedPins() {
@@ -250,39 +270,71 @@ export class ZkAttendanceMappingService {
     }
   }
 
-  // Newly (re)mapped PINs may already have orphaned scans recorded with
-  // person_type=null — attach them and recompute affected days so the
-  // person's attendance reflects history captured before mapping existed.
-  private async reprocessOrphanScans(mapping: device_user_mappings) {
-    const orphans = await this.prisma.zk_attendance_scans.findMany({
-      where: { device_sn: mapping.device_sn, device_pin: mapping.device_pin, person_type: null },
-      select: { id: true, attendance_date: true },
+  /**
+   * Re-derives attribution for every scan on this PIN from the current mapping
+   * state, then rebuilds the affected daily rows.
+   *
+   * Replaces the old reprocessOrphanScans, which only matched person_type=null
+   * and so could *attach* history but never *correct* or *release* it. That is
+   * why deactivating a mapping used to leave the person's attendance intact and
+   * why re-pointing a PIN left every past scan welded to the previous owner.
+   *
+   * Runs inline so the change is visible on the very next read.
+   *
+   * @param overrideToUnmapped resolve as if no mapping exists — used by delete,
+   *        where the row is already gone (or is about to be).
+   */
+  private async resolvePin(
+    deviceSn: string,
+    devicePin: string,
+    actor: string,
+    overrideToUnmapped = false,
+  ): Promise<ResolutionReport | { skipped: true; scan_count: number; warning: string }> {
+    const scanCount = await this.prisma.zk_attendance_scans.count({
+      where: { device_sn: deviceSn, device_pin: devicePin },
     });
-    if (orphans.length === 0) return;
 
-    await this.prisma.zk_attendance_scans.updateMany({
-      where: { id: { in: orphans.map((o) => o.id) } },
-      data: {
-        person_type: mapping.person_type,
-        employee_id: mapping.employee_id ?? undefined,
-        student_cc: mapping.student_cc ?? undefined,
-      },
-    });
-
-    const dates = [...new Set(orphans.map((o) => o.attendance_date.toISOString()))].map((s) => new Date(s));
-
-    for (const date of dates) {
-      const seg = await this.processor.recomputeDaySequence(
-        mapping.person_type,
-        mapping.employee_id,
-        mapping.student_cc,
-        date,
-      );
-      if (mapping.person_type === DevicePersonType.STAFF) {
-        await this.processor.upsertStaffDaily(mapping.employee_id!, date, seg);
-      } else {
-        await this.processor.upsertStudentDaily(mapping.student_cc!, date, seg);
-      }
+    if (scanCount > INLINE_RESOLVE_SCAN_LIMIT) {
+      const warning =
+        `${scanCount} scans on ${deviceSn}/${devicePin} exceed the inline limit (${INLINE_RESOLVE_SCAN_LIMIT}). ` +
+        `The mapping was saved, but historical attendance was NOT rebuilt — run ` +
+        `POST /attendance/zk-scan-resolution/resolve with {"kind":"device_pin","device_sn":"${deviceSn}",` +
+        `"device_pin":"${devicePin}","dry_run":false} to finish.`;
+      return { skipped: true, scan_count: scanCount, warning };
     }
+
+    return this.resolution.resolve(
+      { kind: 'device_pin', device_sn: deviceSn, device_pin: devicePin },
+      { actor, dryRun: false, overrideToUnmapped },
+    );
+  }
+
+  /**
+   * Deletes a mapping and releases the scans it owned.
+   *
+   * Without the re-resolution, deleting a mapping left every historical scan
+   * still attributed to that person — invisible to the unmapped-PIN screen, but
+   * still driving their attendance, payroll and the parent portal.
+   */
+  async deleteMapping(id: number, actor: string) {
+    const existing = await this.prisma.device_user_mappings.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Mapping not found');
+
+    await this.prisma.device_user_mappings.delete({ where: { id } });
+
+    await this.auditLogs.log({
+      entity_type: 'ZK_ATTENDANCE_MAPPING',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: actor,
+      student_id: existing.student_cc ?? null,
+      note:
+        `Device mapping #${id} deleted (${existing.device_sn}/${existing.device_pin} → ` +
+        `${existing.person_type === DevicePersonType.STAFF ? `employee #${existing.employee_id}` : `student #${existing.student_cc}`}). ` +
+        `Its scans were released.`,
+    });
+
+    const resolution = await this.resolvePin(existing.device_sn, existing.device_pin, actor, true);
+    return { mapping: existing, resolution };
   }
 }

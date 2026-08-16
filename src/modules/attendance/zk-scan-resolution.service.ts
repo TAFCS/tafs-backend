@@ -65,7 +65,6 @@ export interface ResolveOptions {
 const DEFAULT_MAX_AFFECTED_DAYS = 5000;
 const SCAN_PAGE_SIZE = 5000;
 const UPDATE_CHUNK = 500;
-const ADVISORY_LOCK_KEY = 'zk-scan-resolution';
 
 @Injectable()
 export class ZkScanResolutionService {
@@ -89,7 +88,7 @@ export class ZkScanResolutionService {
     const maxAffectedDays = opts.maxAffectedDays ?? DEFAULT_MAX_AFFECTED_DAYS;
     const warnings: string[] = [];
 
-    const release = dryRun ? null : await this.acquireLock();
+    const release = dryRun ? null : this.acquireLock();
     try {
       const scans = await this.loadScans(scope, opts, warnings);
       const mappingIndex = await this.loadMappingIndex(scans, opts);
@@ -214,7 +213,7 @@ export class ZkScanResolutionService {
         duration_ms: Date.now() - started,
       };
     } finally {
-      if (release) await release();
+      if (release) release();
     }
   }
 
@@ -245,14 +244,28 @@ export class ZkScanResolutionService {
     });
   }
 
-  private async acquireLock(): Promise<() => Promise<void>> {
-    const [{ ok }] = await this.prisma.$queryRaw<{ ok: boolean }[]>`
-      SELECT pg_try_advisory_lock(hashtext(${ADVISORY_LOCK_KEY})) AS ok`;
-    if (!ok) {
+  /**
+   * In-process guard against two concurrent runs.
+   *
+   * Deliberately NOT a Postgres advisory lock: those are session-scoped, and
+   * Prisma hands each query a pooled connection (this deployment also fronts
+   * Postgres with pgbouncer), so the unlock frequently lands on a different
+   * connection than the lock and leaks it permanently.
+   *
+   * Per-instance rather than cluster-wide, which is enough here: the operation
+   * is convergent (target state is a pure function of mappings x scans), so a
+   * concurrent run on another instance would at worst duplicate work, and
+   * excludeToday already keeps rebuilds away from live ingest.
+   */
+  private static running = false;
+
+  private acquireLock(): () => void {
+    if (ZkScanResolutionService.running) {
       throw new ConflictException('A scan re-resolution run is already in progress');
     }
-    return async () => {
-      await this.prisma.$queryRaw`SELECT pg_advisory_unlock(hashtext(${ADVISORY_LOCK_KEY}))`;
+    ZkScanResolutionService.running = true;
+    return () => {
+      ZkScanResolutionService.running = false;
     };
   }
 

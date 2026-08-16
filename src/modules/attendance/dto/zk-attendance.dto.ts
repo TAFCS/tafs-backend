@@ -29,6 +29,14 @@ export class CreateDeviceMappingDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Only needed to reactivate an existing deactivated mapping — this endpoint
+   * upserts, and reviving a disabled mapping must be deliberate.
+   */
+  @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
 }
 
 export class UpdateDeviceMappingDto {
