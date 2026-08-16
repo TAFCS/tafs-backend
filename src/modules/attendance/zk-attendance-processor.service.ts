@@ -17,6 +17,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-notice-board.service';
+import { resolvePersonRef } from './device-mapping-resolution.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -303,9 +304,10 @@ export class ZkAttendanceProcessorService {
       where: { device_sn_device_pin: { device_sn: input.sn, device_pin: input.pin } },
     });
 
-    const personType = mapping?.is_active ? mapping.person_type : null;
-    const employeeId = mapping?.is_active ? mapping.employee_id : null;
-    const studentCc = mapping?.is_active ? mapping.student_cc : null;
+    // Shared with re-resolution (ZkScanResolutionService) so the two can never
+    // derive identity differently — if they did, a rebuild would create drift.
+    const { person_type: personType, employee_id: employeeId, student_cc: studentCc } =
+      resolvePersonRef(mapping);
 
     // Soft dedup: a scan within DEDUP_WINDOW_MS of this person's last accepted scan
     // (any device) doesn't toggle the sequence — accidental double-tap / retry.
@@ -552,12 +554,20 @@ export class ZkAttendanceProcessorService {
     return { ...base, scanCountAfter: seg.scanCount, statusAfter: after?.status ?? null, action };
   }
 
-  /** Read-only preview of recomputePersonDay — writes nothing, not even sequence_no. */
+  /**
+   * Read-only preview of recomputePersonDay — writes nothing, not even sequence_no.
+   *
+   * `projectedScanCount` must be supplied when previewing a re-attribution:
+   * the day's *current* scan count is pre-move and would predict the wrong
+   * outcome (e.g. reporting UPSERTED for a person who is about to lose their
+   * last scan and should be CLEARED).
+   */
   async projectPersonDay(
     personType: DevicePersonType,
     employeeId: number | null,
     studentCc: number | null,
     date: Date,
+    projectedScanCount?: number,
   ): Promise<DayRecomputeOutcome> {
     assertPersonId(personType, employeeId, studentCc);
     const isStaff = personType === DevicePersonType.STAFF;
@@ -570,7 +580,8 @@ export class ZkAttendanceProcessorService {
           where: { student_cc_date: { student_cc: studentCc!, date } },
         });
 
-    const scanCount = await this.countPersonDayScans(personType, employeeId, studentCc, date);
+    const currentCount = await this.countPersonDayScans(personType, employeeId, studentCc, date);
+    const scanCount = projectedScanCount ?? currentCount;
 
     let action: DayAction;
     if (scanCount === 0) {
@@ -591,7 +602,7 @@ export class ZkAttendanceProcessorService {
       employeeId,
       studentCc,
       date,
-      scanCountBefore: scanCount,
+      scanCountBefore: currentCount,
       scanCountAfter: scanCount,
       statusBefore: existing?.status ?? null,
       statusAfter: action === 'CLEARED' ? null : (existing?.status ?? null),
