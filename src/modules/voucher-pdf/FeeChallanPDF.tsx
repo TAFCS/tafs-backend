@@ -63,13 +63,20 @@ const QR_RESERVE = 72;
 // to it via `marginTop: 'auto'` — stays put rather than drifting into the page margin.
 const CHALLAN_TOP_OFFSET = 4;
 
-// History sections are kept atomic (wrap={false}) so a table is never split across pages.
-// That breaks down for the two unbounded ledgers — arrears and payment history — because a
-// section taller than a whole page cannot be placed anywhere and react-pdf clips it, silently
-// dropping rows. Above this row count the table is guaranteed not to fit a page, so we let it
-// split and repeat its header instead. Below it, the table always fits and stays atomic.
-// ~483pt of usable column height at ~11pt per (typically two-line) row leaves ample margin.
-const LONG_TABLE_ROWS = 35;
+// Split of the page between the challan copies and the history column. The column gets 18%
+// rather than 15% so its 4-5 columns of text have room to breathe; the copies lose 3% of width
+// they were not using (their middle section is mostly whitespace).
+const CHALLAN_WIDTH = '82%';
+const COLUMN_WIDTH = '18%';
+
+// History tables are kept atomic (wrap={false}) so a table is never split mid-body. That is
+// only safe while the table actually fits on a page: react-pdf cannot place an unsplittable
+// section taller than the page, so it crushes the whole column and text collides. Any table
+// long enough to risk that is allowed to split (repeating its header) instead. The bound is
+// deliberately conservative — rows here wrap to 2-3 lines at ~16pt, so ~24 rows can already
+// fill the usable column height.
+const LONG_TABLE_ROWS = 18;
+const isLong = (rows?: unknown[]) => (rows?.length ?? 0) > LONG_TABLE_ROWS;
 
 // Define styles
 const styles = StyleSheet.create({
@@ -393,11 +400,11 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     historyTitle: {
-        fontSize: 6,
+        fontSize: 7,
         fontWeight: 'bold',
         color: '#1e293b',
         backgroundColor: '#f1f5f9',
-        padding: '2px 4px',
+        padding: '3px 4px',
         marginBottom: 3,
         textTransform: 'uppercase',
         borderLeftWidth: 2,
@@ -411,32 +418,38 @@ const styles = StyleSheet.create({
     },
     historyTableHeader: {
         flexDirection: 'row',
+        alignItems: 'flex-start',
         borderBottomWidth: 0.5,
         borderBottomColor: '#475569',
-        paddingVertical: 1,
+        paddingVertical: 2,
     },
     historyTableRow: {
         flexDirection: 'row',
+        // flex-start lets each cell size to its own wrapped height instead of being
+        // stretched to a common baseline, which is what made long heads collide.
+        alignItems: 'flex-start',
         borderBottomWidth: 0.3,
         borderBottomColor: '#64748b',
-        paddingVertical: 1,
+        paddingVertical: 2,
     },
     historyTableCell: {
-        fontSize: 4,
+        fontSize: 5,
+        lineHeight: 1.3,
         color: '#1e293b',
         flex: 1,
         borderRightWidth: 0.3,
         borderRightColor: '#475569',
-        paddingHorizontal: 2,
+        paddingHorizontal: 3,
     },
     historyTableHeaderCell: {
-        fontSize: 4,
+        fontSize: 5,
+        lineHeight: 1.3,
         fontWeight: 'bold',
         color: '#1e293b',
         flex: 1,
         borderRightWidth: 0.3,
         borderRightColor: '#475569',
-        paddingHorizontal: 2,
+        paddingHorizontal: 3,
     },
 });
 
@@ -781,7 +794,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 deciding page breaks, so the OUTER box is sized to the flow area to avoid forcing
                 a spurious extra page, while the INNER box is given the full content height so the
                 copies still occupy the whole page. The inner overflow is purely visual. */}
-            <View style={{ position: 'absolute', top: 0, left: 0, width: '85%', height: CONTENT_HEIGHT - QR_RESERVE }}>
+            <View style={{ position: 'absolute', top: 0, left: 0, width: CHALLAN_WIDTH, height: CONTENT_HEIGHT - QR_RESERVE }}>
                 <View style={{ position: 'absolute', top: CHALLAN_TOP_OFFSET, left: 0, width: '100%', height: CONTENT_HEIGHT - CHALLAN_TOP_OFFSET, flexDirection: 'row' }}>
                     <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
                     <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
@@ -795,13 +808,13 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 page 2, where the challan block no longer exists. The QR strip is reserved by the
                 Page's paddingBottom, and the left divider is drawn as a fixed rule below, so
                 neither depends on how far the content happens to flow. */}
-            <View style={{ marginLeft: '85%', width: '15%', paddingLeft: 8, flexDirection: 'column' }}>
+            <View style={{ marginLeft: CHALLAN_WIDTH, width: COLUMN_WIDTH, paddingLeft: 8, flexDirection: 'column' }}>
 
                 {/* ARREAR'S HISTORY */}
-                <View style={styles.historySection} wrap={(arrearsHistory?.length ?? 0) > LONG_TABLE_ROWS}>
+                <View style={styles.historySection} wrap={isLong(arrearsHistory)}>
                     <Text style={styles.historyTitle}>ARREAR'S HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={(arrearsHistory?.length ?? 0) > LONG_TABLE_ROWS}>
+                        <View style={styles.historyTableHeader} fixed={isLong(arrearsHistory)}>
                             <Text style={styles.historyTableHeaderCell}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
                             <Text style={[styles.historyTableHeaderCell, { textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
@@ -825,14 +838,14 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                         const amt = parseFloat(String(a.amount).replace(/,/g, '')) || 0;
                                         runningTotal += amt;
                                         return (
-                                            <View key={idx} style={styles.historyTableRow}>
+                                            <View key={idx} wrap={false} style={styles.historyTableRow}>
                                                 <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
                                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
                                                 <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>{amt.toLocaleString()}</Text>
                                             </View>
                                         );
                                     })}
-                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                    <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
                                         <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3, borderRightWidth: 0 }]}>TOTAL OUTSTANDING</Text>
                                         <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', borderRightWidth: 0 }]}>
                                             {runningTotal.toLocaleString()}
@@ -841,7 +854,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                 </>
                             );
                         })() : (
-                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={styles.historyTableCell}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
@@ -851,10 +864,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* PAYMENT HISTORY */}
-                <View style={styles.historySection} wrap={(paymentHistory?.length ?? 0) > LONG_TABLE_ROWS}>
+                <View style={styles.historySection} wrap={isLong(paymentHistory)}>
                     <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={(paymentHistory?.length ?? 0) > LONG_TABLE_ROWS}>
+                        <View style={styles.historyTableHeader} fixed={isLong(paymentHistory)}>
                             <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>DATE</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
@@ -865,7 +878,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         {paymentHistory && paymentHistory.length > 0 ? (
                             <>
                                 {paymentHistory.map((p: any, idx: number) => (
-                                    <View key={idx} style={[styles.historyTableRow, { alignItems: 'flex-start' }]}>
+                                    <View key={idx} wrap={false} style={[styles.historyTableRow, { alignItems: 'flex-start' }]}>
                                         <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{(() => {
                                             const [y, m, d] = String(p.date || '').split('-');
                                             return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
@@ -877,13 +890,13 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                         <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
                                     </View>
                                 ))}
-                                <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.4, borderRightWidth: 0 }]}>TOTAL PAID</Text>
                                     <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                 </View>
                             </>
                         ) : (
-                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={[styles.historyTableCell, { flex: 0.7 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
@@ -896,10 +909,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* INSTALLMENTS PLAN */}
-                <View style={styles.historySection} wrap={false}>
+                <View style={styles.historySection} wrap={isLong(installmentsHistory)}>
                     <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
+                        <View style={styles.historyTableHeader} fixed={isLong(installmentsHistory)}>
                             <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
                             <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
@@ -910,7 +923,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                             return (
                                 <>
                                     {installmentsHistory.map((inst: any, idx: number) => (
-                                        <View key={idx} style={styles.historyTableRow}>
+                                        <View key={idx} wrap={false} style={styles.historyTableRow}>
                                             <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{inst.month}</Text>
                                             <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
                                             <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
@@ -921,7 +934,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                             </Text>
                                         </View>
                                     ))}
-                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
+                                    <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
                                         <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2, borderRightWidth: 0 }]}>TOTAL</Text>
                                         <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8, borderRightWidth: 0 }]}>
                                             {planTotal.toLocaleString()}
@@ -930,7 +943,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                 </>
                             );
                         })() : (
-                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
                                 <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
@@ -941,10 +954,10 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 </View>
 
                 {/* SIBLINGS Section */}
-                <View style={styles.historySection} wrap={false}>
+                <View style={styles.historySection} wrap={isLong(siblings)}>
                     <Text style={styles.historyTitle}>SIBLINGS</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
+                        <View style={styles.historyTableHeader} fixed={isLong(siblings)}>
                             <Text style={styles.historyTableHeaderCell}>CC</Text>
                             <Text style={styles.historyTableHeaderCell}>GR</Text>
                             <Text style={styles.historyTableHeaderCell}>LVL</Text>
@@ -953,7 +966,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                         </View>
                         {siblings && siblings.length > 0 ? (
                             siblings.map((s, idx) => (
-                                <View key={idx} style={styles.historyTableRow}>
+                                <View key={idx} wrap={false} style={styles.historyTableRow}>
                                     <Text style={styles.historyTableCell}>{s.cc}</Text>
                                     <Text style={styles.historyTableCell}>{s.gr_number}</Text>
                                     <Text style={styles.historyTableCell}>{s.className}</Text>
@@ -962,7 +975,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                 </View>
                             ))
                         ) : (
-                            <View style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
+                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
                                 <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5, borderRightWidth: 0 }]}>No siblings</Text>
                             </View>
                         )}
@@ -974,7 +987,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
             {/* Divider between the challan copies and the history column. Drawn as a fixed rule
                 rather than a border on the column so it spans the full page height on every
                 page, regardless of how far the column's content flows. */}
-            <View fixed style={{ position: 'absolute', top: 0, left: '85%', width: 1, height: CONTENT_HEIGHT, backgroundColor: '#e4e4e4' }} />
+            <View fixed style={{ position: 'absolute', top: 0, left: CHALLAN_WIDTH, width: 1, height: CONTENT_HEIGHT, backgroundColor: '#e4e4e4' }} />
 
             {/* QR CODE — scans directly to the challan PDF.
                 `fixed` + absolute keeps it anchored to the bottom of the history column on
@@ -982,7 +995,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 own pagination can't push it around, and is positioned from the top so it lands
                 exactly in the strip reserved by the Page's paddingBottom. */}
             {qrUrl && (
-                <View fixed style={{ position: 'absolute', top: CONTENT_HEIGHT - QR_RESERVE, height: QR_RESERVE, left: '85%', width: '15%', paddingLeft: 8, alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
+                <View fixed style={{ position: 'absolute', top: CONTENT_HEIGHT - QR_RESERVE, height: QR_RESERVE, left: CHALLAN_WIDTH, width: COLUMN_WIDTH, paddingLeft: 8, alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
                     <QrCodeView url={qrUrl} size={52} />
                     <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
                 </View>
