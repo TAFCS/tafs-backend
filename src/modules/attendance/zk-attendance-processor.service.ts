@@ -55,6 +55,48 @@ export interface DaySegment {
   scanCount: number;
 }
 
+/**
+ * What happened to a person's daily attendance row during a recompute.
+ * SKIPPED_* values mean the row was deliberately left alone.
+ */
+export type DayAction =
+  | 'UPSERTED'
+  | 'CLEARED'
+  | 'NOOP'
+  | 'SKIPPED_PROTECTED_SOURCE'
+  | 'SKIPPED_NON_WORKING_DAY'
+  | 'SKIPPED_NO_CAMPUS';
+
+export interface DayRecomputeOutcome {
+  personType: DevicePersonType;
+  employeeId: number | null;
+  studentCc: number | null;
+  date: Date;
+  scanCountBefore: number;
+  scanCountAfter: number;
+  statusBefore: string | null;
+  statusAfter: string | null;
+  action: DayAction;
+}
+
+/**
+ * Guards the person-scoped scan queries. Without this, a null id builds
+ * `where: { person_type: 'STAFF', employee_id: null }` — which matches every
+ * unattributed scan that day and would renumber all of them under one person.
+ */
+export function assertPersonId(
+  personType: DevicePersonType,
+  employeeId: number | null,
+  studentCc: number | null,
+): void {
+  if (personType === DevicePersonType.STAFF && employeeId == null) {
+    throw new Error('STAFF day recompute requires a non-null employee_id');
+  }
+  if (personType === DevicePersonType.STUDENT && studentCc == null) {
+    throw new Error('STUDENT day recompute requires a non-null student_cc');
+  }
+}
+
 export type NotificationSkipReason =
   | 'unmapped_pin'
   | 'duplicate_scan'
@@ -384,6 +426,8 @@ export class ZkAttendanceProcessorService {
     studentCc: number | null,
     attendanceDate: Date,
   ): Promise<DaySegment> {
+    assertPersonId(personType, employeeId, studentCc);
+
     const scans = await this.prisma.zk_attendance_scans.findMany({
       where: {
         person_type: personType,
@@ -422,6 +466,246 @@ export class ZkAttendanceProcessorService {
     const checkOutAt = lastOutIdx >= 0 ? scans[lastOutIdx].scan_time : null;
 
     return { checkInAt, checkOutAt, lastScanAt, scanCount: scans.length };
+  }
+
+  /**
+   * Makes one person's daily row match their scans for that day — including the
+   * zero-scan case, which upsertStaffDaily/upsertStudentDaily deliberately bail
+   * on (they only ever write). Without the clear path, a person who loses their
+   * scans to a mapping correction keeps a phantom PRESENT row forever.
+   *
+   * This is the primitive re-resolution drives; ingest keeps using the upserts
+   * directly, so the hot path is untouched.
+   */
+  async recomputePersonDay(
+    personType: DevicePersonType,
+    employeeId: number | null,
+    studentCc: number | null,
+    date: Date,
+    opts: { actor?: string; recomputeDuplicates?: boolean } = {},
+  ): Promise<DayRecomputeOutcome> {
+    assertPersonId(personType, employeeId, studentCc);
+    const actor = opts.actor ?? 'scan-resolution';
+    const isStaff = personType === DevicePersonType.STAFF;
+
+    const existing = isStaff
+      ? await this.prisma.attendance_staff_daily.findUnique({
+          where: { employee_id_date: { employee_id: employeeId!, date } },
+        })
+      : await this.prisma.attendance_student_daily.findUnique({
+          where: { student_cc_date: { student_cc: studentCc!, date } },
+        });
+
+    const base: Omit<DayRecomputeOutcome, 'action' | 'scanCountAfter' | 'statusAfter'> = {
+      personType,
+      employeeId,
+      studentCc,
+      date,
+      scanCountBefore: await this.countPersonDayScans(personType, employeeId, studentCc, date),
+      statusBefore: existing?.status ?? null,
+    };
+
+    // Duplicate flags were decided against whoever owned the scan at ingest, so
+    // re-attribution can leave them wrong on both sides. Re-derive before sequencing.
+    if (opts.recomputeDuplicates !== false) {
+      await this.recomputeDayDuplicates(personType, employeeId, studentCc, date);
+    }
+
+    const seg = await this.recomputeDaySequence(personType, employeeId, studentCc, date);
+
+    if (seg.scanCount === 0) {
+      const action = isStaff
+        ? await this.clearBiometricStaffDaily(employeeId!, date, actor)
+        : await this.clearBiometricStudentDaily(studentCc!, date, actor);
+      return { ...base, scanCountAfter: 0, statusAfter: action === 'CLEARED' ? null : base.statusBefore, action };
+    }
+
+    // Mirror the upserts' own refusal to overwrite a human/system decision, so
+    // the caller gets an honest action instead of a silent no-op.
+    const protectedStaff =
+      existing?.source === AttendanceSource.MANUAL ||
+      existing?.source === AttendanceSource.SYSTEM ||
+      existing?.source === AttendanceSource.LEAVE;
+    const protectedStudent =
+      existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM;
+    if (isStaff ? protectedStaff : protectedStudent) {
+      return { ...base, scanCountAfter: seg.scanCount, statusAfter: base.statusBefore, action: 'SKIPPED_PROTECTED_SOURCE' };
+    }
+
+    if (isStaff) {
+      await this.upsertStaffDaily(employeeId!, date, seg);
+    } else {
+      await this.upsertStudentDaily(studentCc!, date, seg, actor);
+    }
+
+    const after = isStaff
+      ? await this.prisma.attendance_staff_daily.findUnique({
+          where: { employee_id_date: { employee_id: employeeId!, date } },
+        })
+      : await this.prisma.attendance_student_daily.findUnique({
+          where: { student_cc_date: { student_cc: studentCc!, date } },
+        });
+
+    // The upserts also bail on missing campus / non-working day; if nothing
+    // landed, report that rather than claiming an upsert happened.
+    const action: DayAction = after ? 'UPSERTED' : existing ? 'NOOP' : 'SKIPPED_NON_WORKING_DAY';
+    return { ...base, scanCountAfter: seg.scanCount, statusAfter: after?.status ?? null, action };
+  }
+
+  /** Read-only preview of recomputePersonDay — writes nothing, not even sequence_no. */
+  async projectPersonDay(
+    personType: DevicePersonType,
+    employeeId: number | null,
+    studentCc: number | null,
+    date: Date,
+  ): Promise<DayRecomputeOutcome> {
+    assertPersonId(personType, employeeId, studentCc);
+    const isStaff = personType === DevicePersonType.STAFF;
+
+    const existing = isStaff
+      ? await this.prisma.attendance_staff_daily.findUnique({
+          where: { employee_id_date: { employee_id: employeeId!, date } },
+        })
+      : await this.prisma.attendance_student_daily.findUnique({
+          where: { student_cc_date: { student_cc: studentCc!, date } },
+        });
+
+    const scanCount = await this.countPersonDayScans(personType, employeeId, studentCc, date);
+
+    let action: DayAction;
+    if (scanCount === 0) {
+      if (!existing) action = 'NOOP';
+      else if (existing.source !== AttendanceSource.BIOMETRIC) action = 'SKIPPED_PROTECTED_SOURCE';
+      else action = 'CLEARED';
+    } else {
+      const isProtected = isStaff
+        ? existing?.source === AttendanceSource.MANUAL ||
+          existing?.source === AttendanceSource.SYSTEM ||
+          existing?.source === AttendanceSource.LEAVE
+        : existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM;
+      action = isProtected ? 'SKIPPED_PROTECTED_SOURCE' : 'UPSERTED';
+    }
+
+    return {
+      personType,
+      employeeId,
+      studentCc,
+      date,
+      scanCountBefore: scanCount,
+      scanCountAfter: scanCount,
+      statusBefore: existing?.status ?? null,
+      statusAfter: action === 'CLEARED' ? null : (existing?.status ?? null),
+      action,
+    };
+  }
+
+  private async countPersonDayScans(
+    personType: DevicePersonType,
+    employeeId: number | null,
+    studentCc: number | null,
+    date: Date,
+  ): Promise<number> {
+    assertPersonId(personType, employeeId, studentCc);
+    return this.prisma.zk_attendance_scans.count({
+      where: {
+        person_type: personType,
+        ...(personType === DevicePersonType.STAFF ? { employee_id: employeeId } : { student_cc: studentCc }),
+        attendance_date: date,
+        is_duplicate: false,
+      },
+    });
+  }
+
+  /** Deletes a biometric-derived daily row that no longer has any backing scans. */
+  private async clearBiometricStaffDaily(employeeId: number, date: Date, actor: string): Promise<DayAction> {
+    const existing = await this.prisma.attendance_staff_daily.findUnique({
+      where: { employee_id_date: { employee_id: employeeId, date } },
+    });
+    if (!existing) return 'NOOP';
+    if (existing.source !== AttendanceSource.BIOMETRIC) return 'SKIPPED_PROTECTED_SOURCE';
+
+    await this.prisma.attendance_staff_daily.delete({
+      where: { employee_id_date: { employee_id: employeeId, date } },
+    });
+    void this.auditLogs.log({
+      entity_type: 'STAFF_ATTENDANCE',
+      entity_id: String(employeeId),
+      action: 'DELETED',
+      section: 'attendance',
+      field: 'status',
+      old_value: existing.status,
+      new_value: null,
+      note: `Biometric attendance removed for employee #${employeeId} on ${date.toISOString().slice(0, 10)} — no backing scans after mapping re-resolution.`,
+      changed_by: actor,
+    });
+    return 'CLEARED';
+  }
+
+  private async clearBiometricStudentDaily(studentCc: number, date: Date, actor: string): Promise<DayAction> {
+    const existing = await this.prisma.attendance_student_daily.findUnique({
+      where: { student_cc_date: { student_cc: studentCc, date } },
+    });
+    if (!existing) return 'NOOP';
+    if (existing.source !== AttendanceSource.BIOMETRIC) return 'SKIPPED_PROTECTED_SOURCE';
+
+    await this.prisma.attendance_student_daily.delete({
+      where: { student_cc_date: { student_cc: studentCc, date } },
+    });
+    void this.auditLogs.log({
+      entity_type: 'STUDENT_ATTENDANCE',
+      entity_id: String(studentCc),
+      action: 'DELETED',
+      section: 'attendance',
+      field: 'status',
+      old_value: existing.status,
+      new_value: null,
+      student_id: studentCc,
+      note: `Biometric attendance removed for student #${studentCc} on ${date.toISOString().slice(0, 10)} — no backing scans after mapping re-resolution.`,
+      changed_by: actor,
+    });
+    return 'CLEARED';
+  }
+
+  /**
+   * Re-derives is_duplicate across one person's scans for a day.
+   *
+   * Deliberately narrower than the ingest-time check (processOneScan compares
+   * against the person's globally latest scan): for a rebuild, day-scoped is the
+   * correct window, and it makes the result independent of processing order.
+   */
+  private async recomputeDayDuplicates(
+    personType: DevicePersonType,
+    employeeId: number | null,
+    studentCc: number | null,
+    date: Date,
+  ): Promise<number> {
+    assertPersonId(personType, employeeId, studentCc);
+    const scans = await this.prisma.zk_attendance_scans.findMany({
+      where: {
+        person_type: personType,
+        ...(personType === DevicePersonType.STAFF ? { employee_id: employeeId } : { student_cc: studentCc }),
+        attendance_date: date,
+      },
+      select: { id: true, scan_time: true, is_duplicate: true },
+      orderBy: { scan_time: 'asc' },
+    });
+
+    const flips: { id: number; is_duplicate: boolean }[] = [];
+    let lastAccepted: Date | null = null;
+    for (const s of scans) {
+      const isDup = lastAccepted != null && s.scan_time.getTime() - lastAccepted.getTime() < DEDUP_WINDOW_MS;
+      if (!isDup) lastAccepted = s.scan_time;
+      if (s.is_duplicate !== isDup) flips.push({ id: s.id, is_duplicate: isDup });
+    }
+
+    if (flips.length > 0) {
+      await this.prisma.$transaction(
+        flips.map((f) =>
+          this.prisma.zk_attendance_scans.update({ where: { id: f.id }, data: { is_duplicate: f.is_duplicate } }),
+        ),
+      );
+    }
+    return flips.length;
   }
 
   // Never overwrites a row whose source = MANUAL — admins marking e.g. EXCUSED
