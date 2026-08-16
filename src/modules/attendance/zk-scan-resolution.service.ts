@@ -14,6 +14,7 @@ import {
   mappingKey,
   PersonRef,
   personDayKey,
+  personKey,
   resolvePersonRef,
   samePersonRef,
   UNATTRIBUTED,
@@ -238,6 +239,109 @@ export class ZkScanResolutionService {
     } finally {
       if (release) release();
     }
+  }
+
+  /**
+   * Condenses a report into confirm-dialog copy. The untrimmed report carries a
+   * row per scan, which a dialog can't use.
+   *
+   * `subject` is the person the operation is ABOUT — the one being linked to, or
+   * the pin's current owner on an unlink. They must be excluded from
+   * "affects other people": on any unlink every scan moves off the subject, so
+   * without this the dialog warns that a student's own unlink affects somebody
+   * else, on every single unlink.
+   */
+  async summariseImpact(r: ResolutionReport, subject?: PersonRef | null) {
+    const days = r.affected_days;
+    const created = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore === null).length;
+    const rebuilt = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore !== null).length;
+    const removed = days.filter((d) => d.action === 'CLEARED').length;
+    const protectedDays = days.filter((d) => d.action === 'SKIPPED_PROTECTED_SOURCE').length;
+
+    const subjectKey = subject && isAttributed(subject) ? personKey(subject) : null;
+
+    const otherRefs = new Map<string, PersonRef>();
+    for (const x of r.reattributions) {
+      if (!isAttributed(x.from)) continue;
+      const key = personKey(x.from);
+      if (key === subjectKey) continue;
+      if (!otherRefs.has(key)) otherRefs.set(key, x.from);
+    }
+    const others = await this.describePeople([...otherRefs.values()]);
+
+    const bits: string[] = [];
+    if (r.attached) bits.push(`${r.attached} scan${r.attached === 1 ? '' : 's'} will be linked`);
+    if (r.repointed) bits.push(`${r.repointed} scan${r.repointed === 1 ? '' : 's'} will move to a different person`);
+    if (r.orphaned) bits.push(`${r.orphaned} scan${r.orphaned === 1 ? '' : 's'} will be unlinked`);
+    if (created) bits.push(`${created} day${created === 1 ? '' : 's'} of attendance will appear`);
+    if (rebuilt) bits.push(`${rebuilt} existing day${rebuilt === 1 ? '' : 's'} will be recalculated`);
+    if (removed) bits.push(`${removed} day${removed === 1 ? '' : 's'} will stop showing`);
+
+    return {
+      scans_examined: r.scans_examined,
+      scans_linked: r.attached,
+      scans_moved: r.repointed,
+      scans_unlinked: r.orphaned,
+      days_appearing: created,
+      days_recalculated: rebuilt,
+      days_removed: removed,
+      days_protected: protectedDays,
+      /** Named, so the dialog can say WHO loses these scans rather than "1 other person". */
+      affects_other_people: others,
+      reversible: true,
+      summary: bits.length ? bits.join(', ') + '.' : 'No attendance will change.',
+      warnings: r.warnings,
+    };
+  }
+
+  /**
+   * Who a pin currently belongs to, per the mapping table. Used as the "subject"
+   * of an unlink preview. Falls back to the mapping's person even when it is
+   * already inactive, since that is still who the scans are attributed to.
+   */
+  async currentOwnerOf(deviceSn: string, devicePin: string): Promise<PersonRef | null> {
+    const mapping = await this.prisma.device_user_mappings.findUnique({
+      where: { device_sn_device_pin: { device_sn: deviceSn, device_pin: devicePin } },
+      select: { person_type: true, employee_id: true, student_cc: true },
+    });
+    if (!mapping) return null;
+    return {
+      person_type: mapping.person_type,
+      employee_id: mapping.person_type === DevicePersonType.STAFF ? mapping.employee_id : null,
+      student_cc: mapping.person_type === DevicePersonType.STUDENT ? mapping.student_cc : null,
+    };
+  }
+
+  /** Turns person refs into display names for confirm-dialog copy. */
+  private async describePeople(refs: PersonRef[]): Promise<string[]> {
+    if (refs.length === 0) return [];
+    const employeeIds = refs.map((r) => r.employee_id).filter((v): v is number => v != null);
+    const studentCcs = refs.map((r) => r.student_cc).filter((v): v is number => v != null);
+
+    const employees = employeeIds.length
+      ? await this.prisma.employee_profiles.findMany({
+          where: { id: { in: employeeIds } },
+          select: { id: true, full_name: true, employee_code: true },
+        })
+      : [];
+    const students = studentCcs.length
+      ? await this.prisma.students.findMany({
+          where: { cc: { in: studentCcs } },
+          select: { cc: true, full_name: true },
+        })
+      : [];
+
+    const empById = new Map(employees.map((e) => [e.id, e]));
+    const stuByCc = new Map(students.map((s) => [s.cc, s]));
+
+    return refs.map((r) => {
+      if (r.person_type === DevicePersonType.STAFF) {
+        const e = empById.get(r.employee_id!);
+        return e ? `${e.full_name ?? `Employee #${r.employee_id}`}${e.employee_code ? ` (${e.employee_code})` : ''}` : `Employee #${r.employee_id}`;
+      }
+      const s = stuByCc.get(r.student_cc!);
+      return s ? `${s.full_name} (cc ${r.student_cc})` : `Student cc ${r.student_cc}`;
+    });
   }
 
   /** Convenience wrapper for the mapping lifecycle hooks. */

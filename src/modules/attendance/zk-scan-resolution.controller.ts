@@ -30,7 +30,8 @@ import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
 import { DevicePersonType } from '@prisma/client';
-import { ResolutionReport, ResolutionScope, ZkScanResolutionService } from './zk-scan-resolution.service';
+import { ResolutionScope, ZkScanResolutionService } from './zk-scan-resolution.service';
+import type { PersonRef } from './device-mapping-resolution.util';
 
 export class PreviewLinkDto {
   @IsString() device_sn: string;
@@ -43,47 +44,6 @@ export class PreviewLinkDto {
 export class PreviewUnlinkDto {
   @IsString() device_sn: string;
   @IsString() device_pin: string;
-}
-
-/**
- * Confirm dialogs need counts and a plain-language line, not the full row-level
- * diff — the untrimmed report can carry thousands of entries.
- */
-function summarise(r: ResolutionReport) {
-  const days = r.affected_days;
-  const created = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore === null).length;
-  const rebuilt = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore !== null).length;
-  const removed = days.filter((d) => d.action === 'CLEARED').length;
-  const protectedDays = days.filter((d) => d.action === 'SKIPPED_PROTECTED_SOURCE').length;
-
-  const bits: string[] = [];
-  if (r.attached) bits.push(`${r.attached} scan${r.attached === 1 ? '' : 's'} will be linked`);
-  if (r.repointed) bits.push(`${r.repointed} scan${r.repointed === 1 ? '' : 's'} will move to a different person`);
-  if (r.orphaned) bits.push(`${r.orphaned} scan${r.orphaned === 1 ? '' : 's'} will be unlinked`);
-  if (created) bits.push(`${created} day${created === 1 ? '' : 's'} of attendance will appear`);
-  if (rebuilt) bits.push(`${rebuilt} existing day${rebuilt === 1 ? '' : 's'} will be recalculated`);
-  if (removed) bits.push(`${removed} day${removed === 1 ? '' : 's'} will stop showing`);
-
-  return {
-    scans_examined: r.scans_examined,
-    scans_linked: r.attached,
-    scans_moved: r.repointed,
-    scans_unlinked: r.orphaned,
-    days_appearing: created,
-    days_recalculated: rebuilt,
-    days_removed: removed,
-    days_protected: protectedDays,
-    affects_other_people: [
-      ...new Set(
-        r.reattributions
-          .filter((x) => x.from.employee_id != null || x.from.student_cc != null)
-          .map((x) => `${x.from.person_type}:${x.from.employee_id ?? x.from.student_cc}`),
-      ),
-    ],
-    reversible: true,
-    summary: bits.length ? bits.join(', ') + '.' : 'No attendance will change.',
-    warnings: r.warnings,
-  };
 }
 
 export class ResolveScansDto {
@@ -176,19 +136,23 @@ export class ZkScanResolutionController {
       throw new BadRequestException('student_cc is required for a STUDENT preview');
     }
 
+    const target: PersonRef = {
+      person_type: dto.person_type as DevicePersonType,
+      employee_id: dto.person_type === 'STAFF' ? (dto.employee_id ?? null) : null,
+      student_cc: dto.person_type === 'STUDENT' ? (dto.student_cc ?? null) : null,
+    };
+
     const report = await this.resolution.resolve(
       { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
-      {
-        actor: user.username || user.sub,
-        dryRun: true,
-        overrideToPerson: {
-          person_type: dto.person_type as DevicePersonType,
-          employee_id: dto.person_type === 'STAFF' ? (dto.employee_id ?? null) : null,
-          student_cc: dto.person_type === 'STUDENT' ? (dto.student_cc ?? null) : null,
-        },
-      },
+      { actor: user.username || user.sub, dryRun: true, overrideToPerson: target },
     );
-    return createApiResponse(summarise(report), HttpStatus.OK, 'Link preview generated');
+    // The person being linked to is the subject, not a bystander — excluding them
+    // keeps "affects other people" meaning what it says.
+    return createApiResponse(
+      await this.resolution.summariseImpact(report, target),
+      HttpStatus.OK,
+      'Link preview generated',
+    );
   }
 
   /**
@@ -203,7 +167,15 @@ export class ZkScanResolutionController {
       { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
       { actor: user.username || user.sub, dryRun: true, overrideToUnmapped: true },
     );
-    return createApiResponse(summarise(report), HttpStatus.OK, 'Unlink preview generated');
+    // On an unlink EVERY scan moves off the pin's current owner. They are the
+    // subject of the operation, so without excluding them the dialog reports
+    // that unlinking a student affects "1 other person" — every single time.
+    const subject = await this.resolution.currentOwnerOf(dto.device_sn, dto.device_pin);
+    return createApiResponse(
+      await this.resolution.summariseImpact(report, subject),
+      HttpStatus.OK,
+      'Unlink preview generated',
+    );
   }
 
   /** Read-only drift preview for a single device pin. */
