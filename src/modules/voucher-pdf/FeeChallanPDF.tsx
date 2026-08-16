@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
     copyLabel: {
         position: 'absolute',
         right: 12,
-        top: -5,
+        top: -2,
         backgroundColor: '#000000',
         color: '#ffffff',
         padding: '1px 5px',
