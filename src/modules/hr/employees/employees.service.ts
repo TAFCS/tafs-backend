@@ -71,6 +71,9 @@ export class CreateEmployeeDto {
   personal_phone?: string;
 
   @IsOptional() @IsString()
+  secondary_phone?: string;
+
+  @IsOptional() @IsString()
   personal_email?: string;
 
   @IsOptional() @IsString()
@@ -388,6 +391,7 @@ export class EmployeesService {
         date_of_birth: rest.date_of_birth ? new Date(rest.date_of_birth) : null,
         address: rest.address || null,
         personal_phone: rest.personal_phone || null,
+        secondary_phone: rest.secondary_phone || null,
         personal_email: rest.personal_email || null,
         job_title: upperOrNull(rest.job_title),
         staff_category_id: rest.staff_category_id ?? null,
@@ -512,6 +516,7 @@ export class EmployeesService {
             rest.date_of_birth !== undefined ? (rest.date_of_birth ? new Date(rest.date_of_birth) : null) : undefined,
           address: rest.address !== undefined ? nullIfEmpty(rest.address) : undefined,
           personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
+          secondary_phone: rest.secondary_phone !== undefined ? nullIfEmpty(rest.secondary_phone) : undefined,
           personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
           job_title: rest.job_title !== undefined ? upperOrNull(rest.job_title) : undefined,
           staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
@@ -555,6 +560,7 @@ export class EmployeesService {
       { key: 'department_id', label: 'Department' },
       { key: 'campus_id', label: 'Campus' },
       { key: 'personal_phone', label: 'Phone' },
+      { key: 'secondary_phone', label: 'Secondary Phone' },
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
     ];

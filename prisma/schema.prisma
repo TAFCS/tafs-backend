@@ -1121,6 +1121,7 @@ model employee_profiles {
   date_of_birth                      DateTime?                            @db.Date
   address                            String?
   personal_phone                     String?                              @db.VarChar(60)
+  secondary_phone                    String?                              @db.VarChar(60)
   personal_email                     String?                              @db.VarChar(100)
   job_title                          String?                              @db.VarChar(100)
   job_description                    String?
