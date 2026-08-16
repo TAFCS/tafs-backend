@@ -26,6 +26,8 @@ import { join } from 'path';
 
 const prisma = new PrismaClient();
 const APPLY = process.argv.includes('--apply');
+const CATEGORY_ARG = process.argv.find((a) => a.startsWith('--categories='));
+const APPLY_CATEGORIES = new Set((CATEGORY_ARG ? CATEGORY_ARG.split('=')[1] : 'A,B').split(','));
 const CSV_PATH = join(__dirname, '../../student-device-pin-gr-fix-plan.csv');
 
 function csvEscape(value: string | number | boolean): string {
@@ -109,20 +111,21 @@ async function main() {
   console.log(`Plan written to ${CSV_PATH}`);
 
   if (!APPLY) {
-    console.log('\nDry run only — no rows were changed. Re-run with --apply to update categories A and B.');
+    console.log('\nDry run only — no rows were changed. Re-run with --apply (optionally --categories=A,B) to update.');
     return;
   }
 
-  console.log(`\nApplying fix to ${byCat.A.length + byCat.B.length} row(s) (categories A + B)...`);
+  const toApply = plan.filter((p) => APPLY_CATEGORIES.has(p.category));
+  console.log(`\nApplying fix to ${toApply.length} row(s) (categories ${[...APPLY_CATEGORIES].join(',')})...`);
   let updated = 0;
-  for (const { m } of [...byCat.A, ...byCat.B]) {
+  for (const { m } of toApply) {
     await prisma.device_user_mappings.update({
       where: { id: m.id },
       data: { device_pin: String(m.student_cc) },
     });
     updated++;
   }
-  console.log(`Updated ${updated} row(s). Category C (${byCat.C.length}) left untouched for manual review.`);
+  console.log(`Updated ${updated} row(s). Skipped: ${plan.length - updated}.`);
 }
 
 main()

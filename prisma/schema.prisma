@@ -738,6 +738,7 @@ model students {
   @@index([deleted_at], map: "idx_students_deleted_at")
   @@index([family_id], map: "idx_students_family_id")
   @@index([full_name], map: "idx_students_full_name")
+  @@index([gr_number], map: "idx_students_gr_number")
   @@index([section_id], map: "idx_students_section_id")
   @@index([status], map: "idx_students_status")
 }

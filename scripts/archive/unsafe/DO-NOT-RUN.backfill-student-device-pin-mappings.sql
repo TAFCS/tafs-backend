@@ -1,3 +1,32 @@
+-- ============================================================================
+-- ARCHIVED — DO NOT RUN. Kept only as a record of what was executed historically.
+--
+-- WHY THIS IS UNSAFE
+--
+-- 1. Step 3 (UPDATE ... SET student_cc = real_s.cc) silently RE-POINTS live,
+--    active mappings using a `gr_number = device_pin` heuristic. Its uniqueness
+--    check counts only GR matches and is blind to CC collisions entirely.
+--    Student GR numbers and CCs share one numeric namespace: 199 known cases
+--    where student A's gr_number equals student B's cc. This is the mechanism
+--    that made pin 6102 credit MUHAMMAD HAIB MIRZA's attendance to AIZA BAIG.
+--
+-- 2. Step 2 creates mappings from a bare `cc = device_pin::int` guess with no
+--    cross-check against GR numbers.
+--
+-- 3. Step 4 attaches orphan scans without recomputing attendance_*_daily, so
+--    scan attribution and daily attendance silently disagree afterwards.
+--
+-- WHAT TO USE INSTEAD
+--   * Mapping changes:  POST / PATCH / DELETE /attendance/zk-device-mappings
+--                       (collision-guarded, and re-resolves history inline)
+--   * Bulk repair:      POST /attendance/zk-scan-resolution/resolve  (dry_run first)
+--   * Diagnosis:        npx ts-node scripts/audit-zk-scan-attribution.ts
+--
+-- psql aborts here before executing anything below.
+-- ============================================================================
+\echo '*** ARCHIVED — DO NOT RUN. See header; use the zk-scan-resolution endpoint. ***'
+\quit
+
 -- backfill-student-device-pin-mappings.sql
 --
 -- Creates missing STUDENT device_user_mappings when an unmapped ZK pin uniquely

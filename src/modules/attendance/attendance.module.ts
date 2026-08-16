@@ -20,6 +20,8 @@ import { StudentAttendanceService } from './student-attendance.service';
 import { ZkAttendanceMappingController } from './zk-attendance-mapping.controller';
 import { ZkAttendanceMappingService } from './zk-attendance-mapping.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
+import { ZkScanResolutionService } from './zk-scan-resolution.service';
+import { ZkScanResolutionController } from './zk-scan-resolution.controller';
 import { ZkDeviceController, ZkLogsController } from './zk-push.controller';
 import { ZkPushService } from './zk-push.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
@@ -44,6 +46,7 @@ import { RecomputeLateController } from './recompute-late.controller';
     ZkDeviceController,
     ZkLogsController,
     ZkAttendanceMappingController,
+    ZkScanResolutionController,
     AttendanceNotificationsController,
     ClassCheckInScheduleController,
     RecomputeLateController,
@@ -57,6 +60,7 @@ import { RecomputeLateController } from './recompute-late.controller';
     StudentAttendanceService,
     ZkPushService,
     ZkAttendanceProcessorService,
+    ZkScanResolutionService,
     ZkAttendanceMappingService,
     AttendanceNotificationsService,
     AttendancePolicyResolverService,

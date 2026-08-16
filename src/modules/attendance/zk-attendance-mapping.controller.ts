@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -37,6 +37,26 @@ export class ZkAttendanceMappingController {
     return this.mappingService.getMappings(parsedEmployeeId, parsedStudentCc);
   }
 
+  /** Pre-flight collision check so the UI can warn before submit. */
+  @Get('collision-check')
+  async collisionCheck(
+    @Query('device_sn') deviceSn: string,
+    @Query('device_pin') devicePin: string,
+    @Query('person_type') personType: string,
+    @Query('student_cc') studentCc: string | undefined,
+    @Query('employee_id') employeeId: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    this.assertSuperAdmin(user);
+    return this.mappingService.checkPinCollisions({
+      device_sn: deviceSn,
+      device_pin: devicePin,
+      person_type: (personType as any) ?? 'STUDENT',
+      student_cc: studentCc ? parseInt(studentCc, 10) : undefined,
+      employee_id: employeeId ? parseInt(employeeId, 10) : undefined,
+    });
+  }
+
   @Get('unmapped')
   async getUnmapped(@CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
@@ -65,6 +85,19 @@ export class ZkAttendanceMappingController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     return this.mappingService.updateMapping(id, dto, user.username || user.sub);
+  }
+
+  /**
+   * Deletes a mapping and releases every scan it owned, rebuilding the affected
+   * daily attendance. Supersedes the ad-hoc delete scripts, which left scans
+   * attributed to people who no longer had a mapping.
+   */
+  @Delete(':id')
+  @UseGuards(PoliciesGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  async deleteMapping(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    return this.mappingService.deleteMapping(id, user.username || user.sub);
   }
 
   private assertSuperAdmin(user: IJwtStaffPayload) {

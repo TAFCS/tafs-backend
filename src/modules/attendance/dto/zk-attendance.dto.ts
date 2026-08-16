@@ -29,6 +29,19 @@ export class CreateDeviceMappingDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Only needed to reactivate an existing deactivated mapping — this endpoint
+   * upserts, and reviving a disabled mapping must be deliberate.
+   */
+  @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
+
+  /** Override a BLOCK-level pin collision deliberately. */
+  @IsOptional()
+  @IsBoolean()
+  acknowledge_collisions?: boolean;
 }
 
 export class UpdateDeviceMappingDto {
@@ -57,6 +70,11 @@ export class UpdateDeviceMappingDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  /** Override a BLOCK-level pin collision deliberately. */
+  @IsOptional()
+  @IsBoolean()
+  acknowledge_collisions?: boolean;
 }
 
 
