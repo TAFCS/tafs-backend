@@ -29,7 +29,62 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
-import { ResolutionScope, ZkScanResolutionService } from './zk-scan-resolution.service';
+import { DevicePersonType } from '@prisma/client';
+import { ResolutionReport, ResolutionScope, ZkScanResolutionService } from './zk-scan-resolution.service';
+
+export class PreviewLinkDto {
+  @IsString() device_sn: string;
+  @IsString() device_pin: string;
+  @IsIn(['STAFF', 'STUDENT']) person_type: 'STAFF' | 'STUDENT';
+  @IsOptional() @Type(() => Number) @IsInt() employee_id?: number;
+  @IsOptional() @Type(() => Number) @IsInt() student_cc?: number;
+}
+
+export class PreviewUnlinkDto {
+  @IsString() device_sn: string;
+  @IsString() device_pin: string;
+}
+
+/**
+ * Confirm dialogs need counts and a plain-language line, not the full row-level
+ * diff — the untrimmed report can carry thousands of entries.
+ */
+function summarise(r: ResolutionReport) {
+  const days = r.affected_days;
+  const created = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore === null).length;
+  const rebuilt = days.filter((d) => d.action === 'UPSERTED' && d.statusBefore !== null).length;
+  const removed = days.filter((d) => d.action === 'CLEARED').length;
+  const protectedDays = days.filter((d) => d.action === 'SKIPPED_PROTECTED_SOURCE').length;
+
+  const bits: string[] = [];
+  if (r.attached) bits.push(`${r.attached} scan${r.attached === 1 ? '' : 's'} will be linked`);
+  if (r.repointed) bits.push(`${r.repointed} scan${r.repointed === 1 ? '' : 's'} will move to a different person`);
+  if (r.orphaned) bits.push(`${r.orphaned} scan${r.orphaned === 1 ? '' : 's'} will be unlinked`);
+  if (created) bits.push(`${created} day${created === 1 ? '' : 's'} of attendance will appear`);
+  if (rebuilt) bits.push(`${rebuilt} existing day${rebuilt === 1 ? '' : 's'} will be recalculated`);
+  if (removed) bits.push(`${removed} day${removed === 1 ? '' : 's'} will stop showing`);
+
+  return {
+    scans_examined: r.scans_examined,
+    scans_linked: r.attached,
+    scans_moved: r.repointed,
+    scans_unlinked: r.orphaned,
+    days_appearing: created,
+    days_recalculated: rebuilt,
+    days_removed: removed,
+    days_protected: protectedDays,
+    affects_other_people: [
+      ...new Set(
+        r.reattributions
+          .filter((x) => x.from.employee_id != null || x.from.student_cc != null)
+          .map((x) => `${x.from.person_type}:${x.from.employee_id ?? x.from.student_cc}`),
+      ),
+    ],
+    reversible: true,
+    summary: bits.length ? bits.join(', ') + '.' : 'No attendance will change.',
+    warnings: r.warnings,
+  };
+}
 
 export class ResolveScansDto {
   @IsIn(['scan_ids', 'device_pin', 'device', 'date_range'])
@@ -102,6 +157,53 @@ export class ZkScanResolutionController {
         ? 'Dry run complete — no changes were written'
         : 'Scan attribution re-resolved successfully',
     );
+  }
+
+  /**
+   * "If I linked this pin to this person, what would happen?"
+   *
+   * Powers the confirm step on one-click mapping. A plain dry-run can't answer
+   * this — an unmapped pin has nothing to resolve to, so it reports no change.
+   */
+  @Post('preview-link')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  async previewLink(@Body() dto: PreviewLinkDto, @CurrentUser() user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    if (dto.person_type === 'STAFF' && !dto.employee_id) {
+      throw new BadRequestException('employee_id is required for a STAFF preview');
+    }
+    if (dto.person_type === 'STUDENT' && !dto.student_cc) {
+      throw new BadRequestException('student_cc is required for a STUDENT preview');
+    }
+
+    const report = await this.resolution.resolve(
+      { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
+      {
+        actor: user.username || user.sub,
+        dryRun: true,
+        overrideToPerson: {
+          person_type: dto.person_type as DevicePersonType,
+          employee_id: dto.person_type === 'STAFF' ? (dto.employee_id ?? null) : null,
+          student_cc: dto.person_type === 'STUDENT' ? (dto.student_cc ?? null) : null,
+        },
+      },
+    );
+    return createApiResponse(summarise(report), HttpStatus.OK, 'Link preview generated');
+  }
+
+  /**
+   * "If I unlinked/deleted this pin's mapping, what would happen?"
+   * Powers the confirm step on delete and deactivate.
+   */
+  @Post('preview-unlink')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  async previewUnlink(@Body() dto: PreviewUnlinkDto, @CurrentUser() user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    const report = await this.resolution.resolve(
+      { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
+      { actor: user.username || user.sub, dryRun: true, overrideToUnmapped: true },
+    );
+    return createApiResponse(summarise(report), HttpStatus.OK, 'Unlink preview generated');
   }
 
   /** Read-only drift preview for a single device pin. */

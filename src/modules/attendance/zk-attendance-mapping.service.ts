@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { device_user_mappings, DevicePersonType } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -12,6 +12,15 @@ import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from 
  * finish the job via POST /attendance/zk-scan-resolution/resolve.
  */
 const INLINE_RESOLVE_SCAN_LIMIT = 2000;
+
+/** Returned instead of a ResolutionReport when a pin is too large to rebuild inline. */
+export interface SkippedResolution {
+  skipped: true;
+  needs_rebuild: true;
+  scan_count: number;
+  warning: string;
+  resolve_request: { kind: 'device_pin'; device_sn: string; device_pin: string; dry_run: false };
+}
 
 export type CollisionSeverity = 'BLOCK' | 'WARN';
 
@@ -30,6 +39,8 @@ export interface PinCollision {
 
 @Injectable()
 export class ZkAttendanceMappingService {
+  private readonly logger = new Logger(ZkAttendanceMappingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
@@ -430,18 +441,43 @@ export class ZkAttendanceMappingService {
     devicePin: string,
     actor: string,
     overrideToUnmapped = false,
-  ): Promise<ResolutionReport | { skipped: true; scan_count: number; warning: string }> {
+  ): Promise<ResolutionReport | SkippedResolution> {
     const scanCount = await this.prisma.zk_attendance_scans.count({
       where: { device_sn: deviceSn, device_pin: devicePin },
     });
 
     if (scanCount > INLINE_RESOLVE_SCAN_LIMIT) {
+      // Loud on purpose. A silently-skipped rebuild leaves the mapping changed
+      // but history stale — the exact drift this whole feature exists to remove,
+      // except invisible. Callers must see and handle this state explicitly.
       const warning =
         `${scanCount} scans on ${deviceSn}/${devicePin} exceed the inline limit (${INLINE_RESOLVE_SCAN_LIMIT}). ` +
         `The mapping was saved, but historical attendance was NOT rebuilt — run ` +
         `POST /attendance/zk-scan-resolution/resolve with {"kind":"device_pin","device_sn":"${deviceSn}",` +
         `"device_pin":"${devicePin}","dry_run":false} to finish.`;
-      return { skipped: true, scan_count: scanCount, warning };
+
+      this.logger.warn(warning);
+      await this.auditLogs.log({
+        entity_type: 'ZK_ATTENDANCE_MAPPING',
+        entity_id: `${deviceSn}/${devicePin}`,
+        action: 'UPDATED',
+        section: 'attendance',
+        changed_by: actor,
+        note: `PENDING REBUILD — ${warning}`,
+      });
+
+      return {
+        skipped: true,
+        needs_rebuild: true,
+        scan_count: scanCount,
+        warning,
+        resolve_request: {
+          kind: 'device_pin',
+          device_sn: deviceSn,
+          device_pin: devicePin,
+          dry_run: false,
+        },
+      };
     }
 
     return this.resolution.resolve(

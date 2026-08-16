@@ -498,12 +498,11 @@ export class ZkAttendanceProcessorService {
           where: { student_cc_date: { student_cc: studentCc!, date } },
         });
 
-    const base: Omit<DayRecomputeOutcome, 'action' | 'scanCountAfter' | 'statusAfter'> = {
+    const base = {
       personType,
       employeeId,
       studentCc,
       date,
-      scanCountBefore: await this.countPersonDayScans(personType, employeeId, studentCc, date),
       statusBefore: existing?.status ?? null,
     };
 
@@ -519,7 +518,7 @@ export class ZkAttendanceProcessorService {
       const action = isStaff
         ? await this.clearBiometricStaffDaily(employeeId!, date, actor)
         : await this.clearBiometricStudentDaily(studentCc!, date, actor);
-      return { ...base, scanCountAfter: 0, statusAfter: action === 'CLEARED' ? null : base.statusBefore, action };
+      return { ...base, scanCountBefore: 0, scanCountAfter: 0, statusAfter: action === 'CLEARED' ? null : base.statusBefore, action };
     }
 
     // Mirror the upserts' own refusal to overwrite a human/system decision, so
@@ -531,7 +530,7 @@ export class ZkAttendanceProcessorService {
     const protectedStudent =
       existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM;
     if (isStaff ? protectedStaff : protectedStudent) {
-      return { ...base, scanCountAfter: seg.scanCount, statusAfter: base.statusBefore, action: 'SKIPPED_PROTECTED_SOURCE' };
+      return { ...base, scanCountBefore: seg.scanCount, scanCountAfter: seg.scanCount, statusAfter: base.statusBefore, action: 'SKIPPED_PROTECTED_SOURCE' };
     }
 
     if (isStaff) {
@@ -540,7 +539,7 @@ export class ZkAttendanceProcessorService {
       await this.upsertStudentDaily(studentCc!, date, seg, actor);
     }
 
-    const after = isStaff
+    let after = isStaff
       ? await this.prisma.attendance_staff_daily.findUnique({
           where: { employee_id_date: { employee_id: employeeId!, date } },
         })
@@ -548,10 +547,26 @@ export class ZkAttendanceProcessorService {
           where: { student_cc_date: { student_cc: studentCc!, date } },
         });
 
+    // Re-attribution changes WHO owns a day, not whether they were late. While
+    // STUDENT_LATE_MARKING_ENABLED is false every recompute classifies PRESENT,
+    // so rebuilding a day would silently erase a LATE recorded when the switch
+    // was on. Restore the stored classification in exactly that case.
+    if (
+      !isStaff &&
+      !STUDENT_LATE_MARKING_ENABLED &&
+      existing?.status === RollRecordStatus.LATE &&
+      after?.status === RollRecordStatus.PRESENT
+    ) {
+      after = await this.prisma.attendance_student_daily.update({
+        where: { student_cc_date: { student_cc: studentCc!, date } },
+        data: { status: RollRecordStatus.LATE },
+      });
+    }
+
     // The upserts also bail on missing campus / non-working day; if nothing
     // landed, report that rather than claiming an upsert happened.
     const action: DayAction = after ? 'UPSERTED' : existing ? 'NOOP' : 'SKIPPED_NON_WORKING_DAY';
-    return { ...base, scanCountAfter: seg.scanCount, statusAfter: after?.status ?? null, action };
+    return { ...base, scanCountBefore: seg.scanCount, scanCountAfter: seg.scanCount, statusAfter: after?.status ?? null, action };
   }
 
   /**

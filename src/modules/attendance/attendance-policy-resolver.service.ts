@@ -15,6 +15,29 @@ export class AttendancePolicyResolverService {
     private readonly expectedTimes: EmployeeExpectedTimesService,
   ) {}
 
+  /** See CalendarDayResolverService.beginBatch — same contract. */
+  private batchCache: Map<string, { expectedCheckIn: Date | null; graceMinutes: number }> | null = null;
+
+  beginBatch(): void {
+    this.batchCache = new Map();
+  }
+
+  endBatch(): void {
+    this.batchCache = null;
+  }
+
+  private async memoPolicy(
+    key: string,
+    load: () => Promise<{ expectedCheckIn: Date | null; graceMinutes: number }>,
+  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+    if (!this.batchCache) return load();
+    const hit = this.batchCache.get(key);
+    if (hit) return hit;
+    const val = await load();
+    this.batchCache.set(key, val);
+    return val;
+  }
+
   async resolveActivePolicySet(campusId: number, date: Date) {
     return this.prisma.hr_policy_sets.findFirst({
       where: {
@@ -147,6 +170,16 @@ export class AttendancePolicyResolverService {
     campusId: number,
     date: Date,
   ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+    return this.memoPolicy(`stu:${classId ?? '-'}:${campusId}:${date.toISOString().slice(0, 10)}`, () =>
+      this.resolveStudentCheckInPolicyUncached(classId, campusId, date),
+    );
+  }
+
+  private async resolveStudentCheckInPolicyUncached(
+    classId: number | null,
+    campusId: number,
+    date: Date,
+  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
     if (classId != null) {
       const schedule = await this.prisma.class_check_in_schedules.findFirst({
         where: {
@@ -174,6 +207,16 @@ export class AttendancePolicyResolverService {
   }
 
   async resolveStaffCheckInPolicy(
+    employeeId: number,
+    campusId: number,
+    date: Date,
+  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+    return this.memoPolicy(`stf:${employeeId}:${campusId}:${date.toISOString().slice(0, 10)}`, () =>
+      this.resolveStaffCheckInPolicyUncached(employeeId, campusId, date),
+    );
+  }
+
+  private async resolveStaffCheckInPolicyUncached(
     employeeId: number,
     campusId: number,
     date: Date,

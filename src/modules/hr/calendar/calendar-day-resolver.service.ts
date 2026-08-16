@@ -27,6 +27,31 @@ type CalendarRow = {
 export class CalendarDayResolverService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Memo for a bulk operation (e.g. scan re-resolution) that resolves many days
+   * for the same few people. Off by default so normal request paths keep reading
+   * live. Enable with beginBatch(), and ALWAYS clear with endBatch() in a finally
+   * — a stale cache would silently serve outdated calendar data.
+   */
+  private batchCache: Map<string, ResolvedCalendarDay> | null = null;
+
+  beginBatch(): void {
+    this.batchCache = new Map();
+  }
+
+  endBatch(): void {
+    this.batchCache = null;
+  }
+
+  private async memo(key: string, load: () => Promise<ResolvedCalendarDay>): Promise<ResolvedCalendarDay> {
+    if (!this.batchCache) return load();
+    const hit = this.batchCache.get(key);
+    if (hit) return hit;
+    const val = await load();
+    this.batchCache.set(key, val);
+    return val;
+  }
+
   private calendarSpecificity(row: CalendarRow, audience: 'STUDENT' | 'STAFF'): number {
     if (audience === 'STAFF') {
       if (row.employee_id) return 5;
@@ -118,8 +143,10 @@ export class CalendarDayResolverService {
     sectionId: number | null,
     date: Date,
   ): Promise<ResolvedCalendarDay> {
-    const rows = await this.loadStudentCalendarRowsForDate(campusId, date);
-    return this.resolveStudentDayFromRows(rows, classId, sectionId, date);
+    return this.memo(`stu:${campusId}:${classId ?? '-'}:${sectionId ?? '-'}:${date.toISOString().slice(0, 10)}`, async () => {
+      const rows = await this.loadStudentCalendarRowsForDate(campusId, date);
+      return this.resolveStudentDayFromRows(rows, classId, sectionId, date);
+    });
   }
 
   /** Batched equivalent of resolveStudentDay() for running it over many students on
@@ -158,6 +185,12 @@ export class CalendarDayResolverService {
   }
 
   async resolveStaffDay(employeeId: number, campusId: number, date: Date): Promise<ResolvedCalendarDay> {
+    return this.memo(`stf:${employeeId}:${campusId}:${date.toISOString().slice(0, 10)}`, () =>
+      this.resolveStaffDayUncached(employeeId, campusId, date),
+    );
+  }
+
+  private async resolveStaffDayUncached(employeeId: number, campusId: number, date: Date): Promise<ResolvedCalendarDay> {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: {

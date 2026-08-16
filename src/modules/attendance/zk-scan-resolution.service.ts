@@ -3,6 +3,7 @@ import { device_user_mappings, DevicePersonType } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import {
+  DayAction,
   DayRecomputeOutcome,
   MANUAL_DEVICE_SN,
   ZkAttendanceProcessorService,
@@ -17,6 +18,8 @@ import {
   samePersonRef,
   UNATTRIBUTED,
 } from './device-mapping-resolution.util';
+import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 
 export type ResolutionScope =
   | { kind: 'scan_ids'; scan_ids: number[] }
@@ -58,8 +61,14 @@ export interface ResolveOptions {
   /** Refuse to run when the blast radius exceeds this many person-days. */
   maxAffectedDays?: number;
   force?: boolean;
-  /** Treat this (sn,pin) as having no mapping — used to preview a delete. */
+  /** Treat this (sn,pin) as having no mapping — previews a delete/deactivate. */
   overrideToUnmapped?: boolean;
+  /**
+   * Treat this (sn,pin) as if it mapped to this person — previews a LINK before
+   * the mapping exists. Without it, previewing an unmapped pin reports no change,
+   * because there is nothing to resolve to yet.
+   */
+  overrideToPerson?: PersonRef;
 }
 
 const DEFAULT_MAX_AFFECTED_DAYS = 5000;
@@ -74,6 +83,8 @@ export class ZkScanResolutionService {
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
     private readonly auditLogs: AuditLogsService,
+    private readonly calendarResolver: CalendarDayResolverService,
+    private readonly policyResolver: AttendancePolicyResolverService,
   ) {}
 
   /**
@@ -124,7 +135,7 @@ export class ZkScanResolutionService {
         };
         const desired = opts.overrideToUnmapped
           ? { ...UNATTRIBUTED }
-          : resolvePersonRef(mappingIndex.get(mappingKey(scan.device_sn, scan.device_pin)));
+          : (opts.overrideToPerson ?? resolvePersonRef(mappingIndex.get(mappingKey(scan.device_sn, scan.device_pin))));
 
         if (samePersonRef(current, desired)) continue;
 
@@ -164,32 +175,36 @@ export class ZkScanResolutionService {
         await this.applyReattributions(reattributions);
       }
 
-      const outcomes: DayRecomputeOutcome[] = [];
-      for (const [key, d] of affectedDays.entries()) {
-        try {
-          let outcome: DayRecomputeOutcome;
-          if (dryRun) {
-            const current = await this.countNonDuplicateScans(d.personType, d.employeeId, d.studentCc, d.date);
-            const projected = Math.max(0, current + (scanDelta.get(key) ?? 0));
-            outcome = await this.processor.projectPersonDay(
-              d.personType,
-              d.employeeId,
-              d.studentCc,
-              d.date,
-              projected,
-            );
-          } else {
-            outcome = await this.processor.recomputePersonDay(d.personType, d.employeeId, d.studentCc, d.date, {
-              actor: opts.actor,
-            });
+      // Every day in a run belongs to the same few people, so calendar and
+      // policy resolution repeat constantly. Memo them for the run only.
+      this.calendarResolver.beginBatch();
+      this.policyResolver.beginBatch();
+
+      let outcomes: DayRecomputeOutcome[] = [];
+      try {
+        if (dryRun) {
+          // Two bulk queries for the whole run instead of three per day — a
+          // preview backs a confirm dialog, so it has to feel instant.
+          outcomes = await this.projectAllDays([...affectedDays.entries()], scanDelta);
+        } else {
+          for (const d of affectedDays.values()) {
+            try {
+              outcomes.push(
+                await this.processor.recomputePersonDay(d.personType, d.employeeId, d.studentCc, d.date, {
+                  actor: opts.actor,
+                }),
+              );
+            } catch (err: any) {
+              warnings.push(
+                `Failed to recompute ${d.personType} ${d.employeeId ?? d.studentCc} on ` +
+                  `${d.date.toISOString().slice(0, 10)}: ${err.message}`,
+              );
+            }
           }
-          outcomes.push(outcome);
-        } catch (err: any) {
-          warnings.push(
-            `Failed to recompute ${d.personType} ${d.employeeId ?? d.studentCc} on ` +
-              `${d.date.toISOString().slice(0, 10)}: ${err.message}`,
-          );
         }
+      } finally {
+        this.calendarResolver.endBatch();
+        this.policyResolver.endBatch();
       }
 
       const dailySummary = outcomes.reduce<Record<string, number>>((acc, o) => {
@@ -227,6 +242,102 @@ export class ZkScanResolutionService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bulk equivalent of processor.projectPersonDay over many person-days: reads
+   * every daily row and scan count in two queries, then derives each outcome in
+   * memory from the pending scan delta.
+   */
+  private async projectAllDays(
+    entries: [string, { personType: DevicePersonType; employeeId: number | null; studentCc: number | null; date: Date }][],
+    scanDelta: Map<string, number>,
+  ): Promise<DayRecomputeOutcome[]> {
+    if (entries.length === 0) return [];
+
+    const staffIds = [...new Set(entries.map((e) => e[1].employeeId).filter((v): v is number => v != null))];
+    const studentIds = [...new Set(entries.map((e) => e[1].studentCc).filter((v): v is number => v != null))];
+    const dates = [...new Set(entries.map((e) => e[1].date.toISOString()))].map((d) => new Date(d));
+
+    const [staffDaily, studentDaily, staffCounts, studentCounts] = await Promise.all([
+      staffIds.length
+        ? this.prisma.attendance_staff_daily.findMany({
+            where: { employee_id: { in: staffIds }, date: { in: dates } },
+            select: { employee_id: true, date: true, status: true, source: true },
+          })
+        : Promise.resolve([] as any[]),
+      studentIds.length
+        ? this.prisma.attendance_student_daily.findMany({
+            where: { student_cc: { in: studentIds }, date: { in: dates } },
+            select: { student_cc: true, date: true, status: true, source: true },
+          })
+        : Promise.resolve([] as any[]),
+      staffIds.length
+        ? this.prisma.zk_attendance_scans.groupBy({
+            by: ['employee_id', 'attendance_date'],
+            where: {
+              person_type: DevicePersonType.STAFF,
+              employee_id: { in: staffIds },
+              attendance_date: { in: dates },
+              is_duplicate: false,
+            },
+            _count: { _all: true },
+          })
+        : Promise.resolve([] as any[]),
+      studentIds.length
+        ? this.prisma.zk_attendance_scans.groupBy({
+            by: ['student_cc', 'attendance_date'],
+            where: {
+              person_type: DevicePersonType.STUDENT,
+              student_cc: { in: studentIds },
+              attendance_date: { in: dates },
+              is_duplicate: false,
+            },
+            _count: { _all: true },
+          })
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const dk = (d: Date) => d.toISOString().slice(0, 10);
+    const dailyMap = new Map<string, { status: string; source: string }>();
+    for (const r of staffDaily as any[]) dailyMap.set(`STAFF:${r.employee_id}:${dk(r.date)}`, { status: r.status, source: r.source });
+    for (const r of studentDaily as any[]) dailyMap.set(`STUDENT:${r.student_cc}:${dk(r.date)}`, { status: r.status, source: r.source });
+
+    const countMap = new Map<string, number>();
+    for (const r of staffCounts as any[]) countMap.set(`STAFF:${r.employee_id}:${dk(r.attendance_date)}`, r._count._all);
+    for (const r of studentCounts as any[]) countMap.set(`STUDENT:${r.student_cc}:${dk(r.attendance_date)}`, r._count._all);
+
+    return entries.map(([key, d]) => {
+      const id = d.personType === DevicePersonType.STAFF ? d.employeeId : d.studentCc;
+      const mk = `${d.personType}:${id}:${dk(d.date)}`;
+      const existing = dailyMap.get(mk);
+      const before = countMap.get(mk) ?? 0;
+      const after = Math.max(0, before + (scanDelta.get(key) ?? 0));
+
+      const isProtected =
+        d.personType === DevicePersonType.STAFF
+          ? existing?.source === 'MANUAL' || existing?.source === 'SYSTEM' || existing?.source === 'LEAVE'
+          : existing?.source === 'MANUAL' || existing?.source === 'SYSTEM';
+
+      let action: DayAction;
+      if (after === 0) {
+        action = !existing ? 'NOOP' : existing.source !== 'BIOMETRIC' ? 'SKIPPED_PROTECTED_SOURCE' : 'CLEARED';
+      } else {
+        action = isProtected ? 'SKIPPED_PROTECTED_SOURCE' : 'UPSERTED';
+      }
+
+      return {
+        personType: d.personType,
+        employeeId: d.employeeId,
+        studentCc: d.studentCc,
+        date: d.date,
+        scanCountBefore: before,
+        scanCountAfter: after,
+        statusBefore: existing?.status ?? null,
+        statusAfter: action === 'CLEARED' ? null : (existing?.status ?? null),
+        action,
+      };
+    });
+  }
 
   private async countNonDuplicateScans(
     personType: DevicePersonType,
@@ -351,7 +462,7 @@ export class ZkScanResolutionService {
     opts: ResolveOptions,
   ): Promise<Map<string, device_user_mappings>> {
     const index = new Map<string, device_user_mappings>();
-    if (opts.overrideToUnmapped || scans.length === 0) return index;
+    if (opts.overrideToUnmapped || opts.overrideToPerson || scans.length === 0) return index;
 
     const deviceSns = [...new Set(scans.map((s) => s.device_sn))];
     const mappings = await this.prisma.device_user_mappings.findMany({
