@@ -13,6 +13,21 @@ import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from 
  */
 const INLINE_RESOLVE_SCAN_LIMIT = 2000;
 
+export type CollisionSeverity = 'BLOCK' | 'WARN';
+
+export interface PinCollision {
+  code:
+    | 'PIN_IS_OTHER_STUDENT_GR'
+    | 'PIN_IS_OTHER_STUDENT_CC'
+    | 'PIN_NOT_EQUAL_TO_CC'
+    | 'PIN_USED_ON_OTHER_DEVICE';
+  severity: CollisionSeverity;
+  message: string;
+  conflicting_student_cc?: number;
+  conflicting_student_name?: string;
+  conflicting_mapping_id?: number;
+}
+
 @Injectable()
 export class ZkAttendanceMappingService {
   constructor(
@@ -51,6 +66,18 @@ export class ZkAttendanceMappingService {
           `Pass is_active: true to reactivate it, or PATCH the mapping directly.`,
       );
     }
+
+    const collisions = await this.assertNoBlockingCollisions(
+      {
+        device_sn: dto.device_sn,
+        device_pin: dto.device_pin,
+        person_type: dto.person_type,
+        employee_id: dto.employee_id,
+        student_cc: dto.student_cc,
+        exclude_mapping_id: before?.id,
+      },
+      dto.acknowledge_collisions,
+    );
 
     const mapping = await this.prisma.device_user_mappings.upsert({
       where: { device_sn_device_pin: { device_sn: dto.device_sn, device_pin: dto.device_pin } },
@@ -94,7 +121,7 @@ export class ZkAttendanceMappingService {
 
     const resolution = await this.resolvePin(mapping.device_sn, mapping.device_pin, userId);
 
-    return { ...mapping, resolution };
+    return { ...mapping, resolution, collisions };
   }
 
   async updateMapping(id: number, dto: UpdateDeviceMappingDto, changedBy?: string) {
@@ -107,6 +134,22 @@ export class ZkAttendanceMappingService {
         personType,
         dto.employee_id ?? existing.employee_id ?? undefined,
         dto.student_cc ?? existing.student_cc ?? undefined,
+      );
+    }
+
+    // Only re-check when the mapping is being pointed at a different person;
+    // a plain is_active toggle shouldn't be blocked by a pre-existing collision.
+    if (dto.person_type || dto.employee_id !== undefined || dto.student_cc !== undefined) {
+      await this.assertNoBlockingCollisions(
+        {
+          device_sn: existing.device_sn,
+          device_pin: existing.device_pin,
+          person_type: personType,
+          employee_id: dto.employee_id ?? existing.employee_id,
+          student_cc: dto.student_cc ?? existing.student_cc,
+          exclude_mapping_id: id,
+        },
+        dto.acknowledge_collisions,
       );
     }
 
@@ -259,6 +302,104 @@ export class ZkAttendanceMappingService {
       }, {});
 
     return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+  }
+
+  /**
+   * Student GR numbers and CCs share one numeric namespace, so a pin taken from
+   * a GR number can silently be another student's CC. That is exactly how pin
+   * 6102 credited MUHAMMAD HAIB MIRZA's attendance to AIZA BAIG for two days.
+   *
+   * BLOCK = the pin provably identifies a different student.
+   * WARN  = worth surfacing, but legitimate in some setups.
+   */
+  async checkPinCollisions(input: {
+    device_sn: string;
+    device_pin: string;
+    person_type: DevicePersonType;
+    employee_id?: number | null;
+    student_cc?: number | null;
+    exclude_mapping_id?: number;
+  }): Promise<PinCollision[]> {
+    const collisions: PinCollision[] = [];
+    const pin = input.device_pin.trim();
+    const pinAsNumber = /^\d+$/.test(pin) ? Number(pin) : null;
+
+    const candidates = await this.prisma.students.findMany({
+      where: {
+        deleted_at: null,
+        OR: [{ gr_number: pin }, ...(pinAsNumber !== null ? [{ cc: pinAsNumber }] : [])],
+      },
+      select: { cc: true, full_name: true, gr_number: true },
+    });
+
+    for (const s of candidates) {
+      if (input.person_type === DevicePersonType.STUDENT && s.cc === input.student_cc) continue;
+
+      const isCcMatch = s.cc === pinAsNumber;
+      collisions.push({
+        code: isCcMatch ? 'PIN_IS_OTHER_STUDENT_CC' : 'PIN_IS_OTHER_STUDENT_GR',
+        severity: 'BLOCK',
+        message:
+          `Pin ${pin} is ${isCcMatch ? 'the CC' : `the GR number (${s.gr_number})`} of ` +
+          `${s.full_name} (cc ${s.cc}). Using it here would credit their scans to the wrong person.`,
+        conflicting_student_cc: s.cc,
+        conflicting_student_name: s.full_name ?? undefined,
+      });
+    }
+
+    // House convention (see scripts/check-student-device-mappings.ts) is pin == cc.
+    if (
+      input.person_type === DevicePersonType.STUDENT &&
+      input.student_cc != null &&
+      pinAsNumber !== null &&
+      pinAsNumber !== input.student_cc
+    ) {
+      collisions.push({
+        code: 'PIN_NOT_EQUAL_TO_CC',
+        severity: 'WARN',
+        message: `Pin ${pin} does not match this student's CC (${input.student_cc}). Convention is pin == cc.`,
+      });
+    }
+
+    const otherDevice = await this.prisma.device_user_mappings.findFirst({
+      where: {
+        device_pin: pin,
+        is_active: true,
+        device_sn: { not: input.device_sn },
+        ...(input.exclude_mapping_id ? { id: { not: input.exclude_mapping_id } } : {}),
+      },
+      select: { id: true, device_sn: true, employee_id: true, student_cc: true },
+    });
+    if (
+      otherDevice &&
+      (otherDevice.employee_id !== (input.employee_id ?? null) ||
+        otherDevice.student_cc !== (input.student_cc ?? null))
+    ) {
+      collisions.push({
+        code: 'PIN_USED_ON_OTHER_DEVICE',
+        severity: 'WARN',
+        message: `Pin ${pin} is already mapped to a different person on device ${otherDevice.device_sn}.`,
+        conflicting_mapping_id: otherDevice.id,
+      });
+    }
+
+    return collisions;
+  }
+
+  private async assertNoBlockingCollisions(
+    input: Parameters<ZkAttendanceMappingService['checkPinCollisions']>[0],
+    acknowledge?: boolean,
+  ): Promise<PinCollision[]> {
+    const collisions = await this.checkPinCollisions(input);
+    const blocking = collisions.filter((c) => c.severity === 'BLOCK');
+    if (blocking.length > 0 && !acknowledge) {
+      throw new ConflictException({
+        message: `Device pin collides with another student: ${blocking.map((b) => b.message).join(' ')}`,
+        collisions,
+        hint: 'Pass acknowledge_collisions: true to override deliberately.',
+      });
+    }
+    return collisions;
   }
 
   private validatePersonRefs(personType: DevicePersonType, employeeId?: number | null, studentCc?: number | null) {

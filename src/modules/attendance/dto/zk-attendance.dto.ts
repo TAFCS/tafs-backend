@@ -37,6 +37,11 @@ export class CreateDeviceMappingDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  /** Override a BLOCK-level pin collision deliberately. */
+  @IsOptional()
+  @IsBoolean()
+  acknowledge_collisions?: boolean;
 }
 
 export class UpdateDeviceMappingDto {
@@ -65,6 +70,11 @@ export class UpdateDeviceMappingDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  /** Override a BLOCK-level pin collision deliberately. */
+  @IsOptional()
+  @IsBoolean()
+  acknowledge_collisions?: boolean;
 }
 
 

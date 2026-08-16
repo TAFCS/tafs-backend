@@ -37,6 +37,26 @@ export class ZkAttendanceMappingController {
     return this.mappingService.getMappings(parsedEmployeeId, parsedStudentCc);
   }
 
+  /** Pre-flight collision check so the UI can warn before submit. */
+  @Get('collision-check')
+  async collisionCheck(
+    @Query('device_sn') deviceSn: string,
+    @Query('device_pin') devicePin: string,
+    @Query('person_type') personType: string,
+    @Query('student_cc') studentCc: string | undefined,
+    @Query('employee_id') employeeId: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    this.assertSuperAdmin(user);
+    return this.mappingService.checkPinCollisions({
+      device_sn: deviceSn,
+      device_pin: devicePin,
+      person_type: (personType as any) ?? 'STUDENT',
+      student_cc: studentCc ? parseInt(studentCc, 10) : undefined,
+      employee_id: employeeId ? parseInt(employeeId, 10) : undefined,
+    });
+  }
+
   @Get('unmapped')
   async getUnmapped(@CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
