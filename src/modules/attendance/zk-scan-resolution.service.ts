@@ -179,6 +179,7 @@ export class ZkScanResolutionService {
       // policy resolution repeat constantly. Memo them for the run only.
       this.calendarResolver.beginBatch();
       this.policyResolver.beginBatch();
+      this.processor.beginBatch();
 
       let outcomes: DayRecomputeOutcome[] = [];
       try {
@@ -187,11 +188,17 @@ export class ZkScanResolutionService {
           // preview backs a confirm dialog, so it has to feel instant.
           outcomes = await this.projectAllDays([...affectedDays.entries()], scanDelta);
         } else {
-          for (const d of affectedDays.values()) {
+          // Re-derive duplicates and sequence numbers for every affected day in
+          // one bulk pass. Done per day this was several hundred round trips
+          // against a remote DB and dominated the whole write path.
+          const segments = await this.processor.prepareDaySegments([...affectedDays.values()]);
+
+          for (const [key, d] of affectedDays.entries()) {
             try {
               outcomes.push(
                 await this.processor.recomputePersonDay(d.personType, d.employeeId, d.studentCc, d.date, {
                   actor: opts.actor,
+                  segment: segments.get(key),
                 }),
               );
             } catch (err: any) {
@@ -205,6 +212,7 @@ export class ZkScanResolutionService {
       } finally {
         this.calendarResolver.endBatch();
         this.policyResolver.endBatch();
+        this.processor.endBatch();
       }
 
       const dailySummary = outcomes.reduce<Record<string, number>>((acc, o) => {

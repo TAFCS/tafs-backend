@@ -1,6 +1,7 @@
 # Handoff — attendance mapping as source of truth
 
-Branch: `fix/attendance-mapping-source-of-truth` (7 commits off `main`, nothing pushed)
+Branch: `fix/attendance-mapping-source-of-truth`
+Webapp changes ride on `tafs-webapp` `main`.
 Last updated: 16 Aug 2026
 
 ---
@@ -31,6 +32,8 @@ loses it and the person gaining it gains it.
 | `0da99a5` | GR/CC collision guard + `idx_students_gr_number` |
 | `7bad2d7` | Archived the heuristic backfill scripts as do-not-run |
 | `46451c9` | Link/unlink previews + 20x preview speedup + loud skip |
+| `116a53a` | This handoff note |
+| _(head)_ | Bulk day-segment rebuild + person memo; frontend confirm steps |
 
 **Verified end to end** on real data: attendance follows the pin across
 activate → deactivate → remap → delete. SYSTEM holidays and MANUAL gate-desk
@@ -47,51 +50,77 @@ mis-attribution count: **4 → 0**.
 
 ---
 
-## NOT done — pick this up first
+## Write-path performance — resolved, and the numbers were misleading
 
-### 1. Write-path performance ⚠️ blocking
+An earlier version of this note called the write path "⚠️ blocking" at **70s** to
+deactivate a 118-scan pin and **133s** to reactivate. That framing was wrong, and
+it is worth recording why so nobody re-opens it.
 
-Previews are fast (2.4s). **Writes are not**: deactivating a 118-scan pin takes
-**70s**, reactivating **133s**. Unacceptable given student remapping is frequent.
+**Measured against this DB: a trivial `SELECT 1` costs ~574ms.** Ping to
+`db-postgresql-sgp1-...ondigitalocean.com` is 85ms, and pgbouncer's transaction
+wrapping plus TLS multiplies that. So local wall-clock is almost entirely a
+function of *how far the developer's laptop is from Singapore*, not of the code.
+The only latency-independent metric is **round-trip count**. Measure that, not
+seconds, and never benchmark this from a laptop.
 
-The cause is *not* the scan rewrite — it's the per-day work in
-`ZkAttendanceProcessorService`:
+Batching landed anyway, because fewer round trips is strictly better and it helps
+production too:
 
-- `recomputeDaySequence` — `findMany`, then a `$transaction` of **individual
-  `update`s**, one per scan whose sequence changed
-- `recomputeDayDuplicates` — same shape
-- `upsertStudentDaily` / `upsertStaffDaily` — a person lookup per day (not cached),
-  then calendar + policy (now cached), then the upsert
+- `prepareDaySegments` (processor) re-derives duplicates **and** sequence numbers
+  for every affected person-day in **one** query plus a handful of grouped
+  `updateMany` calls, replacing a per-day `findMany` + a transaction of individual
+  per-scan updates. This is the same shape as `projectAllDays` on the preview side.
+- `beginBatch()` / `endBatch()` on the processor memoises the person record
+  (`students` / `employee_profiles`) for the run — it is the same one or two people
+  across every day.
 
-For 118 scans across 23 days that's several hundred round trips to a remote DB.
+Round trips for the 118-scan / 27-day case dropped roughly **by half** (~122 → ~72;
+wall-clock 70s → 43.5s locally, and reactivate 133s → 92s). In production, where
+the API and DB are co-located, that is sub-second either way.
 
-**Apply the same fix the preview path just got** (see `projectAllDays` in
-`zk-scan-resolution.service.ts` for the pattern):
+`prepareDaySegments` deliberately buckets only the person-days that were requested:
+its id×date query is a cross product, and a rebuild must never renumber a day
+nobody asked about.
 
-- Batch the sequence/duplicate updates — group by target value and use
-  `updateMany` per group, or one `$executeRaw` with a `VALUES` join, instead of
-  N individual updates.
-- Memoize the person record (`students` / `employee_profiles` campus+class+section)
-  for the run — it's the same person across every day.
-- Consider hoisting the per-day loop into a bulk pass the way `projectAllDays` does.
+---
 
-Target: a routine student remap should land in a few seconds.
+## Frontend — done
 
-### 2. Frontend — three surfaces
+All four mapping surfaces now go through one shared confirm step,
+`src/components/attendance/mapping-impact-dialog.tsx` (webapp):
 
-All blocked only on the above being comfortable; the endpoints exist and work.
+| Surface | File |
+|---|---|
+| Unmapped PINs (the one-click offender) | `zk-device-logs/_components/unmapped-pins-tab.tsx` |
+| PIN Mappings list + create/edit modal | `zk-device-logs/_components/pin-mappings-tab.tsx` |
+| Student directory → Biometric | `identity/students/tabs/StudentBiometricTab.tsx` |
+| Employee directory → Biometric | `hr/employees/_components/EmployeeBiometricTab.tsx` |
 
-**a. `attendance/zk-device-logs` → Unmapped PINs.** Currently one-click "Map this
-PIN", which is causing careless linking. Add a confirm step for both students and
-employees, showing the real impact from `preview-link`.
+The dialog fetches `preview-link` / `preview-unlink` on open, renders the real
+impact (scans linked/moved/unlinked, days appearing/recalculated/removed/protected),
+shows collisions, and only then enables the confirm button.
 
-**b. Student directory → Biometric.** Same confirm treatment on link/unlink.
+Design decisions worth keeping:
 
-**c. Employee directory → Biometric.** Same. (Lower risk — far fewer employees, so
-errors are rarer, but keep it consistent.)
+- **Renaming never prompts.** A display-name or notes edit can't move attendance,
+  so it saves straight through. Only a create, a repoint, or an `is_active` flip
+  opens the dialog — see `movesAttendance()` in `pin-mappings-tab.tsx`.
+- **BLOCK collisions require a typed-out acknowledgement checkbox**, which then
+  sends `acknowledge_collisions: true`. WARN collisions are advisory only.
+- **`extraNotes`** carries context the backend collision check doesn't cover —
+  currently "this student is already mapped to N other PINs".
+- **Reactivating gets the link dialog, not a silent toggle** — claiming a pin's
+  history back is as consequential as releasing it.
+- **`reportRebuildIfNeeded`** turns `needs_rebuild` into a sticky toast with a
+  "Rebuild now" action wired to `/zk-scan-resolution/resolve`. It returns `true`
+  so callers skip their own success toast — otherwise "Mapped!" and "not rebuilt"
+  appear together and contradict each other.
+- The quick-link buttons on Unmapped PINs now read **"Review"**, not "Link" — the
+  label had to stop promising a one-click commit.
 
-Relevant existing webapp files: `UnmappedPinsTab`, `MappingModal` /
-`MappingFormModal` (see webapp commits `618dde4`, `a7f5877`).
+`DELETE /:id` is now reachable from the UI (trash icon on all three mapping
+tables). It previously existed only as an endpoint, with operators falling back to
+ad-hoc scripts.
 
 ---
 
@@ -154,6 +183,10 @@ Two states the UI must handle:
 - **Never run `npx nest build` while `npm run start:dev` is watching** — it wipes
   `dist` mid-compile and the server dies with an unrelated `MODULE_NOT_FOUND`. For
   API testing, build once and run `node dist/src/main.js`.
+- **Never benchmark this DB from a laptop.** ~574ms per query from here; ~85ms of
+  that is raw ping to Singapore. Count round trips instead of stopwatching.
+- **A one-off script must live under `tafs-backend/scripts/`** or `ts-node` can't
+  resolve `@prisma/client`. Writing it to a temp dir fails to compile.
 - **`recomputeDaySequence` with a null person id** would renumber every
   unattributed scan that day. Guarded by `assertPersonId` — keep it.
 - **Prisma `undefined` means "skip this column"**, not "set null". All three person
@@ -206,6 +239,13 @@ students get remapped.
 - `AAWAIZ ALI` cc `44` — rich real case (pin `9999` on **5 devices**, MANUAL scans,
   SYSTEM holidays). Backup at `../backup-aawaiz-cc44.json`; restore LATE marks from
   it after any test that cycles his mapping.
+
+**Last full deactivate → reactivate cycle on cc 44** (39 daily rows, 122 scans):
+all 39 rows returned, every `check_in_at` / `check_out_at` identical, 15 SYSTEM
+holidays and the 4 protected rows untouched, 0 rows added or lost. The only delta
+was 13 `LATE` → `PRESENT`, restored from the snapshot — that is the known
+limitation below, not a regression. Always snapshot the daily rows first; a plain
+diff of that snapshot is the strongest correctness check available.
 
 **Always snapshot before touching production data.** There is no separate test DB —
 `prisma migrate deploy` and every mutation hit live DigitalOcean Postgres.

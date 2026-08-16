@@ -17,7 +17,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-notice-board.service';
-import { resolvePersonRef } from './device-mapping-resolution.util';
+import { personDayKey, resolvePersonRef } from './device-mapping-resolution.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -98,6 +98,16 @@ export function assertPersonId(
   }
 }
 
+/** personDayKey with the person fields spread, for callers that don't hold a PersonRef. */
+function segmentKey(
+  personType: DevicePersonType,
+  employeeId: number | null,
+  studentCc: number | null,
+  date: Date,
+): string {
+  return personDayKey({ person_type: personType, employee_id: employeeId, student_cc: studentCc }, date)!;
+}
+
 export type NotificationSkipReason =
   | 'unmapped_pin'
   | 'duplicate_scan'
@@ -139,6 +149,48 @@ export class ZkAttendanceProcessorService {
     private readonly chatGateway: ChatGateway,
     private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
   ) {}
+
+  /**
+   * Per-run memo for the campus/class/section lookup the daily upserts need.
+   * A rebuild touches the same one or two people across every affected day, so
+   * without this the same row is re-read once per day. Opt-in and explicitly
+   * scoped — ingest never enables it, so a long-lived cache can't go stale.
+   */
+  private personCache: Map<string, { campus_id: number | null; class_id: number | null; section_id: number | null } | null> | null =
+    null;
+
+  beginBatch(): void {
+    this.personCache = new Map();
+  }
+
+  endBatch(): void {
+    this.personCache = null;
+  }
+
+  private async loadStaffRecord(employeeId: number) {
+    const key = `S:${employeeId}`;
+    const cached = this.personCache?.get(key);
+    if (cached !== undefined) return cached;
+    const row = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { campus_id: true },
+    });
+    const value = row ? { campus_id: row.campus_id, class_id: null, section_id: null } : null;
+    this.personCache?.set(key, value);
+    return value;
+  }
+
+  private async loadStudentRecord(studentCc: number) {
+    const key = `T:${studentCc}`;
+    const cached = this.personCache?.get(key);
+    if (cached !== undefined) return cached;
+    const row = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: { campus_id: true, class_id: true, section_id: true },
+    });
+    this.personCache?.set(key, row ?? null);
+    return row ?? null;
+  }
 
   async processPush(
     payload: {
@@ -471,6 +523,141 @@ export class ZkAttendanceProcessorService {
   }
 
   /**
+   * Bulk equivalent of recomputeDayDuplicates + recomputeDaySequence over many
+   * person-days at once.
+   *
+   * Done one day at a time this is the whole cost of a rebuild: each day pays a
+   * findMany plus a transaction of individual per-scan updates, so a remap of
+   * ~120 scans across ~23 days ran to several hundred round trips against a
+   * remote database. Here every scan is read in one query and every write is
+   * grouped by its target value, so the work collapses to a handful of
+   * updateMany calls regardless of how many days are involved.
+   *
+   * Returns the DaySegment per person-day, keyed the same way as `dayKey`.
+   */
+  async prepareDaySegments(
+    entries: Array<{
+      personType: DevicePersonType;
+      employeeId: number | null;
+      studentCc: number | null;
+      date: Date;
+    }>,
+  ): Promise<Map<string, DaySegment>> {
+    const out = new Map<string, DaySegment>();
+    if (entries.length === 0) return out;
+
+    for (const e of entries) {
+      assertPersonId(e.personType, e.employeeId, e.studentCc);
+      out.set(segmentKey(e.personType, e.employeeId, e.studentCc, e.date), {
+        checkInAt: null,
+        checkOutAt: null,
+        lastScanAt: null,
+        scanCount: 0,
+      });
+    }
+
+    const staffIds = [...new Set(entries.map((e) => e.employeeId).filter((v): v is number => v != null))];
+    const studentCcs = [...new Set(entries.map((e) => e.studentCc).filter((v): v is number => v != null))];
+    const dates = [...new Set(entries.map((e) => e.date.getTime()))].map((t) => new Date(t));
+
+    const or: Prisma.zk_attendance_scansWhereInput[] = [];
+    if (staffIds.length) {
+      or.push({ person_type: DevicePersonType.STAFF, employee_id: { in: staffIds }, attendance_date: { in: dates } });
+    }
+    if (studentCcs.length) {
+      or.push({ person_type: DevicePersonType.STUDENT, student_cc: { in: studentCcs }, attendance_date: { in: dates } });
+    }
+    if (or.length === 0) return out;
+
+    const scans = await this.prisma.zk_attendance_scans.findMany({
+      where: { OR: or },
+      select: {
+        id: true,
+        person_type: true,
+        employee_id: true,
+        student_cc: true,
+        attendance_date: true,
+        scan_time: true,
+        is_duplicate: true,
+        sequence_no: true,
+        direction: true,
+      },
+      orderBy: { scan_time: 'asc' },
+    });
+
+    // The id×date query above is a cross product, so bucket only the person-days
+    // that were actually requested — a rebuild must never renumber a day nobody
+    // asked about.
+    const byDay = new Map<string, typeof scans>();
+    for (const s of scans) {
+      const key = segmentKey(s.person_type!, s.employee_id, s.student_cc, s.attendance_date);
+      if (!out.has(key)) continue;
+      const bucket = byDay.get(key);
+      if (bucket) bucket.push(s);
+      else byDay.set(key, [s]);
+    }
+
+    const dupFlips = { true: [] as number[], false: [] as number[] };
+    const seqGroups = new Map<string, { sequence_no: number; direction: ScanDirection; ids: number[] }>();
+
+    for (const [key, dayScans] of byDay) {
+      // Duplicate flags were decided against whoever owned the scan at ingest,
+      // so re-attribution can leave them wrong on both sides. Re-derive first —
+      // sequencing only counts non-duplicates.
+      const accepted: typeof dayScans = [];
+      let lastAccepted: Date | null = null;
+      for (const s of dayScans) {
+        const isDup = lastAccepted != null && s.scan_time.getTime() - lastAccepted.getTime() < DEDUP_WINDOW_MS;
+        if (!isDup) {
+          lastAccepted = s.scan_time;
+          accepted.push(s);
+        }
+        if (s.is_duplicate !== isDup) dupFlips[isDup ? 'true' : 'false'].push(s.id);
+      }
+
+      if (accepted.length === 0) continue;
+
+      accepted.forEach((s, idx) => {
+        const direction: ScanDirection = idx % 2 === 0 ? ScanDirection.IN : ScanDirection.OUT;
+        if (s.sequence_no === idx && s.direction === direction) return;
+        const gk = `${idx}|${direction}`;
+        const group = seqGroups.get(gk);
+        if (group) group.ids.push(s.id);
+        else seqGroups.set(gk, { sequence_no: idx, direction, ids: [s.id] });
+      });
+
+      const lastOutIdx = accepted.length % 2 === 0 ? accepted.length - 1 : accepted.length - 2;
+      out.set(key, {
+        checkInAt: accepted[0].scan_time,
+        checkOutAt: lastOutIdx >= 0 ? accepted[lastOutIdx].scan_time : null,
+        lastScanAt: accepted[accepted.length - 1].scan_time,
+        scanCount: accepted.length,
+      });
+    }
+
+    const writes: Prisma.PrismaPromise<unknown>[] = [];
+    for (const flag of [true, false] as const) {
+      const ids = dupFlips[flag ? 'true' : 'false'];
+      if (ids.length) {
+        writes.push(
+          this.prisma.zk_attendance_scans.updateMany({ where: { id: { in: ids } }, data: { is_duplicate: flag } }),
+        );
+      }
+    }
+    for (const g of seqGroups.values()) {
+      writes.push(
+        this.prisma.zk_attendance_scans.updateMany({
+          where: { id: { in: g.ids } },
+          data: { sequence_no: g.sequence_no, direction: g.direction },
+        }),
+      );
+    }
+    if (writes.length) await this.prisma.$transaction(writes);
+
+    return out;
+  }
+
+  /**
    * Makes one person's daily row match their scans for that day — including the
    * zero-scan case, which upsertStaffDaily/upsertStudentDaily deliberately bail
    * on (they only ever write). Without the clear path, a person who loses their
@@ -484,7 +671,7 @@ export class ZkAttendanceProcessorService {
     employeeId: number | null,
     studentCc: number | null,
     date: Date,
-    opts: { actor?: string; recomputeDuplicates?: boolean } = {},
+    opts: { actor?: string; recomputeDuplicates?: boolean; segment?: DaySegment } = {},
   ): Promise<DayRecomputeOutcome> {
     assertPersonId(personType, employeeId, studentCc);
     const actor = opts.actor ?? 'scan-resolution';
@@ -506,13 +693,19 @@ export class ZkAttendanceProcessorService {
       statusBefore: existing?.status ?? null,
     };
 
-    // Duplicate flags were decided against whoever owned the scan at ingest, so
-    // re-attribution can leave them wrong on both sides. Re-derive before sequencing.
-    if (opts.recomputeDuplicates !== false) {
-      await this.recomputeDayDuplicates(personType, employeeId, studentCc, date);
+    // prepareDaySegments already re-derived duplicates and sequence numbers for
+    // the whole run; re-doing them per day is the bulk of a rebuild's cost.
+    let seg: DaySegment;
+    if (opts.segment) {
+      seg = opts.segment;
+    } else {
+      // Duplicate flags were decided against whoever owned the scan at ingest, so
+      // re-attribution can leave them wrong on both sides. Re-derive before sequencing.
+      if (opts.recomputeDuplicates !== false) {
+        await this.recomputeDayDuplicates(personType, employeeId, studentCc, date);
+      }
+      seg = await this.recomputeDaySequence(personType, employeeId, studentCc, date);
     }
-
-    const seg = await this.recomputeDaySequence(personType, employeeId, studentCc, date);
 
     if (seg.scanCount === 0) {
       const action = isStaff
@@ -739,10 +932,7 @@ export class ZkAttendanceProcessorService {
   async upsertStaffDaily(employeeId: number, date: Date, seg: DaySegment): Promise<void> {
     if (!seg.checkInAt) return;
 
-    const employee = await this.prisma.employee_profiles.findUnique({
-      where: { id: employeeId },
-      select: { campus_id: true },
-    });
+    const employee = await this.loadStaffRecord(employeeId);
     if (!employee?.campus_id) return;
 
     const resolved = await this.calendarResolver.resolveStaffDay(employeeId, employee.campus_id, date);
@@ -831,10 +1021,7 @@ export class ZkAttendanceProcessorService {
   ): Promise<ScanDirection | null> {
     if (!seg.lastScanAt) return null;
 
-    const student = await this.prisma.students.findUnique({
-      where: { cc: studentCc },
-      select: { campus_id: true, class_id: true, section_id: true },
-    });
+    const student = await this.loadStudentRecord(studentCc);
     if (!student?.campus_id) return null;
 
     const resolved = await this.calendarResolver.resolveStudentDay(
