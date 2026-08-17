@@ -42,6 +42,63 @@ export class MailerService implements OnModuleInit {
     }
   }
 
+  async sendDailyDigestEmail(
+    to: string[],
+    data: {
+      dateLabel: string;
+      depositsTotal: string;
+      depositsCount: number;
+      employeesClockedIn: number;
+      employeesClockedOut: number;
+      studentsClockedIn: number;
+      studentsClockedOut: number;
+    },
+  ): Promise<void> {
+    if (!this.transporter) {
+      console.error(
+        '[Mailer] Brevo SMTP not initialized — cannot send daily digest',
+      );
+      return;
+    }
+    if (to.length === 0) return;
+
+    const subject = `TAFS — Daily Digest for ${data.dateLabel}`;
+    const row = (label: string, value: string) => `
+        <tr>
+          <td style="padding: 10px 0; color: #555; font-size: 14px; border-bottom: 1px solid #eee;">${label}</td>
+          <td style="padding: 10px 0; color: #1a1a1a; font-size: 14px; font-weight: bold; text-align: right; border-bottom: 1px solid #eee;">${value}</td>
+        </tr>`;
+
+    const htmlBody = `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #1a1a1a; margin-bottom: 4px;">Daily Digest</h2>
+        <p style="color: #888; font-size: 13px; margin-top: 0;">${data.dateLabel}</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
+          ${row('Money deposited today', `${data.depositsTotal} (${data.depositsCount} deposit${data.depositsCount === 1 ? '' : 's'})`)}
+          ${row('Employees clocked in', String(data.employeesClockedIn))}
+          ${row('Employees clocked out', String(data.employeesClockedOut))}
+          ${row('Students clocked in', String(data.studentsClockedIn))}
+          ${row('Students clocked out', String(data.studentsClockedOut))}
+        </table>
+      </div>
+    `;
+
+    try {
+      const info = await this.transporter.sendMail({
+        from: `${this.fromName} <${this.fromEmail}>`,
+        to,
+        subject,
+        html: htmlBody,
+      });
+      console.log(
+        `[Mailer] Daily digest sent to ${to.join(', ')} (id=${info.messageId})`,
+      );
+    } catch (e) {
+      console.error('[Mailer] Failed to send daily digest:', e.message);
+      throw e;
+    }
+  }
+
   async sendOtpEmail(
     to: string,
     code: string,
