@@ -46,6 +46,7 @@ import { TimetablesModule } from './modules/timetables/timetables.module';
 import { UnconfirmedAdmissionsModule } from './modules/unconfirmed-admissions/unconfirmed-admissions.module';
 import { HouseBalancerModule } from './modules/house-balancer/house-balancer.module';
 import { StudentAllocationModule } from './modules/student-allocation/student-allocation.module';
+import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 
 @Module({
   imports: [
@@ -94,6 +95,7 @@ import { StudentAllocationModule } from './modules/student-allocation/student-al
     UnconfirmedAdmissionsModule,
     StudentAllocationModule,
     HouseBalancerModule,
+    DailyDigestModule,
   ],
   controllers: [AppController],
   providers: [AppService],
