@@ -97,7 +97,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [rows, totalsAgg, classTerms, studentCount] = await Promise.all([
+    const [rows, totals, classTerms, studentCount] = await Promise.all([
       this.prisma.student_fees.findMany({
         where,
         select: FEE_HEAD_SELECT,
@@ -105,31 +105,18 @@ export class FinancialReportsService {
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.student_fees.aggregate({
-        where,
-        _sum: { amount: true, amount_paid: true },
-        _count: true,
-      }),
+      this.feeHeadMoneyTotals(where),
       this.loadClassTerms(),
       this.prisma.students.count({
         where: { ...studentWhere, student_fees: { some: leaf } },
       }),
     ]);
 
-    const amount = this.toMoney(totalsAgg._sum.amount);
-    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid);
-
     return {
       view: 'heads' as const,
       items: rows.map((row) => this.mapFeeHead(row, classTerms)),
-      pagination: createPaginationMeta(page, limit, totalsAgg._count),
-      totals: {
-        count: totalsAgg._count,
-        student_count: studentCount,
-        amount,
-        amount_paid: amountPaid,
-        outstanding: this.roundMoney(amount - amountPaid),
-      },
+      pagination: createPaginationMeta(page, limit, totals.count),
+      totals: { ...totals, student_count: studentCount },
     };
   }
 
@@ -146,7 +133,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, totalsAgg, studentCount] = await Promise.all([
+    const [groups, totals, studentCount] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
         where,
@@ -156,11 +143,7 @@ export class FinancialReportsService {
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.student_fees.aggregate({
-        where,
-        _sum: { amount: true, amount_paid: true },
-        _count: true,
-      }),
+      this.feeHeadMoneyTotals(where),
       this.prisma.students.count({
         where: { ...studentWhere, student_fees: { some: leaf } },
       }),
@@ -182,9 +165,6 @@ export class FinancialReportsService {
       : [];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
 
-    const amount = this.toMoney(totalsAgg._sum.amount);
-    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid);
-
     return {
       view: 'student' as const,
       items: groups.map((group) => {
@@ -205,13 +185,7 @@ export class FinancialReportsService {
         };
       }),
       pagination: createPaginationMeta(page, limit, studentCount),
-      totals: {
-        count: totalsAgg._count,
-        student_count: studentCount,
-        amount,
-        amount_paid: amountPaid,
-        outstanding: this.roundMoney(amount - amountPaid),
-      },
+      totals: { ...totals, student_count: studentCount },
     };
   }
 
@@ -492,6 +466,56 @@ export class FinancialReportsService {
     return {
       ...this.feeHeadsLeafWhere(query),
       students: this.buildStudentWhere(query, user),
+    };
+  }
+
+  /**
+   * Billed = already on a voucher (ISSUED / PARTIALLY_PAID / PAID / DISCOUNT).
+   * To be billed = NOT_ISSUED (scheduled, no voucher yet).
+   * Total = both. Paid / outstanding still cover the full filtered set.
+   */
+  private async feeHeadMoneyTotals(where: Prisma.student_feesWhereInput) {
+    const [totalsAgg, byStatus] = await Promise.all([
+      this.prisma.student_fees.aggregate({
+        where,
+        _sum: { amount: true, amount_paid: true },
+        _count: true,
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['status'],
+        where,
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+    ]);
+
+    let billed = 0;
+    let billedCount = 0;
+    let toBeBilled = 0;
+    let toBeBilledCount = 0;
+    for (const row of byStatus) {
+      const amount = this.toMoney(row._sum.amount);
+      const count = row._count._all;
+      if ((row.status ?? fee_status_enum.NOT_ISSUED) === fee_status_enum.NOT_ISSUED) {
+        toBeBilled = this.roundMoney(toBeBilled + amount);
+        toBeBilledCount += count;
+      } else {
+        billed = this.roundMoney(billed + amount);
+        billedCount += count;
+      }
+    }
+
+    const amount = this.toMoney(totalsAgg._sum.amount);
+    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid);
+    return {
+      count: totalsAgg._count,
+      billed_count: billedCount,
+      to_be_billed_count: toBeBilledCount,
+      billed,
+      to_be_billed: toBeBilled,
+      amount,
+      amount_paid: amountPaid,
+      outstanding: this.roundMoney(amount - amountPaid),
     };
   }
 
