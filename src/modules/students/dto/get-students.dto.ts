@@ -77,7 +77,6 @@ export class GetStudentsDto {
     'abnormal',
     'no_biometric',
     'has_biometric',
-    'scans_no_mapping',
   ])
   audit_type?:
     | 'missing_guardian'
@@ -85,8 +84,7 @@ export class GetStudentsDto {
     | 'no_house'
     | 'abnormal'
     | 'no_biometric'
-    | 'has_biometric'
-    | 'scans_no_mapping';
+    | 'has_biometric';
 
   @IsOptional()
   @IsEnum(['true', 'false'])

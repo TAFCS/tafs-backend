@@ -303,15 +303,6 @@ export class StudentsService {
         (where.AND as Prisma.studentsWhereInput[]).push({
           device_user_mappings: { some: { is_active: true } },
         });
-      } else if (auditType === 'scans_no_mapping') {
-        // The remap backlog: attendance still credited to a student whose
-        // mapping is gone. Mappings are the source of truth, so these scans are
-        // stranded until the student is mapped again.
-        if (!where.AND) where.AND = [];
-        (where.AND as Prisma.studentsWhereInput[]).push({
-          device_user_mappings: { none: {} },
-          zk_attendance_scans: { some: {} },
-        });
       } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
           SELECT student_id FROM public.student_guardians
