@@ -26,6 +26,7 @@ import { StudentFlagsModule } from './modules/student-flags/student-flags.module
 import { PostdatedChequesModule } from './modules/postdated-cheques/postdated-cheques.module';
 import { TransferModule } from './modules/transfers/transfer.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { FinancialReportsModule } from './modules/financial-reports/financial-reports.module';
 import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { MeezanModule } from './modules/meezan/meezan.module';
@@ -73,6 +74,7 @@ import { StudentAllocationModule } from './modules/student-allocation/student-al
     PostdatedChequesModule,
     TransferModule,
     AnalyticsModule,
+    FinancialReportsModule,
     AppPortalModule,
     InstallmentsModule,
     MeezanModule,

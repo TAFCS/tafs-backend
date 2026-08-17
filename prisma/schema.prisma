@@ -188,6 +188,9 @@ model deposit_allocations {
   student_fees              student_fees?              @relation(fields: [student_fee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   voucher_arrear_surcharges voucher_arrear_surcharges? @relation(fields: [surcharge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vouchers                  vouchers?                  @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([deposit_id], map: "idx_deposit_allocations_deposit")
+  @@index([type], map: "idx_deposit_allocations_type")
 }
 
 model deposits {
@@ -204,6 +207,9 @@ model deposits {
   date_of_return      DateTime?             @db.Date
   deposit_allocations deposit_allocations[]
   students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([deposit_date], map: "idx_deposits_deposit_date")
+  @@index([student_id], map: "idx_deposits_student_id")
 }
 
 model families {
@@ -585,6 +591,7 @@ model student_fees {
   @@index([due_date], map: "idx_student_fees_due_date")
   @@index([precedence_override], map: "idx_student_fees_precedence")
   @@index([student_id, is_discount], map: "idx_student_fees_discount")
+  @@index([fee_date], map: "idx_student_fees_fee_date")
 }
 
 model discount_presets {
