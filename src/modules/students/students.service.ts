@@ -289,22 +289,28 @@ export class StudentsService {
       } else if (auditType === 'no_house') {
         where.house_id = null;
       } else if (auditType === 'no_biometric') {
-        // No active PIN mapping AND no linked attendance scans.
+        // Purely "is this student mapped to a device PIN". These filters used to
+        // also count leftover scans, which put 92 students with ZERO mappings
+        // under "Has Device Mapping" — scans left attributed by the August
+        // cleanup, which deleted mappings without releasing them.
         // Push into AND so we do not clobber search's where.OR.
         if (!where.AND) where.AND = [];
         (where.AND as Prisma.studentsWhereInput[]).push({
           device_user_mappings: { none: { is_active: true } },
-          zk_attendance_scans: { none: {} },
         });
       } else if (auditType === 'has_biometric') {
-        // Active PIN mapping OR any linked attendance scan.
-        // Push into AND so we do not clobber search's where.OR.
         if (!where.AND) where.AND = [];
         (where.AND as Prisma.studentsWhereInput[]).push({
-          OR: [
-            { device_user_mappings: { some: { is_active: true } } },
-            { zk_attendance_scans: { some: {} } },
-          ],
+          device_user_mappings: { some: { is_active: true } },
+        });
+      } else if (auditType === 'scans_no_mapping') {
+        // The remap backlog: attendance still credited to a student whose
+        // mapping is gone. Mappings are the source of truth, so these scans are
+        // stranded until the student is mapped again.
+        if (!where.AND) where.AND = [];
+        (where.AND as Prisma.studentsWhereInput[]).push({
+          device_user_mappings: { none: {} },
+          zk_attendance_scans: { some: {} },
         });
       } else if (auditType === 'abnormal') {
         const abnormalStudents: any[] = await this.prisma.$queryRaw`
@@ -833,9 +839,12 @@ export class StudentsService {
       const mappedData: any = { id: s.cc, cc: s.cc };
 
       if (requestedFields.has('core')) {
+        // Kept in step with the no_biometric/has_biometric audit filters: a
+        // student is "biometric" when they have an active PIN mapping. Leftover
+        // scans from a deleted mapping don't count — they're stranded, and
+        // surfacing them here made the badge disagree with the filter.
         const hasBiometric = Boolean(
-          s.device_user_mappings?.some((m: any) => m.is_active === true) ||
-          (s.zk_attendance_scans && s.zk_attendance_scans.length > 0)
+          s.device_user_mappings?.some((m: any) => m.is_active === true)
         );
         mappedData.core = {
           cc: s.cc,
