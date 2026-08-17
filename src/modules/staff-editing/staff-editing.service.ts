@@ -1533,6 +1533,7 @@ export class StaffEditingService {
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
       // All sub-tables
       has_transfer: !!s.has_transfer,
+      has_quick_admission_slip: s.quick_admission_meta != null,
       admissions: s.student_admissions ?? [],
       activities: s.student_activities ?? [],
       languages: s.student_languages ?? [],

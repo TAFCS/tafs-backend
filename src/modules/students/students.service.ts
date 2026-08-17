@@ -243,7 +243,7 @@ export class StudentsService {
     query: GetStudentsDto,
     user?: IJwtStaffPayload,
   ): Promise<Prisma.studentsWhereInput> {
-    const { search, campus_id, class_id, section_id, house_id, status, has_photo } = query;
+    const { search, campus_id, class_id, section_id, house_id, status, has_photo, had_quick_admission } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
@@ -340,6 +340,18 @@ export class StudentsService {
       });
     }
 
+    if (had_quick_admission === 'true') {
+      if (!where.AND) where.AND = [];
+      (where.AND as any).push({
+        NOT: { quick_admission_meta: { equals: Prisma.DbNull } },
+      });
+    } else if (had_quick_admission === 'false') {
+      if (!where.AND) where.AND = [];
+      (where.AND as any).push({
+        quick_admission_meta: { equals: Prisma.DbNull },
+      });
+    }
+
     if (user) {
       return applyStudentScope(user, where, {
         campus_id: campus_id,
@@ -366,6 +378,7 @@ export class StudentsService {
 
     if (class_id?.length || section_id?.length || house_id?.length || auditType) return null;
     if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
+    if (query.had_quick_admission === 'false') return null;
 
     const where: Prisma.unconfirmed_admissionsWhereInput = {};
     const and: Prisma.unconfirmed_admissionsWhereInput[] = [];

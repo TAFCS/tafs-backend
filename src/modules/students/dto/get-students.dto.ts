@@ -93,6 +93,10 @@ export class GetStudentsDto {
   has_photo?: 'true' | 'false';
 
   @IsOptional()
+  @IsEnum(['true', 'false'])
+  had_quick_admission?: 'true' | 'false';
+
+  @IsOptional()
   @IsString()
   columns?: string;
 }

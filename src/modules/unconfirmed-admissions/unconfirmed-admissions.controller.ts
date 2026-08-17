@@ -120,9 +120,7 @@ export class UnconfirmedAdmissionsController {
   async getDepositSlip(
     @Param('cc', ParseIntPipe) cc: number,
     @Res() res: Response,
-    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    this.assertSuperAdmin(user);
     const pdfBuffer = await this.service.generateDepositSlipPdf(cc);
     res.set({
       'Content-Type': 'application/pdf',
