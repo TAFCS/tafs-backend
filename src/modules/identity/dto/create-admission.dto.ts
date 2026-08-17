@@ -311,7 +311,16 @@ export class CreateAdmissionDto {
   @IsInt()
   @Min(1)
   @IsOptional()
+  @Type(() => Number)
   existing_cc?: number;
+
+  // ── Historical Computer Code from paper records. Mutually exclusive with ──
+  // ── existing_cc. When set, gr_number is required and the student is enrolled. ──
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  @Type(() => Number)
+  legacy_cc?: number;
 
   // ── Existing family (sibling re-registration) ──
   @IsInt()
@@ -324,8 +333,10 @@ export class CreateAdmissionDto {
   should_create_family?: boolean;
 
   // ── Student personal data ──
+  // Required when legacy_cc is set; optional otherwise (assigned later at enroll).
+  @ValidateIf((o) => o.legacy_cc != null || (o.gr_number != null && o.gr_number !== ''))
   @IsString()
-  @IsOptional()
+  @IsNotEmpty()
   @MaxLength(50)
   gr_number?: string;
 

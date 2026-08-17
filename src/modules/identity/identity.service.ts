@@ -42,6 +42,67 @@ export class IdentityService {
         existingQuickStudent = existing;
       }
 
+      const parsedLegacyCc =
+        dto.legacy_cc == null ? NaN : Number(dto.legacy_cc);
+      const isLegacy = Number.isInteger(parsedLegacyCc) && parsedLegacyCc >= 1;
+      const legacyGr = dto.gr_number?.trim() || undefined;
+
+      if (isLegacy && dto.existing_cc) {
+        throw new BadRequestException(
+          'Cannot register a legacy student while completing a Quick Admission. Choose one path.',
+        );
+      }
+
+      if (dto.legacy_cc != null && !isLegacy) {
+        throw new BadRequestException('legacy_cc must be a positive integer');
+      }
+
+      if (isLegacy) {
+        if (!legacyGr) {
+          throw new BadRequestException(
+            'gr_number is required when registering a legacy student',
+          );
+        }
+        if (!dto.admission?.campus_id) {
+          throw new BadRequestException(
+            'campus_id is required when registering a legacy student',
+          );
+        }
+
+        const existingLegacy = await tx.students.findUnique({
+          where: { cc: parsedLegacyCc },
+          select: { cc: true, status: true, full_name: true },
+        });
+        if (existingLegacy) {
+          const departed =
+            existingLegacy.status === StudentStatus.LEFT ||
+            existingLegacy.status === StudentStatus.EXPELLED ||
+            existingLegacy.status === StudentStatus.GRADUATED;
+          if (departed) {
+            throw new BadRequestException(
+              `CC ${parsedLegacyCc} already exists (${existingLegacy.full_name}, ${existingLegacy.status}). Use Reinstate on the student profile instead.`,
+            );
+          }
+          throw new BadRequestException(
+            `CC ${parsedLegacyCc} already exists (${existingLegacy.full_name}, status: ${existingLegacy.status}). Cannot assign this Computer Code to a new student.`,
+          );
+        }
+
+        const grClash = await tx.students.findFirst({
+          where: {
+            campus_id: dto.admission.campus_id,
+            gr_number: legacyGr,
+            deleted_at: null,
+          },
+          select: { cc: true },
+        });
+        if (grClash) {
+          throw new BadRequestException(
+            `GR ${legacyGr} is already assigned to CC ${grClash.cc} at this campus.`,
+          );
+        }
+      }
+
       // ── 1. Resolve or create family ──────────────────────────────────────
       let familyId: number | null = existingQuickStudent?.family_id ?? null;
 
@@ -148,10 +209,13 @@ export class IdentityService {
       // ── 2. Create (or complete an existing Quick Admission) student ──────
       const dob = new Date(dto.dob);
 
-      // Reuse the Quick Admission's CC when completing one; otherwise allocate a new one.
+      // Reuse the Quick Admission's CC when completing one; use the paper-record
+      // CC for a legacy student; otherwise allocate a new one.
       const nextCC = existingQuickStudent
         ? existingQuickStudent.cc
-        : await this.ccAllocator.next(tx);
+        : isLegacy
+          ? parsedLegacyCc
+          : await this.ccAllocator.next(tx);
 
       let classId = dto.admission.class_id || undefined;
       if (!classId && dto.admission.requested_grade) {
@@ -173,7 +237,7 @@ export class IdentityService {
       }
 
       const studentData = {
-        gr_number: dto.gr_number,
+        gr_number: legacyGr ?? dto.gr_number,
         cnic: dto.cnic,
         family_id: familyId,
         full_name: dto.full_name,
@@ -194,10 +258,11 @@ export class IdentityService {
         home_phone: dto.home_phone,
         academic_year: dto.admission.academic_year,
         admission_age_years: this.calcAge(dob),
-        status: StudentStatus.SOFT_ADMISSION,
+        status: isLegacy ? StudentStatus.ENROLLED : StudentStatus.SOFT_ADMISSION,
         campus_id: dto.admission.campus_id || undefined,
         class_id: classId,
         section_id: dto.admission.section_id || undefined,
+        ...(isLegacy ? { doa: new Date() } : {}),
       };
 
       const student = existingQuickStudent
@@ -340,7 +405,27 @@ export class IdentityService {
         });
       }
 
-      // ── 8. Handle Flags (Universal) ─────────────────────────────────────
+      // ── 8. Legacy students are ENROLLED immediately — open a placement period
+      if (isLegacy) {
+        await tx.student_progression_periods.create({
+          data: {
+            student_cc: student.cc,
+            campus_id: student.campus_id,
+            class_id: student.class_id,
+            section_id: student.section_id,
+            house_id: student.house_id,
+            academic_year: student.academic_year,
+            gr_number: student.gr_number,
+            change_type: 'ENROLLED',
+            changed_by: changedBy || 'system',
+            notes: 'Legacy enrollment — historical CC/GR, no prior digital record.',
+            valid_from: new Date(),
+            valid_to: null,
+          },
+        });
+      }
+
+      // ── 9. Handle Flags (Universal) ─────────────────────────────────────
       if (dto.flags?.length) {
         for (const f of dto.flags) {
           await this.flagsSvc.addFlag(
@@ -352,7 +437,7 @@ export class IdentityService {
         }
       }
 
-      // ── 9. Return full record ────────────────────────────────────────────
+      // ── 10. Return full record ───────────────────────────────────────────
       return tx.students.findUnique({
         where: { cc: student.cc },
         include: this.defaultStudentInclude(),
@@ -364,16 +449,23 @@ export class IdentityService {
       });
 
     if (student) {
+      const isLegacyEnrollment = dto.legacy_cc != null;
       await this.auditLogs.log({
         entity_type: 'STUDENT',
         entity_id: String(student.cc),
-        action: dto.existing_cc ? 'UPDATED' : 'CREATED',
+        action: isLegacyEnrollment
+          ? 'LEGACY_ENROLLMENT'
+          : dto.existing_cc
+            ? 'UPDATED'
+            : 'CREATED',
         changed_by: changedBy || 'system',
         student_id: student.cc,
         note: [
-          dto.existing_cc
-            ? `Registration form completed for Quick Admission CC ${student.cc} (${student.full_name || dto.full_name}).`
-            : `Admission registered for CC ${student.cc} (${student.full_name || dto.full_name}).`,
+          isLegacyEnrollment
+            ? `Legacy student enrolled with historical CC ${student.cc} and GR ${student.gr_number ?? dto.gr_number} (${student.full_name || dto.full_name}).`
+            : dto.existing_cc
+              ? `Registration form completed for Quick Admission CC ${student.cc} (${student.full_name || dto.full_name}).`
+              : `Admission registered for CC ${student.cc} (${student.full_name || dto.full_name}).`,
           `Status=${student.status ?? 'SOFT_ADMISSION'}`,
           `Campus=${dto.admission.campus_id ?? 'N/A'}`,
           `Grade=${dto.admission.requested_grade ?? 'N/A'}`,
