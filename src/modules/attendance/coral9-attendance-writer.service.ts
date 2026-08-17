@@ -33,6 +33,9 @@ import { Pool } from 'pg';
  * string from the grant script, not the project's owner/postgres role. Set it
  * via the deploy platform's secret manager; it must never be hardcoded here.
  * Inert (forward() is a no-op) until that env var is set.
+ *
+ * CORAL9_FLUSH_SECRET is optional: without it the punch still writes, it just
+ * waits on Coral9's cron sweep to mail instead of firing immediately.
  */
 
 /** TAFSAL. Coral9 staff only ever scan here; no other unit forwards. */
@@ -78,6 +81,22 @@ const STAFF_ACCOUNT_TYPES = ['superadmin', 'platform_admin', 'internal'];
 
 /** Beyond this, give up rather than hold the ingest path open. */
 const STATEMENT_TIMEOUT_MS = 5000;
+
+/**
+ * Tells Coral9 to send the clock-in/out email immediately.
+ *
+ * The database write cannot send mail, and waiting for Coral9's cron sweep put
+ * a "welcome in" message minutes behind the person walking through the door.
+ * This ping closes that gap.
+ *
+ * Deliberately fire-and-forget and deliberately best-effort: the punch is
+ * already committed before this runs, so a failure here costs a timely email
+ * and nothing else — Coral9's cron still picks the punch up as a backstop.
+ * Never let it delay or fail the scan.
+ */
+const CORAL9_FLUSH_URL = 'https://www.coral9.com/api/attendance/flush';
+const CORAL9_FLUSH_SECRET = process.env.CORAL9_FLUSH_SECRET ?? '';
+const CORAL9_FLUSH_TIMEOUT_MS = 3000;
 
 interface PunchOutcome {
   userFound: boolean;
@@ -161,6 +180,11 @@ export class Coral9AttendanceWriterService implements OnModuleDestroy {
             `coral9 punch ok: ${outcome.fullName} ${outcome.newKind === 'in' ? 'checked IN' : 'checked OUT'} ` +
               `(punch #${outcome.newSeq}) pin=${pin} sn=${sn} scan=${stamp}`,
           );
+
+          // Not awaited: the punch is safe in the database, and the scan must
+          // not wait on Coral9's mail path. A dropped ping only means the email
+          // arrives on their next cron sweep instead of now.
+          void this.pingCoral9(pin);
           return;
         } catch (err: any) {
           // 23505 = unique_violation on (user_id, work_date, seq): a concurrent
@@ -173,6 +197,38 @@ export class Coral9AttendanceWriterService implements OnModuleDestroy {
       // Includes connection failures, statement timeouts and TLS errors.
       this.logger.error(
         `coral9 punch failed: pin=${pin} sn=${sn} scan=${stamp} — ${err?.message}`,
+      );
+    }
+  }
+
+  /**
+   * Nudge Coral9 to send the email for whatever it hasn't mailed yet.
+   *
+   * Sends no punch id — it is a trigger, not a message. Coral9 drains its own
+   * queue, so a ping that arrives twice, late, or after an earlier one failed
+   * all end in the same correct state, and neither side has to agree on what
+   * "this punch" means.
+   *
+   * Swallows every error by design. This is the one call in the path that is
+   * allowed to fail silently, because the thing that matters is already saved.
+   */
+  private async pingCoral9(pin: string): Promise<void> {
+    if (!CORAL9_FLUSH_SECRET) return; // not configured — cron will cover it
+
+    try {
+      const res = await fetch(CORAL9_FLUSH_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${CORAL9_FLUSH_SECRET}` },
+        signal: AbortSignal.timeout(CORAL9_FLUSH_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        this.logger.warn(
+          `coral9 mail ping rejected: pin=${pin} status=${res.status} — email will follow on their cron`,
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `coral9 mail ping failed: pin=${pin} — ${err?.message}. Email will follow on their cron.`,
       );
     }
   }
