@@ -140,7 +140,7 @@ export class UpdateStudentDto {
   @IsOptional()
   @IsString()
   @MaxLength(50)
-  gr_number?: string;
+  gr_number?: string | null;
 
   @IsOptional()
   @IsEnum(StudentStatus)

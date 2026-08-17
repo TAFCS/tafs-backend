@@ -363,6 +363,12 @@ export class StaffEditingService {
       studentData.cnic = (!c || c === 'NULL' || c === 'XXXXX-XXXXXXX-X') ? null : c;
     }
 
+    if (studentData.gr_number !== undefined) {
+      const g =
+        typeof studentData.gr_number === 'string' ? studentData.gr_number.trim() : studentData.gr_number;
+      studentData.gr_number = !g ? null : g;
+    }
+
     try {
       const fieldChanges: AuditChildPayload[] = [];
       let studentDisplayName: string | null = null;
@@ -376,6 +382,29 @@ export class StaffEditingService {
           throw new NotFoundException(`Student #${cc} not found`);
         }
         studentDisplayName = existing.full_name;
+
+        if (
+          studentData.gr_number !== undefined &&
+          studentData.gr_number !== existing.gr_number &&
+          studentData.gr_number
+        ) {
+          const campusId =
+            dto.campus_id !== undefined ? dto.campus_id : existing.campus_id;
+          const clash = await tx.students.findFirst({
+            where: {
+              campus_id: campusId,
+              gr_number: studentData.gr_number as string,
+              cc: { not: cc },
+              deleted_at: null,
+            },
+            select: { cc: true },
+          });
+          if (clash) {
+            throw new BadRequestException(
+              `GR Number ${studentData.gr_number} is already assigned to another student in this campus`,
+            );
+          }
+        }
 
         // Require reason + until only when enabling COMP/FE (false→true), not on re-saves.
         const nextComplementary =
@@ -537,8 +566,8 @@ export class StaffEditingService {
               ? (dto as any).academic_year
               : existing.academic_year;
           const nextGrNumber =
-            (dto as any).gr_number !== undefined
-              ? (dto as any).gr_number
+            studentData.gr_number !== undefined
+              ? (studentData.gr_number as string | null)
               : existing.gr_number;
 
           const changeType = this.progressionHistory.resolveChangeType({
@@ -564,10 +593,20 @@ export class StaffEditingService {
             sectionId: nextSectionId,
             houseId: nextHouseId,
             academicYear: nextAcademicYear,
-            grNumber: nextGrNumber,
+            grNumber: nextGrNumber as string | null,
             changeType,
             changedBy,
           });
+
+          if (
+            studentData.gr_number !== undefined &&
+            studentData.gr_number !== existing.gr_number
+          ) {
+            await tx.student_progression_periods.updateMany({
+              where: { student_cc: cc, valid_to: null },
+              data: { gr_number: studentData.gr_number as string | null },
+            });
+          }
         }
 
         // Fetch all current guardian links to match in JS
