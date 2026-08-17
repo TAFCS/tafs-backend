@@ -44,6 +44,14 @@ export class StaffEditingService {
     return new Date(`${year}-${month}-${day}`);
   }
 
+  /** Drop omitted DTO keys so PATCH diffs/updates ignore unset class fields (null still counts as a clear). */
+  private omitUndefined<T extends Record<string, unknown>>(obj: T): T {
+    for (const key of Object.keys(obj)) {
+      if (obj[key] === undefined) delete obj[key];
+    }
+    return obj;
+  }
+
   // ─── Students ─────────────────────────────────────────────────────────────
 
   async getStudents(dto: GetSheetStudentsDto) {
@@ -417,6 +425,8 @@ export class StaffEditingService {
           studentData.fee_endowment_until = null;
         }
 
+        this.omitUndefined(studentData);
+
         // Effective values after this update (for date/bool audit diffs)
         const dateFields = new Set([
           'dob',
@@ -440,16 +450,15 @@ export class StaffEditingService {
         const effectiveStudentData = { ...studentData };
 
         for (const field of TRACKED_STUDENT_FIELDS) {
-          const inDto = (dto as any)[field] !== undefined;
           const inData = Object.prototype.hasOwnProperty.call(effectiveStudentData, field);
-          if (!inDto && !inData) continue;
+          if (!inData) continue;
 
           let oldVal: string | null = null;
           let newVal: string | null = null;
           const oldRaw = (existing as any)[field];
-          const newRaw = inData
-            ? (effectiveStudentData as any)[field]
-            : (dto as any)[field];
+          const newRaw = (effectiveStudentData as any)[field];
+          // Omitted PATCH fields are stripped; null is a real clear and must still log.
+          if (newRaw === undefined) continue;
 
           if (dateFields.has(field)) {
             const oldStr = oldRaw ? new Date(oldRaw).toISOString().split('T')[0] : null;
@@ -1053,7 +1062,7 @@ export class StaffEditingService {
     const data: Record<string, unknown> = {
       ...rest,
     };
-    
+
     if (cnic !== undefined) {
       data.cnic = (cnic && cnic !== "N/A") ? cnic : null;
     }
@@ -1065,6 +1074,8 @@ export class StaffEditingService {
     if (dob !== undefined) {
       data.dob = dob ? this.parseDateFromFrontend(dob as string) : null;
     }
+
+    this.omitUndefined(data);
 
     // Log changes
     const TRACKED_GUARDIAN_FIELDS = [
