@@ -70,8 +70,23 @@ export class GetStudentsDto {
   is_abnormal?: string;
 
   @IsOptional()
-  @IsEnum(['missing_guardian', 'no_family', 'no_house', 'abnormal', 'no_biometric', 'has_biometric'])
-  audit_type?: 'missing_guardian' | 'no_family' | 'no_house' | 'abnormal' | 'no_biometric' | 'has_biometric';
+  @IsEnum([
+    'missing_guardian',
+    'no_family',
+    'no_house',
+    'abnormal',
+    'no_biometric',
+    'has_biometric',
+    'scans_no_mapping',
+  ])
+  audit_type?:
+    | 'missing_guardian'
+    | 'no_family'
+    | 'no_house'
+    | 'abnormal'
+    | 'no_biometric'
+    | 'has_biometric'
+    | 'scans_no_mapping';
 
   @IsOptional()
   @IsEnum(['true', 'false'])

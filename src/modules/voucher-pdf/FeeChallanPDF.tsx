@@ -63,20 +63,77 @@ const QR_RESERVE = 72;
 // to it via `marginTop: 'auto'` — stays put rather than drifting into the page margin.
 const CHALLAN_TOP_OFFSET = 4;
 
-// Split of the page between the challan copies and the history column. The column gets 18%
-// rather than 15% so its 4-5 columns of text have room to breathe; the copies lose 3% of width
-// they were not using (their middle section is mostly whitespace).
-const CHALLAN_WIDTH = '82%';
-const COLUMN_WIDTH = '18%';
+// Split of the page between the challan copies and the history column.
+const CHALLAN_WIDTH = '85%';
+const COLUMN_WIDTH = '15%';
 
 // History tables are kept atomic (wrap={false}) so a table is never split mid-body. That is
 // only safe while the table actually fits on a page: react-pdf cannot place an unsplittable
 // section taller than the page, so it crushes the whole column and text collides. Any table
 // long enough to risk that is allowed to split (repeating its header) instead. The bound is
-// deliberately conservative — rows here wrap to 2-3 lines at ~16pt, so ~24 rows can already
-// fill the usable column height.
-const LONG_TABLE_ROWS = 18;
+// deliberately conservative — rows wrap to 2-3 lines, so well under 50 fill the column.
+const LONG_TABLE_ROWS = 24;
 const isLong = (rows?: unknown[]) => (rows?.length ?? 0) > LONG_TABLE_ROWS;
+
+type HCellSpec = { node: React.ReactNode; align?: 'left' | 'right' | 'center'; color?: string };
+
+/**
+ * One row of a history table.
+ *
+ * Column separators are drawn as absolutely-positioned full-height rules, NOT as
+ * borders on the cells. react-pdf sizes a cell to its own wrapped text and will not
+ * stretch it to the row height (neither Text nor a flex View, with or without an
+ * explicit alignItems: 'stretch'), so cell borders come out ragged — short next to a
+ * one-line cell, tall next to a three-line one. An absolute child with top/bottom 0
+ * spans the row's real height, giving unbroken vertical rules.
+ *
+ * `cols` are relative weights; they are normalised to percentages so the rules can be
+ * placed at the exact column boundaries.
+ */
+const HRow = ({ cols, cells, variant = 'body', last }: {
+    cols: number[];
+    cells: HCellSpec[];
+    variant?: 'header' | 'body' | 'total';
+    /** last row of the table — drops the bottom border so it does not double the table's own */
+    last?: boolean;
+}) => {
+    const sum = cols.reduce((a, b) => a + b, 0);
+    const pct = cols.map(c => (c / sum) * 100);
+    const edges: number[] = [];
+    let acc = 0;
+    for (let i = 0; i < pct.length - 1; i++) { acc += pct[i]; edges.push(acc); }
+
+    const isTotal = variant === 'total';
+    const isHeader = variant === 'header';
+
+    return (
+        <View wrap={false} style={{
+            flexDirection: 'row',
+            position: 'relative',
+            paddingVertical: isTotal ? 1.5 : 1,
+            backgroundColor: isTotal ? '#1e293b' : undefined,
+            borderBottomWidth: last || isTotal ? 0 : (isHeader ? 0.5 : 0.3),
+            borderBottomColor: isHeader ? '#475569' : '#64748b',
+        }}>
+            {cells.map((c, i) => (
+                <View key={i} style={{ width: `${pct[i]}%`, paddingHorizontal: 2 }}>
+                    <Text style={{
+                        fontSize: 4,
+                        textAlign: c.align,
+                        color: c.color ?? (isTotal ? '#ffffff' : '#1e293b'),
+                        fontWeight: isHeader || isTotal ? 'bold' : undefined,
+                    }}>{c.node}</Text>
+                </View>
+            ))}
+            {!isTotal && edges.map((x, i) => (
+                <View key={`rule-${i}`} style={{
+                    position: 'absolute', left: `${x}%`, top: 0, bottom: 0,
+                    width: 0.3, backgroundColor: '#475569',
+                }} />
+            ))}
+        </View>
+    );
+};
 
 // Define styles
 const styles = StyleSheet.create({
@@ -400,11 +457,11 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     historyTitle: {
-        fontSize: 7,
+        fontSize: 6,
         fontWeight: 'bold',
         color: '#1e293b',
         backgroundColor: '#f1f5f9',
-        padding: '3px 4px',
+        padding: '2px 4px',
         marginBottom: 3,
         textTransform: 'uppercase',
         borderLeftWidth: 2,
@@ -418,38 +475,21 @@ const styles = StyleSheet.create({
     },
     historyTableHeader: {
         flexDirection: 'row',
-        alignItems: 'flex-start',
+        // Explicit stretch: every cell takes the full row height, so the per-cell right
+        // borders form unbroken vertical column separators.
+        alignItems: 'stretch',
         borderBottomWidth: 0.5,
         borderBottomColor: '#475569',
-        paddingVertical: 2,
+        paddingVertical: 1,
     },
     historyTableRow: {
         flexDirection: 'row',
-        // flex-start lets each cell size to its own wrapped height instead of being
-        // stretched to a common baseline, which is what made long heads collide.
-        alignItems: 'flex-start',
+        // Explicit stretch: short cells still take the full row height, so the per-cell
+        // right borders form unbroken vertical column separators.
+        alignItems: 'stretch',
         borderBottomWidth: 0.3,
         borderBottomColor: '#64748b',
-        paddingVertical: 2,
-    },
-    historyTableCell: {
-        fontSize: 5,
-        lineHeight: 1.3,
-        color: '#1e293b',
-        flex: 1,
-        borderRightWidth: 0.3,
-        borderRightColor: '#475569',
-        paddingHorizontal: 3,
-    },
-    historyTableHeaderCell: {
-        fontSize: 5,
-        lineHeight: 1.3,
-        fontWeight: 'bold',
-        color: '#1e293b',
-        flex: 1,
-        borderRightWidth: 0.3,
-        borderRightColor: '#475569',
-        paddingHorizontal: 3,
+        paddingVertical: 1,
     },
 });
 
@@ -814,52 +854,53 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View style={styles.historySection} wrap={isLong(arrearsHistory)}>
                     <Text style={styles.historyTitle}>ARREAR'S HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={isLong(arrearsHistory)}>
-                            <Text style={styles.historyTableHeaderCell}>MONTH</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
-                        </View>
-                        {arrearsHistory && arrearsHistory.length > 0 ? (() => {
-                            const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                            // `monthLabel` is resolved by prepareVoucherPdfData, which knows the
-                            // term each head was written under (student_fees.term_start_month).
-                            // This component only ever saw the student's *current* class, so it
-                            // could not label a head billed before a move between term systems.
-                            // The date fallback is for legacy rows with no month/year.
-                            const getMonthLabel = (r: any) => {
-                                if (r.monthLabel) return r.monthLabel;
-                                const [y, m] = r.date.split('-');
-                                return `${MONTHS_SHORT[parseInt(m) - 1].toUpperCase()} ${y.slice(-2)}`;
-                            };
-                            let runningTotal = 0;
+                        {(() => {
+                            const COLS = [1, 2, 1];
                             return (
                                 <>
-                                    {arrearsHistory.map((a: any, idx: number) => {
-                                        const amt = parseFloat(String(a.amount).replace(/,/g, '')) || 0;
-                                        runningTotal += amt;
-                                        return (
-                                            <View key={idx} wrap={false} style={styles.historyTableRow}>
-                                                <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
-                                                <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
-                                                <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>{amt.toLocaleString()}</Text>
-                                            </View>
-                                        );
-                                    })}
-                                    <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3, borderRightWidth: 0 }]}>TOTAL OUTSTANDING</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', borderRightWidth: 0 }]}>
-                                            {runningTotal.toLocaleString()}
-                                        </Text>
+                                    <View fixed={isLong(arrearsHistory)}>
+                                        <HRow cols={COLS} variant="header" cells={[
+                                            { node: 'MONTH' }, { node: 'FEE' }, { node: 'AMOUNT', align: 'right' },
+                                        ]} />
                                     </View>
+                                    {arrearsHistory && arrearsHistory.length > 0 ? (() => {
+                                        const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                        // `monthLabel` is resolved by prepareVoucherPdfData, which knows the
+                                        // term each head was written under (student_fees.term_start_month).
+                                        // This component only ever saw the student's *current* class, so it
+                                        // could not label a head billed before a move between term systems.
+                                        // The date fallback is for legacy rows with no month/year.
+                                        const getMonthLabel = (r: any) => {
+                                            if (r.monthLabel) return r.monthLabel;
+                                            const [y, m] = r.date.split('-');
+                                            return `${MONTHS_SHORT[parseInt(m) - 1].toUpperCase()} ${y.slice(-2)}`;
+                                        };
+                                        let runningTotal = 0;
+                                        return (
+                                            <>
+                                                {arrearsHistory.map((a: any, idx: number) => {
+                                                    const amt = parseFloat(String(a.amount).replace(/,/g, '')) || 0;
+                                                    runningTotal += amt;
+                                                    return (
+                                                        <HRow key={idx} cols={COLS} cells={[
+                                                            { node: getMonthLabel(a) },
+                                                            { node: a.head },
+                                                            { node: amt.toLocaleString(), align: 'right' },
+                                                        ]} />
+                                                    );
+                                                })}
+                                                <HRow cols={[3, 1]} variant="total" cells={[
+                                                    { node: 'TOTAL OUTSTANDING' },
+                                                    { node: runningTotal.toLocaleString(), align: 'right' },
+                                                ]} />
+                                            </>
+                                        );
+                                    })() : (
+                                        <HRow cols={COLS} last cells={[{ node: '-' }, { node: '-' }, { node: '-', align: 'right' }]} />
+                                    )}
                                 </>
                             );
-                        })() : (
-                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
-                                <Text style={styles.historyTableCell}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
-                            </View>
-                        )}
+                        })()}
                     </View>
                 </View>
 
@@ -867,44 +908,41 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View style={styles.historySection} wrap={isLong(paymentHistory)}>
                     <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={isLong(paymentHistory)}>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7 }]}>DATE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
-                            <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
-                                <Text style={{ fontSize: 4, fontWeight: 'bold', color: '#1e293b' }}>METHOD</Text>
-                            </View>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>AMOUNT</Text>
-                        </View>
-                        {paymentHistory && paymentHistory.length > 0 ? (
-                            <>
-                                {paymentHistory.map((p: any, idx: number) => (
-                                    <View key={idx} wrap={false} style={[styles.historyTableRow, { alignItems: 'flex-start' }]}>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7 }]}>{(() => {
-                                            const [y, m, d] = String(p.date || '').split('-');
-                                            return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
-                                        })()}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 2 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.head || '-'}</Text>
-                                        <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
-                                            <Text style={{ fontSize: 4, color: '#1e293b' }}>{p.isDiscount ? '-' : formatPaymentMethod(p.payment_method)}</Text>
-                                        </View>
-                                        <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
+                        {(() => {
+                            const COLS = [0.95, 1.9, 0.8, 0.75];
+                            return (
+                                <>
+                                    <View fixed={isLong(paymentHistory)}>
+                                        <HRow cols={COLS} variant="header" cells={[
+                                            { node: 'DATE' }, { node: 'HEAD' }, { node: 'METHOD' }, { node: 'AMOUNT', align: 'right' },
+                                        ]} />
                                     </View>
-                                ))}
-                                <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.4, borderRightWidth: 0 }]}>TOTAL PAID</Text>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
-                                </View>
-                            </>
-                        ) : (
-                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
-                                <Text style={[styles.historyTableCell, { flex: 0.7 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <View style={{ flex: 0.7, borderRightWidth: 0.3, borderRightColor: '#475569', paddingHorizontal: 2 }}>
-                                    <Text style={{ fontSize: 4, color: '#1e293b' }}>-</Text>
-                                </View>
-                                <Text style={[styles.historyTableCell, { flex: 0.7, textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
-                            </View>
-                        )}
+                                    {paymentHistory && paymentHistory.length > 0 ? (
+                                        <>
+                                            {paymentHistory.map((p: any, idx: number) => {
+                                                const [y, m, d] = String(p.date || '').split('-');
+                                                const dateLabel = y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
+                                                const tint = p.isDiscount ? '#16a34a' : undefined;
+                                                return (
+                                                    <HRow key={idx} cols={COLS} cells={[
+                                                        { node: dateLabel },
+                                                        { node: p.head || '-', color: tint },
+                                                        { node: p.isDiscount ? '-' : formatPaymentMethod(p.payment_method) },
+                                                        { node: p.amount || '0', align: 'right', color: tint },
+                                                    ]} />
+                                                );
+                                            })}
+                                            <HRow cols={[3.65, 0.75]} variant="total" cells={[
+                                                { node: 'TOTAL PAID' },
+                                                { node: paymentHistory[paymentHistory.length - 1]?.totalAmount || '0', align: 'right' },
+                                            ]} />
+                                        </>
+                                    ) : (
+                                        <HRow cols={COLS} last cells={[{ node: '-' }, { node: '-' }, { node: '-' }, { node: '-', align: 'right' }]} />
+                                    )}
+                                </>
+                            );
+                        })()}
                     </View>
                 </View>
 
@@ -912,44 +950,39 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View style={styles.historySection} wrap={isLong(installmentsHistory)}>
                     <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={isLong(installmentsHistory)}>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0 }]}>STATUS</Text>
-                        </View>
-                        {installmentsHistory && installmentsHistory.length > 0 ? (() => {
-                            const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+                        {(() => {
+                            const COLS = [1.1, 1.9, 0.95, 1.05];
                             return (
                                 <>
-                                    {installmentsHistory.map((inst: any, idx: number) => (
-                                        <View key={idx} wrap={false} style={styles.historyTableRow}>
-                                            <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{inst.month}</Text>
-                                            <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
-                                            <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
-                                                {Number(inst.amount || 0).toLocaleString()}
-                                            </Text>
-                                            <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0, color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
-                                                {inst.status}
-                                            </Text>
-                                        </View>
-                                    ))}
-                                    <View wrap={false} style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2, borderRightWidth: 0 }]}>TOTAL</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8, borderRightWidth: 0 }]}>
-                                            {planTotal.toLocaleString()}
-                                        </Text>
+                                    <View fixed={isLong(installmentsHistory)}>
+                                        <HRow cols={COLS} variant="header" cells={[
+                                            { node: 'MONTH' }, { node: 'HEAD' }, { node: 'AMOUNT', align: 'right' }, { node: 'STATUS', align: 'right' },
+                                        ]} />
                                     </View>
+                                    {installmentsHistory && installmentsHistory.length > 0 ? (() => {
+                                        const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+                                        return (
+                                            <>
+                                                {installmentsHistory.map((inst: any, idx: number) => (
+                                                    <HRow key={idx} cols={COLS} cells={[
+                                                        { node: inst.month },
+                                                        { node: inst.head },
+                                                        { node: Number(inst.amount || 0).toLocaleString(), align: 'right' },
+                                                        { node: inst.status, align: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' },
+                                                    ]} />
+                                                ))}
+                                                <HRow cols={[3.95, 1.05]} variant="total" cells={[
+                                                    { node: 'TOTAL' },
+                                                    { node: planTotal.toLocaleString(), align: 'right' },
+                                                ]} />
+                                            </>
+                                        );
+                                    })() : (
+                                        <HRow cols={COLS} last cells={[{ node: '-' }, { node: '-' }, { node: '-', align: 'right' }, { node: '-', align: 'right' }]} />
+                                    )}
                                 </>
                             );
-                        })() : (
-                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
-                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', borderRightWidth: 0 }]}>-</Text>
-                            </View>
-                        )}
+                        })()}
                     </View>
                 </View>
 
@@ -957,28 +990,28 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View style={styles.historySection} wrap={isLong(siblings)}>
                     <Text style={styles.historyTitle}>SIBLINGS</Text>
                     <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader} fixed={isLong(siblings)}>
-                            <Text style={styles.historyTableHeaderCell}>CC</Text>
-                            <Text style={styles.historyTableHeaderCell}>GR</Text>
-                            <Text style={styles.historyTableHeaderCell}>LVL</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2.2 }]}>NAME</Text>
-                            <Text style={[styles.historyTableHeaderCell, { borderRightWidth: 0 }]}>STATUS</Text>
-                        </View>
-                        {siblings && siblings.length > 0 ? (
-                            siblings.map((s, idx) => (
-                                <View key={idx} wrap={false} style={styles.historyTableRow}>
-                                    <Text style={styles.historyTableCell}>{s.cc}</Text>
-                                    <Text style={styles.historyTableCell}>{s.gr_number}</Text>
-                                    <Text style={styles.historyTableCell}>{s.className}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name}</Text>
-                                    <Text style={[styles.historyTableCell, { borderRightWidth: 0 }]}>{s.status || 'Active'}</Text>
-                                </View>
-                            ))
-                        ) : (
-                            <View wrap={false} style={[styles.historyTableRow, { borderBottomWidth: 0 }]}>
-                                <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5, borderRightWidth: 0 }]}>No siblings</Text>
-                            </View>
-                        )}
+                        {(() => {
+                            const COLS = [0.85, 1.05, 0.9, 2.0, 1.2];
+                            return (
+                                <>
+                                    <View fixed={isLong(siblings)}>
+                                        <HRow cols={COLS} variant="header" cells={[
+                                            { node: 'CC' }, { node: 'GR' }, { node: 'LVL' }, { node: 'NAME' }, { node: 'STATUS' },
+                                        ]} />
+                                    </View>
+                                    {siblings && siblings.length > 0 ? (
+                                        siblings.map((s, idx) => (
+                                            <HRow key={idx} cols={COLS} last={idx === siblings.length - 1} cells={[
+                                                { node: s.cc }, { node: s.gr_number }, { node: s.className },
+                                                { node: s.full_name }, { node: s.status || 'Active' },
+                                            ]} />
+                                        ))
+                                    ) : (
+                                        <HRow cols={[1]} last cells={[{ node: 'No siblings', align: 'center' }]} />
+                                    )}
+                                </>
+                            );
+                        })()}
                     </View>
                 </View>
 
