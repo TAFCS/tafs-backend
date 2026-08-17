@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -11,11 +12,18 @@ import {
   Min,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { fee_status_enum } from '@prisma/client';
+import { fee_status_enum, student_status } from '@prisma/client';
 import {
   toNumberArray,
   toStringArray,
 } from '../../../common/transforms/query-array.transform';
+
+function toOptionalBoolean({ value }: { value: unknown }): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return value as boolean;
+}
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -51,6 +59,22 @@ export class FinancialReportQueryDto {
   @IsArray()
   @IsInt({ each: true })
   segment_id?: number[];
+
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(student_status, { each: true })
+  student_status?: student_status[];
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_fee_endowment?: boolean;
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_complementary?: boolean;
 
   @IsOptional()
   @Type(() => Number)

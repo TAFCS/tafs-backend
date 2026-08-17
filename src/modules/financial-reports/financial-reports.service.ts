@@ -438,6 +438,13 @@ export class FinancialReportsService {
       ...(query.segment_id?.length && {
         classes: { segment_id: { in: query.segment_id } },
       }),
+      ...(query.student_status?.length && { status: { in: query.student_status } }),
+      ...(query.is_fee_endowment !== undefined && {
+        is_fee_endowment: query.is_fee_endowment,
+      }),
+      ...(query.is_complementary !== undefined && {
+        is_complementary: query.is_complementary,
+      }),
     };
     return applyStudentScope(user, studentWhere, {
       campus_id: query.campus_id,
