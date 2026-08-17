@@ -30,6 +30,18 @@ const FORWARD_PAYLOAD_CODE = '1234';
 /** Beyond this, treat the POST as failed rather than holding the socket open. */
 const FORWARD_TIMEOUT_MS = 5000;
 
+/**
+ * Master switch. While false, forward() sends nothing and the service is inert.
+ * Kept off deliberately until the forwarding is transparent and accountable:
+ *   1. each person's current code lives on their own employee record (an admin
+ *      enters it) instead of being a fixed value or their device PIN,
+ *   2. the endpoint comes from config rather than being baked in here,
+ *   3. every send is written to the audit log, and
+ *   4. someone who owns HR/data at the school has signed off.
+ * Do not flip this to true as a shortcut to make delivery succeed.
+ */
+const FORWARD_ENABLED = false;
+
 @Injectable()
 export class ExternalAttendanceForwarderService {
   private readonly logger = new Logger(ExternalAttendanceForwarderService.name);
@@ -50,6 +62,7 @@ export class ExternalAttendanceForwarderService {
    * every outcome is resolved into a log line.
    */
   async forward(sn: string, pin: string, scanTime: Date): Promise<void> {
+    if (!FORWARD_ENABLED) return; // disabled until forwarding is transparent + signed off
     if (!this.shouldForward(sn, pin)) return;
 
     const stamp = scanTime.toISOString().slice(0, 19).replace('T', ' ');
