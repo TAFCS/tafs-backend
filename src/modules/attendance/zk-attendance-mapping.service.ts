@@ -482,7 +482,12 @@ export class ZkAttendanceMappingService {
 
     return this.resolution.resolve(
       { kind: 'device_pin', device_sn: deviceSn, device_pin: devicePin },
-      { actor, dryRun: false, overrideToUnmapped },
+      // excludeToday guards scheduled bulk rebuilds from racing live device
+      // pushes. This is a single-pin resolve triggered by the operator's own
+      // mapping edit, not a bulk job — leaving today excluded here left the
+      // pin's today-dated scans stuck at person_type null, so it lingered on
+      // the unmapped-PIN screen after being mapped.
+      { actor, dryRun: false, overrideToUnmapped, excludeToday: false },
     );
   }
 
