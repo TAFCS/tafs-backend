@@ -28,7 +28,7 @@ import { AttendancePolicyResolverService } from './attendance-policy-resolver.se
 import { ClassCheckInScheduleService } from './class-check-in-schedule.service';
 import { ClassCheckInScheduleController } from './class-check-in-schedule.controller';
 import { RecomputeLateController } from './recompute-late.controller';
-import { ExternalAttendanceForwarderService } from './external-attendance-forwarder.service';
+import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
 
 @Module({
   imports: [
@@ -66,7 +66,7 @@ import { ExternalAttendanceForwarderService } from './external-attendance-forwar
     AttendanceNotificationsService,
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
-    ExternalAttendanceForwarderService,
+    Coral9AttendanceWriterService,
   ],
   exports: [
     RollSessionsService,
