@@ -37,6 +37,98 @@ export interface PinCollision {
   conflicting_mapping_id?: number;
 }
 
+export type PinIdentityReason = 'PIN_EQUALS_CC' | 'PIN_EQUALS_GR' | 'PIN_EQUALS_EMPLOYEE_CODE';
+
+export type PinLookupWarningCode =
+  | 'NO_MAPPING'
+  | 'MAPPING_INACTIVE'
+  | 'PIN_MAPPED_TO_MULTIPLE_PEOPLE'
+  | 'SCANS_CREDITED_TO_DIFFERENT_PERSON'
+  | 'PIN_MATCHES_ANOTHER_PERSONS_IDENTITY'
+  | 'DEVICE_NAME_HINT_DIFFERS';
+
+export interface PinLookupWarning {
+  code: PinLookupWarningCode;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  message: string;
+  device_sn?: string;
+}
+
+/** One person, however they were reached — mapping, scan attribution, or identity clash. */
+export interface PinLookupPerson {
+  kind: 'STAFF' | 'STUDENT';
+  employee_id?: number;
+  student_cc?: number;
+  name: string;
+  /** employee_code for staff, gr_number for students. */
+  identifier: string | null;
+  /** job title for staff, "Class — Section" for students. */
+  detail: string | null;
+  campus: string | null;
+  status: string | null;
+}
+
+/** The employee columns every lookup query selects, whatever it selected them for. */
+interface StaffPersonRow {
+  id: number;
+  full_name: string | null;
+  employee_code: string | null;
+  job_title: string | null;
+  employment_status: string | null;
+  campuses?: { campus_name: string | null } | null;
+  departments?: { name: string } | null;
+}
+
+/** The student columns every lookup query selects. */
+interface StudentPersonRow {
+  cc: number;
+  full_name: string;
+  gr_number: string | null;
+  status: string | null;
+  classes?: { description: string } | null;
+  sections?: { description: string } | null;
+  campuses?: { campus_name: string | null } | null;
+}
+
+export type PinLookupMapping = device_user_mappings & {
+  person: PinLookupPerson | null;
+  scan_count: number;
+  last_scan_at: Date | null;
+  employee_profiles: { id: number; full_name: string | null; employee_code: string | null } | null;
+  students: { cc: number; full_name: string; gr_number: string | null } | null;
+};
+
+/** Who the pin's stored scans are actually credited to — not necessarily the mapping. */
+export interface PinScanAttribution {
+  device_sn: string;
+  scan_count: number;
+  first_seen: Date | null;
+  last_seen: Date | null;
+  attributed_to: PinLookupPerson | null;
+  matches_current_mapping: boolean;
+}
+
+export interface PinLookupResult {
+  pin: string;
+  /** Every stored spelling searched, e.g. "0123" also matches "123". */
+  matched_pins: string[];
+  device_sn: string | null;
+  total_scans: number;
+  mappings: PinLookupMapping[];
+  scan_attributions: PinScanAttribution[];
+  name_hints: { device_sn: string; device_pin: string; suggested_name: string | null; updated_at: Date }[];
+  identity_matches: (PinLookupPerson & { reason: PinIdentityReason })[];
+  history: {
+    id: number;
+    action: string;
+    changed_by: string;
+    changed_at: Date;
+    note: string | null;
+    entity_id: string;
+  }[];
+  warnings: PinLookupWarning[];
+}
+
 @Injectable()
 export class ZkAttendanceMappingService {
   private readonly logger = new Logger(ZkAttendanceMappingService.name);
@@ -396,6 +488,366 @@ export class ZkAttendanceMappingService {
     }
 
     return collisions;
+  }
+
+  /**
+   * Reverse lookup: "this pin exists on a device — whose is it?"
+   *
+   * Mis-mapped pins are only ever noticed from the pin side (a device shows a
+   * scan, the wrong person's attendance moves), but every existing screen is
+   * keyed by person, so answering that question meant a manual DB query. This
+   * returns everything the system knows about one pin in a single shot:
+   *
+   *  - every mapping carrying that pin, on every device, active or not;
+   *  - who its scans are ACTUALLY credited to, which can differ from the
+   *    mapping when history has drifted (see scripts/audit-zk-scan-attribution.ts);
+   *  - the name the device itself reports for the pin (zk_pin_name_hints);
+   *  - people whose own identifiers (CC / GR / employee code) equal the pin —
+   *    the root cause of the 6102 mis-credit, where a pin taken from a GR
+   *    number was another student's CC.
+   */
+  async lookupPin(rawPin: string, deviceSn?: string): Promise<PinLookupResult> {
+    const pin = (rawPin ?? '').trim();
+    if (!pin) throw new BadRequestException('pin is required');
+
+    // Operators type "0123" for a pin stored as "123" (and vice versa) — a
+    // lookup that misses on leading zeros is worse than useless here.
+    const variants = Array.from(
+      new Set([pin, ...(/^\d+$/.test(pin) ? [String(Number(pin)), pin.replace(/^0+/, '')] : [])]),
+    ).filter(Boolean);
+    const pinAsNumber = /^\d+$/.test(pin) ? Number(pin) : null;
+    const deviceFilter = deviceSn ? { device_sn: deviceSn } : {};
+
+    const [rawMappings, scanGroups, hints] = await Promise.all([
+      this.prisma.device_user_mappings.findMany({
+        where: { device_pin: { in: variants }, ...deviceFilter },
+        orderBy: [{ is_active: 'desc' }, { device_sn: 'asc' }],
+        include: {
+          employee_profiles: {
+            select: {
+              id: true,
+              full_name: true,
+              employee_code: true,
+              job_title: true,
+              employment_status: true,
+              campuses: { select: { campus_name: true } },
+              departments: { select: { name: true } },
+            },
+          },
+          students: {
+            select: {
+              cc: true,
+              full_name: true,
+              gr_number: true,
+              status: true,
+              classes: { select: { description: true } },
+              sections: { select: { description: true } },
+              campuses: { select: { campus_name: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.zk_attendance_scans.groupBy({
+        by: ['device_sn', 'person_type', 'employee_id', 'student_cc'],
+        where: { device_pin: { in: variants }, ...deviceFilter },
+        _count: { _all: true },
+        _min: { scan_time: true },
+        _max: { scan_time: true },
+      }),
+      this.prisma.zk_pin_name_hints.findMany({
+        where: { device_pin: { in: variants }, ...deviceFilter },
+        orderBy: { device_sn: 'asc' },
+      }),
+    ]);
+
+    // Scans denormalize the person at ingest, so their employee/student refs are
+    // resolved separately from the mapping's — that gap IS the drift we report.
+    const scanEmployeeIds = scanGroups.map((g) => g.employee_id).filter((id): id is number => id != null);
+    const scanStudentCcs = scanGroups.map((g) => g.student_cc).filter((cc): cc is number => cc != null);
+
+    const [scanEmployees, scanStudents, identityStudents, identityEmployees] = await Promise.all([
+      this.prisma.employee_profiles.findMany({
+        where: { id: { in: scanEmployeeIds } },
+        select: {
+          id: true,
+          full_name: true,
+          employee_code: true,
+          job_title: true,
+          employment_status: true,
+          campuses: { select: { campus_name: true } },
+        },
+      }),
+      this.prisma.students.findMany({
+        where: { cc: { in: scanStudentCcs } },
+        select: {
+          cc: true,
+          full_name: true,
+          gr_number: true,
+          status: true,
+          classes: { select: { description: true } },
+          sections: { select: { description: true } },
+          campuses: { select: { campus_name: true } },
+        },
+      }),
+      this.prisma.students.findMany({
+        where: {
+          deleted_at: null,
+          OR: [{ gr_number: { in: variants } }, ...(pinAsNumber !== null ? [{ cc: pinAsNumber }] : [])],
+        },
+        select: {
+          cc: true,
+          full_name: true,
+          gr_number: true,
+          status: true,
+          classes: { select: { description: true } },
+          sections: { select: { description: true } },
+          campuses: { select: { campus_name: true } },
+        },
+      }),
+      this.prisma.employee_profiles.findMany({
+        where: { employee_code: { in: variants } },
+        select: {
+          id: true,
+          full_name: true,
+          employee_code: true,
+          job_title: true,
+          employment_status: true,
+          campuses: { select: { campus_name: true } },
+        },
+      }),
+    ]);
+
+    const scanEmployeeMap = new Map(scanEmployees.map((e) => [e.id, e] as const));
+    const scanStudentMap = new Map(scanStudents.map((s) => [s.cc, s] as const));
+
+    const mappings = rawMappings.map((m) => {
+      const person = m.employee_profiles
+        ? this.toStaffPerson(m.employee_profiles)
+        : m.students
+          ? this.toStudentPerson(m.students)
+          : null;
+      const own = scanGroups.filter(
+        (g) =>
+          g.device_sn === m.device_sn &&
+          ((m.employee_id != null && g.employee_id === m.employee_id) ||
+            (m.student_cc != null && g.student_cc === m.student_cc)),
+      );
+      return {
+        ...m,
+        person,
+        scan_count: own.reduce((sum, g) => sum + g._count._all, 0),
+        last_scan_at: own.reduce<Date | null>(
+          (latest, g) => (g._max.scan_time && (!latest || g._max.scan_time > latest) ? g._max.scan_time : latest),
+          null,
+        ),
+      };
+    });
+
+    const activeByDevice = new Map(mappings.filter((m) => m.is_active).map((m) => [m.device_sn, m]));
+
+    const attributions: PinScanAttribution[] = scanGroups
+      .map((g) => {
+        const person =
+          g.employee_id != null && scanEmployeeMap.has(g.employee_id)
+            ? this.toStaffPerson(scanEmployeeMap.get(g.employee_id)!)
+            : g.student_cc != null && scanStudentMap.has(g.student_cc)
+              ? this.toStudentPerson(scanStudentMap.get(g.student_cc)!)
+              : null;
+        const active = activeByDevice.get(g.device_sn);
+        const matchesMapping = active
+          ? (active.employee_id ?? null) === (g.employee_id ?? null) &&
+            (active.student_cc ?? null) === (g.student_cc ?? null)
+          : g.employee_id == null && g.student_cc == null;
+        return {
+          device_sn: g.device_sn,
+          scan_count: g._count._all,
+          first_seen: g._min.scan_time,
+          last_seen: g._max.scan_time,
+          attributed_to: person,
+          matches_current_mapping: matchesMapping,
+        };
+      })
+      .sort((a, b) => (b.last_seen?.getTime() ?? 0) - (a.last_seen?.getTime() ?? 0));
+
+    const totalScans = attributions.reduce((sum, a) => sum + a.scan_count, 0);
+
+    const mappingIds = mappings.map((m) => String(m.id));
+    const history = await this.prisma.audit_logs.findMany({
+      where: {
+        entity_type: 'ZK_ATTENDANCE_MAPPING',
+        OR: [
+          ...(mappingIds.length ? [{ entity_id: { in: mappingIds } }] : []),
+          ...variants.map((v) => ({ entity_id: { endsWith: `/${v}` } })),
+          ...variants.map((v) => ({ note: { contains: `/${v} ` } })),
+        ],
+      },
+      orderBy: { changed_at: 'desc' },
+      take: 25,
+      select: { id: true, action: true, changed_by: true, changed_at: true, note: true, entity_id: true },
+    });
+
+    return {
+      pin,
+      matched_pins: variants,
+      device_sn: deviceSn ?? null,
+      total_scans: totalScans,
+      mappings,
+      scan_attributions: attributions,
+      name_hints: hints.map((h) => ({
+        device_sn: h.device_sn,
+        device_pin: h.device_pin,
+        suggested_name: h.suggested_name,
+        updated_at: h.updated_at,
+      })),
+      identity_matches: [
+        ...identityStudents.map((s) => ({
+          ...this.toStudentPerson(s),
+          reason: (s.cc === pinAsNumber ? 'PIN_EQUALS_CC' : 'PIN_EQUALS_GR') as PinIdentityReason,
+        })),
+        ...identityEmployees.map((e) => ({
+          ...this.toStaffPerson(e),
+          reason: 'PIN_EQUALS_EMPLOYEE_CODE' as PinIdentityReason,
+        })),
+      ],
+      history,
+      warnings: this.buildPinLookupWarnings(pin, mappings, attributions, hints, identityStudents, pinAsNumber),
+    };
+  }
+
+  /** Flattens an employee row into the one shape every lookup panel renders. */
+  private toStaffPerson(row: StaffPersonRow): PinLookupPerson {
+    return {
+      kind: 'STAFF',
+      employee_id: row.id,
+      name: row.full_name ?? 'Unnamed employee',
+      identifier: row.employee_code ?? null,
+      detail: row.job_title ?? row.departments?.name ?? null,
+      campus: row.campuses?.campus_name ?? null,
+      status: row.employment_status ?? null,
+    };
+  }
+
+  /** Student counterpart of toStaffPerson. */
+  private toStudentPerson(row: StudentPersonRow): PinLookupPerson {
+    const classLabel = [row.classes?.description, row.sections?.description]
+      .filter(Boolean)
+      .join(' — ');
+    return {
+      kind: 'STUDENT',
+      student_cc: row.cc,
+      name: row.full_name,
+      identifier: row.gr_number ?? null,
+      detail: classLabel || null,
+      campus: row.campuses?.campus_name ?? null,
+      status: row.status ?? null,
+    };
+  }
+
+  private buildPinLookupWarnings(
+    pin: string,
+    mappings: Array<{
+      device_sn: string;
+      is_active: boolean;
+      employee_id: number | null;
+      student_cc: number | null;
+      person: PinLookupPerson | null;
+    }>,
+    attributions: PinScanAttribution[],
+    hints: Array<{ device_sn: string; suggested_name: string | null }>,
+    identityStudents: Array<{ cc: number; full_name: string; gr_number: string | null }>,
+    pinAsNumber: number | null,
+  ): PinLookupWarning[] {
+    const warnings: PinLookupWarning[] = [];
+    const active = mappings.filter((m) => m.is_active);
+
+    if (mappings.length === 0) {
+      warnings.push({
+        code: 'NO_MAPPING',
+        severity: attributions.length > 0 ? 'HIGH' : 'LOW',
+        message:
+          attributions.length > 0
+            ? `Pin ${pin} has scans but no mapping — those scans belong to nobody and count towards no one's attendance.`
+            : `Pin ${pin} is not mapped and has never scanned.`,
+      });
+    } else if (active.length === 0) {
+      warnings.push({
+        code: 'MAPPING_INACTIVE',
+        severity: 'MEDIUM',
+        message: `Every mapping for pin ${pin} is inactive, so new scans on it are ignored.`,
+      });
+    }
+
+    const distinctPeople = new Set(
+      active.map((m) => (m.employee_id != null ? `STAFF:${m.employee_id}` : `STUDENT:${m.student_cc}`)),
+    );
+    if (distinctPeople.size > 1) {
+      warnings.push({
+        code: 'PIN_MAPPED_TO_MULTIPLE_PEOPLE',
+        severity: 'HIGH',
+        message:
+          `Pin ${pin} is actively mapped to ${distinctPeople.size} different people across devices: ` +
+          active.map((m) => `${m.person?.name ?? 'Unknown'} on ${m.device_sn}`).join(', ') + '.',
+      });
+    }
+
+    for (const a of attributions.filter((x) => !x.matches_current_mapping)) {
+      const owner = active.find((m) => m.device_sn === a.device_sn);
+      const creditedTo = a.attributed_to
+        ? `${a.attributed_to.name}${a.attributed_to.identifier ? ` (${a.attributed_to.identifier})` : ''}`
+        : 'nobody';
+      warnings.push({
+        code: 'SCANS_CREDITED_TO_DIFFERENT_PERSON',
+        severity: 'HIGH',
+        device_sn: a.device_sn,
+        message:
+          `${a.scan_count} scan(s) on ${a.device_sn} are credited to ${creditedTo}, but ` +
+          (owner?.person
+            ? `the pin now maps to ${owner.person.name} there. Rebuild the pin to re-attribute them.`
+            : `the pin has no active mapping on that device. Rebuild the pin to release them.`),
+      });
+    }
+
+    for (const s of identityStudents) {
+      const isMappedToThem = mappings.some((m) => m.student_cc === s.cc);
+      if (isMappedToThem) continue;
+      warnings.push({
+        code: 'PIN_MATCHES_ANOTHER_PERSONS_IDENTITY',
+        severity: 'HIGH',
+        message:
+          `Pin ${pin} is ${s.cc === pinAsNumber ? 'the CC' : `the GR number (${s.gr_number})`} of ${s.full_name} ` +
+          `(cc ${s.cc}), who is NOT who this pin is mapped to. This is how scans get credited to the wrong student.`,
+      });
+    }
+
+    // Devices carry the enrolled name themselves, so a hint that shares no word
+    // with the mapped person is the cheapest signal that the pin was mapped to
+    // the wrong human in the first place.
+    for (const h of hints) {
+      const mapped = mappings.find((m) => m.device_sn === h.device_sn)?.person?.name;
+      if (!h.suggested_name || !mapped) continue;
+      const tokens = (s: string) =>
+        new Set(
+          s
+            .toUpperCase()
+            .replace(/[^A-Z\s]/g, ' ')
+            .split(/\s+/)
+            .filter((t) => t.length > 2 && !['MR', 'MRS', 'MS', 'SIR', 'MISS'].includes(t)),
+        );
+      const hintTokens = tokens(h.suggested_name);
+      const mappedTokens = tokens(mapped);
+      if (hintTokens.size === 0 || mappedTokens.size === 0) continue;
+      if ([...hintTokens].some((t) => mappedTokens.has(t))) continue;
+      warnings.push({
+        code: 'DEVICE_NAME_HINT_DIFFERS',
+        severity: 'MEDIUM',
+        device_sn: h.device_sn,
+        message:
+          `Device ${h.device_sn} reports pin ${pin} as "${h.suggested_name}", but it is mapped to ${mapped}. ` +
+          `Confirm which one is right before trusting this pin's attendance.`,
+      });
+    }
+
+    return warnings;
   }
 
   private async assertNoBlockingCollisions(
