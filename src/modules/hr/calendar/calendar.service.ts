@@ -462,7 +462,7 @@ export class CalendarService {
           employee_id: employee.id,
           employee_name: employee.full_name ?? null,
           date,
-          reason: `${employee.full_name ?? `Employee #${employee.id}`]} has no campus assigned`,
+          reason: `${employee.full_name ?? `Employee #${employee.id}`} has no campus assigned`,
           existing_day_type: null,
           existing_description: null,
         });
@@ -666,7 +666,7 @@ export class CalendarService {
 
       for (const key of expectedKeys) {
         const row = finalKeyToRow.get(key);
-        if (row && row.day_type === dto.day_type) {
+        if (row && row.day_type === dto.day_type && row.employee_id != null) {
           result.applied.push({
             employee_id: row.employee_id,
             employee_name: row.employee?.full_name ?? null,
