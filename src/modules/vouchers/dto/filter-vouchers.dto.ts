@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { student_status } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class FilterVouchersDto {
     @ApiPropertyOptional({ description: 'Filter by Student CC' })
@@ -97,6 +98,28 @@ export class FilterVouchersDto {
      * - 'as_issued' → match the voucher's own snapshot columns, i.e. who was
      *                billed under that class at the time.
      */
+    /**
+     * Filters on the student's CURRENT status, independent of class_scope — a
+     * voucher carries no status of its own. Chiefly there to separate students
+     * who have actually left from those still sitting in the class: a LEFT or
+     * EXPELLED student keeps their class_id, so a class filter alone still
+     * returns them.
+     */
+    @ApiPropertyOptional({
+        description: 'Filter by the student\'s current status, comma-separated for multiple (e.g. ENROLLED,LEFT)',
+        enum: student_status,
+        isArray: true,
+    })
+    @IsOptional()
+    @Transform(({ value }) =>
+        typeof value === 'string'
+            ? value.split(',').map((v) => v.trim()).filter(Boolean)
+            : value,
+    )
+    @IsArray()
+    @IsEnum(student_status, { each: true })
+    student_status?: student_status[];
+
     @ApiPropertyOptional({
         description:
             "Whether campus/class/section match the student's current placement ('current', default) or the voucher's snapshot at issue time ('as_issued')",

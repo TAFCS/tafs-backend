@@ -6,7 +6,7 @@ import {
     Logger,
     NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -810,6 +810,7 @@ export class VouchersService {
         singleFeeDate?: boolean,
         multipleFeeHeads?: boolean,
         classScope: 'current' | 'as_issued' = 'current',
+        studentStatus?: student_status[],
     ) {
         try {
             const skip = (page - 1) * limit;
@@ -888,23 +889,22 @@ export class VouchersService {
                     ? {
                         ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
                         ...(sectionIds?.length ? { section_id: { in: sectionIds } } : {}),
-                        // Graduation nulls students.class_id and records the exit
-                        // class in graduated_from_class_id. Matching only class_id
-                        // would drop every graduated student's vouchers out of a
-                        // class-filtered view, which is precisely where unrecovered
-                        // arrears are chased — so 'current' means "where the student
-                        // is, or last was".
-                        ...(classIds?.length
-                            ? {
-                                OR: [
-                                    { class_id: { in: classIds } },
-                                    { graduated_from_class_id: { in: classIds } },
-                                ],
-                              }
-                            : {}),
+                        // Strictly the students sitting in this class right now.
+                        // Deliberately NOT widened to graduated_from_class_id: a
+                        // student who graduated out of O3 has class_id = null and
+                        // is no longer in O3, so including them would put rows in
+                        // the list that the filter does not claim to show. Their
+                        // vouchers are still reachable via 'as_issued' or a
+                        // per-student search.
+                        ...(classIds?.length ? { class_id: { in: classIds } } : {}),
                       }
                     : {}),
                 ...(gr ? { gr_number: { contains: gr, mode: 'insensitive' as const } } : {}),
+                // Applies under either class_scope — status belongs to the student,
+                // not the voucher. A LEFT or EXPELLED student keeps the class_id
+                // they held on the way out, so this is the only way to tell them
+                // apart from the students actually sitting in the class.
+                ...(studentStatus?.length ? { status: { in: studentStatus } } : {}),
             };
 
             const where: Prisma.vouchersWhereInput = {

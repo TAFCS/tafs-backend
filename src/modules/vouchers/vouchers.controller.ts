@@ -123,6 +123,7 @@ export class VouchersController {
             query.single_fee_date,
             query.multiple_fee_heads,
             query.class_scope,
+            query.student_status,
         );
         return {
             success: true,
