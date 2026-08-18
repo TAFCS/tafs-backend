@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class FilterVouchersDto {
     @ApiPropertyOptional({ description: 'Filter by Student CC' })
@@ -79,4 +79,31 @@ export class FilterVouchersDto {
     @Transform(({ value }) => value === 'true' || value === true)
     @IsBoolean()
     multiple_fee_heads?: boolean;
+
+    /**
+     * How campus_id / class_id / section_id are matched.
+     *
+     * A voucher snapshots the student's campus/class/section at generation time
+     * and those columns are never rewritten afterwards — the printed voucher and
+     * the frozen paid PDF must keep saying where the student actually sat when
+     * they were billed. That makes the snapshot the wrong thing to filter on for
+     * the common admin question ("show me this year's SR3 vouchers"), because a
+     * student promoted out of SR3 still matches and a student promoted into SR3
+     * has their earlier vouchers hidden.
+     *
+     * - 'current'   (default) → match the student's CURRENT campus/class/section.
+     *                Consistent with bulk voucher generation and financial
+     *                reports, which both filter the students table.
+     * - 'as_issued' → match the voucher's own snapshot columns, i.e. who was
+     *                billed under that class at the time.
+     */
+    @ApiPropertyOptional({
+        description:
+            "Whether campus/class/section match the student's current placement ('current', default) or the voucher's snapshot at issue time ('as_issued')",
+        enum: ['current', 'as_issued'],
+        default: 'current',
+    })
+    @IsOptional()
+    @IsIn(['current', 'as_issued'])
+    class_scope?: 'current' | 'as_issued' = 'current';
 }

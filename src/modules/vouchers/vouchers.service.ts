@@ -42,6 +42,15 @@ const VOUCHER_INCLUDE = {
             gr_number: true,
             gender: true,
             family_id: true,
+            // Current placement, as opposed to the voucher's own campus_id /
+            // class_id / section_id, which are frozen at generation time. The
+            // list surfaces both so a promoted student's older vouchers read
+            // unambiguously.
+            campus_id: true,
+            class_id: true,
+            section_id: true,
+            classes: { select: { id: true, description: true } },
+            sections: { select: { id: true, description: true } },
             student_guardians: {
                 where: { relationship: 'FATHER' },
                 take: 1,
@@ -800,6 +809,7 @@ export class VouchersService {
         limit: number = 50,
         singleFeeDate?: boolean,
         multipleFeeHeads?: boolean,
+        classScope: 'current' | 'as_issued' = 'current',
     ) {
         try {
             const skip = (page - 1) * limit;
@@ -853,13 +863,56 @@ export class VouchersService {
             const classIds = toIdList(classId);
             const sectionIds = toIdList(sectionId);
 
+            // Campus/class/section live in two places: snapshotted on the voucher
+            // at generation time (never rewritten, so the printed voucher and the
+            // frozen paid PDF stay truthful) and live on the student. 'current'
+            // matches the student's placement today — the same thing bulk voucher
+            // generation and financial reports filter on — while 'as_issued'
+            // matches the snapshot, i.e. who was actually billed under that class.
+            const matchCurrentPlacement = classScope !== 'as_issued';
+
+            // Snapshot columns on the voucher itself — only used by 'as_issued'.
+            const snapshotPlacementWhere: Prisma.vouchersWhereInput = matchCurrentPlacement
+                ? {}
+                : {
+                    ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
+                    ...(classIds?.length ? { class_id: { in: classIds } } : {}),
+                    ...(sectionIds?.length ? { section_id: { in: sectionIds } } : {}),
+                  };
+
+            // Everything that constrains the related student is merged into one
+            // `students` clause — Prisma takes a single relation filter, so gr and
+            // current-placement must not be written as two separate spreads.
+            const studentWhere: Prisma.studentsWhereInput = {
+                ...(matchCurrentPlacement
+                    ? {
+                        ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
+                        ...(sectionIds?.length ? { section_id: { in: sectionIds } } : {}),
+                        // Graduation nulls students.class_id and records the exit
+                        // class in graduated_from_class_id. Matching only class_id
+                        // would drop every graduated student's vouchers out of a
+                        // class-filtered view, which is precisely where unrecovered
+                        // arrears are chased — so 'current' means "where the student
+                        // is, or last was".
+                        ...(classIds?.length
+                            ? {
+                                OR: [
+                                    { class_id: { in: classIds } },
+                                    { graduated_from_class_id: { in: classIds } },
+                                ],
+                              }
+                            : {}),
+                      }
+                    : {}),
+                ...(gr ? { gr_number: { contains: gr, mode: 'insensitive' as const } } : {}),
+            };
+
             const where: Prisma.vouchersWhereInput = {
                 // student_id or cc both resolve to student_id (cc is the student PK)
                 ...(cc ? { student_id: cc } : studentId ? { student_id: studentId } : {}),
                 ...(id ? { id } : {}),
-                ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
-                ...(classIds?.length ? { class_id: { in: classIds } } : {}),
-                ...(sectionIds?.length ? { section_id: { in: sectionIds } } : {}),
+                ...snapshotPlacementWhere,
+                ...(Object.keys(studentWhere).length ? { students: studentWhere } : {}),
                 // If a specific status is requested show only that; otherwise show all.
                 ...(status
                     ? {
@@ -873,13 +926,6 @@ export class VouchersService {
                         fee_date: {
                             ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
                             ...(dateTo ? { lte: new Date(dateTo) } : {}),
-                        },
-                    }
-                    : {}),
-                ...(gr
-                    ? {
-                        students: {
-                            gr_number: { contains: gr, mode: 'insensitive' },
                         },
                     }
                     : {}),
