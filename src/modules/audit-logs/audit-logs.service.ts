@@ -61,6 +61,9 @@ const HOUSE_BALANCER_STUDENT_NOTES = [
 
 const SUPER_ADMIN_ONLY_ENTITY_TYPES = ['PARENT_CHANGE_REQUEST'];
 
+/** entity_id on these rows is employee_profiles.id */
+const EMPLOYEE_ENTITY_TYPES = new Set(['STAFF_ATTENDANCE', 'EMPLOYEE']);
+
 export type AuditLogParams = {
   entity_type: string;
   entity_id: string;
@@ -356,6 +359,49 @@ export class AuditLogsService {
     return map;
   }
 
+  private collectEmployeeIds(
+    data: Array<{ id: number; entity_type: string; entity_id: string }>,
+    childrenByParent: Map<number, Array<{ entity_type: string; entity_id: string }>>,
+  ): number[] {
+    const ids = new Set<number>();
+
+    const maybeAdd = (log: { entity_type: string; entity_id: string }) => {
+      if (!EMPLOYEE_ENTITY_TYPES.has(log.entity_type)) return;
+      const id = Number.parseInt(log.entity_id, 10);
+      if (Number.isFinite(id)) ids.add(id);
+    };
+
+    for (const log of data) {
+      maybeAdd(log);
+      for (const child of childrenByParent.get(log.id) ?? []) {
+        maybeAdd(child);
+      }
+    }
+
+    return [...ids];
+  }
+
+  private async buildEmployeeDisplayMap(
+    employeeIds: number[],
+  ): Promise<Map<number, { full_name: string | null; employee_code: string | null }>> {
+    const map = new Map<number, { full_name: string | null; employee_code: string | null }>();
+    if (employeeIds.length === 0) return map;
+
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: employeeIds } },
+      select: { id: true, full_name: true, employee_code: true },
+    });
+
+    for (const employee of employees) {
+      map.set(employee.id, {
+        full_name: employee.full_name,
+        employee_code: employee.employee_code,
+      });
+    }
+
+    return map;
+  }
+
   private async enrichAndReturn(
     data: Array<{
       id: number;
@@ -376,6 +422,8 @@ export class AuditLogsService {
     total: number,
   ) {
     const actorDisplayMap = await this.buildActorDisplayMap(this.collectActors(data, childrenByParent));
+    const employeeIds = this.collectEmployeeIds(data, childrenByParent);
+    const employeeDisplayMap = await this.buildEmployeeDisplayMap(employeeIds);
 
     const [allClasses, allCampuses, allSections, allHouses] = await Promise.all([
       this.prisma.classes.findMany({
@@ -467,12 +515,31 @@ export class AuditLogsService {
         note = enrichHouseBalancerNote(note);
       }
 
+      let employee_id: number | null = null;
+      let employee_name: string | null = null;
+      let employee_code: string | null = null;
+
+      if (EMPLOYEE_ENTITY_TYPES.has(log.entity_type)) {
+        const parsedId = Number.parseInt(log.entity_id, 10);
+        if (Number.isFinite(parsedId)) {
+          employee_id = parsedId;
+          const employee = employeeDisplayMap.get(parsedId);
+          if (employee) {
+            employee_name = employee.full_name?.trim() || null;
+            employee_code = employee.employee_code?.trim() || null;
+          }
+        }
+      }
+
       return {
         ...log,
         old_value: oldVal,
         new_value: newVal,
         note,
         changed_by_display: actorDisplayMap.get(log.changed_by) ?? log.changed_by,
+        employee_id,
+        employee_name,
+        employee_code,
       };
     };
 
