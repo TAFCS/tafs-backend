@@ -25,6 +25,7 @@ services:
       - BREVO_SMTP_KEY=${BREVO_SMTP_KEY}
       - BREVO_FROM_EMAIL=${BREVO_FROM_EMAIL:-no-reply@snaeducationalservices.com}
       - BREVO_FROM_NAME=${BREVO_FROM_NAME:-TAFS}
+      - DAILY_DIGEST_RECIPIENTS=${DAILY_DIGEST_RECIPIENTS}
       # DigitalOcean Spaces (S3-compatible object storage for files/photos)
       - DO_SPACES_REGION=${DO_SPACES_REGION}
       - DO_SPACES_ENDPOINT=${DO_SPACES_ENDPOINT}

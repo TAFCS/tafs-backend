@@ -63,25 +63,85 @@ export class MailerService implements OnModuleInit {
     if (to.length === 0) return;
 
     const subject = `TAFS — Daily Digest for ${data.dateLabel}`;
-    const row = (label: string, value: string) => `
-        <tr>
-          <td style="padding: 10px 0; color: #555; font-size: 14px; border-bottom: 1px solid #eee;">${label}</td>
-          <td style="padding: 10px 0; color: #1a1a1a; font-size: 14px; font-weight: bold; text-align: right; border-bottom: 1px solid #eee;">${value}</td>
-        </tr>`;
+    const PRIMARY = '#255A94';
+    const PRIMARY_TINT = '#EAF1F8';
+    const PRIMARY_BORDER = '#C7D9EA';
+    const BORDER = '#E4E4E7';
+    const MUTED = '#71717A';
+    const FOREGROUND = '#0F172A';
 
-    const htmlBody = `
-      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="color: #1a1a1a; margin-bottom: 4px;">Daily Digest</h2>
-        <p style="color: #888; font-size: 13px; margin-top: 0;">${data.dateLabel}</p>
-        <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
-          ${row('Money deposited today', `${data.depositsTotal} (${data.depositsCount} deposit${data.depositsCount === 1 ? '' : 's'})`)}
-          ${row('Employees clocked in', String(data.employeesClockedIn))}
-          ${row('Employees clocked out', String(data.employeesClockedOut))}
-          ${row('Students clocked in', String(data.studentsClockedIn))}
-          ${row('Students clocked out', String(data.studentsClockedOut))}
+    const tile = (label: string, value: string) => `
+              <td width="50%" valign="top" style="padding: 6px;">
+                <div class="dd-tile" style="background: #ffffff; border: 1px solid ${BORDER}; border-radius: 16px; padding: 14px 16px;">
+                  <div class="dd-muted" style="font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: ${MUTED};">${label}</div>
+                  <div class="dd-fg" style="font-size: 22px; font-weight: 700; color: ${FOREGROUND}; margin-top: 4px;">${value}</div>
+                </div>
+              </td>`;
+
+    // Gmail's mobile apps ignore the color-scheme meta tags below and will
+    // auto-invert light-mode colors unless an explicit dark-mode override is
+    // present in a <style> block — so we re-assert the same light palette
+    // under prefers-color-scheme: dark to defeat that auto-inversion.
+    const htmlBody = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
+    <title>${subject}</title>
+    <style>
+      :root { color-scheme: light; supported-color-schemes: light; }
+      body, .dd-body { background: #F8FAFC !important; }
+      .dd-badge { background: ${PRIMARY} !important; color: #ffffff !important; }
+      .dd-h1 { color: ${FOREGROUND} !important; }
+      .dd-muted { color: ${MUTED} !important; }
+      .dd-fg { color: ${FOREGROUND} !important; }
+      .dd-hero { background: ${PRIMARY_TINT} !important; border-color: ${PRIMARY_BORDER} !important; }
+      .dd-hero-label { color: ${PRIMARY} !important; }
+      .dd-tile { background: #ffffff !important; border-color: ${BORDER} !important; }
+      .dd-footer { color: #A1A1AA !important; }
+      @media (prefers-color-scheme: dark) {
+        body, .dd-body { background: #F8FAFC !important; }
+        .dd-badge { background: ${PRIMARY} !important; color: #ffffff !important; }
+        .dd-h1 { color: ${FOREGROUND} !important; }
+        .dd-muted { color: ${MUTED} !important; }
+        .dd-fg { color: ${FOREGROUND} !important; }
+        .dd-hero { background: ${PRIMARY_TINT} !important; border-color: ${PRIMARY_BORDER} !important; }
+        .dd-hero-label { color: ${PRIMARY} !important; }
+        .dd-tile { background: #ffffff !important; border-color: ${BORDER} !important; }
+        .dd-footer { color: #A1A1AA !important; }
+      }
+    </style>
+  </head>
+  <body class="dd-body" style="margin: 0; padding: 0; background: #F8FAFC;">
+    <div class="dd-body" style="background: #F8FAFC; padding: 32px 16px; font-family: Arial, Helvetica, sans-serif;">
+      <div style="max-width: 480px; margin: 0 auto;">
+        <span class="dd-badge" style="display: inline-block; background: ${PRIMARY}; color: #ffffff; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px;">TAFS</span>
+        <h1 class="dd-h1" style="margin: 12px 0 2px; font-size: 20px; color: ${FOREGROUND};">Daily Digest</h1>
+        <p class="dd-muted" style="margin: 0 0 20px; font-size: 13px; color: ${MUTED};">${data.dateLabel}</p>
+
+        <div class="dd-hero" style="background: ${PRIMARY_TINT}; border: 1px solid ${PRIMARY_BORDER}; border-radius: 16px; padding: 16px 18px; margin-bottom: 8px;">
+          <div class="dd-hero-label" style="font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: ${PRIMARY};">Money deposited today</div>
+          <div class="dd-fg" style="font-size: 28px; font-weight: 700; color: ${FOREGROUND}; margin-top: 4px;">${data.depositsTotal}</div>
+          <div class="dd-muted" style="font-size: 13px; color: ${MUTED}; margin-top: 2px;">${data.depositsCount} deposit${data.depositsCount === 1 ? '' : 's'}</div>
+        </div>
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: separate; margin-top: 4px;">
+          <tr>
+            ${tile('Employees clocked in', String(data.employeesClockedIn))}
+            ${tile('Employees clocked out', String(data.employeesClockedOut))}
+          </tr>
+          <tr>
+            ${tile('Students clocked in', String(data.studentsClockedIn))}
+            ${tile('Students clocked out', String(data.studentsClockedOut))}
+          </tr>
         </table>
+
+        <p class="dd-footer" style="margin: 20px 0 0; font-size: 11px; color: #A1A1AA; text-align: center;">Automated report — TAFS Admin</p>
       </div>
-    `;
+    </div>
+  </body>
+</html>`;
 
     try {
       const info = await this.transporter.sendMail({
