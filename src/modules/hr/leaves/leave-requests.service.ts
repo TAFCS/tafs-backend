@@ -8,6 +8,7 @@ import { LeaveRequestStatus, Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProfileResolverService } from '../employee-profile-resolver.service';
 import {
@@ -251,7 +252,7 @@ export class LeaveRequestsService {
       field: 'status',
       old_value: 'PENDING',
       new_value: dto.status,
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: this.leaveRequestNote(existing, dto.reviewReason?.trim()),
     });
 
@@ -292,7 +293,7 @@ export class LeaveRequestsService {
       field: 'status',
       old_value: 'APPROVED',
       new_value: 'REJECTED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: this.leaveRequestNote(existing, reason),
     });
 

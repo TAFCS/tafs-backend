@@ -20,6 +20,7 @@ import { UpdatePostDto } from './dto/update-post.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
 @ApiTags('Notice Board')
 @ApiBearerAuth()
@@ -65,7 +66,7 @@ export class NoticeBoardController {
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: create a post' })
   create(@CurrentUser() user: any, @Body() dto: CreatePostDto) {
-    return this.service.createPost(user.sub, dto, user.username || user.sub);
+    return this.service.createPost(user.sub, dto, auditActorLabel(user));
   }
 
   @Patch('admin/notice-board/:id')
@@ -76,14 +77,14 @@ export class NoticeBoardController {
     @Body() dto: UpdatePostDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.updatePost(id, dto, user?.username || user?.sub || 'system');
+    return this.service.updatePost(id, dto, auditActorLabel(user) || 'system');
   }
 
   @Delete('admin/notice-board/:id')
   @UseGuards(JwtStaffGuard)
   @ApiOperation({ summary: 'Admin: soft-delete a post' })
   remove(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.service.deletePost(id, user?.username || user?.sub || 'system');
+    return this.service.deletePost(id, auditActorLabel(user) || 'system');
   }
 
   @Get('admin/notice-board/:id/reads')

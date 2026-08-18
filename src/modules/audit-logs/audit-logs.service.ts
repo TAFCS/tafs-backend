@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import {
+  AUDIT_ACTOR_UUID_RE,
+  AUDIT_SYSTEM_ACTOR_LABELS,
+  resolveAuditActorDisplay,
+} from '../../common/utils/audit-actor.util';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
 
 const SECTION_ENTITY_TYPES: Record<string, string[]> = {
@@ -297,6 +302,60 @@ export class AuditLogsService {
     return this.enrichAndReturn(data, childrenByParent, total);
   }
 
+  private collectActors(
+    data: Array<{ id: number; changed_by: string }>,
+    childrenByParent: Map<number, Array<{ changed_by: string }>>,
+  ): string[] {
+    const actors = new Set<string>();
+    for (const log of data) {
+      actors.add(log.changed_by);
+      for (const child of childrenByParent.get(log.id) ?? []) {
+        actors.add(child.changed_by);
+      }
+    }
+    return [...actors];
+  }
+
+  private async buildActorDisplayMap(actors: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+
+    for (const actor of actors) {
+      const systemLabel = AUDIT_SYSTEM_ACTOR_LABELS[actor];
+      if (systemLabel) map.set(actor, systemLabel);
+    }
+
+    const unresolved = actors.filter((actor) => !map.has(actor));
+    const uuids = unresolved.filter((actor) => AUDIT_ACTOR_UUID_RE.test(actor));
+    const usernames = unresolved.filter((actor) => !AUDIT_ACTOR_UUID_RE.test(actor));
+
+    const orClauses: Array<{ id: { in: string[] } } | { username: { in: string[] } }> = [];
+    if (uuids.length > 0) orClauses.push({ id: { in: uuids } });
+    if (usernames.length > 0) orClauses.push({ username: { in: usernames } });
+
+    const userById = new Map<string, { full_name: string; username: string }>();
+    const userByUsername = new Map<string, { full_name: string; username: string }>();
+
+    if (orClauses.length > 0) {
+      const users = await this.prisma.users.findMany({
+        where: { OR: orClauses },
+        select: { id: true, username: true, full_name: true },
+      });
+
+      for (const user of users) {
+        userById.set(user.id, user);
+        userByUsername.set(user.username, user);
+      }
+    }
+
+    for (const actor of actors) {
+      if (!map.has(actor)) {
+        map.set(actor, resolveAuditActorDisplay(actor, userById, userByUsername));
+      }
+    }
+
+    return map;
+  }
+
   private async enrichAndReturn(
     data: Array<{
       id: number;
@@ -316,6 +375,7 @@ export class AuditLogsService {
     childrenByParent: Map<number, typeof data>,
     total: number,
   ) {
+    const actorDisplayMap = await this.buildActorDisplayMap(this.collectActors(data, childrenByParent));
 
     const [allClasses, allCampuses, allSections, allHouses] = await Promise.all([
       this.prisma.classes.findMany({
@@ -412,6 +472,7 @@ export class AuditLogsService {
         old_value: oldVal,
         new_value: newVal,
         note,
+        changed_by_display: actorDisplayMap.get(log.changed_by) ?? log.changed_by,
       };
     };
 

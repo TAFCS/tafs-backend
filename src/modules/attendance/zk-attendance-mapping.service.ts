@@ -61,7 +61,8 @@ export class ZkAttendanceMappingService {
     });
   }
 
-  async createMapping(dto: CreateDeviceMappingDto, userId: string) {
+  async createMapping(dto: CreateDeviceMappingDto, userId: string, actor?: string) {
+    const changedBy = actor ?? userId;
     this.validatePersonRefs(dto.person_type, dto.employee_id, dto.student_cc);
 
     const before = await this.prisma.device_user_mappings.findUnique({
@@ -121,7 +122,7 @@ export class ZkAttendanceMappingService {
       entity_type: 'ZK_ATTENDANCE_MAPPING',
       entity_id: String(mapping.id),
       action: before ? 'UPDATED' : 'CREATED',
-      changed_by: userId,
+      changed_by: changedBy,
       student_id: mapping.student_cc ?? null,
       note: before
         ? `Device mapping #${mapping.id} upserted for ${mapping.device_sn}/${mapping.device_pin} → ${personRef}` +
@@ -130,7 +131,7 @@ export class ZkAttendanceMappingService {
           (mapping.display_name ? ` ("${mapping.display_name}")` : '') + '.',
     });
 
-    const resolution = await this.resolvePin(mapping.device_sn, mapping.device_pin, userId);
+    const resolution = await this.resolvePin(mapping.device_sn, mapping.device_pin, changedBy);
 
     return { ...mapping, resolution, collisions };
   }

@@ -6,6 +6,7 @@ import { Prisma, StaffRole } from '@prisma/client';
 import { CreateEmployeeNoticeDto } from './dto/create-employee-notice.dto';
 import { UpdateEmployeeNoticeDto } from './dto/update-employee-notice.dto';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
 @Injectable()
 export class EmployeeNoticeBoardService {
@@ -154,7 +155,7 @@ export class EmployeeNoticeBoardService {
     if (dto.target_roles?.length) noteParts.push(`Roles: ${dto.target_roles.join(', ')}`);
     if (dto.campus_ids?.length) noteParts.push(`Campuses: ${dto.campus_ids.join(', ')}`);
     if (dto.is_pinned) noteParts.push('Pinned');
-    this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(post.id), action: 'CREATED', section: 'communication', note: noteParts.join(' | '), changed_by: changedBy || user.username || user.sub });
+    this.auditLogs.log({ entity_type: 'EMPLOYEE_NOTICE', entity_id: String(post.id), action: 'CREATED', section: 'communication', note: noteParts.join(' | '), changed_by: changedBy || auditActorLabel(user) });
 
     // Fan-out FCM — fire and forget
     void this._sendFcmNotifications(post, dto.target_roles ?? [], dto.campus_ids ?? [], dto.class_ids ?? [], dto.section_ids ?? []);

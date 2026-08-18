@@ -12,6 +12,7 @@ import {
   GetStaffTimelineQueryDto,
 } from './dto/staff-attendance.dto';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { EmployeeExpectedTimesService } from '../timetables/employee-expected-times.service';
 import {
   computePayrollWindow,
@@ -764,7 +765,7 @@ export class StaffAttendanceService {
       action: 'CREATED',
       section: 'attendance',
       note: `Bulk marked ${dto.records.length} staff for ${dto.date}`,
-      changed_by: user.username || user.sub,
+      changed_by: auditActorLabel(user),
     });
 
     // Avoid reloading the full campus register here — getRegister() runs holiday

@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { BulkEnrollDto, CreateTeachingGroupDto, UpdateTeachingGroupDto } from './dto/teaching-groups.dto';
 
@@ -77,7 +78,7 @@ export class TeachingGroupsService {
       entity_type: 'TEACHING_GROUP',
       entity_id: String(created.id),
       action: 'CREATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Teaching group created: ${created.subjects.name} — ${created.employee_profiles.full_name} for ${created.classes.description}, academic year ${dto.academic_year}.`,
     });
 
@@ -111,7 +112,7 @@ export class TeachingGroupsService {
       entity_type: 'TEACHING_GROUP',
       entity_id: String(id),
       action: 'UPDATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Teaching group #${id} updated.`,
     });
 
@@ -141,7 +142,7 @@ export class TeachingGroupsService {
         entity_type: 'TEACHING_GROUP',
         entity_id: String(id),
         action: 'DEACTIVATED',
-        changed_by: user.username,
+        changed_by: auditActorLabel(user),
         note: `Teaching group #${id} deactivated (has enrollments/timetable data, not hard-deleted).`,
       });
       return { deactivated: true };
@@ -152,7 +153,7 @@ export class TeachingGroupsService {
       entity_type: 'TEACHING_GROUP',
       entity_id: String(id),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Teaching group #${id} deleted.`,
     });
     return { deleted: true };
@@ -218,7 +219,7 @@ export class TeachingGroupsService {
       entity_type: 'TEACHING_GROUP',
       entity_id: String(id),
       action: 'ENROLLED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Enrolled ${dto.student_ids.length} student(s) into teaching group #${id} for ${dto.academic_year}.`,
     });
 
@@ -239,7 +240,7 @@ export class TeachingGroupsService {
       entity_type: 'TEACHING_GROUP',
       entity_id: String(id),
       action: 'UNENROLLED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Removed student #${studentId} from teaching group #${id}.`,
     });
 

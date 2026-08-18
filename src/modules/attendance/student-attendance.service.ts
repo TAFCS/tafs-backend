@@ -5,6 +5,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import { MAX_MATRIX_DAYS, type DayBreakdownEntry } from '../hr/payroll/payroll.service';
@@ -745,7 +746,7 @@ export class StudentAttendanceService {
     const result = await this.processor.recordManualStudentScan(
       studentCc,
       dto.direction,
-      user.username || user.sub,
+      auditActorLabel(user),
     );
 
     return {
@@ -820,7 +821,7 @@ export class StudentAttendanceService {
       action: 'CREATED',
       section: 'attendance',
       new_value: `${dto.date} PRESENT`,
-      changed_by: user.username || user.sub,
+      changed_by: auditActorLabel(user),
       student_id: studentCc,
     });
     return { resolved: true, student_cc: studentCc, date: dto.date };
@@ -943,7 +944,7 @@ export class StudentAttendanceService {
       action: 'UPDATED',
       section: 'attendance',
       new_value: `bulk manual mark (${uniqueRequestedCcs.length})`,
-      changed_by: user.username || user.sub,
+      changed_by: auditActorLabel(user),
       student_id: null,
       note: `Marked ${uniqueRequestedCcs.length} student(s) for ${dto.date} (manual).`,
     });

@@ -62,6 +62,7 @@ export class AuthService {
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
+      fullName: user.full_name,
       role: user.role,
       campusId: user.campus_id,
       allowedClassIds,
@@ -130,6 +131,7 @@ export class AuthService {
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
+      fullName: user.full_name,
       role: user.role,
       campusId: user.campus_id,
       allowedClassIds,

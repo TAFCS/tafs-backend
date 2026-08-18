@@ -17,6 +17,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { SupportTicketsService } from '../support-tickets/support-tickets.service';
 
 @WebSocketGateway({
@@ -616,7 +617,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       },
     });
 
-    const actor = payload?.username || payload?.sub || 'system';
+    const actor = auditActorLabel(payload ?? undefined);
     const target = data.targetSection
       ? `section ${data.targetSection}`
       : data.targetGrade
@@ -694,10 +695,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         where: { id: data.messageId },
       });
 
-      const actor =
-        client?.data?.tafsPayload?.username ||
-        client?.data?.tafsPayload?.sub ||
-        'system';
+      const actor = auditActorLabel(client?.data?.tafsPayload ?? undefined);
       void this.auditLogs.log({
         entity_type: 'CHAT_MESSAGE',
         entity_id: data.messageId,

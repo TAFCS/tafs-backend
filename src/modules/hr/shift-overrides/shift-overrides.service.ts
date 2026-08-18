@@ -4,6 +4,7 @@ import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { CreateShiftOverridesDto, ListShiftOverridesQueryDto } from './dto/shift-overrides.dto';
 
@@ -151,7 +152,7 @@ export class ShiftOverridesService {
       entity_type: 'EMPLOYEE_SHIFT_OVERRIDE',
       entity_id: uniqueEmployeeIds.join(','),
       action: 'CREATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Set shift override for ${employeeNames} on ${uniqueDates.length} day(s): ${uniqueDates.join(', ')}.`,
     });
 
@@ -220,7 +221,7 @@ export class ShiftOverridesService {
       entity_type: 'EMPLOYEE_SHIFT_OVERRIDE',
       entity_id: String(id),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Removed shift override for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
     });
 
