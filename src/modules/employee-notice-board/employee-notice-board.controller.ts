@@ -16,6 +16,7 @@ import { UpdateEmployeeNoticeDto } from './dto/update-employee-notice.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
 @ApiTags('Employee Notice Board')
 @ApiBearerAuth()
@@ -52,7 +53,7 @@ export class EmployeeNoticeBoardController {
   @Post('admin/employee-notices')
   @ApiOperation({ summary: 'Admin: create an employee notice and fan-out FCM' })
   create(@CurrentUser() user: IJwtStaffPayload, @Body() dto: CreateEmployeeNoticeDto) {
-    return this.service.createPost(dto, user, user.username || user.sub);
+    return this.service.createPost(dto, user, auditActorLabel(user));
   }
 
   @Patch('admin/employee-notices/:id')
@@ -62,12 +63,12 @@ export class EmployeeNoticeBoardController {
     @Body() dto: UpdateEmployeeNoticeDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.service.updatePost(id, dto, user.username || user.sub);
+    return this.service.updatePost(id, dto, auditActorLabel(user));
   }
 
   @Delete('admin/employee-notices/:id')
   @ApiOperation({ summary: 'Admin: soft-delete an employee notice' })
   remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
-    return this.service.deletePost(id, user.username || user.sub);
+    return this.service.deletePost(id, auditActorLabel(user));
   }
 }

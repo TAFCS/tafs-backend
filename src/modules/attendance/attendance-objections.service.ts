@@ -10,6 +10,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import {
   CreateAttendanceObjectionDto,
   ListAttendanceObjectionsQueryDto,
@@ -165,7 +166,7 @@ export class AttendanceObjectionsService {
       field: 'status',
       old_value: 'PENDING',
       new_value: dto.status,
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: [
         `Attendance objection for ${employeeLabel} — ${attendanceDateStr}: recorded time ${recordedTimeStr}, claimed time ${claimedTimeStr}.`,
         `Applied ${appliedDateStr} — "${existing.reason}".`,

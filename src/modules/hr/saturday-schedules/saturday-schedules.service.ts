@@ -10,6 +10,7 @@ import { FcmService } from '../../../common/fcm/fcm.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
 import { resolveTemplate, isTemplateDisabled } from '../../../utils/notification-templates.util';
 
@@ -199,7 +200,7 @@ export class SaturdaySchedulesService {
         entity_type: 'SATURDAY_SCHEDULE',
         entity_id: this.dateKey(date),
         action: 'CREATED',
-        changed_by: user.username,
+        changed_by: auditActorLabel(user),
         note: `Assigned mandatory Saturday ${this.dateKey(date)} to ${created.length} employee(s): ${employeeNames}.`,
       });
     }
@@ -267,7 +268,7 @@ export class SaturdaySchedulesService {
       entity_type: 'SATURDAY_SCHEDULE',
       entity_id: String(id),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Removed Saturday schedule for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
     });
 

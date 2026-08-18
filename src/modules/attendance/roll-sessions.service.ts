@@ -17,6 +17,7 @@ import {
 import { RollCallAnnouncementsService } from './roll-call-announcements.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
 /** Fallback IDs used only when no class_attendance_modes rows exist yet. */
 const DEFAULT_ROLL_CALL_CLASS_IDS = [21, 22];
@@ -363,7 +364,7 @@ export class RollSessionsService {
       action: 'CREATED',
       field: 'status',
       new_value: session.status,
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Roll session opened campus=${dto.campus_id} class=${dto.class_id} scope=${teachingGroupId ? `teaching_group=${teachingGroupId}` : `section=${sectionId}`} date=${dto.session_date} period=${period}.`,
     });
 
@@ -499,7 +500,7 @@ export class RollSessionsService {
         field: 'status',
         old_value: session.status,
         new_value: 'SUBMITTED',
-        changed_by: user.username,
+        changed_by: auditActorLabel(user),
         note: `Roll session #${id} submitted (${recordCount}/${rosterCount} marked).`,
       });
 
@@ -540,7 +541,7 @@ export class RollSessionsService {
       field: 'status',
       old_value: session.status,
       new_value: 'SKIPPED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Roll session #${id} skipped: ${dto.reason || 'no reason'}.`,
     });
 

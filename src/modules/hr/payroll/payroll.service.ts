@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { AttendanceSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
@@ -720,7 +721,7 @@ export class PayrollService {
       action: 'FLAG_DECIDED',
       field: 'flag_id',
       new_value: String(flagId),
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `${flag.flag_type} flag (${(flag.dates as string[]).join(', ')}) for employee ${employeeId} marked ${status}.`,
     });
 
@@ -924,7 +925,7 @@ export class PayrollService {
       action: existing ? 'UPDATED' : 'CREATED',
       field: 'status',
       new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${employees.length} employee(s)${isTest ? ', test' : ''}).`,
     });
 
@@ -1234,7 +1235,7 @@ export class PayrollService {
       field: 'status',
       old_value: run.status,
       new_value: PayrollRunStatus.FINALIZED,
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, ${run.payroll_run_lines.length} employee line(s).`,
     });
 
@@ -1270,7 +1271,7 @@ export class PayrollService {
       entity_type: 'PAYROLL_RUN',
       entity_id: String(id),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Deleted payroll run for ${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, status was ${run.status}.`,
     });
 
@@ -1442,7 +1443,7 @@ export class PayrollService {
       action: 'DISBURSED',
       field: 'employee_id',
       new_value: String(employeeId),
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: [`Disbursement for ${employeeLabel}.`, dto.notes].filter(Boolean).join(' '),
     });
 
@@ -1476,7 +1477,7 @@ export class PayrollService {
       entity_type: 'PAYROLL_RUN',
       entity_id: String(runId),
       action: 'DISBURSED_ALL',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Disbursed ${count} line(s) for period ${periodLabel}.${dto.notes ? ` Notes: ${dto.notes}` : ''}`,
     });
 
@@ -1639,7 +1640,7 @@ export class PayrollService {
       action: 'SETTLED',
       field: 'employee_id',
       new_value: String(employeeId),
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: [
         `Settlement for ${employeeLabel}.`,
         overtimeRewardAmount.greaterThan(0) ? `Overtime reward of ${overtimeRewardAmount.toString()} added.` : null,

@@ -5,6 +5,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
@@ -67,13 +68,13 @@ export class ZkAttendanceMappingController {
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async createMapping(@Body() dto: CreateDeviceMappingDto, @CurrentUser() user: IJwtStaffPayload) {
-    return this.mappingService.createMapping(dto, user.sub);
+    return this.mappingService.createMapping(dto, user.sub, auditActorLabel(user));
   }
 
   @Post('simulate-scan')
   async simulateScan(@Body() dto: SimulateScanDto, @CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
-    return this.mappingService.simulateScan(dto, user.username || user.sub);
+    return this.mappingService.simulateScan(dto, auditActorLabel(user));
   }
 
   @Patch(':id')
@@ -84,7 +85,7 @@ export class ZkAttendanceMappingController {
     @Body() dto: UpdateDeviceMappingDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    return this.mappingService.updateMapping(id, dto, user.username || user.sub);
+    return this.mappingService.updateMapping(id, dto, auditActorLabel(user));
   }
 
   /**
@@ -97,7 +98,7 @@ export class ZkAttendanceMappingController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async deleteMapping(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
-    return this.mappingService.deleteMapping(id, user.username || user.sub);
+    return this.mappingService.deleteMapping(id, auditActorLabel(user));
   }
 
   private assertSuperAdmin(user: IJwtStaffPayload) {

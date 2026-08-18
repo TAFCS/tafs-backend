@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { UpsertSlotDto } from './dto/timetables.dto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
@@ -152,7 +153,7 @@ export class TimetablesService {
       entity_type: 'TIMETABLE',
       entity_id: String(created.id),
       action: 'CREATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Timetable for teaching group #${teachingGroupId} at ${created.campuses?.campus_name ?? `campus #${group.campus_id}`}, academic year ${academicYear}.`,
     });
 
@@ -394,7 +395,7 @@ export class TimetablesService {
       entity_type: 'TIMETABLE',
       entity_id: String(created.id),
       action: 'CREATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Timetable for ${created.classes?.description ?? `class #${classId}`} / ${created.sections?.description ?? `section #${sectionId}`} at ${created.campuses?.campus_name ?? `campus #${campusId}`}, academic year ${academicYear}.`,
     });
 
@@ -508,7 +509,7 @@ export class TimetablesService {
       entity_type: 'TIMETABLE_SLOT',
       entity_id: String(result.id),
       action: existingSlot ? 'UPDATED' : 'CREATED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Timetable #${timetableId}, ${dayLabel} block ${dto.block_number}${dto.slot_order === 2 ? ' (split)' : ''}: ${subjectLabel} with ${employeeLabel}${result.room ? ` in ${result.room}` : ''}.`,
     });
 
@@ -541,7 +542,7 @@ export class TimetablesService {
         entity_type: 'TIMETABLE_SLOT',
         entity_id: String(slotId),
         action: 'DELETED',
-        changed_by: user.username,
+        changed_by: auditActorLabel(user),
         note: `Timetable #${slot.timetable_id}, ${dayLabel} block ${slot.block_number}: removed ${subjectLabel} slot (cascaded any split slot).`,
       });
       return { deleted: true, cascaded: true };
@@ -552,7 +553,7 @@ export class TimetablesService {
       entity_type: 'TIMETABLE_SLOT',
       entity_id: String(slotId),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Timetable #${slot.timetable_id}, ${dayLabel} block ${slot.block_number} (split): removed ${subjectLabel} slot.`,
     });
     return { deleted: true, cascaded: false };

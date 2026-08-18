@@ -20,6 +20,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import {
   ClassCheckInScheduleService,
   CreateClassScheduleDto,
@@ -46,7 +47,7 @@ export class ClassCheckInScheduleController {
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
   async create(@Body() dto: CreateClassScheduleDto, @Req() req: { user: IJwtStaffPayload }) {
-    const data = await this.service.create(dto, req.user.sub);
+    const data = await this.service.create(dto, req.user.sub, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.CREATED, 'Class schedule created successfully');
   }
 
@@ -57,7 +58,7 @@ export class ClassCheckInScheduleController {
     @Body() dto: UpdateClassScheduleDto,
     @Req() req: { user: IJwtStaffPayload },
   ) {
-    const data = await this.service.update(id, dto, req.user.username || req.user.sub);
+    const data = await this.service.update(id, dto, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.OK, 'Class schedule updated successfully');
   }
 
@@ -67,7 +68,7 @@ export class ClassCheckInScheduleController {
     @Param('id', ParseIntPipe) id: number,
     @Req() req: { user: IJwtStaffPayload },
   ) {
-    const data = await this.service.remove(id, req.user.username || req.user.sub);
+    const data = await this.service.remove(id, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.OK, 'Class schedule deleted successfully');
   }
 }
