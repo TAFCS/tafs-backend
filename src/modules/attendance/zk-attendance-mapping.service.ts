@@ -148,7 +148,20 @@ export class ZkAttendanceMappingService {
       orderBy: [{ device_sn: 'asc' }, { device_pin: 'asc' }],
       include: {
         employee_profiles: { select: { id: true, full_name: true, employee_code: true } },
-        students: { select: { cc: true, full_name: true, gr_number: true } },
+        // Class, section and campus travel with the mapping so the edit modal can
+        // show WHICH student a pin is on. Name plus GR alone is exactly how a pin
+        // gets confirmed onto the wrong child.
+        students: {
+          select: {
+            cc: true,
+            full_name: true,
+            gr_number: true,
+            photograph_url: true,
+            classes: { select: { description: true } },
+            sections: { select: { description: true } },
+            campuses: { select: { campus_name: true } },
+          },
+        },
       },
     });
   }
@@ -540,6 +553,7 @@ export class ZkAttendanceMappingService {
               full_name: true,
               gr_number: true,
               status: true,
+              photograph_url: true,
               classes: { select: { description: true } },
               sections: { select: { description: true } },
               campuses: { select: { campus_name: true } },
