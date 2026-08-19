@@ -152,7 +152,11 @@ export class BulkVoucherJobsService {
 
     // ── Start Job ───────────────────────────────────────────────────────────
 
-    async startJob(dto: StartBulkJobDto, createdBy: string): Promise<{ job_id: number }> {
+    async startJob(
+        dto: StartBulkJobDto,
+        createdBy: string,
+        createdByDisplayName?: string,
+    ): Promise<{ job_id: number }> {
         if (!dto.student_ccs || dto.student_ccs.length === 0) {
             throw new BadRequestException('student_ccs cannot be empty.');
         }
@@ -235,7 +239,9 @@ export class BulkVoucherJobsService {
             ].join(' | '),
         });
 
-        setImmediate(() => this.processJob(job.id, dto, feeDates, createdBy, auditParentId));
+        setImmediate(() =>
+            this.processJob(job.id, dto, feeDates, createdBy, createdByDisplayName, auditParentId),
+        );
 
         return { job_id: job.id };
     }
@@ -313,12 +319,14 @@ export class BulkVoucherJobsService {
         dto: StartBulkJobDto,
         expectedFeeDates: string[],
         createdBy: string,
+        createdByDisplayName?: string,
         auditParentId?: number | null,
     ) {
         const jobReport: any[] = [];
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
-        const userRecord = await this.prisma.users.findUnique({ where: { id: createdBy }, select: { full_name: true } });
-        const generatedByName = userRecord?.full_name || createdBy;
+        const generatedByName =
+            (await this.vouchersService.resolveGeneratedByName(createdBy)) ??
+            createdByDisplayName;
         this.logger.log(
             `[Job #${jobId}] Starting: ${dto.student_ccs.length} students × ${expectedFeeDates.length} month(s).`,
         );

@@ -442,8 +442,12 @@ export class VouchersController {
     @HttpCode(HttpStatus.ACCEPTED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'Voucher') || ability.can(Action.Manage, 'all'))
     async batchIssue(@Body() dto: StartBulkJobDto, @Req() req: any) {
-        const createdBy: string = req?.user?.id ?? req?.user?.sub ?? 'system';
-        const result = await this.bulkJobsService.startJob(dto, createdBy);
+        const createdBy: string = req?.user?.username ?? req?.user?.sub ?? 'system';
+        const result = await this.bulkJobsService.startJob(
+            dto,
+            createdBy,
+            req?.user?.fullName,
+        );
         return {
             success: true,
             message: 'Batch generation job started',
