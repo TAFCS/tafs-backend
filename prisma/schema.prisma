@@ -377,7 +377,7 @@ model teaching_groups {
   student_subject_enrollments student_subject_enrollments[]
   campuses                    campuses                      @relation(fields: [campus_id], references: [id], onDelete: Cascade)
   classes                     classes                       @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id])
+  employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   subjects                    subjects                      @relation(fields: [subject_id], references: [id])
   timetables                  timetables[]
 
@@ -433,7 +433,7 @@ model timetable_slots {
   created_at               DateTime                   @default(now()) @db.Timestamp(6)
   updated_at               DateTime                   @updatedAt @db.Timestamp(6)
   attendance_roll_sessions attendance_roll_sessions[]
-  employee_profiles        employee_profiles          @relation(fields: [employee_id], references: [id])
+  employee_profiles        employee_profiles          @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   subjects                 subjects                   @relation(fields: [subject_id], references: [id])
   timetables               timetables                 @relation(fields: [timetable_id], references: [id], onDelete: Cascade)
 
@@ -1168,7 +1168,7 @@ model employee_profiles {
   employee_notice_posts              employee_notice_posts[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
-  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
+  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id], onDelete: SetNull)
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
@@ -1566,7 +1566,7 @@ model zk_attendance_scans {
   zk_push_log_id        Int?
   received_at           DateTime                @default(now()) @db.Timestamp(6)
   attendance_objections attendance_objections[]
-  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id])
+  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id], onDelete: SetNull)
   students              students?               @relation(fields: [student_cc], references: [cc])
   zk_push_logs          zk_push_logs?           @relation(fields: [zk_push_log_id], references: [id])
 
