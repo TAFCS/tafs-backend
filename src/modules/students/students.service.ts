@@ -12,6 +12,7 @@ import { PromoteBulkStudentsDto } from './dto/promote-bulk-students.dto';
 import { StudentStatus } from '../../constants/student-status.constant';
 import {
   DEPARTURE_FLAG_PREFIXES,
+  DEPARTURE_STATUSES,
   StudentReturnMode,
   isDepartureStatus,
 } from '../../constants/student-return-mode.constant';
@@ -3238,7 +3239,7 @@ export class StudentsService {
 
     const baseFilter: Prisma.studentsWhereInput = {
       deleted_at: null,
-      status: StudentStatus.ENROLLED,
+      status: { notIn: DEPARTURE_STATUSES },
     };
     if (query.campus_id != null) baseFilter.campus_id = query.campus_id;
     if (query.class_id != null) baseFilter.class_id = query.class_id;
