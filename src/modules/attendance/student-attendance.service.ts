@@ -7,7 +7,6 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { assertClassInScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
-import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import { MAX_MATRIX_DAYS, type DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from '../hr/payroll/payroll-excel.util';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
@@ -50,7 +49,6 @@ export class StudentAttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
-    private readonly holidaySync: HolidayAttendanceSyncService,
     private readonly policyResolver: AttendancePolicyResolverService,
     private readonly auditLogs: AuditLogsService,
     private readonly processor: ZkAttendanceProcessorService,
@@ -120,17 +118,60 @@ export class StudentAttendanceService {
       return { present: 0, late: 0, excused: 0, absent: 0, noClockIn: 0, noClockOut: 0 };
     }
 
-    const records = await this.prisma.attendance_student_daily.findMany({
-      where: { date, student_cc: { in: students.map((s) => s.cc) } },
-    });
+    const [records, calendarRows] = await Promise.all([
+      this.prisma.attendance_student_daily.findMany({
+        where: { date, student_cc: { in: students.map((s) => s.cc) } },
+      }),
+      this.calendarResolver.loadStudentCalendarRowsForDate(campusId, date),
+    ]);
+    const recordMap = new Map(records.map((r) => [r.student_cc, r]));
 
-    const present = records.filter((r) => r.status === RollRecordStatus.PRESENT || r.status === RollRecordStatus.LATE).length;
-    const late = records.filter((r) => r.status === RollRecordStatus.LATE).length;
-    const excused = records.filter((r) => r.status === RollRecordStatus.EXCUSED).length;
-    const absent = records.filter((r) => r.status === RollRecordStatus.ABSENT).length;
-    const noClockIn = students.length - records.length;
+    let present = 0;
+    let late = 0;
+    let excused = 0;
+    let absent = 0;
+    let noClockIn = 0;
+    let noClockOut = 0;
 
-    return { present, late, excused, absent, noClockIn, noClockOut: records.filter((r) => r.check_in_at && !r.check_out_at).length };
+    for (const student of students) {
+      const resolved = this.calendarResolver.resolveStudentDayFromRows(
+        calendarRows,
+        student.class_id,
+        student.section_id,
+        date,
+      );
+      const record = recordMap.get(student.cc);
+
+      if (!resolved.isWorkingDay) {
+        // Non-working day: count as excused unless a punch/manual/leave record exists.
+        if (
+          record?.source === AttendanceSource.MANUAL ||
+          record?.source === AttendanceSource.BIOMETRIC ||
+          record?.source === AttendanceSource.LEAVE
+        ) {
+          if (record.status === RollRecordStatus.PRESENT || record.status === RollRecordStatus.LATE) present++;
+          if (record.status === RollRecordStatus.LATE) late++;
+          if (record.status === RollRecordStatus.EXCUSED) excused++;
+          if (record.status === RollRecordStatus.ABSENT) absent++;
+          if (record.check_in_at && !record.check_out_at) noClockOut++;
+        } else {
+          excused++;
+        }
+        continue;
+      }
+
+      if (!record) {
+        noClockIn++;
+        continue;
+      }
+      if (record.status === RollRecordStatus.PRESENT || record.status === RollRecordStatus.LATE) present++;
+      if (record.status === RollRecordStatus.LATE) late++;
+      if (record.status === RollRecordStatus.EXCUSED) excused++;
+      if (record.status === RollRecordStatus.ABSENT) absent++;
+      if (record.check_in_at && !record.check_out_at) noClockOut++;
+    }
+
+    return { present, late, excused, absent, noClockIn, noClockOut };
   }
 
   async getSummary(query: GetStudentAttendanceQueryDto, user: IJwtStaffPayload) {
@@ -169,45 +210,104 @@ export class StudentAttendanceService {
     if (!campusId) throw new BadRequestException('campus_id is required');
     this.assertCampusAccess(user, campusId);
 
-    await this.holidaySync.syncCampusForDate(campusId, date);
-
+    // Scope first — never sync/resolve the whole campus roster on a filtered read.
     const students = await this.getStudentsInScope(campusId, query.class_id, query.section_id, user);
     if (students.length === 0) return [];
 
-    const records = await this.prisma.attendance_student_daily.findMany({
-      where: { date, student_cc: { in: students.map((s) => s.cc) } },
-    });
+    const studentCcs = students.map((s) => s.cc);
+    const [records, calendarRows] = await Promise.all([
+      this.prisma.attendance_student_daily.findMany({
+        where: { date, student_cc: { in: studentCcs } },
+      }),
+      this.calendarResolver.loadStudentCalendarRowsForDate(campusId, date),
+    ]);
     const recordMap = new Map(records.map((r) => [r.student_cc, r]));
 
-    const rows = await Promise.all(
-      students.map(async (student) => {
-        const resolved = await this.calendarResolver.resolveStudentDay(
-          campusId,
-          student.class_id,
-          student.section_id,
-          date,
-        );
-        const record = recordMap.get(student.cc) ?? null;
-        return {
-          student: {
-            cc: student.cc,
-            full_name: student.full_name,
-            gr_number: student.gr_number,
-            photo_url: student.photograph_url,
-            class: student.classes?.description ?? null,
-            section: student.sections?.description ?? null,
-          },
-          check_in_at: record?.check_in_at ?? null,
-          check_out_at: record?.check_out_at ?? null,
-          status: record?.status ?? null,
-          is_working_day: resolved.isWorkingDay,
-          day_type: resolved.dayType,
-          day_description: resolved.description,
-        };
-      }),
-    );
+    // Lazily apply SYSTEM EXCUSED / clear SYSTEM rows only for students in this
+    // scope. Full campus+staff holiday sync on every dashboard load was the
+    // main reason this page felt stuck on a spinner.
+    const holidayWrites: Promise<unknown>[] = [];
+    for (const student of students) {
+      const resolved = this.calendarResolver.resolveStudentDayFromRows(
+        calendarRows,
+        student.class_id,
+        student.section_id,
+        date,
+      );
+      const existing = recordMap.get(student.cc);
 
-    return rows;
+      if (!resolved.isWorkingDay) {
+        if (
+          existing?.source === AttendanceSource.MANUAL ||
+          existing?.source === AttendanceSource.BIOMETRIC ||
+          existing?.source === AttendanceSource.LEAVE
+        ) {
+          continue;
+        }
+        const description = resolved.description ?? 'Holiday';
+        holidayWrites.push(
+          this.prisma.attendance_student_daily
+            .upsert({
+              where: { student_cc_date: { student_cc: student.cc, date } },
+              create: {
+                student_cc: student.cc,
+                campus_id: campusId,
+                date,
+                status: RollRecordStatus.EXCUSED,
+                source: AttendanceSource.SYSTEM,
+                notes: description,
+              },
+              update: {
+                status: RollRecordStatus.EXCUSED,
+                source: AttendanceSource.SYSTEM,
+                notes: description,
+              },
+            })
+            .then((row) => {
+              recordMap.set(student.cc, row);
+            }),
+        );
+      } else if (existing?.source === AttendanceSource.SYSTEM) {
+        holidayWrites.push(
+          this.prisma.attendance_student_daily
+            .delete({
+              where: { student_cc_date: { student_cc: student.cc, date } },
+            })
+            .then(() => {
+              recordMap.delete(student.cc);
+            }),
+        );
+      }
+    }
+    if (holidayWrites.length > 0) {
+      await Promise.all(holidayWrites);
+    }
+
+    return students.map((student) => {
+      const resolved = this.calendarResolver.resolveStudentDayFromRows(
+        calendarRows,
+        student.class_id,
+        student.section_id,
+        date,
+      );
+      const record = recordMap.get(student.cc) ?? null;
+      return {
+        student: {
+          cc: student.cc,
+          full_name: student.full_name,
+          gr_number: student.gr_number,
+          photo_url: student.photograph_url,
+          class: student.classes?.description ?? null,
+          section: student.sections?.description ?? null,
+        },
+        check_in_at: record?.check_in_at ?? null,
+        check_out_at: record?.check_out_at ?? null,
+        status: record?.status ?? null,
+        is_working_day: resolved.isWorkingDay,
+        day_type: resolved.dayType,
+        day_description: resolved.description,
+      };
+    });
   }
 
   // Derives Working time (IN->OUT) and Break (OUT->IN gaps) segments from the

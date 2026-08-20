@@ -24,7 +24,6 @@ describe('StudentAttendanceService.bulkManualMark', () => {
     const service = new StudentAttendanceService(
       { ...prisma, ...overrides.prisma } as any,
       { ...calendarResolver, ...overrides.calendarResolver } as any,
-      {} as any, // HolidayAttendanceSyncService
       {} as any, // AttendancePolicyResolverService
       { ...auditLogs, ...(overrides.auditLogs ?? {}) } as any,
       {} as any, // ZkAttendanceProcessorService
