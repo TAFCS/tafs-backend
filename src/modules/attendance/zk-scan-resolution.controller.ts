@@ -26,6 +26,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -103,7 +104,7 @@ export class ZkScanResolutionController {
 
     const scope = this.buildScope(dto);
     const report = await this.resolution.resolve(scope, {
-      actor: user.username || user.sub,
+      actor: auditActorLabel(user),
       dryRun: dto.dry_run !== false,
       excludeToday: dto.exclude_today,
       force: dto.force,
@@ -144,7 +145,7 @@ export class ZkScanResolutionController {
 
     const report = await this.resolution.resolve(
       { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
-      { actor: user.username || user.sub, dryRun: true, overrideToPerson: target },
+      { actor: auditActorLabel(user), dryRun: true, overrideToPerson: target },
     );
     // The person being linked to is the subject, not a bystander — excluding them
     // keeps "affects other people" meaning what it says.
@@ -165,7 +166,7 @@ export class ZkScanResolutionController {
     this.assertSuperAdmin(user);
     const report = await this.resolution.resolve(
       { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
-      { actor: user.username || user.sub, dryRun: true, overrideToUnmapped: true },
+      { actor: auditActorLabel(user), dryRun: true, overrideToUnmapped: true },
     );
     // On an unlink EVERY scan moves off the pin's current owner. They are the
     // subject of the operation, so without excluding them the dialog reports
@@ -191,7 +192,7 @@ export class ZkScanResolutionController {
       throw new BadRequestException('device_sn and device_pin are both required');
     }
     const report = await this.resolution.resolveForDevicePin(deviceSn, devicePin, {
-      actor: user.username || user.sub,
+      actor: auditActorLabel(user),
       dryRun: true,
     });
     return createApiResponse(report, HttpStatus.OK, 'Drift preview generated');

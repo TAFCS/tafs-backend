@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ConflictException,
     ForbiddenException,
     Injectable,
     NotFoundException,
@@ -7,7 +8,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Prisma } from '@prisma/client';
-import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
+import { BulkSaveStudentFeesDto, SaveStudentFeeItemDto } from './dto/bulk-save-student-fees.dto';
 import { CreateBundleDto } from './dto/create-bundle.dto';
 import { StudentsService } from '../students/students.service';
 import {
@@ -654,15 +655,129 @@ export class StudentFeesService {
                 const feeTypeLabel = (id: number | null | undefined) =>
                     id != null ? (feeTypesMap.get(id) ?? `fee type #${id}`) : 'fee';
 
-                const incomingKeys = new Set(
-                    items.map((i) => {
-                        const tm = i.target_month ?? i.month ?? 8;
-                        const dateStr = i.fee_date || 'no-date';
-                        return `${i.fee_type_id}|${tm}|${i.academic_year}|${dateStr}`;
-                    }),
-                );
+                // ── 1. Resolve every incoming item to the row it refers to ──
+                // A row's identity is its id. `id` is absent only for rows the
+                // user has just added in the grid, so the composite key below
+                // survives purely as a fallback for those.
+                //
+                // This matters most for fee_date edits. With the composite key
+                // alone, moving a row is indistinguishable from "old row gone,
+                // new row added": the head gets recreated, silently dropping
+                // description_prefix / split_pair_id / bundle_id / amount_paid,
+                // and when the stale row can't be deleted (voucher- or
+                // installment-linked, or its key still claimed by its split
+                // twin — PARTIAL and BALANCE halves differ only by
+                // description_prefix, which the key does not include) the row
+                // is duplicated outright instead of moved.
+                const existingById = new Map(existingFees.map((f) => [f.id, f]));
 
-                // 1. Delete rows in the specified years that are NO LONGER in the incoming list AND have no vouchers.
+                const itemTargetMonth = (i: SaveStudentFeeItemDto) => {
+                    const tm = i.target_month ?? i.month ?? 8;
+                    return tm > 0 ? tm : 8;
+                };
+                // The client derives a row's editable amount with `||` over this
+                // exact chain, so the guard below must too — with `??`, a stored
+                // amount_after_discount of 0 alongside a non-zero amount would
+                // read as an edit on a row the user never touched.
+                const rowAmountOf = (f: { amount_after_discount: Prisma.Decimal | null; amount: Prisma.Decimal | null; amount_before_discount: Prisma.Decimal | null }) =>
+                    Number(
+                        f.amount_after_discount?.toString()
+                        || f.amount?.toString()
+                        || f.amount_before_discount?.toString()
+                        || '0',
+                    );
+                const dateKeyOf = (d: Date | string | null | undefined) =>
+                    !d ? 'no-date' : d instanceof Date ? d.toISOString().split('T')[0] : d;
+                const compositeKeyOf = (
+                    feeTypeId: number | null | undefined,
+                    targetMonth: number | null | undefined,
+                    academicYear: string | null | undefined,
+                    feeDate: Date | string | null | undefined,
+                ) => `${feeTypeId}|${targetMonth ?? 8}|${academicYear}|${dateKeyOf(feeDate)}`;
+
+                // Pass A — an item that names an existing row owns it outright.
+                // `existingFees` is already scoped to this student, these years
+                // and is_discount=false, so failing to find the id here doubles
+                // as the ownership check: a stale or foreign id claims nothing
+                // and falls through to the fallback below.
+                const resolvedRowId = new Map<SaveStudentFeeItemDto, number | null>();
+                const consumedIds = new Set<number>();
+                for (const item of items) {
+                    if (item.id != null && existingById.has(item.id) && !consumedIds.has(item.id)) {
+                        resolvedRowId.set(item, item.id);
+                        consumedIds.add(item.id);
+                    }
+                }
+
+                // Pass B — everything else falls back to the composite key, and
+                // may only match rows no id has claimed. Candidates are queued
+                // per key so two items with a colliding key take two different
+                // rows rather than both grabbing (and concurrently overwriting)
+                // the same one.
+                const feeKeyMap = new Map<string, number[]>();
+                existingFees.forEach((f) => {
+                    if (consumedIds.has(f.id)) return;
+                    const key = compositeKeyOf(f.fee_type_id, f.target_month ?? f.month, f.academic_year, f.fee_date);
+                    const queue = feeKeyMap.get(key);
+                    if (queue) queue.push(f.id);
+                    else feeKeyMap.set(key, [f.id]);
+                });
+                for (const item of items) {
+                    if (resolvedRowId.has(item)) continue;
+                    const key = compositeKeyOf(item.fee_type_id, itemTargetMonth(item), item.academic_year, item.fee_date);
+                    const matchId = feeKeyMap.get(key)?.shift();
+                    if (matchId != null) {
+                        resolvedRowId.set(item, matchId);
+                        consumedIds.add(matchId);
+                    } else {
+                        resolvedRowId.set(item, null);
+                    }
+                }
+
+                // A head that still carries voucher heads is owned by its
+                // voucher, not by this grid. Deleting the voucher cascades the
+                // heads away (voucher_heads.vouchers is onDelete: Cascade), and
+                // the row is then freely editable again — this only rejects
+                // edits made while the voucher is still live, and is the
+                // backstop for the frontend's isRowLocked, which keys off
+                // status alone and so misses a voucher-linked row in any other
+                // status. Values are compared, never mere presence: the grid
+                // re-sends every row on every save, so an untouched locked row
+                // must still save cleanly.
+                const lockedViolations: string[] = [];
+                for (const item of items) {
+                    const rowId = resolvedRowId.get(item);
+                    if (rowId == null) continue;
+                    const before = existingById.get(rowId);
+                    if (!before || before.voucher_heads.length === 0) continue;
+
+                    const changed = [
+                        before.fee_type_id !== item.fee_type_id ? 'fee type' : null,
+                        (before.target_month ?? before.month ?? 8) !== itemTargetMonth(item) ? 'month' : null,
+                        dateKeyOf(before.fee_date) !== dateKeyOf(item.fee_date) ? 'fee date' : null,
+                        rowAmountOf(before) !== Number(item.amount ?? item.amount_before_discount ?? 0) ? 'amount' : null,
+                        Number(before.scholarship_percentage ?? 0)
+                            !== Number(item.scholarship_percentage ?? 0) ? 'scholarship' : null,
+                    ].filter(Boolean);
+
+                    if (changed.length > 0) {
+                        lockedViolations.push(
+                            `${feeTypeLabel(before.fee_type_id)} (${this.periodLabel(before.target_month, before.academic_year, before.fee_date)}) — ${changed.join(', ')}`,
+                        );
+                    }
+                }
+                if (lockedViolations.length > 0) {
+                    throw new BadRequestException(
+                        `Cannot change ${lockedViolations.length} fee row(s) that still have an issued voucher. ` +
+                        `Delete or cancel the voucher first: ${lockedViolations.join('; ')}.`,
+                    );
+                }
+
+                // 2. Delete the rows no incoming item claimed — i.e. the ones the
+                // user actually removed from the grid. Keying this off the claims
+                // rather than off the composite key is also what makes a grid
+                // delete reliable: a removed row whose key happened to be shared
+                // with a surviving row (a split pair) used to be spared.
                 // Installment-linked rows are excluded: they're managed exclusively through the
                 // installments module's own CRUD (create/update/removeHead), and standalone-mode
                 // installment heads are never part of the studentwise-fees grid's payload in the
@@ -670,11 +785,7 @@ export class StudentFeesService {
                 // installment plans every time the unrelated bulk-save endpoint is called.
                 const toDeleteRows = existingFees
                     .filter((f) => f.installment_id == null)
-                    .filter((f) => {
-                        const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
-                        const key = `${f.fee_type_id}|${f.target_month}|${f.academic_year}|${dateStr}`;
-                        return !incomingKeys.has(key);
-                    })
+                    .filter((f) => !consumedIds.has(f.id))
                     .filter((f) => f.voucher_heads.length === 0);
 
                 const toDelete = toDeleteRows.map((f) => f.id);
@@ -693,28 +804,15 @@ export class StudentFeesService {
                     });
                 }
 
-                // 2. Map existing fees by key for manual lookup (since NULL fee_date breaks unique constraint)
-                const feeKeyMap = new Map<string, number>();
-                existingFees.forEach(f => {
-                    const tm = f.target_month ?? f.month ?? 8;
-                    const dateStr = f.fee_date ? f.fee_date.toISOString().split('T')[0] : 'no-date';
-                    const key = `${f.fee_type_id}|${tm}|${f.academic_year}|${dateStr}`;
-                    feeKeyMap.set(key, f.id);
-                });
-
-                const existingFeeById = new Map(existingFees.map((f) => [f.id, f]));
-
                 // 3. Upsert items
                 const createdLabels: string[] = [];
                 const updatedLabels: string[] = [];
                 const upsertPromises = items.map(async (item) => {
-                    const tm = item.target_month ?? item.month ?? 8;
-                    const targetMonth = tm > 0 ? tm : 8;
+                    const targetMonth = itemTargetMonth(item);
                     const feeDate = item.fee_date ? new Date(item.fee_date) : null;
-                    const dateStr = item.fee_date || 'no-date';
-                    const key = `${item.fee_type_id}|${targetMonth}|${item.academic_year}|${dateStr}`;
 
-                    const existingId = feeKeyMap.get(key);
+                    // Resolved synchronously above, before anything was deleted.
+                    const existingId = resolvedRowId.get(item) ?? undefined;
 
                     // Scholarships are MTF-only (fee_type_id=1). Enforced here — the
                     // single source of truth — regardless of what the frontend sends.
@@ -753,7 +851,7 @@ export class StudentFeesService {
                     ).toDecimalPlaces(0);
 
                     if (existingId) {
-                        const before = existingFeeById.get(existingId);
+                        const before = existingById.get(existingId);
                         const beforeAmountAfterDiscount = before ? Number(before.amount_after_discount ?? before.amount ?? 0) : null;
                         const amountChanged = before && beforeAmountAfterDiscount !== Number(amountAfterDiscount);
                         const scholarshipChanged = before &&
@@ -825,7 +923,7 @@ export class StudentFeesService {
                     });
                 }
 
-                // 3. Process Bundles if provided
+                // 4. Process Bundles if provided
                 if (bundles && bundles.length > 0) {
                     // Refetch all current fees for this student/years to get accurate IDs and current state
                     const allFees = await tx.student_fees.findMany({
@@ -887,7 +985,7 @@ export class StudentFeesService {
                     }
                 }
 
-                // 4. Cleanup & Sync Existing Bundles
+                // 5. Cleanup & Sync Existing Bundles
                 // Recalculate totals for all bundles involved or existing in these years
                 const refreshedFees = await tx.student_fees.findMany({
                     where: { student_id, academic_year: { in: years } },
@@ -952,7 +1050,9 @@ export class StudentFeesService {
                 maxWait: 10000,
                 timeout: 30000,
             },
-        );
+        ).catch((err) => {
+            throw this.translateDuplicateHead(err);
+        });
         // Overall summary entry, followed by every granular event (rows deleted,
         // created, updated, installment plans and bundles touched) collected above.
         auditEvents.unshift({
@@ -963,6 +1063,28 @@ export class StudentFeesService {
         });
         await this.flushAuditEvents(auditEvents, student_id, changedBy ?? 'system');
         return result;
+    }
+
+    /**
+     * Turn the student_fees_unique_regular_head violation into something a user
+     * can act on. That partial index is (student_id, fee_type_id, fee_date) over
+     * non-discount, non-split rows, so it fires when a head is moved onto a date
+     * this student already has the same fee type on — coarser than the grid's own
+     * notion of a duplicate (it ignores target_month), which is why this surfaces
+     * on legitimate-looking edits. Anything else is rethrown untouched.
+     */
+    private translateDuplicateHead(err: unknown): unknown {
+        if (
+            err instanceof Prisma.PrismaClientKnownRequestError &&
+            err.code === 'P2002' &&
+            String((err.meta as any)?.target ?? '').includes('student_fees_unique_regular_head')
+        ) {
+            return new ConflictException(
+                'This student already has a fee head of that type on that date. ' +
+                'Pick a different fee date, or edit the existing head instead of adding a second one.',
+            );
+        }
+        return err;
     }
 
     /**

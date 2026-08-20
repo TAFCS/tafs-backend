@@ -101,6 +101,23 @@ export interface EmployeeCalendarDaysResult {
   created: number;
   skipped: number;
   failed: number;
+  /** Detailed list of employee/date pairs where the requested override was applied (created). */
+  applied: Array<{
+    employee_id: number;
+    employee_name?: string | null;
+    date: string;
+    day_type: 'HOLIDAY' | 'WORKDAY';
+    description?: string | null;
+  }>;
+  /** Detailed list of employee/date pairs that were NOT applied because a row already existed. */
+  skipped_details: Array<{
+    employee_id: number;
+    employee_name?: string | null;
+    date: string;
+    reason: string;
+    existing_day_type?: string | null;
+    existing_description?: string | null;
+  }>;
   errors: { employee_id: number; date: string; message: string }[];
   /** Saturday-scoped HOLIDAY entries created for an employee who already has a
    *  mandatory Saturday schedule for that date — the mandatory Saturday wins,
@@ -420,6 +437,8 @@ export class CalendarService {
       created: 0,
       skipped: 0,
       failed: 0,
+      applied: [],
+      skipped_details: [],
       errors: [],
       conflicts: [],
       // Sync is kicked off asynchronously — failures are logged server-side.
@@ -438,6 +457,14 @@ export class CalendarService {
           employee_id: employee.id,
           date,
           message: `${employee.full_name ?? `Employee #${employee.id}`} has no campus assigned`,
+        });
+        result.skipped_details.push({
+          employee_id: employee.id,
+          employee_name: employee.full_name ?? null,
+          date,
+          reason: `${employee.full_name ?? `Employee #${employee.id}`} has no campus assigned`,
+          existing_day_type: null,
+          existing_description: null,
         });
       }
     }
@@ -461,8 +488,17 @@ export class CalendarService {
         department_id: null,
         staff_category_id: null,
       },
-      select: { employee_id: true, date: true },
+      select: {
+        employee_id: true,
+        date: true,
+        day_type: true,
+        description: true,
+        employee: { select: { full_name: true } },
+      },
     });
+    const existingKeyToRow = new Map<string, typeof existingRows[number]>(
+      existingRows.map((r) => [`${r.employee_id}:${this.dateKeyFromRow(r)}`, r]),
+    );
     const existingKeys = new Set(
       existingRows.map((r) => `${r.employee_id}:${this.dateKeyFromRow(r)}`),
     );
@@ -483,6 +519,7 @@ export class CalendarService {
 
     const toCreate: RowInput[] = [];
     const syncPairs = new Map<string, { campusId: number; date: string }>();
+    const expectedKeys = new Set<string>();
 
     for (const employee of eligibleEmployees) {
       for (let i = 0; i < uniqueDates.length; i++) {
@@ -490,6 +527,16 @@ export class CalendarService {
         const key = `${employee.id}:${date}`;
         if (existingKeys.has(key)) {
           result.skipped++;
+
+          const existing = existingKeyToRow.get(key);
+          result.skipped_details.push({
+            employee_id: employee.id,
+            employee_name: existing?.employee?.full_name ?? null,
+            date,
+            reason: existing?.day_type === dto.day_type ? 'already exists' : 'already exists with different day_type',
+            existing_day_type: existing?.day_type ?? null,
+            existing_description: existing?.description ?? null,
+          });
           continue;
         }
         toCreate.push({
@@ -506,6 +553,7 @@ export class CalendarService {
           created_by: createdBy ?? null,
         });
         syncPairs.set(`${employee.campus_id}:${date}`, { campusId: employee.campus_id!, date });
+        expectedKeys.add(key);
       }
     }
 
@@ -581,6 +629,75 @@ export class CalendarService {
             (err as Error)?.message,
           ),
         );
+    }
+
+    // Build applied/skipped detailed lists by querying the final state for
+    // the expected employee/date pairs we attempted to create.
+    // This lets us capture "race skipped" pairs (inserted.count < chunk.length)
+    // with a deterministic per-pair outcome.
+    if (expectedKeys.size > 0) {
+      const expectedEmployeeIds = [...new Set([...expectedKeys].map((k) => Number(k.split(':')[0])))] as number[];
+      const expectedDates = [...new Set([...expectedKeys].map((k) => k.split(':')[1]))] as string[];
+      const expectedDateObjs = expectedDates.map((d) => parseCalendarDateKey(d));
+
+      const finalRows = await this.prisma.academic_calendar_days.findMany({
+        where: {
+          applies_to: 'STAFF',
+          employee_id: { in: expectedEmployeeIds },
+          date: { in: expectedDateObjs },
+          class_id: null,
+          section_id: null,
+          department_id: null,
+          staff_category_id: null,
+        },
+        select: {
+          employee_id: true,
+          date: true,
+          day_type: true,
+          description: true,
+          employee: { select: { full_name: true } },
+        },
+      });
+
+      const finalKeyToRow = new Map<string, typeof finalRows[number]>();
+      for (const r of finalRows) {
+        finalKeyToRow.set(`${r.employee_id}:${this.dateKeyFromRow(r)}`, r);
+      }
+
+      for (const key of expectedKeys) {
+        const row = finalKeyToRow.get(key);
+        if (row && row.day_type === dto.day_type && row.employee_id != null) {
+          result.applied.push({
+            employee_id: row.employee_id,
+            employee_name: row.employee?.full_name ?? null,
+            date: this.dateKeyFromRow(row),
+            day_type: row.day_type as 'HOLIDAY' | 'WORKDAY',
+            description: row.description,
+          });
+        } else if (row) {
+          // Row exists but isn't what we requested (should be rare unless a parallel request wrote first).
+          const [employeeIdStr, dateStr] = key.split(':');
+          result.skipped_details.push({
+            employee_id: Number(employeeIdStr),
+            employee_name: row.employee?.full_name ?? null,
+            date: dateStr,
+            reason: 'already exists with different day_type (race)',
+            existing_day_type: row.day_type,
+            existing_description: row.description,
+          });
+        } else {
+          // Not found after createMany attempt (race / transient failure).
+          const [employeeIdStr, dateStr] = key.split(':');
+          result.skipped_details.push({
+            employee_id: Number(employeeIdStr),
+            employee_name: null,
+            date: dateStr,
+            reason: 'not created (race)',
+            existing_day_type: null,
+            existing_description: null,
+          });
+        }
+      }
     }
 
     if (result.created > 0) {

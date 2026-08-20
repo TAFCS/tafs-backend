@@ -8,13 +8,20 @@ import {
     ParseIntPipe,
     Post,
     Query,
-    Request,
+    UseGuards,
 } from '@nestjs/common';
 import { BulkVoucherJobsService } from './bulk-voucher-jobs.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import { Action } from '../auth/casl/actions';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('bulk-voucher-jobs')
+@UseGuards(JwtStaffGuard, PoliciesGuard)
 export class BulkVoucherJobsController {
     constructor(private readonly bulkVoucherJobsService: BulkVoucherJobsService) {}
 
@@ -26,6 +33,11 @@ export class BulkVoucherJobsController {
      */
     @Post('preview')
     @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Create, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
     async preview(@Body() dto: PreviewBulkRequestDto) {
         const students = await this.bulkVoucherJobsService.preview(dto);
         return {
@@ -43,10 +55,21 @@ export class BulkVoucherJobsController {
      */
     @Post()
     @HttpCode(HttpStatus.ACCEPTED)
-    async startJob(@Body() dto: StartBulkJobDto, @Request() req: any) {
-        // Use authenticated user id if available, otherwise fallback to 'system'
-        const createdBy: string = req?.user?.id ?? req?.user?.sub ?? 'system';
-        const result = await this.bulkVoucherJobsService.startJob(dto, createdBy);
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Create, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async startJob(
+        @Body() dto: StartBulkJobDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const createdBy = user.username ?? user.sub;
+        const result = await this.bulkVoucherJobsService.startJob(
+            dto,
+            createdBy,
+            user.fullName,
+        );
         return {
             success: true,
             message: 'Bulk voucher job started',
@@ -60,6 +83,11 @@ export class BulkVoucherJobsController {
      * Returns current job status + progress counters + merged_pdf_url.
      */
     @Get(':id/status')
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
     async getJobStatus(@Param('id', ParseIntPipe) id: number) {
         const job = await this.bulkVoucherJobsService.getJobStatus(id);
         return {
@@ -75,6 +103,11 @@ export class BulkVoucherJobsController {
      * Lists recent jobs (admin history view).
      */
     @Get()
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
     async listJobs(@Query('campus_id') campusId?: string) {
         const campusIds = campusId
             ? campusId

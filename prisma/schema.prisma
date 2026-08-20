@@ -377,7 +377,7 @@ model teaching_groups {
   student_subject_enrollments student_subject_enrollments[]
   campuses                    campuses                      @relation(fields: [campus_id], references: [id], onDelete: Cascade)
   classes                     classes                       @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id])
+  employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   subjects                    subjects                      @relation(fields: [subject_id], references: [id])
   timetables                  timetables[]
 
@@ -433,7 +433,7 @@ model timetable_slots {
   created_at               DateTime                   @default(now()) @db.Timestamp(6)
   updated_at               DateTime                   @updatedAt @db.Timestamp(6)
   attendance_roll_sessions attendance_roll_sessions[]
-  employee_profiles        employee_profiles          @relation(fields: [employee_id], references: [id])
+  employee_profiles        employee_profiles          @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   subjects                 subjects                   @relation(fields: [subject_id], references: [id])
   timetables               timetables                 @relation(fields: [timetable_id], references: [id], onDelete: Cascade)
 
@@ -558,13 +558,6 @@ model student_fees {
   status                   fee_status_enum?          @default(NOT_ISSUED)
   amount_before_discount   Decimal?                  @db.Decimal(12, 2)
   target_month             Int
-  /// Term start month (8 = Aug-Jul, 4 = Apr-Mar) of the class this head was
-  /// written under. Pairs with target_month + academic_year to fix the calendar
-  /// year: "June of 2025-2026" is Jun 2026 under an Aug-Jul term but Jun 2025
-  /// under an Apr-Mar one. NULL means unknown — readers fall back to deriving
-  /// the cutoff from whichever class they happen to be viewing the head through,
-  /// which is what every caller did before this column existed.
-  term_start_month         Int?                      @db.SmallInt
   bundle_id                Int?
   fee_date                 DateTime?                 @db.Date
   amount_paid              Decimal?                  @default(0) @db.Decimal(12, 2)
@@ -579,6 +572,13 @@ model student_fees {
   amount_after_discount    Decimal?                  @db.Decimal(12, 2)
   scholarship_percentage   Decimal?                  @db.Decimal(5, 2)
   scholarship_type_id      Int?
+  /// Term start month (8 = Aug-Jul, 4 = Apr-Mar) of the class this head was
+  /// written under. Pairs with target_month + academic_year to fix the calendar
+  /// year: "June of 2025-2026" is Jun 2026 under an Aug-Jul term but Jun 2025
+  /// under an Apr-Mar one. NULL means unknown — readers fall back to deriving
+  /// the cutoff from whichever class they happen to be viewing the head through,
+  /// which is what every caller did before this column existed.
+  term_start_month         Int?                      @db.SmallInt
   deposit_allocations      deposit_allocations[]
   student_fee_bundles      student_fee_bundles?      @relation(fields: [bundle_id], references: [id], onUpdate: NoAction)
   discount_presets         discount_presets?         @relation(fields: [discount_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -896,15 +896,6 @@ model vouchers {
   academic_year             String?                     @db.VarChar(10)
   month                     Int?
   pdf_url                   String?
-  /// WRITE-ONCE. The frozen PAID receipt, minted lazily on the first request
-  /// (admin download or parent app) and never re-rendered afterwards. Cleared
-  /// only by a genuine payment reversal in clearDeposit().
-  paid_pdf_url              String?
-  /// WRITE-ONCE. The download filename frozen alongside paid_pdf_url. Clients
-  /// MUST use this rather than rebuilding the name from the live gr_number,
-  /// which is mutable — see buildVoucherFilename / voucher-filename.util.ts.
-  paid_pdf_filename         String?                     @db.VarChar(255)
-  paid_pdf_generated_at     DateTime?                   @db.Timestamp(6)
   total_payable_before_due  Decimal?                    @default(0) @db.Decimal(12, 2)
   total_payable_after_due   Decimal?                    @default(0) @db.Decimal(12, 2)
   late_fee_deposited        Decimal?                    @default(0) @db.Decimal(12, 2)
@@ -918,6 +909,15 @@ model vouchers {
   reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
   generated_by_name         String?                     @db.VarChar(100)
   generated_at              DateTime?                   @db.Timestamp(6)
+  /// WRITE-ONCE. The frozen PAID receipt, minted lazily on the first request
+  /// (admin download or parent app) and never re-rendered afterwards. Cleared
+  /// only by a genuine payment reversal in clearDeposit().
+  paid_pdf_url              String?
+  /// WRITE-ONCE. The download filename frozen alongside paid_pdf_url. Clients
+  /// MUST use this rather than rebuilding the name from the live gr_number,
+  /// which is mutable — see buildVoucherFilename / voucher-filename.util.ts.
+  paid_pdf_filename         String?                     @db.VarChar(255)
+  paid_pdf_generated_at     DateTime?                   @db.Timestamp(6)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]
@@ -1129,7 +1129,6 @@ model employee_profiles {
   date_of_birth                      DateTime?                            @db.Date
   address                            String?
   personal_phone                     String?                              @db.VarChar(60)
-  secondary_phone                    String?                              @db.VarChar(60)
   personal_email                     String?                              @db.VarChar(100)
   job_title                          String?                              @db.VarChar(100)
   job_description                    String?
@@ -1151,7 +1150,6 @@ model employee_profiles {
   employee_code_dep                  String?                              @db.VarChar(10)
   employee_code_number               String?                              @db.VarChar(20)
   staff_category_id                  Int?
-  segment_id                         Int?
   father_photo_url                   String?
   mother_photo_url                   String?
   spouse_cnic                        String?                              @db.VarChar(50)
@@ -1160,6 +1158,8 @@ model employee_profiles {
   father_cnic                        String?                              @db.VarChar(50)
   mother_cnic                        String?                              @db.VarChar(50)
   employment_status                  EmployeeStatus                       @default(ACTIVE)
+  segment_id                         Int?
+  secondary_phone                    String?                              @db.VarChar(60)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_staff_daily             attendance_staff_daily[]
@@ -1168,10 +1168,10 @@ model employee_profiles {
   employee_notice_posts              employee_notice_posts[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
-  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
+  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id], onDelete: SetNull)
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
-  staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
+  staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
@@ -1184,6 +1184,7 @@ model employee_profiles {
   zk_attendance_scans                zk_attendance_scans[]
 
   @@index([employment_status])
+  @@index([segment_id])
 }
 
 model employee_class_section_assignments {
@@ -1565,7 +1566,7 @@ model zk_attendance_scans {
   zk_push_log_id        Int?
   received_at           DateTime                @default(now()) @db.Timestamp(6)
   attendance_objections attendance_objections[]
-  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id])
+  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id], onDelete: SetNull)
   students              students?               @relation(fields: [student_cc], references: [cc])
   zk_push_logs          zk_push_logs?           @relation(fields: [zk_push_log_id], references: [id])
 

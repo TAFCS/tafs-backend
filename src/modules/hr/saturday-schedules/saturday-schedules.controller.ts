@@ -15,7 +15,10 @@ import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { createApiResponse } from '../../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
-import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
+import {
+  CreateSaturdayScheduleDto,
+  ListSaturdaySchedulesQueryDto,
+} from './dto/saturday-schedules.dto';
 import { SaturdaySchedulesService } from './saturday-schedules.service';
 
 @ApiTags('Saturday Schedules')
@@ -31,7 +34,11 @@ export class SaturdaySchedulesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const data = await this.saturdayService.create(dto, user);
-    return createApiResponse(data, HttpStatus.CREATED, 'Saturday schedule created successfully');
+    return createApiResponse(
+      data,
+      HttpStatus.CREATED,
+      'Saturday schedule created successfully',
+    );
   }
 
   @Get()
@@ -40,7 +47,11 @@ export class SaturdaySchedulesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const data = await this.saturdayService.list(query, user);
-    return createApiResponse(data, HttpStatus.OK, 'Saturday schedules retrieved successfully');
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Saturday schedules retrieved successfully',
+    );
   }
 
   @Delete(':id')
@@ -49,6 +60,10 @@ export class SaturdaySchedulesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const data = await this.saturdayService.remove(id, user);
-    return createApiResponse(data, HttpStatus.OK, 'Saturday schedule deleted successfully');
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Saturday schedule deleted successfully',
+    );
   }
 }

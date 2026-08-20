@@ -8,6 +8,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { ProgressionHistoryService } from '../students/progression-history.service';
+import { resolveCampusGrPrefix, computeNextGrNumber } from '../../common/utils/gr-number.util';
 
 @Injectable()
 export class TransferService {
@@ -126,6 +127,37 @@ export class TransferService {
     }));
   }
 
+  /**
+   * Preview what GR the student would get if transferred to the given campus.
+   * Returns null when the GR would not change.
+   */
+  async previewTransferGr(cc: number, toCampusId: number, toClassId?: number): Promise<{ new_gr: string; old_gr: string | null; dest_prefix: string; source_prefix: string } | null> {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { campus_id: true, gr_number: true },
+    });
+    if (!student || !student.campus_id) return null;
+    if (toCampusId === student.campus_id) return null;
+
+    const destPrefix = await resolveCampusGrPrefix(this.prisma, toCampusId);
+    const sourcePrefix = await resolveCampusGrPrefix(this.prisma, student.campus_id);
+    if (destPrefix === sourcePrefix) return null;
+
+    let isALevel = false;
+    if (toClassId) {
+      const cls = await this.prisma.classes.findUnique({ where: { id: toClassId }, select: { academic_system: true } });
+      isALevel = cls?.academic_system === 'A-Level';
+    }
+
+    const newGr = await computeNextGrNumber(this.prisma, toCampusId, isALevel);
+    return {
+      new_gr: newGr,
+      old_gr: student.gr_number,
+      dest_prefix: destPrefix,
+      source_prefix: sourcePrefix,
+    };
+  }
+
   async getAvailableClasses(cc: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
@@ -221,6 +253,21 @@ export class TransferService {
       }
     }
 
+    // Auto-assign new GR when transferring between campuses with different GR prefixes
+    let newGrNumber: string | undefined;
+    if (
+      dto.to_campus_id &&
+      student.campus_id &&
+      dto.to_campus_id !== student.campus_id
+    ) {
+      const destPrefix = await resolveCampusGrPrefix(this.prisma, dto.to_campus_id);
+      const sourcePrefix = await resolveCampusGrPrefix(this.prisma, student.campus_id);
+      if (destPrefix !== sourcePrefix) {
+        const isALevel = toClass.academic_system === 'A-Level';
+        newGrNumber = await computeNextGrNumber(this.prisma, dto.to_campus_id, isALevel);
+      }
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const nextCampusId = dto.to_campus_id ?? student.campus_id;
       const nextClassId = dto.to_class_id;
@@ -249,6 +296,23 @@ export class TransferService {
         );
       }
 
+      if (newGrNumber) {
+        const duplicate = await tx.students.findFirst({
+          where: {
+            gr_number: newGrNumber,
+            campus_id: dto.to_campus_id,
+            deleted_at: null,
+            cc: { not: cc },
+          },
+          select: { cc: true },
+        });
+        if (duplicate) {
+          throw new BadRequestException(
+            `GR ${newGrNumber} already exists on destination campus (CC #${duplicate.cc})`,
+          );
+        }
+      }
+
       await tx.students.update({
         where: { cc },
         data: {
@@ -256,6 +320,7 @@ export class TransferService {
           campus_id: dto.to_campus_id || undefined,
           section_id: dto.to_section_id !== undefined ? dto.to_section_id : undefined,
           academic_year: nextYear || currentYear || undefined,
+          ...(newGrNumber ? { gr_number: newGrNumber } : {}),
         },
       });
       await tx.student_admissions.create({
@@ -273,7 +338,7 @@ export class TransferService {
         sectionId: dto.to_section_id ?? student.section_id,
         houseId: student.house_id,
         academicYear: nextYear || currentYear || null,
-        grNumber: student.gr_number,
+        grNumber: newGrNumber ?? student.gr_number,
         changeType: 'TRANSFERRED',
         changedBy: changedBy || null,
         notes: dto.remarks || null,
@@ -285,6 +350,7 @@ export class TransferService {
     const toClassName = toClass.description;
     let note = `Transferred from ${fromClass} to ${toClassName}`;
     if (nextYear && nextYear !== currentYear) note += ` (AY ${nextYear})`;
+    if (newGrNumber) note += `. GR ${student.gr_number ?? '—'} → ${newGrNumber}`;
     if (dto.remarks) note += `. Remarks: ${dto.remarks}`;
 
     await this.auditLogs.log({

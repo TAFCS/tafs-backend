@@ -169,8 +169,19 @@ export class ZkAttendanceProcessorService {
    * without this the same row is re-read once per day. Opt-in and explicitly
    * scoped — ingest never enables it, so a long-lived cache can't go stale.
    */
-  private personCache: Map<string, { campus_id: number | null; class_id: number | null; section_id: number | null } | null> | null =
-    null;
+  private personCache:
+    | Map<
+        string,
+        | {
+            campus_id: number | null;
+            class_id: number | null;
+            section_id: number | null;
+            full_name?: string | null;
+            employee_code?: string | null;
+          }
+        | null
+      >
+    | null = null;
 
   beginBatch(): void {
     this.personCache = new Map();
@@ -186,9 +197,17 @@ export class ZkAttendanceProcessorService {
     if (cached !== undefined) return cached;
     const row = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { campus_id: true },
+      select: { campus_id: true, full_name: true, employee_code: true },
     });
-    const value = row ? { campus_id: row.campus_id, class_id: null, section_id: null } : null;
+    const value = row
+      ? {
+          campus_id: row.campus_id,
+          class_id: null,
+          section_id: null,
+          full_name: row.full_name,
+          employee_code: row.employee_code,
+        }
+      : null;
     this.personCache?.set(key, value);
     return value;
   }
@@ -866,6 +885,17 @@ export class ZkAttendanceProcessorService {
     if (!existing) return 'NOOP';
     if (existing.source !== AttendanceSource.BIOMETRIC) return 'SKIPPED_PROTECTED_SOURCE';
 
+    const identity = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { full_name: true, employee_code: true },
+    });
+    const empName = identity?.full_name?.trim();
+    const empCode = identity?.employee_code?.trim();
+    const empRef = empName
+      ? `${empName}${empCode ? ` (${empCode})` : ''}`
+      : `employee #${employeeId}${empCode ? ` (${empCode})` : ''}`;
+    const dateKey = date.toISOString().slice(0, 10);
+
     await this.prisma.attendance_staff_daily.delete({
       where: { employee_id_date: { employee_id: employeeId, date } },
     });
@@ -877,7 +907,7 @@ export class ZkAttendanceProcessorService {
       field: 'status',
       old_value: existing.status,
       new_value: null,
-      note: `Biometric attendance removed for employee #${employeeId} on ${date.toISOString().slice(0, 10)} — no backing scans after mapping re-resolution.`,
+      note: `Biometric attendance removed for ${empRef} on ${dateKey} — no backing scans after mapping re-resolution.`,
       changed_by: actor,
     });
     return 'CLEARED';
@@ -1008,6 +1038,12 @@ export class ZkAttendanceProcessorService {
       existing.last_scan_at?.getTime() !== (seg.lastScanAt?.getTime() ?? undefined);
 
     if (changed) {
+      const empName = employee?.full_name?.trim();
+      const empCode = employee?.employee_code?.trim();
+      const empRef = empName
+        ? `${empName}${empCode ? ` (${empCode})` : ''}`
+        : `employee #${employeeId}${empCode ? ` (${empCode})` : ''}`;
+
       void this.auditLogs.log({
         entity_type: 'STAFF_ATTENDANCE',
         entity_id: String(employeeId),
@@ -1016,7 +1052,7 @@ export class ZkAttendanceProcessorService {
         field: 'status',
         old_value: existing?.status ?? null,
         new_value: status,
-        note: `Biometric scan ${isCreate ? 'created' : 'updated'} staff attendance for employee #${employeeId} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        note: `Biometric scan ${isCreate ? 'created' : 'updated'} staff attendance for ${empRef} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
         changed_by: 'zk-device',
       });
     }

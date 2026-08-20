@@ -70,7 +70,7 @@ export class ClassCheckInScheduleService {
     return schedule;
   }
 
-  async create(dto: CreateClassScheduleDto, createdBy?: string) {
+  async create(dto: CreateClassScheduleDto, createdBy?: string, changedBy?: string) {
     const effectiveFrom = new Date(dto.effective_from);
     effectiveFrom.setUTCHours(0, 0, 0, 0);
 
@@ -112,7 +112,7 @@ export class ClassCheckInScheduleService {
       entity_type: 'CLASS_CHECK_IN_SCHEDULE',
       entity_id: String(record.id),
       action: 'CREATED',
-      changed_by: createdBy ?? 'system',
+      changed_by: changedBy ?? createdBy ?? 'system',
       note: `Check-in schedule #${record.id} for class ${classLabel} at campus #${dto.campus_id}: check-in ${dto.expected_check_in}, grace ${dto.late_grace_minutes}m, effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
     });
 

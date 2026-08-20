@@ -2,6 +2,19 @@ import { IsArray, ValidateNested, IsNumber, IsString, IsOptional, IsPositive, Is
 import { Type } from 'class-transformer';
 
 export class SaveStudentFeeItemDto {
+    /**
+     * Existing student_fees.id this row maps to. When present it IS the row's
+     * identity — the composite (fee_type_id|target_month|academic_year|fee_date)
+     * key is only a fallback for rows the client can't tag yet (rows the user
+     * just added in the grid). Sending it is what makes editing fee_date a MOVE
+     * of the existing head rather than a delete-and-recreate, which is how a
+     * date edit used to lose description_prefix/split_pair_id — or, when the old
+     * row couldn't be deleted, leave a duplicate behind.
+     */
+    @IsNumber()
+    @IsOptional()
+    id?: number;
+
     @IsNumber()
     fee_type_id: number;
 

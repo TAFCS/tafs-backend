@@ -28,6 +28,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { StaffRole } from '@prisma/client';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 
 @ApiTags('HR Calendar')
 @ApiBearerAuth()
@@ -75,7 +76,7 @@ export class CalendarController {
     @Req() req: { user: IJwtStaffPayload },
   ) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.createBulk(dto, req.user.sub, req.user.username);
+    const data = await this.calendarService.createBulk(dto, req.user.sub, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar days created for all campuses');
   }
 
@@ -86,7 +87,7 @@ export class CalendarController {
     @Req() req: { user: IJwtStaffPayload },
   ) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.createForEmployees(dto, req.user.sub, req.user.username);
+    const data = await this.calendarService.createForEmployees(dto, req.user.sub, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar overrides created for selected employees');
   }
 
@@ -101,7 +102,7 @@ export class CalendarController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
   async create(@Body() dto: CreateCalendarDayDto, @Req() req: { user: IJwtStaffPayload }) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.create(dto, req.user.sub, req.user.username);
+    const data = await this.calendarService.create(dto, req.user.sub, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.CREATED, 'Calendar day created successfully');
   }
 
@@ -113,7 +114,7 @@ export class CalendarController {
     @Req() req: { user: IJwtStaffPayload },
   ) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.update(id, dto, req.user.username);
+    const data = await this.calendarService.update(id, dto, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.OK, 'Calendar day updated successfully');
   }
 
@@ -121,7 +122,7 @@ export class CalendarController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: { user: IJwtStaffPayload }) {
     this.assertSuperAdmin(req.user);
-    const data = await this.calendarService.remove(id, req.user.username);
+    const data = await this.calendarService.remove(id, auditActorLabel(req.user));
     return createApiResponse(data, HttpStatus.OK, 'Calendar day deleted successfully');
   }
 }

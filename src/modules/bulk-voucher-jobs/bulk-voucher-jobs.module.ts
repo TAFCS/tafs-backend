@@ -5,9 +5,10 @@ import { PrismaModule } from '../../../prisma/prisma.module';
 import { VouchersModule } from '../vouchers/vouchers.module';
 import { VoucherPdfModule } from '../voucher-pdf/voucher-pdf.module';
 import { StorageModule } from '../../common/storage/storage.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-    imports: [PrismaModule, forwardRef(() => VouchersModule), StorageModule, VoucherPdfModule],
+    imports: [PrismaModule, AuthModule, forwardRef(() => VouchersModule), StorageModule, VoucherPdfModule],
     providers: [BulkVoucherJobsService],
     controllers: [BulkVoucherJobsController],
     exports: [BulkVoucherJobsService],

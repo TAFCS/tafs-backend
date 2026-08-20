@@ -36,6 +36,7 @@ export interface EmployeeProfileForExport {
   campuses?: { campus_name: string } | null;
   departments?: { name: string } | null;
   staff_categories?: { name: string } | null;
+  segments?: { name: string } | null;
   reporting_manager?: { full_name: string | null } | null;
   users?: { username: string; email: string | null } | null;
   employee_class_section_assignments?: Array<{
@@ -80,6 +81,7 @@ export async function buildMasterEmployeesExcelBuffer(employees: EmployeeProfile
     'Campus Name',
     'Department',
     'Subcategory',
+    'Segment',
     'Job Title',
     'Job Description',
     'Class-Section Assignments',
@@ -161,6 +163,7 @@ export async function buildMasterEmployeesExcelBuffer(employees: EmployeeProfile
       emp.campuses ? emp.campuses.campus_name : '',
       emp.departments ? emp.departments.name : '',
       emp.staff_categories ? emp.staff_categories.name : '',
+      emp.segments ? emp.segments.name : '',
       emp.job_title || '',
       emp.job_description || '',
       assignmentsFormatted,

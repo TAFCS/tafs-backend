@@ -5,6 +5,7 @@ export type { StaffRole };
 export interface IJwtStaffPayload {
   sub: string;
   username: string;
+  fullName?: string;
   role: StaffRole;
   campusId: number | null;
   allowedClassIds: number[];

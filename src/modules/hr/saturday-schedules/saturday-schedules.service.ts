@@ -10,8 +10,15 @@ import { FcmService } from '../../../common/fcm/fcm.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
-import { CreateSaturdayScheduleDto, ListSaturdaySchedulesQueryDto } from './dto/saturday-schedules.dto';
-import { resolveTemplate, isTemplateDisabled } from '../../../utils/notification-templates.util';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
+import {
+  CreateSaturdayScheduleDto,
+  ListSaturdaySchedulesQueryDto,
+} from './dto/saturday-schedules.dto';
+import {
+  resolveTemplate,
+  isTemplateDisabled,
+} from '../../../utils/notification-templates.util';
 
 const scheduleInclude = {
   employee_profiles: {
@@ -30,7 +37,14 @@ const scheduleInclude = {
               description: true,
               class_code: true,
               segment_id: true,
-              segments: { select: { id: true, code: true, name: true, display_order: true } },
+              segments: {
+                select: {
+                  id: true,
+                  code: true,
+                  name: true,
+                  display_order: true,
+                },
+              },
             },
           },
         },
@@ -52,13 +66,32 @@ export class SaturdaySchedulesService {
   async create(dto: CreateSaturdayScheduleDto, user: IJwtStaffPayload) {
     this.assertCanManage(user);
 
-    const date = this.parseDate(dto.date);
-    if (date.getUTCDay() !== 6) {
-      throw new BadRequestException('Only Saturdays can be scheduled');
+    const rawDates = dto.dates.map((d) => this.parseDate(d));
+    for (const date of rawDates) {
+      if (date.getUTCDay() !== 6) {
+        throw new BadRequestException('Only Saturdays can be scheduled');
+      }
     }
+    const uniqueDates = [
+      ...new Map(rawDates.map((d) => [this.dateKey(d), d])).values(),
+    ];
 
-    const monthStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-    const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+    const monthRanges = new Map<string, { start: Date; end: Date }>();
+    for (const d of uniqueDates) {
+      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+      if (!monthRanges.has(key)) {
+        monthRanges.set(key, {
+          start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)),
+          end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)),
+        });
+      }
+    }
+    const overallStart = new Date(
+      Math.min(...[...monthRanges.values()].map((r) => r.start.getTime())),
+    );
+    const overallEnd = new Date(
+      Math.max(...[...monthRanges.values()].map((r) => r.end.getTime())),
+    );
 
     const employees = await this.prisma.employee_profiles.findMany({
       where: { id: { in: dto.employeeIds } },
@@ -73,54 +106,75 @@ export class SaturdaySchedulesService {
       this.assertCampusAccess(user, employee.campus_id);
     }
 
-    const existingByEmployee = await this.prisma.teacher_saturday_schedules.groupBy({
-      by: ['employee_id'],
+    const existingRows = await this.prisma.teacher_saturday_schedules.findMany({
       where: {
         employee_id: { in: dto.employeeIds },
-        date: { gte: monthStart, lte: monthEnd },
+        date: { gte: overallStart, lte: overallEnd },
       },
-      _count: { _all: true },
+      select: { employee_id: true, date: true },
     });
-    const countMap = new Map(existingByEmployee.map((r) => [r.employee_id, r._count._all]));
 
-    const existingOnDate = await this.prisma.teacher_saturday_schedules.findMany({
-      where: { employee_id: { in: dto.employeeIds }, date },
-      select: { employee_id: true },
-    });
-    const alreadyOnDate = new Set(existingOnDate.map((r) => r.employee_id));
-
-    // An employee over the monthly cap is skipped, not fatal to the whole batch —
-    // the rest of the selected employees should still get scheduled.
-    const cappedIds = new Set<number>();
-    const skippedCap: { employee_id: number; full_name: string | null }[] = [];
-    for (const employee of employees) {
-      const count = countMap.get(employee.id) ?? 0;
-      if (count >= 2 && !alreadyOnDate.has(employee.id)) {
-        cappedIds.add(employee.id);
-        skippedCap.push({ employee_id: employee.id, full_name: employee.full_name });
-      }
+    // Running per-employee-per-month counts (seeded from the DB, incremented as
+    // rows are created below) and a set of dates each employee is already on —
+    // both scoped by month so a request spanning two payroll months enforces the
+    // 2/month cap independently per month rather than across the whole batch.
+    const monthCountMap = new Map<string, number>();
+    const alreadyScheduled = new Set<string>();
+    for (const row of existingRows) {
+      const monthKey = `${row.date.getUTCFullYear()}-${row.date.getUTCMonth()}`;
+      const countKey = `${row.employee_id}:${monthKey}`;
+      monthCountMap.set(countKey, (monthCountMap.get(countKey) ?? 0) + 1);
+      alreadyScheduled.add(`${row.employee_id}:${this.dateKey(row.date)}`);
     }
 
-    const created: Prisma.teacher_saturday_schedulesGetPayload<{ include: typeof scheduleInclude }>[] = [];
+    // An employee over the monthly cap for a given month is skipped for that
+    // month's dates, not fatal to the whole batch — everything else still goes through.
+    const cappedEmployeeIds = new Set<number>();
+    const skippedCap: { employee_id: number; full_name: string | null }[] = [];
+    const created: Prisma.teacher_saturday_schedulesGetPayload<{
+      include: typeof scheduleInclude;
+    }>[] = [];
 
-    for (const employeeId of dto.employeeIds) {
-      if (alreadyOnDate.has(employeeId) || cappedIds.has(employeeId)) continue;
+    for (const date of uniqueDates) {
+      const monthKey = `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+      const dateKey = this.dateKey(date);
 
-      try {
-        const row = await this.prisma.teacher_saturday_schedules.create({
-          data: {
-            employee_id: employeeId,
-            date,
-            marked_by: user.sub,
-          },
-          include: scheduleInclude,
-        });
-        created.push(row);
-      } catch (err) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      for (const employee of employees) {
+        const scheduledKey = `${employee.id}:${dateKey}`;
+        if (alreadyScheduled.has(scheduledKey)) continue;
+
+        const countKey = `${employee.id}:${monthKey}`;
+        const count = monthCountMap.get(countKey) ?? 0;
+        if (count >= 2) {
+          cappedEmployeeIds.add(employee.id);
+          skippedCap.push({
+            employee_id: employee.id,
+            full_name: employee.full_name,
+          });
           continue;
         }
-        throw err;
+
+        try {
+          const row = await this.prisma.teacher_saturday_schedules.create({
+            data: {
+              employee_id: employee.id,
+              date,
+              marked_by: user.sub,
+            },
+            include: scheduleInclude,
+          });
+          created.push(row);
+          monthCountMap.set(countKey, count + 1);
+          alreadyScheduled.add(scheduledKey);
+        } catch (err) {
+          if (
+            err instanceof Prisma.PrismaClientKnownRequestError &&
+            err.code === 'P2002'
+          ) {
+            continue;
+          }
+          throw err;
+        }
       }
     }
 
@@ -128,58 +182,102 @@ export class SaturdaySchedulesService {
     // calendar entry for the same date (see CalendarDayResolverService) — flag
     // it so the admin knows the holiday will be ignored for that employee now,
     // instead of that happening silently.
-    const holidayConflicts: { employee_id: number; full_name: string | null }[] = [];
+    const holidayConflicts: {
+      employee_id: number;
+      full_name: string | null;
+    }[] = [];
+    const conflictDatesByEmployee = new Map<number, Date[]>();
     if (created.length > 0) {
       const conflictRows = await this.prisma.academic_calendar_days.findMany({
         where: {
-          employee_id: { in: created.map((r) => r.employee_id) },
-          date,
           applies_to: 'STAFF',
           day_type: 'HOLIDAY',
+          OR: created.map((r) => ({
+            employee_id: r.employee_id,
+            date: r.date,
+          })),
         },
-        select: { employee_id: true },
+        select: { employee_id: true, date: true },
       });
-      const conflictSet = new Set(conflictRows.map((r) => r.employee_id));
+      const conflictKeySet = new Set(
+        conflictRows.map((r) => `${r.employee_id}:${this.dateKey(r.date)}`),
+      );
       for (const row of created) {
-        if (conflictSet.has(row.employee_id)) {
-          holidayConflicts.push({
-            employee_id: row.employee_id,
-            full_name: row.employee_profiles.full_name,
-          });
+        if (
+          conflictKeySet.has(`${row.employee_id}:${this.dateKey(row.date)}`)
+        ) {
+          const bucket = conflictDatesByEmployee.get(row.employee_id) ?? [];
+          bucket.push(row.date);
+          conflictDatesByEmployee.set(row.employee_id, bucket);
         }
+      }
+      for (const employeeId of conflictDatesByEmployee.keys()) {
+        const row = created.find((r) => r.employee_id === employeeId);
+        holidayConflicts.push({
+          employee_id: employeeId,
+          full_name: row?.employee_profiles.full_name ?? null,
+        });
       }
     }
 
-    const monthLabel = this.formatMonthLabel(date);
-    const affectedCampusIds = new Set<number>();
-    for (const employee of employees) {
-      if (employee.campus_id != null) affectedCampusIds.add(employee.campus_id);
-    }
+    for (const [monthKey, range] of monthRanges) {
+      const createdInMonth = created.filter(
+        (row) =>
+          `${row.date.getUTCFullYear()}-${row.date.getUTCMonth()}` === monthKey,
+      );
+      if (createdInMonth.length === 0) continue;
 
-    for (const campusId of affectedCampusIds) {
-      void this.noticeBoard
-        .createPost(
-          {
-            title: `Mandatory Saturday Attendance — ${monthLabel}`,
-            body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
-            target_roles: [StaffRole.TEACHER],
-            campus_ids: [campusId],
-          },
-          user,
-        )
-        .catch((err) => console.error('[SaturdaySchedules] Notice board post failed:', err?.message));
-    }
+      const monthLabel = this.formatMonthLabel(range.start);
+      const affectedCampusIds = new Set<number>();
+      for (const row of createdInMonth) {
+        if (row.employee_profiles.campus_id != null)
+          affectedCampusIds.add(row.employee_profiles.campus_id);
+      }
 
-    void this.notifyEmployeesMonthlySummary(dto.employeeIds, monthStart, monthEnd, date).catch((err) =>
-      console.error('[SaturdaySchedules] Monthly summary notice failed:', err?.message),
-    );
+      for (const campusId of affectedCampusIds) {
+        void this.noticeBoard
+          .createPost(
+            {
+              title: `Mandatory Saturday Attendance — ${monthLabel}`,
+              body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
+              target_roles: [StaffRole.TEACHER],
+              campus_ids: [campusId],
+            },
+            user,
+          )
+          .catch((err) =>
+            console.error(
+              '[SaturdaySchedules] Notice board post failed:',
+              err?.message,
+            ),
+          );
+      }
+
+      const employeeIdsInMonth = [
+        ...new Set(createdInMonth.map((row) => row.employee_id)),
+      ];
+      void this.notifyEmployeesMonthlySummary(
+        employeeIdsInMonth,
+        range.start,
+        range.end,
+        range.start,
+      ).catch((err) =>
+        console.error(
+          '[SaturdaySchedules] Monthly summary notice failed:',
+          err?.message,
+        ),
+      );
+    }
 
     if (holidayConflicts.length > 0) {
       const createdById = new Map(created.map((row) => [row.employee_id, row]));
-      const conflictDateLabel = this.formatSaturdayList([date]);
       for (const conflict of holidayConflicts) {
-        const userId = createdById.get(conflict.employee_id)?.employee_profiles.user_id;
+        const userId = createdById.get(conflict.employee_id)?.employee_profiles
+          .user_id;
         if (!userId) continue;
+        const conflictDates =
+          conflictDatesByEmployee.get(conflict.employee_id) ?? [];
+        const conflictDateLabel = this.formatSaturdayList(conflictDates);
         void this.noticeBoard
           .createScheduleNotice(
             conflict.employee_id,
@@ -187,24 +285,52 @@ export class SaturdaySchedulesService {
             'Attendance Required Despite Day Off',
             `You have a day off marked for ${conflictDateLabel}, but a mandatory Saturday assignment takes priority — please check in as usual.`,
           )
-          .catch((err) => console.error('[SaturdaySchedules] Conflict notice failed:', err?.message));
+          .catch((err) =>
+            console.error(
+              '[SaturdaySchedules] Conflict notice failed:',
+              err?.message,
+            ),
+          );
       }
     }
 
     if (created.length > 0) {
-      const employeeNames = created
-        .map((row) => row.employee_profiles.full_name ?? `Employee #${row.employee_profiles.id}`)
-        .join(', ');
-      void this.auditLogs.log({
-        entity_type: 'SATURDAY_SCHEDULE',
-        entity_id: this.dateKey(date),
-        action: 'CREATED',
-        changed_by: user.username,
-        note: `Assigned mandatory Saturday ${this.dateKey(date)} to ${created.length} employee(s): ${employeeNames}.`,
-      });
+      const createdByDate = new Map<string, typeof created>();
+      for (const row of created) {
+        const key = this.dateKey(row.date);
+        const bucket = createdByDate.get(key) ?? [];
+        bucket.push(row);
+        createdByDate.set(key, bucket);
+      }
+      for (const [dateKey, rows] of createdByDate) {
+        const employeeNames = rows
+          .map(
+            (row) =>
+              row.employee_profiles.full_name ??
+              `Employee #${row.employee_profiles.id}`,
+          )
+          .join(', ');
+        void this.auditLogs.log({
+          entity_type: 'SATURDAY_SCHEDULE',
+          entity_id: dateKey,
+          action: 'CREATED',
+          changed_by: auditActorLabel(user),
+          note: `Assigned mandatory Saturday ${dateKey} to ${rows.length} employee(s): ${employeeNames}.`,
+        });
+      }
     }
 
-    return { created, skipped_cap: skippedCap, holiday_conflicts: holidayConflicts };
+    // De-dupe skipped_cap entries — an employee capped out mid-batch across
+    // multiple dates would otherwise appear once per date they were skipped for.
+    const dedupedSkippedCap = [
+      ...new Map(skippedCap.map((s) => [s.employee_id, s])).values(),
+    ];
+
+    return {
+      created,
+      skipped_cap: dedupedSkippedCap,
+      holiday_conflicts: holidayConflicts,
+    };
   }
 
   async list(query: ListSaturdaySchedulesQueryDto, user: IJwtStaffPayload) {
@@ -218,12 +344,11 @@ export class SaturdaySchedulesService {
     const monthStart = new Date(Date.UTC(year, month - 1, 1));
     const monthEnd = new Date(Date.UTC(year, month, 0));
 
-    const campusIds =
-      query.campusId?.length
-        ? query.campusId
-        : user.role === StaffRole.CAMPUS_ADMIN && user.campusId != null
-          ? [user.campusId]
-          : undefined;
+    const campusIds = query.campusId?.length
+      ? query.campusId
+      : user.role === StaffRole.CAMPUS_ADMIN && user.campusId != null
+        ? [user.campusId]
+        : undefined;
     if (user.role === StaffRole.CAMPUS_ADMIN && campusIds?.length) {
       for (const campusId of campusIds) {
         this.assertCampusAccess(user, campusId);
@@ -241,7 +366,9 @@ export class SaturdaySchedulesService {
     const where: Prisma.teacher_saturday_schedulesWhereInput = {
       date: { gte: monthStart, lte: monthEnd },
       ...(query.employeeId != null ? { employee_id: query.employeeId } : {}),
-      ...(Object.keys(employeeFilter).length > 0 ? { employee_profiles: employeeFilter } : {}),
+      ...(Object.keys(employeeFilter).length > 0
+        ? { employee_profiles: employeeFilter }
+        : {}),
     };
 
     return this.prisma.teacher_saturday_schedules.findMany({
@@ -256,7 +383,11 @@ export class SaturdaySchedulesService {
 
     const existing = await this.prisma.teacher_saturday_schedules.findUnique({
       where: { id },
-      include: { employee_profiles: { select: { campus_id: true, full_name: true, user_id: true } } },
+      include: {
+        employee_profiles: {
+          select: { campus_id: true, full_name: true, user_id: true },
+        },
+      },
     });
     if (!existing) throw new NotFoundException('Saturday schedule not found');
 
@@ -267,7 +398,7 @@ export class SaturdaySchedulesService {
       entity_type: 'SATURDAY_SCHEDULE',
       entity_id: String(id),
       action: 'DELETED',
-      changed_by: user.username,
+      changed_by: auditActorLabel(user),
       note: `Removed Saturday schedule for ${existing.employee_profiles.full_name ?? `employee #${existing.employee_id}`} on ${this.dateKey(existing.date)}.`,
     });
 
@@ -279,19 +410,32 @@ export class SaturdaySchedulesService {
           'Saturday Attendance Cancelled',
           `You're no longer required to attend on ${this.formatSaturdayList([existing.date])} — this Saturday has been removed from your schedule.`,
         )
-        .catch((err) => console.error('[SaturdaySchedules] Removal notice failed:', err?.message));
+        .catch((err) =>
+          console.error(
+            '[SaturdaySchedules] Removal notice failed:',
+            err?.message,
+          ),
+        );
     }
 
     return { id };
   }
 
   private assertCanManage(user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN && user.role !== StaffRole.CAMPUS_ADMIN) {
-      throw new ForbiddenException('Only super admins and campus admins can manage Saturday schedules');
+    if (
+      user.role !== StaffRole.SUPER_ADMIN &&
+      user.role !== StaffRole.CAMPUS_ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Only super admins and campus admins can manage Saturday schedules',
+      );
     }
   }
 
-  private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
+  private assertCampusAccess(
+    user: IJwtStaffPayload,
+    employeeCampusId: number | null,
+  ) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (employeeCampusId == null) {
       throw new ForbiddenException('You do not have access to this employee');
@@ -307,7 +451,8 @@ export class SaturdaySchedulesService {
 
   private parseDate(dateStr: string): Date {
     const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) throw new BadRequestException('Invalid date');
+    if (Number.isNaN(d.getTime()))
+      throw new BadRequestException('Invalid date');
     d.setUTCHours(0, 0, 0, 0);
     return d;
   }
@@ -380,15 +525,30 @@ export class SaturdaySchedulesService {
             : dates.length === 2
               ? 'Please ensure your attendance on both days.'
               : 'Please ensure your attendance on all assigned days.';
-        if (await isTemplateDisabled(this.prisma, 'notif_staff_saturday_title')) return;
+        if (await isTemplateDisabled(this.prisma, 'notif_staff_saturday_title'))
+          return;
 
-        const vars = { month: monthLabel, date_list: dateList, attendance_note: attendanceNote };
-        const title = await resolveTemplate(this.prisma, 'notif_staff_saturday_title',
-          'Working Saturday Notice', vars);
-        const body = await resolveTemplate(this.prisma, 'notif_staff_saturday_body',
-          'You are required to attend school on the following Saturday(s) in {month}: {date_list}. {attendance_note}', vars);
+        const vars = {
+          month: monthLabel,
+          date_list: dateList,
+          attendance_note: attendanceNote,
+        };
+        const title = await resolveTemplate(
+          this.prisma,
+          'notif_staff_saturday_title',
+          'Working Saturday Notice',
+          vars,
+        );
+        const body = await resolveTemplate(
+          this.prisma,
+          'notif_staff_saturday_body',
+          'You are required to attend school on the following Saturday(s) in {month}: {date_list}. {attendance_note}',
+          vars,
+        );
 
-        await this.fcmService.sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE' });
+        await this.fcmService.sendToUsers([userId], title, body, {
+          type: 'EMPLOYEE_NOTICE',
+        });
       }),
     );
   }

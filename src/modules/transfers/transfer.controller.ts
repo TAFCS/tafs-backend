@@ -49,6 +49,21 @@ export class TransferController {
     );
   }
 
+  @Get(':cc/preview-gr')
+  @ApiOperation({ summary: 'Preview what GR number the student would receive after cross-campus transfer' })
+  async previewGr(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Query('to_campus_id') toCampusId: string,
+    @Query('to_class_id') toClassId?: string,
+  ) {
+    const data = await this.transferService.previewTransferGr(
+      cc,
+      Number(toCampusId),
+      toClassId ? Number(toClassId) : undefined,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'GR preview retrieved');
+  }
+
   @Get(':cc/transfer-order')
   @ApiOperation({ summary: 'Get student data for transfer order PDF' })
   async getTransferOrder(@Param('cc', ParseIntPipe) cc: number) {
