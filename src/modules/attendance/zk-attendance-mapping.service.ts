@@ -13,6 +13,28 @@ import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from 
  */
 const INLINE_RESOLVE_SCAN_LIMIT = 2000;
 
+/**
+ * Which campus (and, for segment-locked devices, which academic segments) a
+ * STUDENT pin may be mapped to on a given device. Derived from actual scan
+ * history per device, not its on-box label — devices named "Campus 3 ..." are
+ * physically at the JHR campus, so the label alone can't be trusted.
+ * Devices not listed here (test rigs, staff-only units) get no such check.
+ */
+const DEVICE_SEGMENT_RULES: Record<string, { campusCode: string; segmentCodes: string[] }> = {
+  NYU7261205128: { campusCode: 'JHR', segmentCodes: ['PRE_PRIMARY'] }, // Campus 3 Device 2 Pre-Primary
+  NYU7261205142: { campusCode: 'JHR', segmentCodes: ['JUNIOR_CAMBRIDGE'] }, // Campus 3 Device 1 Junior Cambridge
+  NYU7261205221: { campusCode: 'JHR', segmentCodes: ['SECONDARY'] }, // Campus 2 Device 1 Secondary
+  NYU7261205141: { campusCode: 'JHR', segmentCodes: ['SENIOR_CAMBRIDGE'] }, // Campus 2 Device 2 Senior Cambridge
+  NYU7261205172: { campusCode: 'JHR', segmentCodes: ['OLEVELS_CAMBRIDGE', 'ALEVELS_CAMBRIDGE'] }, // TAFSAL
+};
+
+/** Faculty devices: any segment, as long as the student belongs to this campus. */
+const DEVICE_CAMPUS_ONLY_RULES: Record<string, string> = {
+  NYU7251000240: 'JHR', // Johar Faculty
+  NYU7261205040: 'KNF', // GKF Faculty
+  NYU7261000023: 'NNZ', // NNN Faculty
+};
+
 /** Returned instead of a ResolutionReport when a pin is too large to rebuild inline. */
 export interface SkippedResolution {
   skipped: true;
@@ -22,14 +44,20 @@ export interface SkippedResolution {
   resolve_request: { kind: 'device_pin'; device_sn: string; device_pin: string; dry_run: false };
 }
 
-export type CollisionSeverity = 'BLOCK' | 'WARN';
+/**
+ * HARD_BLOCK can never be overridden with acknowledge_collisions — these are
+ * basic data-integrity rules, not judgment calls. BLOCK can be, for the cases
+ * where forcing a mapping through is sometimes legitimate.
+ */
+export type CollisionSeverity = 'HARD_BLOCK' | 'BLOCK' | 'WARN';
 
 export interface PinCollision {
   code:
     | 'PIN_IS_OTHER_STUDENT_GR'
     | 'PIN_IS_OTHER_STUDENT_CC'
     | 'PIN_NOT_EQUAL_TO_CC'
-    | 'PIN_USED_ON_OTHER_DEVICE';
+    | 'PIN_USED_ON_OTHER_DEVICE'
+    | 'DEVICE_SEGMENT_MISMATCH';
   severity: CollisionSeverity;
   message: string;
   conflicting_student_cc?: number;
@@ -464,18 +492,20 @@ export class ZkAttendanceMappingService {
       });
     }
 
-    // House convention (see scripts/check-student-device-mappings.ts) is pin == cc.
-    if (
-      input.person_type === DevicePersonType.STUDENT &&
-      input.student_cc != null &&
-      pinAsNumber !== null &&
-      pinAsNumber !== input.student_cc
-    ) {
-      collisions.push({
-        code: 'PIN_NOT_EQUAL_TO_CC',
-        severity: 'WARN',
-        message: `Pin ${pin} does not match this student's CC (${input.student_cc}). Convention is pin == cc.`,
-      });
+    // Students are only ever linked via pin == cc (see
+    // scripts/check-student-device-mappings.ts) — not a convention worth a
+    // warning, a mapping that violates it is simply wrong.
+    if (input.person_type === DevicePersonType.STUDENT && input.student_cc != null) {
+      if (pinAsNumber === null || pinAsNumber !== input.student_cc) {
+        collisions.push({
+          code: 'PIN_NOT_EQUAL_TO_CC',
+          severity: 'HARD_BLOCK',
+          message: `Pin ${pin} does not match this student's CC (${input.student_cc}). Student pins must equal CC.`,
+        });
+      }
+
+      const segmentMismatch = await this.checkStudentDeviceEligibility(input.device_sn, input.student_cc);
+      if (segmentMismatch) collisions.push(segmentMismatch);
     }
 
     const otherDevice = await this.prisma.device_user_mappings.findFirst({
@@ -869,6 +899,17 @@ export class ZkAttendanceMappingService {
     acknowledge?: boolean,
   ): Promise<PinCollision[]> {
     const collisions = await this.checkPinCollisions(input);
+
+    // Never overridable, acknowledge_collisions or not — these aren't judgment
+    // calls, the mapping is simply wrong.
+    const hardBlocking = collisions.filter((c) => c.severity === 'HARD_BLOCK');
+    if (hardBlocking.length > 0) {
+      throw new ConflictException({
+        message: `Mapping not allowed: ${hardBlocking.map((b) => b.message).join(' ')}`,
+        collisions,
+      });
+    }
+
     const blocking = collisions.filter((c) => c.severity === 'BLOCK');
     if (blocking.length > 0 && !acknowledge) {
       throw new ConflictException({
@@ -878,6 +919,54 @@ export class ZkAttendanceMappingService {
       });
     }
     return collisions;
+  }
+
+  /**
+   * A student pin belongs on a device that actually serves that student —
+   * segment-locked devices (Pre-Primary, Junior Cambridge, ...) only their
+   * segment; faculty devices (branch-wide) any segment, but the right campus.
+   * Devices with no rule (test rigs, staff-only units) are unrestricted.
+   */
+  private async checkStudentDeviceEligibility(
+    deviceSn: string,
+    studentCc: number,
+  ): Promise<PinCollision | null> {
+    const segmentRule = DEVICE_SEGMENT_RULES[deviceSn];
+    const requiredCampusCode = segmentRule?.campusCode ?? DEVICE_CAMPUS_ONLY_RULES[deviceSn];
+    if (!requiredCampusCode) return null;
+
+    const student = await this.prisma.students.findUnique({
+      where: { cc: studentCc },
+      select: {
+        full_name: true,
+        campuses: { select: { campus_code: true, campus_name: true } },
+        classes: { select: { description: true, segments: { select: { code: true, name: true } } } },
+      },
+    });
+    if (!student) return null;
+
+    if (student.campuses?.campus_code !== requiredCampusCode) {
+      return {
+        code: 'DEVICE_SEGMENT_MISMATCH',
+        severity: 'HARD_BLOCK',
+        message:
+          `${student.full_name} is enrolled at ${student.campuses?.campus_name ?? 'a different campus'}, ` +
+          `not the campus this device serves.`,
+      };
+    }
+
+    if (segmentRule && !segmentRule.segmentCodes.includes(student.classes?.segments?.code ?? '')) {
+      return {
+        code: 'DEVICE_SEGMENT_MISMATCH',
+        severity: 'HARD_BLOCK',
+        message:
+          `${student.full_name} is in ${student.classes?.description ?? 'a class'}` +
+          `${student.classes?.segments?.name ? ` (${student.classes.segments.name})` : ''}, ` +
+          `which this device does not serve.`,
+      };
+    }
+
+    return null;
   }
 
   private validatePersonRefs(personType: DevicePersonType, employeeId?: number | null, studentCc?: number | null) {
