@@ -32,6 +32,17 @@ const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival ar
  */
 export const MANUAL_DEVICE_SN = 'MANUAL';
 
+/** Gate-desk punches may flip a default ABSENT mark to present; other manual/system marks stay protected. */
+function isDailyRecordPunchProtected(existing: attendance_student_daily | null): boolean {
+  if (!existing) return false;
+  if (existing.source === AttendanceSource.LEAVE) return true;
+  if (existing.source === AttendanceSource.BIOMETRIC) return false;
+  if (existing.source === AttendanceSource.MANUAL || existing.source === AttendanceSource.SYSTEM) {
+    return existing.status !== RollRecordStatus.ABSENT;
+  }
+  return false;
+}
+
 /**
  * Kill switch for student LATE marking, paused campus-wide by request. While
  * false, every student check-in classifies as PRESENT regardless of expected
@@ -1047,7 +1058,7 @@ export class ZkAttendanceProcessorService {
     const existing = await this.prisma.attendance_student_daily.findUnique({
       where: { student_cc_date: { student_cc: studentCc, date } },
     });
-    if (existing?.source === AttendanceSource.MANUAL || existing?.source === AttendanceSource.SYSTEM) return null;
+    if (isDailyRecordPunchProtected(existing)) return null;
 
     const policy = await this.policyResolver.resolveStudentCheckInPolicy(
       student.class_id,
@@ -1189,12 +1200,9 @@ export class ZkAttendanceProcessorService {
     }
     // resolveAttendance / holiday sync own the day once they've written it;
     // a punch here would insert a scan that never reaches the daily record.
-    if (
-      state.record?.source === AttendanceSource.MANUAL ||
-      state.record?.source === AttendanceSource.SYSTEM
-    ) {
+    if (isDailyRecordPunchProtected(state.record)) {
       throw new ConflictException(
-        `Today's attendance for this student was already set manually (${state.record.status}). Edit it from the student's attendance page instead.`,
+        `Today's attendance for this student was already set manually (${state.record!.status}). Edit it from the student's attendance page instead.`,
       );
     }
 

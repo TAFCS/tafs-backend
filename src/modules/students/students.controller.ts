@@ -18,6 +18,7 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { STUDENTS_MESSAGES } from '../../constants/api-response/students.constant';
+import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
 
 @Controller('students')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -26,8 +27,8 @@ export class StudentsController {
 
   @Get('search-simple')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  async searchSimple(@Query('q') q: string) {
-    const results = await this.studentsService.searchSimple(q || '');
+  async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
+    const results = await this.studentsService.searchSimple(query, user);
     return createApiResponse(
       results,
       HttpStatus.OK,

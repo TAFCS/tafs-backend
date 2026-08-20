@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
+import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { Prisma } from '@prisma/client';
@@ -3231,33 +3232,54 @@ export class StudentsService {
     return `${fallbackStartYear}-${fallbackStartYear + 1}`;
   }
 
-  async searchSimple(query: string) {
-    const isNumeric = /^\d+$/.test(query);
-    const results: any[] = [];
+  async searchSimple(query: SearchSimpleQueryDto, user: IJwtStaffPayload) {
+    const q = (query.q ?? '').trim();
+    if (!q) return [];
+
+    const baseFilter: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      status: StudentStatus.ENROLLED,
+    };
+    if (query.campus_id != null) baseFilter.campus_id = query.campus_id;
+    if (query.class_id != null) baseFilter.class_id = query.class_id;
+    if (query.section_id != null) baseFilter.section_id = query.section_id;
+    if (query.segment_id != null) {
+      baseFilter.classes = { is: { segment_id: query.segment_id } };
+    }
+
+    const scopedFilter = applyStudentScope(user, baseFilter, {
+      campus_id: query.campus_id,
+      class_id: query.class_id,
+    });
+
+    const select = {
+      cc: true,
+      full_name: true,
+      gr_number: true,
+      photograph_url: true,
+      classes: { select: { description: true } },
+      sections: { select: { description: true } },
+      campuses: { select: { campus_name: true } },
+    } as const;
+
+    const isNumeric = /^\d+$/.test(q);
+    const results: Prisma.studentsGetPayload<{ select: typeof select }>[] = [];
 
     // 1. Check for exact CC match if query is numeric
     if (isNumeric) {
       const exactMatch = await this.prisma.students.findFirst({
-        where: { cc: Number(query), deleted_at: null },
-        select: {
-          cc: true,
-          full_name: true,
-          gr_number: true,
-          photograph_url: true,
-          classes: { select: { description: true } },
-          sections: { select: { description: true } },
-          campuses: { select: { campus_name: true } },
-        },
+        where: { ...scopedFilter, cc: Number(q) },
+        select,
       });
       if (exactMatch) results.push(exactMatch);
     }
 
     // 2. Fetch partial matches for names and GR numbers
     const where: Prisma.studentsWhereInput = {
-      deleted_at: null,
+      ...scopedFilter,
       OR: [
-        { full_name: { contains: query, mode: 'insensitive' } },
-        { gr_number: { contains: query, mode: 'insensitive' } },
+        { full_name: { contains: q, mode: 'insensitive' } },
+        { gr_number: { contains: q, mode: 'insensitive' } },
       ],
     };
 
@@ -3269,15 +3291,7 @@ export class StudentsService {
     const others = await this.prisma.students.findMany({
       where,
       take: 5 - results.length,
-      select: {
-        cc: true,
-        full_name: true,
-        gr_number: true,
-        photograph_url: true,
-        classes: { select: { description: true } },
-        sections: { select: { description: true } },
-        campuses: { select: { campus_name: true } },
-      },
+      select,
       orderBy: { full_name: 'asc' },
     });
 
