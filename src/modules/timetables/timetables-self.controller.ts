@@ -7,6 +7,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { createApiResponse } from '../../utils/serializer.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TimetablesService } from './timetables.service';
+import { ClassPeriodsService } from './class-periods.service';
 
 @ApiTags('Timetables Self')
 @ApiBearerAuth()
@@ -16,6 +17,7 @@ export class TimetablesSelfController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly service: TimetablesService,
+    private readonly classPeriods: ClassPeriodsService,
   ) {}
 
   @Get('me')
@@ -28,19 +30,26 @@ export class TimetablesSelfController {
       throw new NotFoundException('No employee profile linked to this account');
     }
 
-    const [slots, blocks] = await Promise.all([
-      this.service.listTeacherWeeklySlots(employee.id),
-      this.service.listBlocks(),
-    ]);
-    const blockByNumber = new Map(blocks.map((b) => [b.block_number, b]));
+    const slots = await this.service.listTeacherWeeklySlots(employee.id);
+    // Each slot's own class may run a different bell schedule, so times are
+    // resolved per (campus, class, block) rather than off one shared list.
+    const periods = await this.classPeriods.resolveMany(
+      slots.map((slot) => ({
+        campus_id: slot.timetables.campus_id,
+        class_id: slot.timetables.class_id,
+        block_number: slot.block_number,
+      })),
+    );
 
     const data = slots.map((slot) => {
-      const block = blockByNumber.get(slot.block_number);
+      const period = periods.get(
+        `${slot.timetables.campus_id}:${slot.timetables.class_id}:${slot.block_number}`,
+      );
       return {
         ...slot,
-        start_time: block?.start_time ?? null,
-        end_time: block?.end_time ?? null,
-        label: block?.label ?? null,
+        start_time: period?.start_time ?? null,
+        end_time: period?.end_time ?? null,
+        label: period?.label ?? null,
       };
     });
 

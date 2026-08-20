@@ -143,6 +143,47 @@ export class CreateGroupTimetableDto {
   academic_year: string;
 }
 
+export class ListClassPeriodsQueryDto {
+  @Type(() => Number)
+  @IsInt()
+  campus_id: number;
+
+  @Type(() => Number)
+  @IsInt()
+  class_id: number;
+}
+
+export class UpsertClassPeriodDto {
+  @Type(() => Number)
+  @IsInt()
+  campus_id: number;
+
+  @Type(() => Number)
+  @IsInt()
+  class_id: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  block_number: number;
+
+  @IsString()
+  start_time: string; // "HH:MM"
+
+  @IsString()
+  end_time: string; // "HH:MM"
+
+  @IsOptional()
+  @IsBoolean()
+  is_break?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  label?: string;
+}
+
 export class UpsertSlotDto {
   @Type(() => Number)
   @IsInt()
@@ -153,7 +194,7 @@ export class UpsertSlotDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(8)
+  @Max(12)
   block_number: number;
 
   @Type(() => Number)

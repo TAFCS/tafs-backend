@@ -10,6 +10,7 @@ import { TeachingGroupsController } from './teaching-groups.controller';
 import { TeachingGroupsService } from './teaching-groups.service';
 import { TimetablesSelfController } from './timetables-self.controller';
 import { TimetablesParentController } from './timetables-parent.controller';
+import { ClassPeriodsService } from './class-periods.service';
 
 @Module({
   imports: [AuthModule],
@@ -26,6 +27,7 @@ import { TimetablesParentController } from './timetables-parent.controller';
     TeacherCheckinDerivationService,
     EmployeeExpectedTimesService,
     TeachingGroupsService,
+    ClassPeriodsService,
   ],
   exports: [
     TimetablesService,
@@ -33,6 +35,7 @@ import { TimetablesParentController } from './timetables-parent.controller';
     TeacherCheckinDerivationService,
     EmployeeExpectedTimesService,
     TeachingGroupsService,
+    ClassPeriodsService,
   ],
 })
 export class TimetablesModule {}

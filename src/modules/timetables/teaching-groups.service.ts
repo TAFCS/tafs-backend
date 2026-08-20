@@ -12,12 +12,14 @@ import { assertClassInScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { BulkEnrollDto, CreateTeachingGroupDto, UpdateTeachingGroupDto } from './dto/teaching-groups.dto';
+import { ClassPeriodsService } from './class-periods.service';
 
 @Injectable()
 export class TeachingGroupsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly classPeriods: ClassPeriodsService,
   ) {}
 
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
@@ -290,38 +292,46 @@ export class TeachingGroupsService {
     const timetableIds = timetables.map((t) => t.id);
     if (timetableIds.length === 0) return { blocks: [] };
 
-    const [blocks, slots] = await Promise.all([
-      this.prisma.timetable_blocks.findMany({ orderBy: { block_number: 'asc' } }),
-      this.prisma.timetable_slots.findMany({
-        where: { timetable_id: { in: timetableIds } },
-        include: {
-          subjects: { select: { id: true, name: true, code: true } },
-          employee_profiles: { select: { id: true, full_name: true } },
-          timetables: {
-            select: {
-              campus_id: true,
-              class_id: true,
-              teaching_group_id: true,
-              teaching_groups: { select: { id: true, label: true } },
-            },
+    const slots = await this.prisma.timetable_slots.findMany({
+      where: { timetable_id: { in: timetableIds } },
+      include: {
+        subjects: { select: { id: true, name: true, code: true } },
+        employee_profiles: { select: { id: true, full_name: true } },
+        timetables: {
+          select: {
+            campus_id: true,
+            class_id: true,
+            teaching_group_id: true,
+            teaching_groups: { select: { id: true, label: true } },
           },
         },
-        orderBy: [{ day_of_week: 'asc' }, { block_number: 'asc' }, { slot_order: 'asc' }],
-      }),
-    ]);
+      },
+      orderBy: [{ day_of_week: 'asc' }, { block_number: 'asc' }, { slot_order: 'asc' }],
+    });
 
-    const blockByNumber = new Map(blocks.map((b) => [b.block_number, b]));
+    // Each teaching group's class may run a different bell schedule, so
+    // times are resolved per (campus, class, block) rather than off one
+    // shared global list.
+    const periods = await this.classPeriods.resolveMany(
+      slots.map((slot) => ({
+        campus_id: slot.timetables.campus_id,
+        class_id: slot.timetables.class_id,
+        block_number: slot.block_number,
+      })),
+    );
 
     return {
       blocks: slots.map((slot) => {
-        const block = blockByNumber.get(slot.block_number);
+        const period = periods.get(
+          `${slot.timetables.campus_id}:${slot.timetables.class_id}:${slot.block_number}`,
+        );
         return {
           id: slot.id,
           day_of_week: slot.day_of_week,
           block_number: slot.block_number,
-          start_time: block?.start_time ?? null,
-          end_time: block?.end_time ?? null,
-          label: block?.label ?? null,
+          start_time: period?.start_time ?? null,
+          end_time: period?.end_time ?? null,
+          label: period?.label ?? null,
           room: slot.room,
           subject: slot.subjects,
           teacher: slot.employee_profiles,

@@ -12,12 +12,14 @@ import { assertClassInScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { UpsertSlotDto } from './dto/timetables.dto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ClassPeriodsService } from './class-periods.service';
 
 @Injectable()
 export class TimetablesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly classPeriods: ClassPeriodsService,
   ) {}
 
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
@@ -93,7 +95,7 @@ export class TimetablesService {
     const group = await this.assertTeachingGroupAccess(teachingGroupId, user);
 
     const [blocks, timetable] = await Promise.all([
-      this.listBlocks(),
+      this.classPeriods.list(group.campus_id, group.class_id),
       this.prisma.timetables.findUnique({
         where: {
           campus_id_teaching_group_id_academic_year: {
@@ -213,7 +215,7 @@ export class TimetablesService {
 
     const dayOfWeek = date.getUTCDay();
     const [blocks, timetable] = await Promise.all([
-      this.listBlocks(),
+      this.classPeriods.list(campusId, classId),
       this.resolveActiveTimetable(campusId, classId, sectionId, date),
     ]);
 
@@ -239,6 +241,7 @@ export class TimetablesService {
         start_time: block.start_time,
         end_time: block.end_time,
         label: block.label,
+        is_break: block.is_break,
         slots: (slotsByBlock.get(block.block_number) ?? []).map((slot) => ({
           id: slot.id,
           slot_order: slot.slot_order,
@@ -274,7 +277,7 @@ export class TimetablesService {
     const dayOfWeek = date.getUTCDay();
     const academicYear = this.deriveAcademicYear(date);
     const [blocks, timetable] = await Promise.all([
-      this.listBlocks(),
+      this.classPeriods.list(group.campus_id, group.class_id),
       this.prisma.timetables.findFirst({
         where: {
           campus_id: group.campus_id,
@@ -308,6 +311,7 @@ export class TimetablesService {
         start_time: block.start_time,
         end_time: block.end_time,
         label: block.label,
+        is_break: block.is_break,
         slots: (slotsByBlock.get(block.block_number) ?? []).map((slot) => ({
           id: slot.id,
           slot_order: slot.slot_order,
@@ -330,7 +334,7 @@ export class TimetablesService {
     await this.assertCampusSection(campusId, classId, sectionId);
 
     const [blocks, timetable] = await Promise.all([
-      this.listBlocks(),
+      this.classPeriods.list(campusId, classId),
       this.prisma.timetables.findUnique({
         where: {
           campus_id_class_id_section_id_academic_year: {

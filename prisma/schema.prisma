@@ -115,6 +115,7 @@ model campuses {
   campus_sections             campus_sections[]
   class_check_in_schedules    class_check_in_schedules[]
   class_fee_schedule          class_fee_schedule[]
+  class_timetable_periods     class_timetable_periods[]
   employee_profiles           employee_profiles[]
   hr_policy_sets              hr_policy_sets[]
   payroll_runs                payroll_runs[]
@@ -156,6 +157,7 @@ model classes {
   class_attendance_modes             class_attendance_modes?
   class_check_in_schedules           class_check_in_schedules[]
   class_fee_schedule                 class_fee_schedule[]
+  class_timetable_periods            class_timetable_periods[]
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
   employee_class_section_assignments employee_class_section_assignments[]
   student_academic_history           student_academic_history[]
@@ -447,6 +449,32 @@ model timetable_blocks {
   start_time   DateTime @db.Time(0)
   end_time     DateTime @db.Time(0)
   label        String?  @db.VarChar(20)
+}
+
+// Per (campus, class) bell schedule -- replaces the single global
+// timetable_blocks template. Different classes/segments run different
+// period lengths and break windows (e.g. O1/O2 at 50-min periods with a
+// 10:30-11:00 break vs O3 at 60-min periods with a 10:50-11:10 break), so
+// block times are no longer one-size-fits-all. block_number lines up with
+// timetable_slots.block_number for the same (campus, class). A row with
+// is_break=true has no corresponding slots -- it's a display-only divider
+// (e.g. "BREAK 10:30-11:00").
+model class_timetable_periods {
+  id           Int      @id @default(autoincrement())
+  campus_id    Int
+  class_id     Int
+  block_number Int
+  start_time   DateTime @db.Time(0)
+  end_time     DateTime @db.Time(0)
+  is_break     Boolean  @default(false)
+  label        String?  @db.VarChar(20)
+  created_at   DateTime @default(now()) @db.Timestamp(6)
+  updated_at   DateTime @updatedAt @db.Timestamp(6)
+  campuses     campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes      classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+
+  @@unique([campus_id, class_id, block_number], map: "class_timetable_periods_scope_key")
+  @@index([campus_id, class_id])
 }
 
 model student_activities {

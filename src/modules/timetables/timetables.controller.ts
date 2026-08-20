@@ -22,13 +22,16 @@ import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { TimetablesService } from './timetables.service';
 import { EmployeeExpectedTimesService } from './employee-expected-times.service';
+import { ClassPeriodsService } from './class-periods.service';
 import {
   CreateGroupTimetableDto,
   CreateTimetableDto,
   DaySlotsQueryDto,
   GroupDaySlotsQueryDto,
+  ListClassPeriodsQueryDto,
   TeachingGroupGridQueryDto,
   TimetableGridQueryDto,
+  UpsertClassPeriodDto,
   UpsertSlotDto,
 } from './dto/timetables.dto';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -41,8 +44,36 @@ export class TimetablesController {
   constructor(
     private readonly service: TimetablesService,
     private readonly expectedTimes: EmployeeExpectedTimesService,
+    private readonly classPeriods: ClassPeriodsService,
     private readonly prisma: PrismaService,
   ) {}
+
+  @Get('periods')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  async listPeriods(@Query() query: ListClassPeriodsQueryDto) {
+    const data = await this.classPeriods.list(query.campus_id, query.class_id);
+    return createApiResponse(data, HttpStatus.OK, 'Class periods retrieved');
+  }
+
+  @Put('periods')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  async upsertPeriod(
+    @Body() dto: UpsertClassPeriodDto,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.classPeriods.upsert(dto, req.user);
+    return createApiResponse(data, HttpStatus.OK, 'Period saved');
+  }
+
+  @Delete('periods/:id')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  async deletePeriod(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    const data = await this.classPeriods.remove(id, req.user);
+    return createApiResponse(data, HttpStatus.OK, 'Period deleted');
+  }
 
   @Get('blocks')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
