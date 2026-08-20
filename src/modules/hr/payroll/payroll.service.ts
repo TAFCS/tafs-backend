@@ -337,13 +337,15 @@ export class PayrollService {
         : dowDefault;
 
       let classification: DayClassification;
-      if (!resolved.isWorkingDay) {
-        classification = 'DAY_OFF';
-      } else if (
+      if (
         record?.source === AttendanceSource.MANUAL ||
         record?.source === AttendanceSource.LEAVE
       ) {
+        // A recorded override always wins, even on a holiday/off day — this is
+        // what lets HR flip a day off with punches on it to PRESENT/etc.
         classification = record.status as DayClassification;
+      } else if (!resolved.isWorkingDay) {
+        classification = 'DAY_OFF';
       } else if (dayScans.length === 0) {
         classification = 'ABSENT';
       } else if (dayScans.length % 2 !== 0) {

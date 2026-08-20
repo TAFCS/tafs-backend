@@ -704,9 +704,17 @@ export class StaffAttendanceService {
     for (const mark of dto.records) {
       const resolved = await this.calendarResolver.resolveStaffDay(mark.employee_id, dto.campus_id, date);
       if (!resolved.isWorkingDay) {
-        throw new BadRequestException(
-          `Cannot mark attendance on a day off: ${resolved.description ?? resolved.dayType ?? 'Holiday'}`,
-        );
+        // Still allow the override when the employee actually punched in that
+        // day — HR needs to flip a holiday/off-day with real scans on it to
+        // PRESENT (or any other status), just not mark an empty day off.
+        const punchCount = await this.prisma.zk_attendance_scans.count({
+          where: { employee_id: mark.employee_id, attendance_date: date },
+        });
+        if (punchCount === 0) {
+          throw new BadRequestException(
+            `Cannot mark attendance on a day off: ${resolved.description ?? resolved.dayType ?? 'Holiday'}`,
+          );
+        }
       }
     }
 
