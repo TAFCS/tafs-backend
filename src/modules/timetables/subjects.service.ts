@@ -22,7 +22,9 @@ export class SubjectsService {
   async list(query: ListSubjectsQueryDto) {
     const where: Prisma.subjectsWhereInput = {};
     if (query.academic_system) {
-      where.academic_system = query.academic_system;
+      // A null academic_system marks a "universal" subject (e.g. Sports,
+      // Taekwondo) pickable for any class regardless of segment.
+      where.OR = [{ academic_system: query.academic_system }, { academic_system: null }];
     }
     if (query.active !== undefined) {
       where.is_active = query.active;
@@ -40,7 +42,7 @@ export class SubjectsService {
         data: {
           name,
           code: dto.code?.trim() || null,
-          academic_system: dto.academic_system?.trim() || 'A-Level',
+          academic_system: dto.academic_system?.trim() || null,
           is_active: true,
         },
       });
