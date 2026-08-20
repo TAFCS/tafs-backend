@@ -9,6 +9,11 @@ const initialConfigs = [
   { key: 'min_ios_build', value: '1', description: 'Minimum iOS build number required' },
   { key: 'android_store_url', value: 'https://play.google.com/store', description: 'Android Play Store deep link URL' },
   { key: 'ios_store_url', value: 'https://apps.apple.com/store', description: 'iOS App Store deep link URL' },
+  {
+    key: 'slc_last_number',
+    value: '250',
+    description: 'Last issued School Leaving Certificate (SLC) number. Next issued = this + 1.',
+  },
 ];
 
 async function main() {

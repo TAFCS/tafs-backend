@@ -662,6 +662,8 @@ model students {
   family_id                   Int?
   campus_id                   Int?
   gr_number                   String?                       @db.VarChar(50)
+  /// School Leaving Certificate serial — independent of CC / GR.
+  slc_number                  Int?                          @unique
   dob                         DateTime?                     @db.Date
   gender                      String?                       @db.VarChar(10)
   nationality                 String?                       @db.VarChar(50)

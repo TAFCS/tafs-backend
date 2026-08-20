@@ -8,6 +8,10 @@ import { ProgressionHistoryService } from '../students/progression-history.servi
 
 @Injectable()
 export class EnrollmentService {
+  private static readonly SLC_LAST_KEY = 'slc_last_number';
+  /** Last SLC already issued outside / before this tracker. Next allocate = 251. */
+  private static readonly SLC_SEED_LAST = 250;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly allocation: StudentAllocationService,
@@ -825,6 +829,69 @@ export class EnrollmentService {
     return selectedSectionId;
   }
 
+  /**
+   * Allocates a unique SLC serial for the student if they don't already have one.
+   * Tracker is seeded so the last issued number is 250 → next is 251.
+   */
+  async allocateSlcNumber(cc: number): Promise<number> {
+    return this.prisma.$transaction(async (tx) => {
+      const student = await tx.students.findUnique({
+        where: { cc },
+        select: { cc: true, slc_number: true },
+      });
+      if (!student) {
+        throw new NotFoundException(`Student with CC #${cc} not found`);
+      }
+      if (student.slc_number != null) {
+        return student.slc_number;
+      }
+
+      let config = await tx.app_config.findUnique({
+        where: { key: EnrollmentService.SLC_LAST_KEY },
+      });
+      if (!config) {
+        config = await tx.app_config.create({
+          data: {
+            key: EnrollmentService.SLC_LAST_KEY,
+            value: String(EnrollmentService.SLC_SEED_LAST),
+            description:
+              'Last issued School Leaving Certificate (SLC) number. Next issued = this + 1.',
+            updated_at: new Date(),
+            updated_by: 'SYSTEM',
+          },
+        });
+      }
+
+      const maxAssigned = await tx.students.aggregate({
+        _max: { slc_number: true },
+      });
+      const lastFromConfig = parseInt(config.value, 10);
+      const lastFromStudents = maxAssigned._max.slc_number ?? 0;
+      const last = Math.max(
+        Number.isFinite(lastFromConfig) ? lastFromConfig : 0,
+        lastFromStudents,
+        EnrollmentService.SLC_SEED_LAST,
+      );
+      const next = last + 1;
+
+      await tx.app_config.update({
+        where: { key: EnrollmentService.SLC_LAST_KEY },
+        data: {
+          value: String(next),
+          updated_by: 'SYSTEM',
+          updated_at: new Date(),
+        },
+      });
+
+      await tx.students.update({
+        where: { cc },
+        data: { slc_number: next },
+      });
+
+      return next;
+    });
+  }
+
   async getLeavingCertificateData(cc: number) {
     const student = await this.prisma.students.findUnique({
       where: { cc },
@@ -852,6 +919,8 @@ export class EnrollmentService {
     if (!student) {
       throw new NotFoundException(`Student with CC #${cc} not found`);
     }
+
+    const slcNumber = await this.allocateSlcNumber(cc);
 
     const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
     const fatherFullName = fatherLink?.guardians?.full_name || '';
@@ -943,7 +1012,7 @@ export class EnrollmentService {
     return {
       header_title: headerTitle,
       header_prefix: headerPrefix,
-      slc_number: String(student.cc),
+      slc_number: String(slcNumber),
       cc: student.cc,
       gr_number: student.gr_number || '—',
       name: {
