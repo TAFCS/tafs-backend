@@ -200,7 +200,7 @@ export class UpsertSlotDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(2)
+  @Max(3)
   slot_order: number;
 
   @Type(() => Number)

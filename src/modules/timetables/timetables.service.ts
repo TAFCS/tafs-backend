@@ -425,20 +425,20 @@ export class TimetablesService {
     });
     if (!employee) throw new BadRequestException('Employee not found');
 
-    if (dto.slot_order === 2) {
-      const primary = await this.prisma.timetable_slots.findUnique({
+    if (dto.slot_order > 1) {
+      const previous = await this.prisma.timetable_slots.findUnique({
         where: {
           timetable_id_day_of_week_block_number_slot_order: {
             timetable_id: timetableId,
             day_of_week: dto.day_of_week,
             block_number: dto.block_number,
-            slot_order: 1,
+            slot_order: dto.slot_order - 1,
           },
         },
       });
-      if (!primary) {
+      if (!previous) {
         throw new BadRequestException(
-          'Cannot add a split slot before the primary slot (slot_order=1) exists',
+          `Cannot add split slot_order=${dto.slot_order} before slot_order=${dto.slot_order - 1} exists in this block`,
         );
       }
     }
@@ -585,7 +585,29 @@ export class TimetablesService {
       return { deleted: true, cascaded: true };
     }
 
-    await this.prisma.timetable_slots.delete({ where: { id: slotId } });
+    // Deleting a non-primary split can leave a gap (e.g. removing slot_order=2
+    // while slot_order=3 still exists) -- shift any higher slot_orders in
+    // this cell down by one so orders stay contiguous (1..N). The "add next
+    // split" UI always offers max(slot_order)+1, which relies on that.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.timetable_slots.delete({ where: { id: slotId } });
+      const higher = await tx.timetable_slots.findMany({
+        where: {
+          timetable_id: slot.timetable_id,
+          day_of_week: slot.day_of_week,
+          block_number: slot.block_number,
+          slot_order: { gt: slot.slot_order },
+        },
+        orderBy: { slot_order: 'asc' },
+      });
+      for (const h of higher) {
+        await tx.timetable_slots.update({
+          where: { id: h.id },
+          data: { slot_order: h.slot_order - 1 },
+        });
+      }
+    });
+
     void this.auditLogs.log({
       entity_type: 'TIMETABLE_SLOT',
       entity_id: String(slotId),
