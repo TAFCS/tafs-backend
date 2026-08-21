@@ -443,29 +443,62 @@ export class TimetablesService {
       }
     }
 
-    // Reject if teacher already has a different slot at this day+block
-    // (another timetable's active schedule, or the other split in this cell).
-    const conflict = await this.prisma.timetable_slots.findFirst({
+    // Reject if the teacher's real wall-clock time for this slot overlaps
+    // any other active slot they're already scheduled into that weekday.
+    // block_number alone isn't enough to detect this anymore: each class
+    // has its own bell schedule now, so "block 3" can be a different real
+    // time in a different class -- comparing raw block_number would flag
+    // teachers who aren't actually double-booked (and would miss real
+    // double-bookings that happen to land on different block numbers).
+    const otherSlotsThatDay = await this.prisma.timetable_slots.findMany({
       where: {
         employee_id: dto.employee_id,
         day_of_week: dto.day_of_week,
-        block_number: dto.block_number,
+        timetables: { is_active: true },
         NOT: {
-          AND: [
-            { timetable_id: timetableId },
-            { slot_order: dto.slot_order },
-          ],
+          AND: [{ timetable_id: timetableId }, { slot_order: dto.slot_order }],
         },
-        OR: [
-          { timetable_id: timetableId },
-          { timetables: { is_active: true } },
-        ],
       },
+      include: { timetables: { select: { campus_id: true, class_id: true } } },
     });
-    if (conflict) {
-      throw new ConflictException(
-        `Teacher is already scheduled at this day/block (timetable #${conflict.timetable_id})`,
+
+    if (otherSlotsThatDay.length > 0) {
+      const periods = await this.classPeriods.resolveMany([
+        { campus_id: timetable.campus_id, class_id: timetable.class_id, block_number: dto.block_number },
+        ...otherSlotsThatDay.map((s) => ({
+          campus_id: s.timetables.campus_id,
+          class_id: s.timetables.class_id,
+          block_number: s.block_number,
+        })),
+      ]);
+      const newPeriod = periods.get(
+        `${timetable.campus_id}:${timetable.class_id}:${dto.block_number}`,
       );
+
+      for (const other of otherSlotsThatDay) {
+        const otherPeriod = periods.get(
+          `${other.timetables.campus_id}:${other.timetables.class_id}:${other.block_number}`,
+        );
+        // Without a bell schedule configured for either side we can't tell
+        // whether they truly overlap -- fall back to the old same-block
+        // heuristic so a real double-booking is never silently allowed.
+        if (!newPeriod || !otherPeriod) {
+          if (other.block_number === dto.block_number) {
+            throw new ConflictException(
+              `Teacher is already scheduled at this day/block (timetable #${other.timetable_id})`,
+            );
+          }
+          continue;
+        }
+        const overlaps =
+          newPeriod.start_time.getTime() < otherPeriod.end_time.getTime() &&
+          otherPeriod.start_time.getTime() < newPeriod.end_time.getTime();
+        if (overlaps) {
+          throw new ConflictException(
+            `Teacher is already scheduled at this time (timetable #${other.timetable_id})`,
+          );
+        }
+      }
     }
 
     const existingSlot = await this.prisma.timetable_slots.findUnique({
