@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -114,6 +114,27 @@ export class EmployeesController {
   ) {
     const data = await this.employeesService.resetAccountPassword(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee password reset successfully');
+  }
+
+  @Get(':id/account/reveal-password')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async revealAccountPassword(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.revealAccountPassword(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee password revealed successfully');
+  }
+
+  @Patch(':id/account/username')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async changeAccountUsername(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ChangeEmployeeUsernameDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.changeAccountUsername(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee username changed successfully');
   }
 
   @Get(':id')

@@ -838,6 +838,7 @@ model users {
   id                                                                       String                       @id
   username                                                                 String                       @unique @db.VarChar(50)
   password_hash                                                            String                       @db.VarChar(255)
+  password_reveal                                                         String?                      @db.Text
   email                                                                    String?                      @unique @db.VarChar(100)
   full_name                                                                String                       @db.VarChar(100)
   role                                                                     StaffRole

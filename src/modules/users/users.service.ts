@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -12,6 +13,8 @@ import { SetPermissionDto } from './dto/set-permission.dto';
 import { UpdateRolePermissionDto } from './dto/update-role-permission.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { StaffRole } from '@prisma/client';
+import { encryptSecret } from '../../common/utils/reversible-secret.util';
+import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
 
 @Injectable()
 export class UsersService {
@@ -98,6 +101,10 @@ export class UsersService {
   }
 
   async createUser(dto: CreateUserDto, createdById: string) {
+    if (isLegacyTafsEmailUsername(dto.username)) {
+      throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
+    }
+
     const existing = await this.prisma.users.findUnique({
       where: { username: dto.username },
     });
@@ -112,6 +119,7 @@ export class UsersService {
         username: dto.username,
         full_name: dto.full_name,
         password_hash: hash,
+        password_reveal: encryptSecret(dto.password),
         role: dto.role,
         campus_id: dto.campus_id ? Number(dto.campus_id) : null,
         allowed_class_ids: dto.allowed_class_ids ?? [],
@@ -154,7 +162,10 @@ export class UsersService {
     if (dto.campus_id !== undefined) data.campus_id = dto.campus_id ? Number(dto.campus_id) : null;
     if (dto.allowed_class_ids !== undefined) data.allowed_class_ids = dto.allowed_class_ids;
     if (dto.is_active !== undefined) data.is_active = dto.is_active;
-    if (dto.password) data.password_hash = await bcrypt.hash(dto.password, 10);
+    if (dto.password) {
+      data.password_hash = await bcrypt.hash(dto.password, 10);
+      data.password_reveal = encryptSecret(dto.password);
+    }
 
     const record = await this.prisma.users.update({
       where: { id },

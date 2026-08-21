@@ -11,6 +11,8 @@ import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields, campusPrefixForId } from './employee-code.util';
 import { buildMasterEmployeesExcelBuffer } from './master-employee-excel.util';
+import { encryptSecret, decryptSecret } from '../../../common/utils/reversible-secret.util';
+import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credentials.util';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -206,6 +208,12 @@ export class ResetEmployeePasswordDto {
   @IsString()
   @MinLength(8)
   password: string;
+}
+
+export class ChangeEmployeeUsernameDto {
+  @IsString()
+  @MinLength(3)
+  username: string;
 }
 
 const nullIfEmpty = (value?: string | null) => {
@@ -999,7 +1007,7 @@ export class EmployeesService {
     const password_hash = await bcrypt.hash(dto.password, 10);
     await this.prisma.users.update({
       where: { id: employee.user_id },
-      data: { password_hash },
+      data: { password_hash, password_reveal: encryptSecret(dto.password) },
     });
 
     this.auditLogs.log({
@@ -1013,5 +1021,78 @@ export class EmployeesService {
     });
 
     return { success: true };
+  }
+
+  async revealAccountPassword(employeeId: number, caller?: IJwtStaffPayload) {
+    const employee = await this.findOne(employeeId);
+    if (!employee.user_id) {
+      throw new BadRequestException('This employee has no linked portal account.');
+    }
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: employee.user_id },
+      select: { username: true, password_reveal: true },
+    });
+    if (!user) throw new NotFoundException('Linked portal account not found.');
+    if (!user.password_reveal) {
+      throw new BadRequestException('No recoverable password on file for this account — reset the password to set one.');
+    }
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'password',
+      note: `${(employee as any).full_name ?? `#${employeeId}`} — portal password revealed`,
+      changed_by: caller?.username || caller?.sub || 'system',
+    });
+
+    return { username: user.username, password: decryptSecret(user.password_reveal) };
+  }
+
+  async changeAccountUsername(employeeId: number, dto: ChangeEmployeeUsernameDto, caller?: IJwtStaffPayload) {
+    const employee = await this.findOne(employeeId);
+    if (!employee.user_id) {
+      throw new BadRequestException('This employee has no linked portal account.');
+    }
+
+    const nextUsername = dto.username.trim();
+    if (isLegacyTafsEmailUsername(nextUsername)) {
+      throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
+    }
+    if (!/^[a-z0-9._-]+$/i.test(nextUsername)) {
+      throw new BadRequestException('Username may only contain letters, numbers, dots, underscores and hyphens.');
+    }
+
+    const existingUser = await this.prisma.users.findUnique({
+      where: { id: employee.user_id },
+      select: { username: true },
+    });
+
+    const conflict = await this.prisma.users.findFirst({
+      where: { username: nextUsername, NOT: { id: employee.user_id } },
+    });
+    if (conflict) throw new ConflictException('Username already taken.');
+
+    const updated = await this.prisma.users.update({
+      where: { id: employee.user_id },
+      data: { username: nextUsername },
+      select: { id: true, username: true },
+    });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'username',
+      old_value: existingUser?.username,
+      new_value: updated.username,
+      note: `${(employee as any).full_name ?? `#${employeeId}`} — portal username changed from "${existingUser?.username}" to "${updated.username}"`,
+      changed_by: caller?.username || caller?.sub || 'system',
+    });
+
+    return updated;
   }
 }
