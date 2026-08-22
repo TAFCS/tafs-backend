@@ -36,6 +36,13 @@ export class UsersController {
     return createApiResponse(users, HttpStatus.OK, 'Users retrieved successfully');
   }
 
+  @Get(':id/reveal-password')
+  @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
+  async revealPassword(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
+    const data = await this.usersService.revealPassword(id, caller.username || caller.sub);
+    return createApiResponse(data, HttpStatus.OK, 'Password revealed successfully');
+  }
+
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   async findUser(@Param('id') id: string) {

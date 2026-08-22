@@ -13,7 +13,7 @@ import { SetPermissionDto } from './dto/set-permission.dto';
 import { UpdateRolePermissionDto } from './dto/update-role-permission.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { StaffRole } from '@prisma/client';
-import { encryptSecret } from '../../common/utils/reversible-secret.util';
+import { encryptSecret, decryptSecret } from '../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
 
 @Injectable()
@@ -98,6 +98,29 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException(`User ${id} not found`);
     return user;
+  }
+
+  async revealPassword(id: string, revealedBy: string) {
+    const user = await this.prisma.users.findUnique({
+      where: { id },
+      select: { username: true, password_reveal: true },
+    });
+    if (!user) throw new NotFoundException(`User ${id} not found`);
+    if (!user.password_reveal) {
+      throw new BadRequestException('No recoverable password on file for this account — set a new password first.');
+    }
+
+    this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: id,
+      action: 'UPDATED',
+      section: 'system',
+      field: 'password',
+      changed_by: revealedBy,
+      note: `Password revealed for user ${user.username} (#${id}).`,
+    });
+
+    return { username: user.username, password: decryptSecret(user.password_reveal) };
   }
 
   async createUser(dto: CreateUserDto, createdById: string) {
