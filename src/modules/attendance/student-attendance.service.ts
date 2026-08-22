@@ -61,6 +61,16 @@ export class StudentAttendanceService {
     return d;
   }
 
+  /** "HH:MM" on the given UTC day, or null when no time was supplied. */
+  private timeToDate(date: Date, time?: string): Date | null {
+    if (!time) return null;
+    const [h, m] = time.split(':').map(Number);
+    if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+      throw new BadRequestException(`Invalid time "${time}" — expected HH:MM`);
+    }
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
+  }
+
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
@@ -975,21 +985,36 @@ export class StudentAttendanceService {
       }),
     );
 
-    // Fetch existing manual timestamps so we can preserve them when re-marking PRESENT/LATE.
-    const existingRecords = await this.prisma.attendance_student_daily.findMany({
-      where: {
-        date,
-        student_cc: { in: uniqueRequestedCcs },
-      },
-      select: {
-        student_cc: true,
-        source: true,
-        check_in_at: true,
-        check_out_at: true,
-        last_scan_at: true,
-      },
-    });
+    // Fetch existing timestamps so we can preserve them when re-marking PRESENT/LATE,
+    // plus the day's scans — a holiday the student actually punched on is still
+    // overridable (same rule as StaffAttendanceService#bulkMark).
+    const [existingRecords, scannedCcs] = await Promise.all([
+      this.prisma.attendance_student_daily.findMany({
+        where: {
+          date,
+          student_cc: { in: uniqueRequestedCcs },
+        },
+        select: {
+          student_cc: true,
+          source: true,
+          check_in_at: true,
+          check_out_at: true,
+          last_scan_at: true,
+        },
+      }),
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          student_cc: { in: uniqueRequestedCcs },
+          person_type: 'STUDENT',
+          is_duplicate: false,
+          attendance_date: date,
+        },
+        select: { student_cc: true },
+        distinct: ['student_cc'],
+      }),
+    ]);
     const existingMap = new Map(existingRecords.map((r) => [r.student_cc, r]));
+    const punchedSet = new Set(scannedCcs.map((s) => s.student_cc));
 
     const upserts = dto.records.map((mark) => {
       const studentCc = mark.student_cc;
@@ -998,7 +1023,11 @@ export class StudentAttendanceService {
         throw new BadRequestException(`Student CC ${studentCc} not found in campus roster.`);
       }
 
-      if (!resolved.isWorkingDay && mark.status !== RollRecordStatus.EXCUSED) {
+      if (
+        !resolved.isWorkingDay &&
+        mark.status !== RollRecordStatus.EXCUSED &&
+        !punchedSet.has(studentCc)
+      ) {
         throw new BadRequestException(
           `Cannot set ${mark.status} on a non-working day for student ${studentCc}: ${
             resolved.description ?? resolved.dayType ?? 'Holiday'
@@ -1007,10 +1036,20 @@ export class StudentAttendanceService {
       }
 
       const existing = existingMap.get(studentCc);
-      const preserveTimes = existing?.source === AttendanceSource.MANUAL;
 
+      // ABSENT/EXCUSED are "the student wasn't here" — the punches go away.
+      // PRESENT/LATE keep the day's times: whatever the caller typed, else
+      // whatever the row already held (biometric scans included, so flipping
+      // a scanned day to LATE doesn't wipe the real punch times).
       const shouldHaveTimes =
         mark.status === RollRecordStatus.PRESENT || mark.status === RollRecordStatus.LATE;
+      const checkInAt = shouldHaveTimes
+        ? (this.timeToDate(date, mark.check_in_time) ?? existing?.check_in_at ?? null)
+        : null;
+      const checkOutAt = shouldHaveTimes
+        ? (this.timeToDate(date, mark.check_out_time) ?? existing?.check_out_at ?? null)
+        : null;
+      const lastScanAt = shouldHaveTimes ? (checkOutAt ?? existing?.last_scan_at ?? null) : null;
 
       return this.prisma.attendance_student_daily.upsert({
         where: { student_cc_date: { student_cc: studentCc, date } },
@@ -1021,17 +1060,17 @@ export class StudentAttendanceService {
           status: mark.status,
           source: AttendanceSource.MANUAL,
           marked_by: user.sub,
-          check_in_at: shouldHaveTimes && preserveTimes ? existing?.check_in_at : null,
-          check_out_at: shouldHaveTimes && preserveTimes ? existing?.check_out_at : null,
-          last_scan_at: shouldHaveTimes && preserveTimes ? existing?.last_scan_at : null,
+          check_in_at: checkInAt,
+          check_out_at: checkOutAt,
+          last_scan_at: lastScanAt,
         },
         update: {
           status: mark.status,
           source: AttendanceSource.MANUAL,
           marked_by: user.sub,
-          check_in_at: shouldHaveTimes && preserveTimes ? existing?.check_in_at : null,
-          check_out_at: shouldHaveTimes && preserveTimes ? existing?.check_out_at : null,
-          last_scan_at: shouldHaveTimes && preserveTimes ? existing?.last_scan_at : null,
+          check_in_at: checkInAt,
+          check_out_at: checkOutAt,
+          last_scan_at: lastScanAt,
         },
       });
     });
