@@ -91,6 +91,16 @@ export class BulkManualStudentAttendanceRecordDto {
 
   @IsEnum(RollRecordStatus)
   status: RollRecordStatus;
+
+  /** "HH:MM" — only honoured for PRESENT/LATE; ABSENT/EXCUSED always clear the punches. */
+  @IsOptional()
+  @IsString()
+  check_in_time?: string;
+
+  /** "HH:MM" — see check_in_time. */
+  @IsOptional()
+  @IsString()
+  check_out_time?: string;
 }
 
 export class BulkManualStudentAttendanceDto {
