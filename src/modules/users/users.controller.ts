@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   HttpStatus,
   HttpCode,
@@ -34,6 +35,13 @@ export class UsersController {
   async listUsers() {
     const users = await this.usersService.listUsers();
     return createApiResponse(users, HttpStatus.OK, 'Users retrieved successfully');
+  }
+
+  @Get('check-username')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
+  async checkUsername(@Query('username') username: string) {
+    const available = await this.usersService.isUsernameAvailable(username || '');
+    return createApiResponse({ available }, HttpStatus.OK, 'Username availability checked');
   }
 
   @Get(':id/reveal-password')
