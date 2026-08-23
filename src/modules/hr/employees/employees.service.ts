@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
-import { CheckInSource, EmployeeStatus, StaffRole } from '@prisma/client';
+import { CheckInSource, EmployeeStatus, Prisma, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -13,6 +13,9 @@ import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields, camp
 import { buildMasterEmployeesExcelBuffer } from './master-employee-excel.util';
 import { encryptSecret, decryptSecret } from '../../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credentials.util';
+import { CaslAbilityFactory } from '../../auth/casl/casl-ability.factory';
+import { Action } from '../../auth/casl/actions';
+import { v4 as uuidv4 } from 'uuid';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -22,7 +25,35 @@ export class ClassSectionAssignmentDto {
   section_id: number;
 }
 
+/** Portal login to create together with the employee profile, in one transaction. */
+export class CreateEmployeePortalAccountDto {
+  @IsString()
+  @MinLength(3)
+  username: string;
+
+  @IsString()
+  @MinLength(6)
+  password: string;
+
+  @IsOptional()
+  @IsEnum(StaffRole)
+  role?: StaffRole;
+
+  @IsOptional() @IsInt()
+  campus_id?: number;
+}
+
 export class CreateEmployeeDto {
+  /**
+   * Create the portal login as part of this request. Preferred over creating the
+   * user first via POST /users: a failure here rolls the account back instead of
+   * leaving an orphan that makes the retry collide on "Username already taken".
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateEmployeePortalAccountDto)
+  portal_account?: CreateEmployeePortalAccountDto;
+
   @IsOptional() @IsString()
   user_id?: string;
 
@@ -264,6 +295,7 @@ export class EmployeesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly caslAbilityFactory: CaslAbilityFactory,
   ) {}
 
   async exportMasterExcel(): Promise<Buffer> {
@@ -295,6 +327,36 @@ export class EmployeesService {
         `Staff category "${category.name}" does not belong to the selected department`,
       );
     }
+  }
+
+  /** Throws ConflictException if the CNIC already belongs to another employee profile */
+  private async assertCnicAvailable(cnic: string, excludeId?: number) {
+    const existing = await this.prisma.employee_profiles.findFirst({
+      where: {
+        cnic: { equals: cnic, mode: 'insensitive' },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: { id: true, full_name: true, employee_code: true },
+    });
+    if (existing) {
+      const who = existing.full_name || existing.employee_code || `profile #${existing.id}`;
+      throw new ConflictException(
+        `CNIC "${cnic}" already belongs to ${who}. Open that profile instead of creating a second one.`,
+      );
+    }
+  }
+
+  /** Turns a raw unique-constraint violation into a message naming the field the admin typed. */
+  private conflictFromUniqueViolation(err: unknown): ConflictException | null {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') return null;
+    const target = (err.meta as { target?: unknown } | undefined)?.target;
+    const fields = (Array.isArray(target) ? target : [target]).map((f) => String(f ?? ''));
+    const hits = (name: string) => fields.some((f) => f.includes(name));
+    if (hits('cnic')) return new ConflictException('That CNIC is already on another employee profile.');
+    if (hits('employee_code')) return new ConflictException('That employee code is already assigned to another employee.');
+    if (hits('username')) return new ConflictException('Username already taken.');
+    if (hits('user_id')) return new ConflictException('That portal account is already linked to another employee profile.');
+    return null;
   }
 
   /** Throws ConflictException if employee_code is already taken by another record */
@@ -361,7 +423,7 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    const { class_section_assignments, employment_status, ...rest } = dto;
+    const { class_section_assignments, employment_status, portal_account, ...rest } = dto;
     const codeFields = resolveEmployeeCodeFields({
       ...rest,
       campusPrefix: campusPrefixForId(rest.campus_id ?? null),
@@ -369,6 +431,9 @@ export class EmployeesService {
 
     if (codeFields.employee_code) {
       await this.assertCodeAvailable(codeFields.employee_code);
+    }
+    if (rest.cnic) {
+      await this.assertCnicAvailable(rest.cnic);
     }
     await this.assertCategoryMatchesDepartment(rest.department_id ?? null, rest.staff_category_id ?? null);
 
@@ -380,63 +445,96 @@ export class EmployeesService {
       status = employment_status;
     }
 
-    const record = await this.prisma.employee_profiles.create({
-      data: {
-        user_id: rest.user_id || null,
-        cnic: rest.cnic || null,
-        join_date: rest.join_date ? new Date(rest.join_date) : null,
-        employment_type: rest.employment_type || null,
-        employment_status: status,
-        is_permanent_employee: status === EmployeeStatus.PERMANENT,
-        department_id: rest.department_id || null,
-        reporting_manager_id: rest.reporting_manager_id || null,
-        employee_code: codeFields.employee_code,
-        employee_code_dep: codeFields.employee_code_dep,
-        employee_code_number: codeFields.employee_code_number,
-        full_name: rest.full_name || null,
-        father_name: rest.father_name || null,
-        mother_name: rest.mother_name || null,
-        date_of_birth: rest.date_of_birth ? new Date(rest.date_of_birth) : null,
-        address: rest.address || null,
-        personal_phone: rest.personal_phone || null,
-        secondary_phone: rest.secondary_phone || null,
-        personal_email: rest.personal_email || null,
-        job_title: upperOrNull(rest.job_title),
-        staff_category_id: rest.staff_category_id ?? null,
-        segment_id: rest.segment_id ?? null,
-        job_description: upperOrNull(rest.job_description),
-        notes: rest.notes || null,
-        reporting_time: toTime(rest.reporting_time),
-        leaving_time: toTime(rest.leaving_time),
-        check_in_source: rest.check_in_source ?? CheckInSource.FIXED,
-        late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
-        monthly_pay: rest.monthly_pay ?? null,
-        campus_id: rest.campus_id || null,
-        days_per_week: rest.days_per_week ?? null,
-        photo_url: rest.photo_url || null,
-        father_photo_url: rest.father_photo_url || null,
-        father_cnic: rest.father_cnic || null,
-        mother_photo_url: rest.mother_photo_url || null,
-        mother_cnic: rest.mother_cnic || null,
-        spouse_name: rest.spouse_name || null,
-        spouse_cnic: rest.spouse_cnic || null,
-        spouse_photo_url: rest.spouse_photo_url || null,
-        account_number: rest.account_number || null,
-        bank_name: rest.bank_name || null,
-        emergency_contact_name: rest.emergency_contact_name || null,
-        emergency_contact_phone: rest.emergency_contact_phone || null,
-        emergency_contact_relationship: rest.emergency_contact_relationship || null,
-        employee_class_section_assignments: class_section_assignments?.length
-          ? {
-              create: class_section_assignments.map((a) => ({
-                class_id: a.class_id,
-                section_id: a.section_id
-              }))
-            }
-          : undefined
-      },
-      include: includeRelations
-    });
+    const account = await this.preparePortalAccount(portal_account, rest, caller);
+
+    let record: any;
+    try {
+      record = await this.prisma.$transaction(async (tx) => {
+        // The login is created inside the transaction so that any failure below —
+        // a duplicate CNIC, a bad department — rolls the username back instead of
+        // burning it and making the admin's retry collide.
+        const userId = account
+          ? (await tx.users.create({ data: account.data, select: { id: true } })).id
+          : rest.user_id || null;
+
+        return tx.employee_profiles.create({
+          data: {
+            user_id: userId,
+            cnic: rest.cnic || null,
+            join_date: rest.join_date ? new Date(rest.join_date) : null,
+            employment_type: rest.employment_type || null,
+            employment_status: status,
+            is_permanent_employee: status === EmployeeStatus.PERMANENT,
+            department_id: rest.department_id || null,
+            reporting_manager_id: rest.reporting_manager_id || null,
+            employee_code: codeFields.employee_code,
+            employee_code_dep: codeFields.employee_code_dep,
+            employee_code_number: codeFields.employee_code_number,
+            full_name: rest.full_name || null,
+            father_name: rest.father_name || null,
+            mother_name: rest.mother_name || null,
+            date_of_birth: rest.date_of_birth ? new Date(rest.date_of_birth) : null,
+            address: rest.address || null,
+            personal_phone: rest.personal_phone || null,
+            secondary_phone: rest.secondary_phone || null,
+            personal_email: rest.personal_email || null,
+            job_title: upperOrNull(rest.job_title),
+            staff_category_id: rest.staff_category_id ?? null,
+            segment_id: rest.segment_id ?? null,
+            job_description: upperOrNull(rest.job_description),
+            notes: rest.notes || null,
+            reporting_time: toTime(rest.reporting_time),
+            leaving_time: toTime(rest.leaving_time),
+            check_in_source: rest.check_in_source ?? CheckInSource.FIXED,
+            late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
+            monthly_pay: rest.monthly_pay ?? null,
+            campus_id: rest.campus_id || null,
+            days_per_week: rest.days_per_week ?? null,
+            photo_url: rest.photo_url || null,
+            father_photo_url: rest.father_photo_url || null,
+            father_cnic: rest.father_cnic || null,
+            mother_photo_url: rest.mother_photo_url || null,
+            mother_cnic: rest.mother_cnic || null,
+            spouse_name: rest.spouse_name || null,
+            spouse_cnic: rest.spouse_cnic || null,
+            spouse_photo_url: rest.spouse_photo_url || null,
+            account_number: rest.account_number || null,
+            bank_name: rest.bank_name || null,
+            emergency_contact_name: rest.emergency_contact_name || null,
+            emergency_contact_phone: rest.emergency_contact_phone || null,
+            emergency_contact_relationship: rest.emergency_contact_relationship || null,
+            employee_class_section_assignments: class_section_assignments?.length
+              ? {
+                  create: class_section_assignments.map((a) => ({
+                    class_id: a.class_id,
+                    section_id: a.section_id
+                  }))
+                }
+              : undefined
+          },
+          include: includeRelations,
+        });
+      });
+    } catch (err) {
+      const conflict = this.conflictFromUniqueViolation(err);
+      if (conflict) throw conflict;
+      throw err;
+    }
+
+    if (account) {
+      this.auditLogs.log({
+        entity_type: 'USER',
+        entity_id: record.user_id,
+        action: 'CREATED',
+        section: 'system',
+        new_value: `${account.data.username} (${account.data.role})`,
+        changed_by: caller?.sub || changedBy || 'system',
+        note: `Created user ${account.data.username} (#${record.user_id}) with role ${account.data.role}` +
+          (account.data.campus_id ? `, campus #${account.data.campus_id}` : '') +
+          (account.data.full_name ? `, name "${account.data.full_name}"` : '') +
+          ' as part of employee registration.',
+      });
+    }
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
       entity_id: String(record.id),
@@ -446,6 +544,72 @@ export class EmployeesService {
       changed_by: changedBy ?? 'system',
     });
     return record;
+  }
+
+  /**
+   * Validates a requested portal login and returns the row to create, or null when
+   * the caller did not ask for one. Everything that can be checked up front is
+   * checked here so the transaction body stays a straight write.
+   */
+  private async preparePortalAccount(
+    portalAccount: CreateEmployeePortalAccountDto | undefined,
+    rest: Omit<CreateEmployeeDto, 'class_section_assignments' | 'employment_status' | 'portal_account'>,
+    caller?: IJwtStaffPayload,
+  ) {
+    if (!portalAccount) return null;
+
+    if (rest.user_id) {
+      throw new BadRequestException(
+        'Provide either an existing user_id to link or portal_account to create a new login — not both.',
+      );
+    }
+    if (caller) {
+      const ability = this.caslAbilityFactory.createForStaff(caller);
+      if (!ability.can(Action.Create, 'User')) {
+        throw new ForbiddenException('You do not have permission to create portal logins.');
+      }
+    }
+
+    const username = portalAccount.username.trim();
+    if (isLegacyTafsEmailUsername(username)) {
+      throw new BadRequestException(
+        'Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.',
+      );
+    }
+    const role = portalAccount.role ?? StaffRole.EMPLOYEE;
+    if (role === StaffRole.SUPER_ADMIN && caller?.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    }
+
+    const taken = await this.prisma.users.findFirst({
+      where: { username: { equals: username, mode: 'insensitive' } },
+      select: { id: true, employee_profile: { select: { id: true, full_name: true } } },
+    });
+    if (taken) {
+      const linked = taken.employee_profile;
+      throw new ConflictException(
+        linked
+          ? `Username "${username}" already belongs to ${linked.full_name || `employee #${linked.id}`}. Choose a different username.`
+          : `Username "${username}" is already taken by an account with no employee profile. Choose a different username, or link that account instead.`,
+      );
+    }
+
+    const now = new Date();
+    return {
+      data: {
+        id: uuidv4(),
+        username,
+        full_name: rest.full_name?.trim() || username,
+        password_hash: await bcrypt.hash(portalAccount.password, 10),
+        password_reveal: encryptSecret(portalAccount.password),
+        role,
+        campus_id: portalAccount.campus_id ?? rest.campus_id ?? null,
+        allowed_class_ids: [],
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+      },
+    };
   }
 
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string) {
