@@ -1,13 +1,22 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
-import { Prisma, fee_status_enum } from '@prisma/client';
+import {
+  FinancialReportSnapshotStatus,
+  FinancialReportType,
+  Prisma,
+  fee_status_enum,
+  student_status,
+} from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { applyStudentScope } from '../../common/staff-scope';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import {
   getMonthYearLabel,
   termOfHead,
 } from '../../common/utils/academic-labels';
 import { createPaginationMeta } from '../../utils/serializer.util';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import type {
   ExportDepositsQueryDto,
@@ -16,6 +25,10 @@ import type {
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
 } from './dto/financial-report-query.dto';
+import type {
+  CreateFeeHeadsSnapshotDto,
+  ListFeeHeadsSnapshotsQueryDto,
+} from './dto/financial-report-snapshot.dto';
 
 const EXPORT_ROW_CAP = 25_000;
 const HEADER_FILL: ExcelJS.Fill = {
@@ -42,9 +55,14 @@ const FEE_HEAD_SELECT = {
       cc: true,
       gr_number: true,
       full_name: true,
+      status: true,
       class_id: true,
+      graduated_from_class_id: true,
       campuses: { select: { campus_name: true } },
       classes: {
+        select: { id: true, description: true, term_start_month: true },
+      },
+      graduated_from_class: {
         select: { id: true, description: true, term_start_month: true },
       },
       sections: { select: { description: true } },
@@ -83,12 +101,25 @@ export type ExportFile = {
 
 @Injectable()
 export class FinancialReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
 
   async listFeeHeads(query: ListFeeHeadsQueryDto, user: IJwtStaffPayload) {
     this.assertDateRange(query);
-    if ((query.view ?? 'heads') === 'student') {
+    const view = query.view ?? 'heads';
+    if (view === 'student') {
       return this.listFeeHeadsByStudent(query, user);
+    }
+    if (view === 'fee_type') {
+      return this.listFeeHeadsByFeeType(query, user);
+    }
+    if (view === 'period') {
+      return this.listFeeHeadsByPeriod(query, user);
+    }
+    if (view === 'class') {
+      return this.listFeeHeadsByClass(query, user);
     }
 
     const leaf = this.feeHeadsLeafWhere(query);
@@ -116,7 +147,11 @@ export class FinancialReportsService {
       view: 'heads' as const,
       items: rows.map((row) => this.mapFeeHead(row, classTerms)),
       pagination: createPaginationMeta(page, limit, totals.count),
-      totals: { ...totals, student_count: studentCount },
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
     };
   }
 
@@ -157,8 +192,12 @@ export class FinancialReportsService {
             cc: true,
             gr_number: true,
             full_name: true,
+            status: true,
+            class_id: true,
+            graduated_from_class_id: true,
             campuses: { select: { campus_name: true } },
             classes: { select: { description: true } },
+            graduated_from_class: { select: { description: true } },
             sections: { select: { description: true } },
           },
         })
@@ -176,7 +215,7 @@ export class FinancialReportsService {
           gr_number: student?.gr_number ?? null,
           student_name: student?.full_name ?? '',
           campus: student?.campuses?.campus_name ?? '',
-          class_name: student?.classes?.description ?? '',
+          class_name: this.resolveStudentClassName(student),
           section: student?.sections?.description ?? '',
           head_count: group._count._all,
           amount: billed,
@@ -185,7 +224,227 @@ export class FinancialReportsService {
         };
       }),
       pagination: createPaginationMeta(page, limit, studentCount),
-      totals: { ...totals, student_count: studentCount },
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
+    };
+  }
+
+  private async listFeeHeadsByFeeType(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+    };
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 50, 200);
+
+    const [groups, totals, studentCount, feeTypes] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['fee_type_id', 'description_prefix'],
+        where,
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+        orderBy: [{ fee_type_id: 'asc' }, { description_prefix: 'asc' }],
+      }),
+      this.feeHeadMoneyTotals(where),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+      this.prisma.fee_types.findMany({
+        select: { id: true, description: true },
+      }),
+    ]);
+
+    const feeTypeMap = new Map(feeTypes.map((ft) => [ft.id, ft.description ?? '']));
+    const items = groups.map((group) => {
+      const amount = this.toMoney(group._sum.amount);
+      const amountPaid = this.toMoney(group._sum.amount_paid);
+      const feeName = feeTypeMap.get(group.fee_type_id) ?? '';
+      const feeType = [group.description_prefix, feeName].filter(Boolean).join(' ');
+      return {
+        fee_type_id: group.fee_type_id,
+        fee_type: feeType || '—',
+        head_count: group._count._all,
+        amount,
+        amount_paid: amountPaid,
+        outstanding: this.roundMoney(amount - amountPaid),
+      };
+    });
+    const start = (page - 1) * limit;
+
+    return {
+      view: 'fee_type' as const,
+      items: items.slice(start, start + limit),
+      pagination: createPaginationMeta(page, limit, items.length),
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
+    };
+  }
+
+  private async listFeeHeadsByPeriod(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+    };
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 50, 200);
+
+    const [groups, totals, studentCount, classTerms] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['target_month', 'academic_year', 'term_start_month'],
+        where,
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+        orderBy: [{ academic_year: 'asc' }, { target_month: 'asc' }],
+      }),
+      this.feeHeadMoneyTotals(where),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+      this.loadClassTerms(),
+    ]);
+
+    const items = groups.map((group) => {
+      const amount = this.toMoney(group._sum.amount);
+      const amountPaid = this.toMoney(group._sum.amount_paid);
+      const termStart =
+        group.term_start_month ??
+        (classTerms.size ? [...classTerms.values()][0] : 8);
+      return {
+        target_month: group.target_month,
+        academic_year: group.academic_year,
+        period_label: getMonthYearLabel(
+          group.target_month,
+          group.academic_year,
+          termStart,
+        ),
+        head_count: group._count._all,
+        amount,
+        amount_paid: amountPaid,
+        outstanding: this.roundMoney(amount - amountPaid),
+      };
+    });
+    const start = (page - 1) * limit;
+
+    return {
+      view: 'period' as const,
+      items: items.slice(start, start + limit),
+      pagination: createPaginationMeta(page, limit, items.length),
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
+    };
+  }
+
+  private async listFeeHeadsByClass(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+    };
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 50, 200);
+
+    const [groups, totals, studentCount] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['student_id'],
+        where,
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.feeHeadMoneyTotals(where),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+    ]);
+
+    const studentIds = groups.map((g) => g.student_id);
+    const students = studentIds.length
+      ? await this.prisma.students.findMany({
+          where: { cc: { in: studentIds } },
+          select: {
+            cc: true,
+            status: true,
+            class_id: true,
+            graduated_from_class_id: true,
+            classes: { select: { id: true, description: true } },
+            graduated_from_class: { select: { id: true, description: true } },
+          },
+        })
+      : [];
+    const studentMap = new Map(students.map((s) => [s.cc, s]));
+
+    const classBuckets = new Map<
+      number | 'unassigned',
+      {
+        class_id: number | null;
+        class_name: string;
+        student_count: number;
+        head_count: number;
+        amount: number;
+        amount_paid: number;
+        outstanding: number;
+      }
+    >();
+
+    for (const group of groups) {
+      const student = studentMap.get(group.student_id);
+      const effectiveClassId = this.effectiveClassId(student);
+      const bucketKey = effectiveClassId ?? 'unassigned';
+      const existing = classBuckets.get(bucketKey) ?? {
+        class_id: effectiveClassId,
+        class_name: this.resolveStudentClassName(student) || 'Unassigned',
+        student_count: 0,
+        head_count: 0,
+        amount: 0,
+        amount_paid: 0,
+        outstanding: 0,
+      };
+      const amount = this.toMoney(group._sum.amount);
+      const amountPaid = this.toMoney(group._sum.amount_paid);
+      existing.student_count += 1;
+      existing.head_count += group._count._all;
+      existing.amount = this.roundMoney(existing.amount + amount);
+      existing.amount_paid = this.roundMoney(existing.amount_paid + amountPaid);
+      existing.outstanding = this.roundMoney(existing.amount - existing.amount_paid);
+      classBuckets.set(bucketKey, existing);
+    }
+
+    const items = [...classBuckets.values()].sort((a, b) =>
+      a.class_name.localeCompare(b.class_name),
+    );
+    const start = (page - 1) * limit;
+
+    return {
+      view: 'class' as const,
+      items: items.slice(start, start + limit),
+      pagination: createPaginationMeta(page, limit, items.length),
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
     };
   }
 
@@ -227,8 +486,18 @@ export class FinancialReportsService {
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
     this.assertDateRange(query);
-    if ((query.view ?? 'heads') === 'student') {
+    const view = query.view ?? 'heads';
+    if (view === 'student') {
       return this.exportFeeHeadsByStudent(query, user);
+    }
+    if (view === 'fee_type') {
+      return this.exportFeeHeadsByFeeType(query, user);
+    }
+    if (view === 'period') {
+      return this.exportFeeHeadsByPeriod(query, user);
+    }
+    if (view === 'class') {
+      return this.exportFeeHeadsByClass(query, user);
     }
 
     const where = this.buildFeeHeadsWhere(query, user);
@@ -311,8 +580,12 @@ export class FinancialReportsService {
             cc: true,
             gr_number: true,
             full_name: true,
+            status: true,
+            class_id: true,
+            graduated_from_class_id: true,
             campuses: { select: { campus_name: true } },
             classes: { select: { description: true } },
+            graduated_from_class: { select: { description: true } },
             sections: { select: { description: true } },
           },
         })
@@ -339,7 +612,7 @@ export class FinancialReportsService {
         gr_number: student?.gr_number ?? '',
         student_name: student?.full_name ?? '',
         campus: student?.campuses?.campus_name ?? '',
-        class_name: student?.classes?.description ?? '',
+        class_name: this.resolveStudentClassName(student),
         section: student?.sections?.description ?? '',
         head_count: group._count._all,
         amount: billed,
@@ -351,6 +624,106 @@ export class FinancialReportsService {
     return this.buildExportFile(
       'Fee Heads by Student',
       `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
+      columns,
+      data,
+      query.format,
+    );
+  }
+
+  private async exportFeeHeadsByFeeType(
+    query: ExportFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const result = await this.listFeeHeadsByFeeType(
+      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
+      user,
+    );
+    this.assertExportCap(result.items.length);
+    const columns: ExportColumn[] = [
+      { header: 'Fee type', key: 'fee_type', width: 32 },
+      { header: 'Heads', key: 'head_count', width: 10 },
+      { header: 'Amount', key: 'amount', width: 14 },
+      { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Outstanding', key: 'outstanding', width: 14 },
+    ];
+    const data = result.items.map((item) => ({
+      fee_type: item.fee_type,
+      head_count: item.head_count,
+      amount: item.amount,
+      amount_paid: item.amount_paid,
+      outstanding: item.outstanding,
+    }));
+    return this.buildExportFile(
+      'Fee Heads by Type',
+      `fee-heads-by-type-${query.from_date}-to-${query.to_date}`,
+      columns,
+      data,
+      query.format,
+    );
+  }
+
+  private async exportFeeHeadsByPeriod(
+    query: ExportFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const result = await this.listFeeHeadsByPeriod(
+      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
+      user,
+    );
+    this.assertExportCap(result.items.length);
+    const columns: ExportColumn[] = [
+      { header: 'Period', key: 'period_label', width: 14 },
+      { header: 'Academic year', key: 'academic_year', width: 14 },
+      { header: 'Heads', key: 'head_count', width: 10 },
+      { header: 'Amount', key: 'amount', width: 14 },
+      { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Outstanding', key: 'outstanding', width: 14 },
+    ];
+    const data = result.items.map((item) => ({
+      period_label: item.period_label,
+      academic_year: item.academic_year,
+      head_count: item.head_count,
+      amount: item.amount,
+      amount_paid: item.amount_paid,
+      outstanding: item.outstanding,
+    }));
+    return this.buildExportFile(
+      'Fee Heads by Period',
+      `fee-heads-by-period-${query.from_date}-to-${query.to_date}`,
+      columns,
+      data,
+      query.format,
+    );
+  }
+
+  private async exportFeeHeadsByClass(
+    query: ExportFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const result = await this.listFeeHeadsByClass(
+      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
+      user,
+    );
+    this.assertExportCap(result.items.length);
+    const columns: ExportColumn[] = [
+      { header: 'Class', key: 'class_name', width: 20 },
+      { header: 'Students', key: 'student_count', width: 12 },
+      { header: 'Heads', key: 'head_count', width: 10 },
+      { header: 'Amount', key: 'amount', width: 14 },
+      { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Outstanding', key: 'outstanding', width: 14 },
+    ];
+    const data = result.items.map((item) => ({
+      class_name: item.class_name,
+      student_count: item.student_count,
+      head_count: item.head_count,
+      amount: item.amount,
+      amount_paid: item.amount_paid,
+      outstanding: item.outstanding,
+    }));
+    return this.buildExportFile(
+      'Fee Heads by Class',
+      `fee-heads-by-class-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
       query.format,
@@ -426,14 +799,355 @@ export class FinancialReportsService {
     return { segments };
   }
 
+  async createFeeHeadsSnapshot(
+    dto: CreateFeeHeadsSnapshotDto,
+    user: IJwtStaffPayload,
+  ) {
+    this.assertDateRange(dto);
+    const view = dto.view ?? 'heads';
+    const filters = this.buildSnapshotFilters(dto, view);
+    const filtersHash = this.hashSnapshotFilters(filters);
+    const { totals, reconciles } = await this.captureFeeHeadsTotals(dto, user);
+
+    if (!reconciles) {
+      throw new BadRequestException(
+        'Cannot create a snapshot while totals do not reconcile. Review billed, to-be-billed, paid, and outstanding figures first.',
+      );
+    }
+
+    const row = await this.prisma.financial_report_snapshots.create({
+      data: {
+        report_type: FinancialReportType.FEE_HEADS,
+        from_date: this.parseDateOnlyUtc(dto.from_date),
+        to_date: this.parseDateOnlyUtc(dto.to_date),
+        view,
+        filters,
+        filters_hash: filtersHash,
+        status: FinancialReportSnapshotStatus.DRAFT,
+        totals,
+        reconciles,
+        generated_by: auditActorLabel(user),
+        notes: dto.notes?.trim() || null,
+      },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'FINANCIAL_REPORT_SNAPSHOT',
+      entity_id: String(row.id),
+      action: 'CREATED',
+      field: 'status',
+      new_value: FinancialReportSnapshotStatus.DRAFT,
+      changed_by: auditActorLabel(user),
+      note: `Fee heads snapshot for ${dto.from_date} to ${dto.to_date}, view ${view}.`,
+    });
+
+    return this.mapSnapshotRow(row);
+  }
+
+  async listFeeHeadsSnapshots(
+    query: ListFeeHeadsSnapshotsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    void user;
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const where: Prisma.financial_report_snapshotsWhereInput = {
+      report_type: FinancialReportType.FEE_HEADS,
+      ...(query.status && { status: query.status }),
+    };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.financial_report_snapshots.findMany({
+        where,
+        orderBy: [{ generated_at: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.financial_report_snapshots.count({ where }),
+    ]);
+
+    return {
+      items: rows.map((row) => this.mapSnapshotRow(row)),
+      pagination: createPaginationMeta(page, limit, total),
+    };
+  }
+
+  async getFeeHeadsSnapshot(id: number, user: IJwtStaffPayload) {
+    const row = await this.prisma.financial_report_snapshots.findFirst({
+      where: {
+        id,
+        report_type: FinancialReportType.FEE_HEADS,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(`Fee heads snapshot ${id} not found`);
+    }
+
+    const liveCheck = await this.buildSnapshotLiveCheck(row, user);
+    return {
+      ...this.mapSnapshotRow(row),
+      live_check: liveCheck,
+    };
+  }
+
+  async finalizeFeeHeadsSnapshot(id: number, user: IJwtStaffPayload) {
+    const row = await this.prisma.financial_report_snapshots.findFirst({
+      where: {
+        id,
+        report_type: FinancialReportType.FEE_HEADS,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(`Fee heads snapshot ${id} not found`);
+    }
+    if (row.status === FinancialReportSnapshotStatus.FINALIZED) {
+      throw new BadRequestException('This snapshot is already finalized.');
+    }
+
+    const liveCheck = await this.buildSnapshotLiveCheck(row, user);
+    if (!liveCheck.reconciles) {
+      throw new BadRequestException(
+        'Cannot finalize: live totals do not reconcile. Resolve the mismatch in underlying fee heads first.',
+      );
+    }
+    if (liveCheck.has_drift) {
+      throw new BadRequestException(
+        'Cannot finalize: live data has changed since this snapshot was created. Generate a fresh snapshot and review it again.',
+      );
+    }
+
+    const duplicateFinalized =
+      await this.prisma.financial_report_snapshots.findFirst({
+        where: {
+          report_type: row.report_type,
+          from_date: row.from_date,
+          to_date: row.to_date,
+          view: row.view,
+          filters_hash: row.filters_hash,
+          status: FinancialReportSnapshotStatus.FINALIZED,
+          NOT: { id: row.id },
+        },
+      });
+    if (duplicateFinalized) {
+      throw new BadRequestException(
+        `A finalized snapshot already exists for this date range, view, and filters (snapshot #${duplicateFinalized.id}).`,
+      );
+    }
+
+    const updated = await this.prisma.financial_report_snapshots.update({
+      where: { id: row.id },
+      data: {
+        status: FinancialReportSnapshotStatus.FINALIZED,
+        finalized_by: auditActorLabel(user),
+        finalized_at: new Date(),
+        totals: liveCheck.live_totals,
+        reconciles: liveCheck.reconciles,
+      },
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'FINANCIAL_REPORT_SNAPSHOT',
+      entity_id: String(updated.id),
+      action: 'FINALIZED',
+      field: 'status',
+      old_value: FinancialReportSnapshotStatus.DRAFT,
+      new_value: FinancialReportSnapshotStatus.FINALIZED,
+      changed_by: auditActorLabel(user),
+      note: `Finalized fee heads snapshot for ${this.formatDateOnly(row.from_date)} to ${this.formatDateOnly(row.to_date)}, view ${row.view}.`,
+    });
+
+    return this.getFeeHeadsSnapshot(updated.id, user);
+  }
+
+  async deleteFeeHeadsSnapshot(id: number, user: IJwtStaffPayload) {
+    const row = await this.prisma.financial_report_snapshots.findFirst({
+      where: {
+        id,
+        report_type: FinancialReportType.FEE_HEADS,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(`Fee heads snapshot ${id} not found`);
+    }
+    if (row.status === FinancialReportSnapshotStatus.FINALIZED) {
+      throw new BadRequestException('Finalized snapshots cannot be deleted.');
+    }
+
+    await this.prisma.financial_report_snapshots.delete({ where: { id: row.id } });
+
+    void this.auditLogs.log({
+      entity_type: 'FINANCIAL_REPORT_SNAPSHOT',
+      entity_id: String(row.id),
+      action: 'DELETED',
+      changed_by: auditActorLabel(user),
+      note: `Deleted draft fee heads snapshot for ${this.formatDateOnly(row.from_date)} to ${this.formatDateOnly(row.to_date)}.`,
+    });
+
+    return { id: row.id };
+  }
+
+  private buildSnapshotFilters(
+    query: ListFeeHeadsQueryDto,
+    view: string,
+  ): Prisma.JsonObject {
+    const sortNums = (values?: number[]) =>
+      values?.length ? [...values].sort((a, b) => a - b) : undefined;
+    const sortStrings = (values?: string[]) =>
+      values?.length ? [...values].sort() : undefined;
+
+    return {
+      from_date: query.from_date,
+      to_date: query.to_date,
+      view,
+      campus_id: sortNums(query.campus_id),
+      class_id: sortNums(query.class_id),
+      section_id: sortNums(query.section_id),
+      segment_id: sortNums(query.segment_id),
+      student_status: sortStrings(query.student_status),
+      is_fee_endowment: query.is_fee_endowment ?? null,
+      is_complementary: query.is_complementary ?? null,
+      status: sortStrings(query.status),
+    };
+  }
+
+  private hashSnapshotFilters(filters: Prisma.JsonObject): string {
+    return createHash('sha256').update(JSON.stringify(filters)).digest('hex');
+  }
+
+  private async captureFeeHeadsTotals(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+    };
+    const [totals, studentCount] = await Promise.all([
+      this.feeHeadMoneyTotals(where),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+    ]);
+    const check = this.buildTotalsCheck(totals);
+    return {
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...check,
+      },
+      reconciles: check.reconciles,
+    };
+  }
+
+  private async buildSnapshotLiveCheck(
+    row: {
+      filters: Prisma.JsonValue;
+      totals: Prisma.JsonValue;
+      reconciles: boolean;
+    },
+    user: IJwtStaffPayload,
+  ) {
+    const filters = row.filters as ListFeeHeadsQueryDto;
+    const { totals: liveTotals, reconciles } = await this.captureFeeHeadsTotals(
+      filters,
+      user,
+    );
+    const snapshotTotals = row.totals as Record<string, number | boolean>;
+    const drift = this.diffSnapshotTotals(snapshotTotals, liveTotals);
+    const hasDrift = Object.values(drift).some(
+      (value) => typeof value === 'number' && Math.abs(value) > 0.009,
+    );
+
+    return {
+      reconciles,
+      has_drift: hasDrift,
+      live_totals: liveTotals,
+      drift,
+      matches_snapshot: !hasDrift,
+    };
+  }
+
+  private diffSnapshotTotals(
+    snapshotTotals: Record<string, number | boolean>,
+    liveTotals: Record<string, number | boolean>,
+  ) {
+    const keys = [
+      'count',
+      'student_count',
+      'billed_count',
+      'to_be_billed_count',
+      'billed',
+      'to_be_billed',
+      'amount',
+      'amount_paid',
+      'outstanding',
+    ] as const;
+
+    const drift: Record<string, number> = {};
+    for (const key of keys) {
+      const snapshotValue = Number(snapshotTotals[key] ?? 0);
+      const liveValue = Number(liveTotals[key] ?? 0);
+      drift[key] = this.roundMoney(liveValue - snapshotValue);
+    }
+    return drift;
+  }
+
+  private mapSnapshotRow(row: {
+    id: number;
+    report_type: FinancialReportType;
+    from_date: Date;
+    to_date: Date;
+    view: string;
+    filters: Prisma.JsonValue;
+    filters_hash: string;
+    status: FinancialReportSnapshotStatus;
+    totals: Prisma.JsonValue;
+    reconciles: boolean;
+    generated_by: string | null;
+    generated_at: Date;
+    finalized_by: string | null;
+    finalized_at: Date | null;
+    notes: string | null;
+  }) {
+    return {
+      id: row.id,
+      report_type: row.report_type,
+      from_date: this.formatDateOnly(row.from_date),
+      to_date: this.formatDateOnly(row.to_date),
+      view: row.view,
+      filters: row.filters,
+      filters_hash: row.filters_hash,
+      status: row.status,
+      totals: row.totals,
+      reconciles: row.reconciles,
+      generated_by: row.generated_by,
+      generated_at: row.generated_at.toISOString(),
+      finalized_by: row.finalized_by,
+      finalized_at: row.finalized_at?.toISOString() ?? null,
+      notes: row.notes,
+    };
+  }
+
   private buildStudentWhere(
     query: FinancialReportQueryDto,
     user: IJwtStaffPayload,
   ): Prisma.studentsWhereInput {
+    const includesGraduated = query.student_status?.includes(
+      student_status.GRADUATED,
+    );
     const studentWhere: Prisma.studentsWhereInput = {
       deleted_at: null,
       ...(query.campus_id?.length && { campus_id: { in: query.campus_id } }),
-      ...(query.class_id?.length && { class_id: { in: query.class_id } }),
+      ...(query.class_id?.length && {
+        OR: includesGraduated
+          ? [
+              { class_id: { in: query.class_id } },
+              { graduated_from_class_id: { in: query.class_id } },
+            ]
+          : [{ class_id: { in: query.class_id } }],
+      }),
       ...(query.section_id?.length && { section_id: { in: query.section_id } }),
       ...(query.segment_id?.length && {
         classes: { segment_id: { in: query.segment_id } },
@@ -549,7 +1263,12 @@ export class FinancialReportsService {
   ) {
     const amount = this.toMoney(row.amount);
     const amountPaid = this.toMoney(row.amount_paid);
-    const classId = row.students.class_id ?? row.students.classes?.id ?? null;
+    const classId =
+      row.students.class_id ??
+      row.students.graduated_from_class_id ??
+      row.students.classes?.id ??
+      row.students.graduated_from_class?.id ??
+      null;
     const feeName = row.fee_types?.description ?? '';
     const feeType = [row.description_prefix, feeName].filter(Boolean).join(' ');
 
@@ -559,7 +1278,7 @@ export class FinancialReportsService {
       gr_number: row.students.gr_number,
       student_name: row.students.full_name,
       campus: row.students.campuses?.campus_name ?? '',
-      class_name: row.students.classes?.description ?? '',
+      class_name: this.resolveStudentClassName(row.students),
       section: row.students.sections?.description ?? '',
       fee_type: feeType || '—',
       period_label: getMonthYearLabel(
@@ -572,6 +1291,62 @@ export class FinancialReportsService {
       amount,
       amount_paid: amountPaid,
       outstanding: this.roundMoney(amount - amountPaid),
+    };
+  }
+
+  private resolveStudentClassName(
+    student:
+      | {
+          status?: student_status | null;
+          classes?: { description: string } | null;
+          graduated_from_class?: { description: string } | null;
+        }
+      | null
+      | undefined,
+  ): string {
+    if (!student) return '';
+    if (student.status === student_status.GRADUATED) {
+      return student.graduated_from_class?.description ?? '';
+    }
+    return student.classes?.description ?? '';
+  }
+
+  private effectiveClassId(
+    student:
+      | {
+          status?: student_status | null;
+          class_id?: number | null;
+          graduated_from_class_id?: number | null;
+        }
+      | null
+      | undefined,
+  ): number | null {
+    if (!student) return null;
+    if (student.status === student_status.GRADUATED) {
+      return student.graduated_from_class_id ?? null;
+    }
+    return student.class_id ?? null;
+  }
+
+  private buildTotalsCheck(totals: {
+    amount: number;
+    amount_paid: number;
+    outstanding: number;
+    billed: number;
+    to_be_billed: number;
+  }) {
+    const billedPlusToBeBilled = this.roundMoney(
+      totals.billed + totals.to_be_billed,
+    );
+    const paidPlusOutstanding = this.roundMoney(
+      totals.amount_paid + totals.outstanding,
+    );
+    return {
+      billed_plus_to_be_billed: billedPlusToBeBilled === totals.amount,
+      paid_plus_outstanding: paidPlusOutstanding === totals.amount,
+      reconciles:
+        billedPlusToBeBilled === totals.amount &&
+        paidPlusOutstanding === totals.amount,
     };
   }
 

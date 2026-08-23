@@ -51,6 +51,7 @@ const permissionsList = [
     { key: 'system.permissions.manage', module: 'System Administration', description: 'Manage user permissions' },
     { key: 'system.analytics.view', module: 'System Administration', description: 'View dashboard analytics' },
     { key: 'system.analytics.view_amounts', module: 'System Administration', description: 'View financial amounts in analytics' },
+    { key: 'system.analytics.finalize', module: 'System Administration', description: 'Finalize financial report snapshots' },
 
     // HR & Attendance
     { key: 'hr.employees.view', module: 'HR & Attendance', description: 'View employee directory' },
@@ -119,6 +120,7 @@ async function main() {
             'finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 
             'finance.vouchers.view', 'finance.vouchers.download', 'finance.vouchers.split_partial',
             'finance.deposits.record', 'finance.deposits.view', 'finance.banks.view',
+            'system.analytics.view', 'system.analytics.view_amounts', 'system.analytics.finalize',
             'hr.leave.apply', 'hr.payroll.view', 'hr.payroll.manage',
             'communication.support_tickets.view',
         ],

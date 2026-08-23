@@ -1,7 +1,12 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
   Query,
   Res,
   UseGuards,
@@ -22,9 +27,16 @@ import {
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
 } from './dto/financial-report-query.dto';
+import {
+  CreateFeeHeadsSnapshotDto,
+  ListFeeHeadsSnapshotsQueryDto,
+} from './dto/financial-report-snapshot.dto';
 
 const canReadAnalytics = (ability: AppAbility) =>
   ability.can(Action.Read, 'all') || ability.can(Action.Manage, 'all');
+
+const canFinalizeAnalytics = (ability: AppAbility) =>
+  ability.can(Action.Manage, 'all');
 
 @Controller('financial-reports')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -36,6 +48,56 @@ export class FinancialReportsController {
   async filterOptions() {
     const data = await this.financialReportsService.listFilterOptions();
     return createApiResponse(data, HttpStatus.OK, 'Financial report filters retrieved successfully');
+  }
+
+  @Get('fee-heads/snapshots')
+  @CheckPolicies(canReadAnalytics)
+  async listFeeHeadsSnapshots(
+    @Query() query: ListFeeHeadsSnapshotsQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.listFeeHeadsSnapshots(query, user);
+    return createApiResponse(data, HttpStatus.OK, 'Fee heads snapshots retrieved successfully');
+  }
+
+  @Post('fee-heads/snapshots')
+  @CheckPolicies(canReadAnalytics)
+  async createFeeHeadsSnapshot(
+    @Body() dto: CreateFeeHeadsSnapshotDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.createFeeHeadsSnapshot(dto, user);
+    return createApiResponse(data, HttpStatus.CREATED, 'Fee heads snapshot created successfully');
+  }
+
+  @Get('fee-heads/snapshots/:id')
+  @CheckPolicies(canReadAnalytics)
+  async getFeeHeadsSnapshot(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.getFeeHeadsSnapshot(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Fee heads snapshot retrieved successfully');
+  }
+
+  @Post('fee-heads/snapshots/:id/finalize')
+  @CheckPolicies(canFinalizeAnalytics)
+  async finalizeFeeHeadsSnapshot(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.finalizeFeeHeadsSnapshot(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Fee heads snapshot finalized successfully');
+  }
+
+  @Delete('fee-heads/snapshots/:id')
+  @CheckPolicies(canReadAnalytics)
+  async deleteFeeHeadsSnapshot(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.deleteFeeHeadsSnapshot(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Fee heads snapshot deleted successfully');
   }
 
   @Get('fee-heads')

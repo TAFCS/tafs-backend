@@ -2087,3 +2087,35 @@ enum otp_purpose {
   PARENT_FORGOT_PASSWORD
   STAFF_FORGOT_PASSWORD
 }
+
+enum FinancialReportType {
+  FEE_HEADS
+  DEPOSITS
+}
+
+enum FinancialReportSnapshotStatus {
+  DRAFT
+  FINALIZED
+}
+
+model financial_report_snapshots {
+  id            Int                           @id @default(autoincrement())
+  report_type   FinancialReportType
+  from_date     DateTime                      @db.Date
+  to_date       DateTime                      @db.Date
+  view          String                        @db.VarChar(32)
+  filters       Json
+  filters_hash  String                        @db.VarChar(64)
+  status        FinancialReportSnapshotStatus @default(DRAFT)
+  totals        Json
+  reconciles    Boolean                       @default(true)
+  generated_by  String?                       @db.VarChar(100)
+  generated_at  DateTime                      @default(now()) @db.Timestamp(6)
+  finalized_by  String?                       @db.VarChar(100)
+  finalized_at  DateTime?                     @db.Timestamp(6)
+  notes         String?                       @db.VarChar(500)
+
+  @@index([report_type, from_date, to_date])
+  @@index([status])
+  @@index([filters_hash])
+}
