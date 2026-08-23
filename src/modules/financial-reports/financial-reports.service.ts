@@ -266,7 +266,7 @@ export class FinancialReportsService {
     const items = groups.map((group) => {
       const amount = this.toMoney(group._sum.amount);
       const amountPaid = this.toMoney(group._sum.amount_paid);
-      const feeName = feeTypeMap.get(group.fee_type_id) ?? '';
+      const feeName = group.fee_type_id != null ? feeTypeMap.get(group.fee_type_id) ?? '' : '';
       const feeType = [group.description_prefix, feeName].filter(Boolean).join(' ');
       return {
         fee_type_id: group.fee_type_id,
@@ -331,7 +331,7 @@ export class FinancialReportsService {
         period_label: getMonthYearLabel(
           group.target_month,
           group.academic_year,
-          termStart,
+          { termStartMonth: termStart },
         ),
         head_count: group._count._all,
         amount,
@@ -1049,7 +1049,7 @@ export class FinancialReportsService {
     },
     user: IJwtStaffPayload,
   ) {
-    const filters = row.filters as ListFeeHeadsQueryDto;
+    const filters = row.filters as unknown as ListFeeHeadsQueryDto;
     const { totals: liveTotals, reconciles } = await this.captureFeeHeadsTotals(
       filters,
       user,
