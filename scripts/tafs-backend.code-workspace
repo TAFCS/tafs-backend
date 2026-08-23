@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../../tafs-webapp"
+		},
+		{
+			"path": "../../tafs-staff-app"
 		}
 	]
 }
