@@ -46,6 +46,16 @@ export class UsersService {
 
   // ─── User CRUD ──────────────────────────────────────────────────────────────
 
+  async isUsernameAvailable(username: string): Promise<boolean> {
+    const trimmed = username.trim();
+    if (!trimmed) return false;
+    const existing = await this.prisma.users.findFirst({
+      where: { username: { equals: trimmed, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    return !existing;
+  }
+
   async listUsers() {
     return this.prisma.users.findMany({
       orderBy: { created_at: 'asc' },

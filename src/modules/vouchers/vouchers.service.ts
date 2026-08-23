@@ -25,6 +25,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
+import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
@@ -967,7 +968,7 @@ export class VouchersService {
             const total = allMatching.length;
             const paginatedIds = allMatching.slice(skip, skip + take).map(v => v.id);
 
-            const [unsortedVouchers, stats] = await Promise.all([
+            const [unsortedVouchers, stats, classTerms] = await Promise.all([
                 this.prisma.vouchers.findMany({
                     where: { id: { in: paginatedIds } },
                     include: VOUCHER_INCLUDE,
@@ -976,7 +977,8 @@ export class VouchersService {
                     by: ['status'],
                     where: statsWhere,
                     _count: { _all: true }
-                })
+                }),
+                getClassTermMap(this.prisma),
             ]);
 
             // Restore sorted order
@@ -1001,7 +1003,7 @@ export class VouchersService {
 
             return {
                 items: vouchers.map((v) => ({
-                    ...this.normalizeVoucher(v),
+                    ...this.normalizeVoucher(v, classTerms),
                     is_latest_for_student: latestVoucherIdByStudent.has(v.id),
                 })),
                 meta: {
@@ -1212,6 +1214,12 @@ export class VouchersService {
                         ((resolveTermStartMonth(termOf(sf)) !== DEFAULT_TERM_START_MONTH && sf?.fee_date)
                             ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), termOf(sf))
                             : null),
+                    // Discounts never carry a meaningful fee_type_id of their own —
+                    // orderVoucherHeads() heuristically matches them to the group of
+                    // the real head they discount by target month.
+                    fee_type_id: null,
+                    priority_order: null,
+                    voucher_head_id: h.id,
                 };
             }
             // ── End discount row ────────────────────────────────────────────
@@ -1320,6 +1328,9 @@ export class VouchersService {
                 // voucher's — they run long after `sf` is out of scope.
                 term_start_month: h.student_fees?.term_start_month ?? null,
                 academic_year: effectiveAcadYear || h.student_fees?.academic_year,
+                fee_type_id: sf?.fee_type_id ?? null,
+                priority_order: sf?.fee_types?.priority_order ?? null,
+                voucher_head_id: h.id,
             };
         });
 
@@ -1534,7 +1545,29 @@ export class VouchersService {
             };
         });
 
-        const feeHeads = [...consolidatedByRanges, ...nonConsolidatable, ...missedArrearFeeItems];
+        // One fixed rule for every rendered voucher: group by fee type, order
+        // groups by fee_types.priority_order, order heads within a group by
+        // target month. Discounts (no fee_type_id of their own) are matched
+        // against `consolidatable` — the pre-range, one-row-per-month list —
+        // rather than `consolidatedByRanges`, whose rows only carry the START
+        // month of a merged range and would miss a discount for a month in the
+        // middle of it. missedArrearFeeItems are synthetic "not yet on this
+        // voucher" rows and stay appended last, unchanged.
+        const toOrderablePdfHead = (h: any): OrderableHead<any> => ({
+            ref: h,
+            headId: h.voucher_head_id ?? null,
+            feeTypeId: h.fee_type_id ?? null,
+            priorityOrder: h.priority_order ?? null,
+            targetMonth: h.target_month ?? null,
+            academicYear: h.academic_year ?? null,
+            term: termOf(h),
+            isDiscount: h.isDiscount === true,
+        });
+        const orderedRealAndDiscountHeads = orderVoucherHeads(
+            [...consolidatedByRanges, ...nonConsolidatable].map(toOrderablePdfHead),
+            consolidatable.map(toOrderablePdfHead),
+        );
+        const feeHeads = [...orderedRealAndDiscountHeads, ...missedArrearFeeItems];
 
         // Consolidated month-range label for the arrears row, e.g. "ARREARS (AUG 25 – OCT 25)"
         const arrearHeadsForLabel = nonSurcharges.filter(h => h.isArrear && h.target_month != null);
@@ -1859,16 +1892,19 @@ export class VouchersService {
     }
 
     async findOne(id: number) {
-        const voucher = await this.prisma.vouchers.findUnique({
-            where: { id },
-            include: VOUCHER_INCLUDE,
-        });
+        const [voucher, classTerms] = await Promise.all([
+            this.prisma.vouchers.findUnique({
+                where: { id },
+                include: VOUCHER_INCLUDE,
+            }),
+            getClassTermMap(this.prisma),
+        ]);
 
         if (!voucher) {
             throw new NotFoundException(`Voucher with ID ${id} not found`);
         }
 
-        return this.normalizeVoucher(voucher);
+        return this.normalizeVoucher(voucher, classTerms);
     }
 
     async findByStudentCC(cc: number, familyId?: number) {
@@ -1886,16 +1922,19 @@ export class VouchersService {
                 ],
             };
 
-        const vouchers = await this.prisma.vouchers.findMany({
-            where: {
-                student_id: cc,
-                ...voidFilter,
-                ...(familyId ? { students: { family_id: familyId } } : {})
-            },
-            include: VOUCHER_INCLUDE,
-            orderBy: { issue_date: 'asc' },
-        });
-        return vouchers.map((v) => this.normalizeVoucher(v));
+        const [vouchers, classTerms] = await Promise.all([
+            this.prisma.vouchers.findMany({
+                where: {
+                    student_id: cc,
+                    ...voidFilter,
+                    ...(familyId ? { students: { family_id: familyId } } : {})
+                },
+                include: VOUCHER_INCLUDE,
+                orderBy: { issue_date: 'asc' },
+            }),
+            getClassTermMap(this.prisma),
+        ]);
+        return vouchers.map((v) => this.normalizeVoucher(v, classTerms));
     }
 
     /**
@@ -2034,9 +2073,10 @@ export class VouchersService {
             };
         }
 
+        const classTerms = await getClassTermMap(this.prisma);
         return {
             exists: true,
-            voucher: this.normalizeVoucher(voucher),
+            voucher: this.normalizeVoucher(voucher, classTerms),
         };
     }
 
@@ -4564,7 +4604,31 @@ export class VouchersService {
         };
     }
 
-    private normalizeVoucher(voucher: any) {
+    /**
+     * Adapts a raw voucher_heads row (with its student_fees/fee_types relation
+     * already loaded by VOUCHER_INCLUDE) into the shared voucher-head-order
+     * input shape. Used by normalizeVoucher to enforce the one fixed
+     * group-by-fee-type / priority / target-month rule everywhere heads render.
+     */
+    private toOrderableVoucherHead(
+        h: any,
+        voucher: any,
+        classTerms?: ReadonlyMap<number, number>,
+    ): OrderableHead<any> {
+        const fee = h.student_fees;
+        return {
+            ref: h,
+            headId: h.id ?? null,
+            feeTypeId: fee?.fee_type_id ?? null,
+            priorityOrder: fee?.fee_types?.priority_order ?? null,
+            targetMonth: fee?.target_month ?? null,
+            academicYear: fee?.academic_year ?? null,
+            term: termOfHead(fee, { classId: voucher.class_id, classTerms }),
+            isDiscount: fee?.is_discount === true,
+        };
+    }
+
+    private normalizeVoucher(voucher: any, classTerms?: ReadonlyMap<number, number>) {
         if (!voucher) return null;
 
         // The months actually being billed, consolidated into ranges — same string
@@ -4632,7 +4696,10 @@ export class VouchersService {
                     has_installment_merged: hasInstallmentMerged
                 };
             });
-            return { ...voucher, voucher_heads: mappedHeads, months_label: monthsLabel };
+            const orderedMappedHeads = orderVoucherHeads(
+                mappedHeads.map((h: any) => this.toOrderableVoucherHead(h, voucher, classTerms)),
+            );
+            return { ...voucher, voucher_heads: orderedMappedHeads, months_label: monthsLabel };
         }
 
         const originalHeads: any[] = voucher.voucher_heads || [];
@@ -4804,9 +4871,13 @@ export class VouchersService {
 
         this.logger.debug(`  Voucher #${voucher.id} Result: Computed Status=${computedStatus}`);
 
+        const orderedUpdatedHeads = orderVoucherHeads(
+            updatedHeads.map((h) => this.toOrderableVoucherHead(h, voucher, classTerms)),
+        );
+
         return {
             ...voucher,
-            voucher_heads: updatedHeads,
+            voucher_heads: orderedUpdatedHeads,
             months_label: monthsLabel,
             sf_net_total: sfNetTotal.add(surchargeNetTotal).toFixed(2),
             sf_gross_total: sfGrossTotal.add(surchargeNetTotal).toFixed(2),
