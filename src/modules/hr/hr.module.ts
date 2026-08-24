@@ -8,6 +8,8 @@ import { SegmentsController } from './segments/segments.controller';
 import { SegmentsService } from './segments/segments.service';
 import { PoliciesController } from './policies/policies.controller';
 import { PoliciesService } from './policies/policies.service';
+import { PayrollRulesController } from './payroll-rules/payroll-rules.controller';
+import { PayrollRulesService } from './payroll-rules/payroll-rules.service';
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { CalendarDayResolverService } from './calendar/calendar-day-resolver.service';
@@ -56,12 +58,14 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     PayrollController,
     PayrollSelfController,
     PayrollMatrixController,
+    PayrollRulesController,
   ],
   providers: [
     EmployeesService,
     DepartmentsService,
     SegmentsService,
     PoliciesService,
+    PayrollRulesService,
     CalendarService,
     CalendarDayResolverService,
     HolidayAttendanceSyncService,

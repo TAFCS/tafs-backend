@@ -30,6 +30,7 @@
     "verify:voucher-notifications": "ts-node scripts/verify-voucher-notifications.ts",
     "verify:split-reversal": "ts-node scripts/verify-split-deposit-reversal.ts",
     "seed:notification-templates": "ts-node scripts/seed-notification-templates.ts",
+    "seed:payroll-statutory-rules": "ts-node scripts/seed-payroll-statutory-rules.ts",
     "backfill:progression-periods": "ts-node scripts/backfill-progression-periods.ts",
     "migrate:tafs-usernames": "ts-node scripts/rename-tafs-usernames.ts"
   },

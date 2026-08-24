@@ -1459,6 +1459,20 @@ model payroll_settlements {
   settled_by_user        users             @relation("PayrollSettlementSettledBy", fields: [settled_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
+model payroll_statutory_rules {
+  id             Int      @id @default(autoincrement())
+  rule_type      String   @db.VarChar(50)
+  effective_from DateTime @db.Date
+  value_json     Json     @default("{}")
+  description    String?  @db.VarChar(255)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.Timestamp(6)
+  updated_at     DateTime @updatedAt @db.Timestamp(6)
+
+  @@unique([rule_type, effective_from])
+  @@index([rule_type])
+}
+
 model attendance_objections {
   id              Int                       @id @default(autoincrement())
   employee_id     Int
