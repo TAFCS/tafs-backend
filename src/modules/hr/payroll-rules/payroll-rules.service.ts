@@ -26,6 +26,14 @@ export class PayrollRulesService {
     return rule;
   }
 
+  /** Most recent version of `ruleType` that was already in effect on `asOfDate`, or null if none. */
+  async findEffective(ruleType: string, asOfDate: Date) {
+    return this.prisma.payroll_statutory_rules.findFirst({
+      where: { rule_type: ruleType, effective_from: { lte: asOfDate } },
+      orderBy: { effective_from: 'desc' },
+    });
+  }
+
   async create(dto: CreatePayrollStatutoryRuleDto, changedBy: string) {
     this.validateValueJson(dto.rule_type, dto.value_json);
     const created = await this.prisma.payroll_statutory_rules

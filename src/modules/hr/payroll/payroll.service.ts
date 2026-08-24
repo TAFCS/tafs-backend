@@ -14,6 +14,8 @@ import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
+import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
+import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../payroll-rules/payroll-tax-calculator.util';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -75,6 +77,10 @@ interface ComputedLine {
   half_day_deduction: Prisma.Decimal;
   late_deduction: Prisma.Decimal;
   break_deduction: Prisma.Decimal;
+  eobi_deduction: Prisma.Decimal;
+  income_tax_deduction: Prisma.Decimal;
+  eobi_employer_cost: Prisma.Decimal;
+  sessi_employer_cost: Prisma.Decimal;
   total_deductions: Prisma.Decimal;
   net_pay: Prisma.Decimal;
   daily_breakdown: DayBreakdownEntry[];
@@ -153,6 +159,7 @@ export class PayrollService {
     private readonly storage: StorageService,
     private readonly payslipPdf: PayslipPdfService,
     private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
+    private readonly payrollRules: PayrollRulesService,
   ) {}
 
   // Fixed school payroll cycle — see payroll-period.util.ts
@@ -496,7 +503,35 @@ export class PayrollService {
     const halfDayDeduction = dailyRate.dividedBy(2).times(halfDays);
     const lateDeduction = perMinuteRate.times(totalLateMinutes);
     const breakDeduction = perMinuteRate.times(totalBreakMinutes);
-    const totalDeductions = absenceDeduction.plus(halfDayDeduction).plus(lateDeduction).plus(breakDeduction);
+
+    const [eobiRule, sessiRule, incomeTaxRule] = await Promise.all([
+      this.payrollRules.findEffective('EOBI', periodEnd),
+      this.payrollRules.findEffective('SESSI', periodEnd),
+      this.payrollRules.findEffective('INCOME_TAX', periodEnd),
+    ]);
+    const eobiValue = (eobiRule?.value_json ?? {}) as { employer_percent?: number; employee_percent?: number; wage_base_amount?: number };
+    const sessiValue = (sessiRule?.value_json ?? {}) as { employer_percent?: number; wage_base_amount?: number };
+    const incomeTaxValue = (incomeTaxRule?.value_json ?? {}) as { slabs?: { min: number; max: number | null; fixed_amount: number; rate_percent: number }[] };
+
+    const eobiDeduction = eobiRule
+      ? calculateStatutoryContribution(eobiValue.wage_base_amount ?? 0, eobiValue.employee_percent ?? 0)
+      : new Prisma.Decimal(0);
+    const eobiEmployerCost = eobiRule
+      ? calculateStatutoryContribution(eobiValue.wage_base_amount ?? 0, eobiValue.employer_percent ?? 0)
+      : new Prisma.Decimal(0);
+    const sessiEmployerCost = sessiRule
+      ? calculateStatutoryContribution(sessiValue.wage_base_amount ?? 0, sessiValue.employer_percent ?? 0)
+      : new Prisma.Decimal(0);
+    const incomeTaxDeduction = incomeTaxValue.slabs
+      ? calculateMonthlyIncomeTax(monthlyPay.times(12).toNumber(), incomeTaxValue.slabs)
+      : new Prisma.Decimal(0);
+
+    const totalDeductions = absenceDeduction
+      .plus(halfDayDeduction)
+      .plus(lateDeduction)
+      .plus(breakDeduction)
+      .plus(eobiDeduction)
+      .plus(incomeTaxDeduction);
     const netPay = monthlyPay.minus(totalDeductions);
 
     return {
@@ -527,6 +562,10 @@ export class PayrollService {
       half_day_deduction: halfDayDeduction.toDecimalPlaces(2),
       late_deduction: lateDeduction.toDecimalPlaces(2),
       break_deduction: breakDeduction.toDecimalPlaces(2),
+      eobi_deduction: eobiDeduction,
+      income_tax_deduction: incomeTaxDeduction,
+      eobi_employer_cost: eobiEmployerCost,
+      sessi_employer_cost: sessiEmployerCost,
       total_deductions: totalDeductions.toDecimalPlaces(2),
       net_pay: netPay.toDecimalPlaces(2),
       daily_breakdown: dailyBreakdown,
@@ -693,7 +732,9 @@ export class PayrollService {
     const baseDeductions = new Prisma.Decimal(line.absence_deduction)
       .plus(line.half_day_deduction)
       .plus(line.late_deduction)
-      .plus(line.break_deduction);
+      .plus(line.break_deduction)
+      .plus(line.eobi_deduction)
+      .plus(line.income_tax_deduction);
     const totalDeductions = baseDeductions.plus(sandwichDeduction).plus(consecutiveLateDeduction).toDecimalPlaces(2);
     const netPay = new Prisma.Decimal(line.monthly_pay).minus(totalDeductions).toDecimalPlaces(2);
 
@@ -1563,6 +1604,8 @@ export class PayrollService {
       disbursement_notes: line.disbursement_notes,
       monthly_pay: Number(line.monthly_pay),
       total_deductions: Number(line.total_deductions),
+      eobi_deduction: Number(line.eobi_deduction),
+      income_tax_deduction: Number(line.income_tax_deduction),
       net_pay: Number(line.net_pay),
       overtime_days: line.overtime_days,
       settlement: line.payroll_settlements
@@ -1616,7 +1659,11 @@ export class PayrollService {
     });
     if (!line) throw new NotFoundException('Payroll line not found for this period');
 
-    const { payroll_settlements, ...lineFields } = line;
+    // eobi_employer_cost/sessi_employer_cost are deliberately excluded from
+    // the spread below — internal-only, must never reach an employee. See
+    // cash_bonus_amount handling above for the same pattern.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { payroll_settlements, eobi_employer_cost, sessi_employer_cost, ...lineFields } = line;
 
     return {
       ...lineFields,
@@ -1629,6 +1676,8 @@ export class PayrollService {
       break_deduction: Number(line.break_deduction),
       sandwich_deduction: Number(line.sandwich_deduction),
       consecutive_late_deduction: Number(line.consecutive_late_deduction),
+      eobi_deduction: Number(line.eobi_deduction),
+      income_tax_deduction: Number(line.income_tax_deduction),
       total_deductions: Number(line.total_deductions),
       net_pay: Number(line.net_pay),
       overtime_days: line.overtime_days,
@@ -1850,6 +1899,8 @@ export class PayrollService {
           breakDeduction: Number(line.break_deduction),
           sandwichDeduction: Number(line.sandwich_deduction),
           consecutiveLateDeduction: Number(line.consecutive_late_deduction),
+          eobiDeduction: Number(line.eobi_deduction),
+          incomeTaxDeduction: Number(line.income_tax_deduction),
           totalDeductions: Number(line.total_deductions),
           netPay: Number(line.net_pay),
         },

@@ -1414,6 +1414,10 @@ model payroll_run_lines {
   consecutive_late_deduction Decimal              @default(0) @db.Decimal(12, 2)
   overtime_days              Int                  @default(0)
   sandwich_deduction         Decimal              @default(0) @db.Decimal(12, 2)
+  eobi_deduction             Decimal              @default(0) @db.Decimal(12, 2)
+  income_tax_deduction       Decimal              @default(0) @db.Decimal(12, 2)
+  eobi_employer_cost         Decimal              @default(0) @db.Decimal(12, 2)
+  sessi_employer_cost        Decimal              @default(0) @db.Decimal(12, 2)
   finalized_at               DateTime?            @db.Timestamp(6)
   finalized_by               String?
   disbursed_by_user          users?               @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
