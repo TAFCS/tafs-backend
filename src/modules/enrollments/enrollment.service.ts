@@ -5,6 +5,7 @@ import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ProgressionHistoryService } from '../students/progression-history.service';
+import { computeNextGrNumber } from '../../common/utils/gr-number.util';
 
 @Injectable()
 export class EnrollmentService {
@@ -125,7 +126,7 @@ export class EnrollmentService {
 
     const targetSectionId = sectionId ?? student.section_id ?? undefined;
     const [suggested_gr, houseDetails, balanced_section, min_gr] = await Promise.all([
-      this.computeNextGr(student.campus_id, isALevel),
+      computeNextGrNumber(this.prisma, student.campus_id, isALevel),
       this.computeBalancedHouseDetails(resolvedClassId, targetSectionId, student.campus_id),
       this.computeBalancedSection(student.campus_id, resolvedClassId),
       this.computeMinGr(student.campus_id),
@@ -631,90 +632,6 @@ export class EnrollmentService {
 
       return enrolled;
     });
-  }
-
-  private async computeNextGr(campusId: number | null, isALevel = false): Promise<string> {
-    if (!campusId) return '1';
-
-    // Get campus details for prefix logic
-    const campus = await this.prisma.campuses.findUnique({
-      where: { id: campusId },
-      select: { campus_name: true, campus_prefix: true } as any,
-    }) as any;
-
-    const getPrefixByCampusName = (name: string, campusId: number) => {
-      const uname = name.toUpperCase();
-      if (uname.includes('KANEEZ FATIMA') || campusId === 2) return 'KF-A';
-      if (uname.includes('NORTH NAZIMABAD') || campusId === 3) return 'A-N';
-      return '';
-    };
-
-    const defaultPrefix = isALevel 
-      ? 'A-' 
-      : (campus?.campus_prefix || (campus ? getPrefixByCampusName(campus.campus_name, campusId) : ''));
-
-    // Optimize: Instead of fetching ALL students, fetch the most recent ones 
-    // to determine the current GR sequence and prefix.
-    const students = await this.prisma.students.findMany({
-      where: { campus_id: campusId, gr_number: { not: null } },
-      select: { gr_number: true },
-      orderBy: { cc: 'desc' },
-      take: 500, // Look at the last 500 admissions to find the max GR
-    });
-
-    let maxNum = 0;
-    let mainPrefix = defaultPrefix;
-
-    if (students.length > 0) {
-      for (const s of students) {
-        if (!s.gr_number) continue;
-
-        // Match pattern like "ABC-123" or just "123"
-        const match = s.gr_number.match(/^(.*?)([0-9]+)$/);
-        if (match) {
-          const prefix = match[1];
-          const num = parseInt(match[2], 10);
-
-          // Logic: Separate sequences for A-Level vs everything else
-          const isThisGrALevel = prefix === 'A-';
-          if (isThisGrALevel !== isALevel) continue;
-
-          // Harden: Ensure the prefix matches the expected defaultPrefix for the campus/level
-          if (prefix !== defaultPrefix) continue;
-
-          if (num > maxNum) {
-            maxNum = num;
-            mainPrefix = prefix || defaultPrefix;
-          }
-        } else if (!isALevel && defaultPrefix === '') {
-          // For non-A-Level, also check purely numeric GRs if no prefix match found yet
-          const num = parseInt(s.gr_number, 10);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
-          }
-        }
-      }
-    }
-
-    let nextNum = maxNum + 1;
-    let finalGr = `${mainPrefix}${nextNum}`;
-
-    // Robust uniqueness check: Ensure this GR is truly not present in this campus
-    let isTaken = true;
-    while (isTaken) {
-      const existing = await this.prisma.students.findFirst({
-        where: { campus_id: campusId, gr_number: finalGr },
-        select: { cc: true }
-      });
-      if (!existing) {
-        isTaken = false;
-      } else {
-        nextNum++;
-        finalGr = `${mainPrefix}${nextNum}`;
-      }
-    }
-
-    return finalGr;
   }
 
   private async computeBalancedHouseDetails(
