@@ -800,6 +800,47 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 <Text style={styles.instructions}>4. PARENTS ARE RESPONSIBLE FOR COLLECTING FEE VOUCHERS FROM THEIR RESPECTIVE CAMPUS IF THEY ARE NOT RECEIVED OR DELIVERED BY THE STUDENT.</Text>
                 <Text style={styles.instructions}>5. STUDENTS WITH FEES REMAINING UNPAID FOR ONE MONTH BEYOND THE DEADLINE WILL BE SUSPENDED FROM ATTENDING CLASSES UNTIL ALL OUTSTANDING DUES ARE CLEARED.</Text>
 
+                {(details.bank?.name || '').toLowerCase().includes('meezan') && (
+                    <View style={styles.paymentOptionsTable}>
+                        <View style={styles.paymentOptionsHeader}>
+                            <Text>PAYMENT OPTIONS (CASH ACCEPTED)</Text>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>BANK COUNTERS</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>CASH, MBL CHEQUES, AND PAY ORDERS ARE ACCEPTED AT ALL MBL BRANCHES.</Text>
+                            </View>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>CMS ONLINE</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY VIA THE CMS ONLINE DEPOSIT MODULE USING CUSTOMER CODE: TAFCS.</Text>
+                            </View>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>MBL DIGITAL BANKING</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>SELECT "SCHOOL" AS THE BENEFICIARY FROM THE BILLER OPTION VIA MOBILE OR INTERNET BANKING.</Text>
+                            </View>
+                        </View>
+                        <View style={[styles.paymentOptionsRow, { borderBottomWidth: 0 }]}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>OTHER BANKS/DIGITAL CHANNELS</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 24-DIGIT INVOICE NUMBER.</Text>
+                                <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL ID: 1006259110046</Text>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
                 <View style={styles.stampSignatureRow}>
                     <View style={styles.stampBox}>
                         <Text style={styles.stampText}>BANK'S STAMP</Text>
