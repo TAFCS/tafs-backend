@@ -424,6 +424,12 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
     const { class_section_assignments, employment_status, portal_account, ...rest } = dto;
+
+    const effectiveCheckInSource = rest.check_in_source ?? CheckInSource.FIXED;
+    if (effectiveCheckInSource === CheckInSource.FIXED && (!rest.reporting_time || !rest.leaving_time)) {
+      throw new BadRequestException('Expected check-in and check-out times are required when payroll uses fixed times.');
+    }
+
     const codeFields = resolveEmployeeCodeFields({
       ...rest,
       campusPrefix: campusPrefixForId(rest.campus_id ?? null),
@@ -619,6 +625,16 @@ export class EmployeesService {
     if (_ignoredStatus !== undefined) {
       throw new BadRequestException('Use PATCH /hr/employees/:id/status to change employment status');
     }
+
+    const nextCheckInSource = rest.check_in_source !== undefined ? rest.check_in_source : (existing as any).check_in_source;
+    if (nextCheckInSource === CheckInSource.FIXED) {
+      const nextReportingTime = rest.reporting_time !== undefined ? rest.reporting_time : (existing as any).reporting_time;
+      const nextLeavingTime = rest.leaving_time !== undefined ? rest.leaving_time : (existing as any).leaving_time;
+      if (!nextReportingTime || !nextLeavingTime) {
+        throw new BadRequestException('Expected check-in and check-out times are required when payroll uses fixed times.');
+      }
+    }
+
     const nextCampusId = rest.campus_id !== undefined ? rest.campus_id : existing.campus_id;
     const hasCodeInput =
       rest.employee_code !== undefined ||
