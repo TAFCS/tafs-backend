@@ -129,6 +129,22 @@ const runInclude = {
 export class PayrollService {
   private readonly logger = new Logger(PayrollService.name);
 
+  // Shared by every roster/single-employee lookup that feeds
+  // computeEmployeeLinesForRange (generateRun's two roster branches,
+  // regenerateLine's single-employee lookup).
+  private readonly employeeLineSelect = {
+    id: true,
+    monthly_pay: true,
+    reporting_time: true,
+    leaving_time: true,
+    late_relaxation_minutes: true,
+    department_id: true,
+    staff_category_id: true,
+    staff_categories: { select: { code: true } },
+    days_per_week: true,
+    employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+  } as const;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
@@ -600,8 +616,9 @@ export class PayrollService {
     employeeId: number,
     detected: DetectedFlag[],
     dailyRate: Prisma.Decimal,
+    tx: Prisma.TransactionClient = this.prisma,
   ): Promise<void> {
-    const existingFlags = await this.prisma.payroll_flags.findMany({
+    const existingFlags = await tx.payroll_flags.findMany({
       where: { payroll_run_id: runId, employee_id: employeeId },
     });
     const existingByKey = new Map(
@@ -615,12 +632,12 @@ export class PayrollService {
       const deductionAmount = dailyRate.times(flag.deduction_days).toDecimalPlaces(2);
       const existing = existingByKey.get(key);
       if (existing) {
-        await this.prisma.payroll_flags.update({
+        await tx.payroll_flags.update({
           where: { id: existing.id },
           data: { dates: flag.dates, deduction_days: flag.deduction_days, deduction_amount: deductionAmount },
         });
       } else {
-        await this.prisma.payroll_flags.create({
+        await tx.payroll_flags.create({
           data: {
             payroll_run_id: runId,
             employee_id: employeeId,
@@ -638,10 +655,10 @@ export class PayrollService {
       .filter((f) => !seenKeys.has(`${f.flag_type}:${f.anchor_date.toISOString().slice(0, 10)}`))
       .map((f) => f.id);
     if (staleIds.length > 0) {
-      await this.prisma.payroll_flags.deleteMany({ where: { id: { in: staleIds } } });
+      await tx.payroll_flags.deleteMany({ where: { id: { in: staleIds } } });
     }
 
-    await this.recomputeLineFlagDeductions(runId, employeeId);
+    await this.recomputeLineFlagDeductions(runId, employeeId, tx);
   }
 
   /**
@@ -650,18 +667,22 @@ export class PayrollService {
    * layer folded in only from flags currently APPLIED, so a PENDING or
    * EXEMPTED flag never changes pay.
    */
-  private async recomputeLineFlagDeductions(runId: number, employeeId: number): Promise<void> {
-    const line = await this.prisma.payroll_run_lines.findUnique({
+  private async recomputeLineFlagDeductions(
+    runId: number,
+    employeeId: number,
+    tx: Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
+    const line = await tx.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
     });
     if (!line) return;
 
     const [sandwichSum, lateSum] = await Promise.all([
-      this.prisma.payroll_flags.aggregate({
+      tx.payroll_flags.aggregate({
         where: { payroll_run_id: runId, employee_id: employeeId, flag_type: PayrollFlagType.SANDWICH, status: PayrollFlagStatus.APPLIED },
         _sum: { deduction_amount: true },
       }),
-      this.prisma.payroll_flags.aggregate({
+      tx.payroll_flags.aggregate({
         where: { payroll_run_id: runId, employee_id: employeeId, flag_type: PayrollFlagType.CONSECUTIVE_LATE, status: PayrollFlagStatus.APPLIED },
         _sum: { deduction_amount: true },
       }),
@@ -676,7 +697,7 @@ export class PayrollService {
     const totalDeductions = baseDeductions.plus(sandwichDeduction).plus(consecutiveLateDeduction).toDecimalPlaces(2);
     const netPay = new Prisma.Decimal(line.monthly_pay).minus(totalDeductions).toDecimalPlaces(2);
 
-    await this.prisma.payroll_run_lines.update({
+    await tx.payroll_run_lines.update({
       where: { id: line.id },
       data: {
         sandwich_deduction: sandwichDeduction,
@@ -702,8 +723,13 @@ export class PayrollService {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status === PayrollRunStatus.FINALIZED) {
-      throw new BadRequestException('Flags can only be decided on a draft payroll run.');
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { finalized_at: true },
+    });
+    if (line?.finalized_at) {
+      throw new BadRequestException("Flags can only be decided before this employee's payroll line is finalized.");
     }
 
     const flag = await this.prisma.payroll_flags.findUnique({ where: { id: flagId } });
@@ -800,6 +826,138 @@ export class PayrollService {
     );
   }
 
+  /**
+   * Regenerates exactly one employee's line on an existing run — the
+   * employee-scoped counterpart to generateRun's "Regen All". Reuses the same
+   * computeEmployeeLinesForRange/syncPayrollFlagsForEmployee machinery,
+   * called with a single-employee roster, and upserts (never delete+recreate)
+   * so the line keeps its id.
+   */
+  async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.is_test) {
+      throw new BadRequestException('Test runs do not support per-employee regenerate — use "Generate Test Run" instead.');
+    }
+
+    const existingLine = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { finalized_at: true },
+    });
+    if (existingLine?.finalized_at) {
+      throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
+    }
+
+    const employee = await this.prisma.employee_profiles.findFirst({
+      where: { id: employeeId, campus_id: run.campus_id, monthly_pay: { not: null } },
+      select: this.employeeLineSelect,
+    });
+    if (!employee) {
+      throw new BadRequestException("This employee is not on this run's campus, or has no monthly_pay set.");
+    }
+
+    const [{ employee_id, ...lineData }] = await this.computeEmployeeLinesForRange(
+      [employee],
+      run.campus_id,
+      run.period_start,
+      run.period_end,
+    );
+    const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.payroll_run_lines.upsert({
+        where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id } },
+        create: { payroll_run_id: runId, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
+        update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
+      });
+      await this.syncPayrollFlagsForEmployee(runId, employee_id, detected, lineData.daily_rate, tx);
+      await this.recomputeRunStatus(runId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_REGENERATED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Regenerated payroll line for employee ${employeeId}.`,
+    });
+
+    return this.getRun(runId, user);
+  }
+
+  /**
+   * Finalizes (locks) exactly one employee's line, independent of the rest
+   * of the run — the employee-scoped counterpart to finalizeRun's "Finalize
+   * All". A cycle only rolls up to FINALIZED (see recomputeRunStatus) once
+   * every employee has gone through here.
+   */
+  async finalizeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.is_test) {
+      throw new BadRequestException('Test runs do not support per-employee finalize — use "Finalize All" instead.');
+    }
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      include: { employee_profiles: { select: { user_id: true } } },
+    });
+    if (!line) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
+    if (line.finalized_at) {
+      throw new BadRequestException("This employee's payroll line is already finalized.");
+    }
+    if (line.unresolved_days > 0) {
+      throw new BadRequestException(
+        `Cannot finalize: ${line.unresolved_days} unresolved attendance day(s) for this employee ` +
+          `(working days with no attendance record at all). Resolve them in the staff attendance register, ` +
+          `then regenerate this line.`,
+      );
+    }
+    const pendingFlags = await this.prisma.payroll_flags.count({
+      where: { payroll_run_id: runId, employee_id: employeeId, status: PayrollFlagStatus.PENDING },
+    });
+    if (pendingFlags > 0) {
+      throw new BadRequestException(
+        `Cannot finalize: ${pendingFlags} flagged instance(s) of the sandwich or consecutive-late rules ` +
+          `still need a decision (Apply or Exempt) for this employee.`,
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.payroll_run_lines.update({
+        where: { id: line.id },
+        data: { finalized_at: new Date(), finalized_by: user.sub },
+      });
+      await this.recomputeRunStatus(runId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_FINALIZED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Finalized payroll line for employee ${employeeId}.`,
+    });
+
+    // Test runs are throwaway/repeatable — no reason to page a test employee
+    // every time one gets finalized during testing. (run.is_test is already
+    // rejected above, kept for parity with finalizeRun's notification guard.)
+    if (!run.is_test && line.employee_profiles.user_id) {
+      const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+      void this.employeeNoticeBoard
+        .createPayrollNotice(employeeId, line.employee_profiles.user_id, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, runId)
+        .catch((err) => this.logger.error(`Failed to send payroll-finalized notice for employee ${employeeId}`, err));
+    }
+
+    return this.getRun(runId, user);
+  }
+
   async generateRun(dto: GeneratePayrollRunDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
 
@@ -812,18 +970,7 @@ export class PayrollService {
     const employees = isTest
       ? await this.prisma.employee_profiles.findMany({
           where: { id: { in: dto.employee_ids }, campus_id: dto.campus_id, monthly_pay: { not: null } },
-          select: {
-            id: true,
-            monthly_pay: true,
-            reporting_time: true,
-            leaving_time: true,
-            late_relaxation_minutes: true,
-            department_id: true,
-            staff_category_id: true,
-            staff_categories: { select: { code: true } },
-            days_per_week: true,
-            employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-          },
+          select: this.employeeLineSelect,
         })
       : await this.prisma.employee_profiles.findMany({
           where: {
@@ -831,18 +978,7 @@ export class PayrollService {
             monthly_pay: { not: null },
             employment_status: { in: ['ACTIVE', 'PERMANENT'] },
           },
-          select: {
-            id: true,
-            monthly_pay: true,
-            reporting_time: true,
-            leaving_time: true,
-            late_relaxation_minutes: true,
-            department_id: true,
-            staff_category_id: true,
-            staff_categories: { select: { code: true } },
-            days_per_week: true,
-            employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-          },
+          select: this.employeeLineSelect,
         });
     if (employees.length === 0) {
       throw new BadRequestException(
@@ -867,20 +1003,13 @@ export class PayrollService {
         },
       },
     });
-    // Test runs are exempt from the immutability guard entirely — the whole
-    // point of test mode is being able to repeat generate -> finalize ->
-    // settle as many times as needed, even after finalizing.
-    if (existing?.status === PayrollRunStatus.FINALIZED && !existing.is_test) {
-      throw new BadRequestException(
-        `Payroll for ${dto.year}-${String(dto.month).padStart(2, '0')} on this campus is already finalized. ` +
-          `Finalized runs are immutable — this isn't a correction workflow yet.`,
-      );
-    }
-
-    // Re-generating a DRAFT for the same period replaces it in place (recomputed
-    // from current attendance data) rather than piling up duplicate drafts —
+    // Re-generating for the same period replaces it in place (recomputed from
+    // current attendance data) rather than piling up duplicate drafts —
     // expected while real attendance data is still being backfilled. For a
-    // test run this also applies even if it was previously finalized.
+    // test run this also applies even if it was previously finalized. A real
+    // run that's fully complete (every line finalized) is no longer a hard
+    // block either — see the "Regen All" branch below, which simply has
+    // nothing left to touch in that case.
     const run = existing
       ? await this.prisma.payroll_runs.update({
           where: { id: existing.id },
@@ -904,21 +1033,52 @@ export class PayrollService {
           },
         });
 
-    if (existing) {
-      await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
-    }
+    let touchedCount = employees.length;
 
-    const computedLines = await this.computeEmployeeLinesForRange(employees, dto.campus_id, periodStart, periodEnd);
-    const lines = computedLines.map((line) => ({ payroll_run_id: run.id, ...line }));
-    await this.prisma.payroll_run_lines.createMany({ data: lines as unknown as Prisma.payroll_run_linesCreateManyInput[] });
+    if (!existing || isTest) {
+      // New run, or a test-run regenerate: test runs stay fully disposable —
+      // the whole point of test mode is being able to repeat generate ->
+      // finalize -> settle as many times as needed — so both cases wipe (if
+      // anything exists) and recompute the entire given roster from scratch.
+      if (existing) {
+        await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
+      }
+      const computedLines = await this.computeEmployeeLinesForRange(employees, dto.campus_id, periodStart, periodEnd);
+      await this.prisma.payroll_run_lines.createMany({
+        data: computedLines.map((line) => ({ payroll_run_id: run.id, ...line })) as unknown as Prisma.payroll_run_linesCreateManyInput[],
+      });
+      for (const line of computedLines) {
+        const detected = this.detectPayrollFlags(line.daily_breakdown);
+        await this.syncPayrollFlagsForEmployee(run.id, line.employee_id, detected, line.daily_rate);
+      }
+    } else {
+      // "Regen All" on a real run: never touch an employee whose line is
+      // already finalized/settled — everyone else (including a newly
+      // eligible employee with no line here yet, e.g. a new hire, who simply
+      // isn't in lockedIds) is upserted in place. Upsert keeps an existing
+      // line's id, so it never orphans a payroll_settlements row or reshuffles
+      // payroll_flags identity the way the old delete+recreate did.
+      const existingLines = await this.prisma.payroll_run_lines.findMany({
+        where: { payroll_run_id: run.id },
+        select: { employee_id: true, finalized_at: true },
+      });
+      const lockedIds = new Set(existingLines.filter((l) => l.finalized_at).map((l) => l.employee_id));
+      const toCompute = employees.filter((e) => !lockedIds.has(e.id));
+      touchedCount = toCompute.length;
 
-    // Detect sandwich / consecutive-late candidates from each employee's
-    // freshly computed daily_breakdown and sync them against whatever flags
-    // already exist for this run+employee — Apply/Exempt decisions on a
-    // still-detected flag survive; flags that no longer apply are removed.
-    for (const line of computedLines) {
-      const detected = this.detectPayrollFlags(line.daily_breakdown);
-      await this.syncPayrollFlagsForEmployee(run.id, line.employee_id, detected, line.daily_rate);
+      if (toCompute.length > 0) {
+        const computedLines = await this.computeEmployeeLinesForRange(toCompute, dto.campus_id, periodStart, periodEnd);
+        for (const { employee_id, ...lineData } of computedLines) {
+          await this.prisma.payroll_run_lines.upsert({
+            where: { payroll_run_id_employee_id: { payroll_run_id: run.id, employee_id } },
+            create: { payroll_run_id: run.id, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
+            update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
+          });
+          const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+          await this.syncPayrollFlagsForEmployee(run.id, employee_id, detected, lineData.daily_rate);
+        }
+      }
+      await this.recomputeRunStatus(run.id);
     }
 
     void this.auditLogs.log({
@@ -928,7 +1088,7 @@ export class PayrollService {
       field: 'status',
       new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
       changed_by: auditActorLabel(user),
-      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${employees.length} employee(s)${isTest ? ', test' : ''}).`,
+      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}).`,
     });
 
     return this.getRun(run.id, user);
@@ -1112,11 +1272,18 @@ export class PayrollService {
       { header: 'Net Pay', width: 14, getValue: (l) => Number(l.net_pay) },
       { header: 'Tags', width: 24, getValue: (l) => tagLabels(l) },
     ];
-    if (run.status === PayrollRunStatus.FINALIZED) {
+    if (lines.some((l) => l.disbursed_at)) {
       columns.push({
         header: 'Disbursed',
         width: 16,
         getValue: (l) => (l.disbursed_at ? l.disbursed_at.toISOString().slice(0, 10) : ''),
+      });
+    }
+    if (lines.some((l) => l.finalized_at)) {
+      columns.push({
+        header: 'Finalized',
+        width: 16,
+        getValue: (l) => (l.finalized_at ? l.finalized_at.toISOString().slice(0, 10) : ''),
       });
     }
 
@@ -1164,15 +1331,55 @@ export class PayrollService {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id }, include: runInclude });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    return this.attachFlagsToLines(run);
+    return this.attachDerivedFieldsToLines(run);
+  }
+
+  /**
+   * Per-line status is derived, never stored: a line moves
+   * PENDING -> FINALIZED (finalized_at set, locked against regenerate) ->
+   * SETTLED (disbursed_at set, via settleLine or the legacy disburseLine/
+   * disburseAll paths). A run-level "complete" rollup is a separate concern,
+   * see recomputeRunStatus.
+   */
+  private deriveLineStatus(line: { finalized_at: Date | null; disbursed_at: Date | null }): 'PENDING' | 'FINALIZED' | 'SETTLED' {
+    if (line.disbursed_at) return 'SETTLED';
+    if (line.finalized_at) return 'FINALIZED';
+    return 'PENDING';
+  }
+
+  /**
+   * A pay cycle is "complete" (payroll_runs.status = FINALIZED) once every
+   * employee line on it has finalized_at set — no one left pending — and
+   * "incomplete" (DRAFT) otherwise. Called as a side effect of every mutation
+   * that can change a line's finalized_at, so the run-level badge always
+   * reflects the current rollup rather than being a manually-flipped switch.
+   * lines.length > 0 is load-bearing: an empty run must never read complete.
+   */
+  private async recomputeRunStatus(runId: number, tx: Prisma.TransactionClient = this.prisma): Promise<void> {
+    const [lines, run] = await Promise.all([
+      tx.payroll_run_lines.findMany({ where: { payroll_run_id: runId }, select: { finalized_at: true } }),
+      tx.payroll_runs.findUnique({ where: { id: runId }, select: { status: true, finalized_at: true } }),
+    ]);
+    if (!run) return;
+    const allDone = lines.length > 0 && lines.every((l) => l.finalized_at !== null);
+    const nextStatus = allDone ? PayrollRunStatus.FINALIZED : PayrollRunStatus.DRAFT;
+    if (nextStatus === run.status && (nextStatus === PayrollRunStatus.DRAFT ? true : !!run.finalized_at)) return;
+    await tx.payroll_runs.update({
+      where: { id: runId },
+      data: { status: nextStatus, finalized_at: allDone ? (run.finalized_at ?? new Date()) : null },
+    });
   }
 
   // Flags are stored on the run, not the line (their identity must survive a
   // DRAFT regenerate, which replaces every line's id) — attach them onto
-  // their line by employee_id for the API response.
-  private attachFlagsToLines<T extends { payroll_run_lines: { employee_id: number }[]; payroll_flags: unknown[] }>(
-    run: T,
-  ) {
+  // their line by employee_id for the API response. Also stamps the derived
+  // per-line status so the frontend doesn't re-derive this tri-state itself.
+  private attachDerivedFieldsToLines<
+    T extends {
+      payroll_run_lines: { employee_id: number; finalized_at: Date | null; disbursed_at: Date | null }[];
+      payroll_flags: unknown[];
+    },
+  >(run: T) {
     const flagsByEmployee = new Map<number, unknown[]>();
     for (const flag of run.payroll_flags as { employee_id: number }[]) {
       const bucket = flagsByEmployee.get(flag.employee_id);
@@ -1183,11 +1390,20 @@ export class PayrollService {
       ...run,
       payroll_run_lines: run.payroll_run_lines.map((line) => ({
         ...line,
+        line_status: this.deriveLineStatus(line),
         payroll_flags: flagsByEmployee.get(line.employee_id) ?? [],
       })),
     };
   }
 
+  /**
+   * "Finalize All": finalizes every still-pending, eligible employee line on
+   * the run in one call — the bulk counterpart to finalizeLine. Unlike the
+   * old whole-run finalize, ineligibility is per-employee: a line with
+   * unresolved days or a pending flag is skipped (with a reason) rather than
+   * blocking every other employee. Only throws if there's nothing pending at
+   * all left to finalize.
+   */
   async finalizeRun(id: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({
       where: { id },
@@ -1199,33 +1415,43 @@ export class PayrollService {
     });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status === PayrollRunStatus.FINALIZED) {
-      throw new BadRequestException('This payroll run is already finalized.');
+
+    const pendingLines = run.payroll_run_lines.filter((l) => !l.finalized_at);
+    if (pendingLines.length === 0) {
+      throw new BadRequestException('This payroll run is already fully finalized.');
     }
 
-    const unresolvedTotal = run.payroll_run_lines.reduce((sum, l) => sum + l.unresolved_days, 0);
-    if (unresolvedTotal > 0) {
-      throw new BadRequestException(
-        `Cannot finalize: ${unresolvedTotal} unresolved attendance day(s) across employees on this run ` +
-          `(working days with no attendance record at all). Resolve them in the staff attendance register first, ` +
-          `then regenerate this run.`,
-      );
-    }
-
-    const pendingFlags = await this.prisma.payroll_flags.count({
+    const pendingFlags = await this.prisma.payroll_flags.findMany({
       where: { payroll_run_id: id, status: PayrollFlagStatus.PENDING },
+      select: { employee_id: true },
     });
-    if (pendingFlags > 0) {
-      throw new BadRequestException(
-        `Cannot finalize: ${pendingFlags} flagged instance(s) of the sandwich or consecutive-late rules ` +
-          `still need a decision (Apply or Exempt) before this run can be finalized.`,
-      );
+    const pendingFlagCounts = new Map<number, number>();
+    for (const flag of pendingFlags) {
+      pendingFlagCounts.set(flag.employee_id, (pendingFlagCounts.get(flag.employee_id) ?? 0) + 1);
     }
 
-    await this.prisma.payroll_runs.update({
-      where: { id },
-      data: { status: PayrollRunStatus.FINALIZED, finalized_at: new Date() },
-    });
+    const finalizedNow: typeof pendingLines = [];
+    const skipped: { employee_id: number; reason: string }[] = [];
+    const finalizedAt = new Date();
+
+    for (const line of pendingLines) {
+      if (line.unresolved_days > 0) {
+        skipped.push({ employee_id: line.employee_id, reason: `${line.unresolved_days} unresolved attendance day(s)` });
+        continue;
+      }
+      const flagCount = pendingFlagCounts.get(line.employee_id) ?? 0;
+      if (flagCount > 0) {
+        skipped.push({ employee_id: line.employee_id, reason: `${flagCount} pending flag(s) need a decision` });
+        continue;
+      }
+      await this.prisma.payroll_run_lines.update({
+        where: { id: line.id },
+        data: { finalized_at: finalizedAt, finalized_by: user.sub },
+      });
+      finalizedNow.push(line);
+    }
+
+    await this.recomputeRunStatus(id);
 
     const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
     const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
@@ -1233,12 +1459,9 @@ export class PayrollService {
     void this.auditLogs.log({
       entity_type: 'PAYROLL_RUN',
       entity_id: String(id),
-      action: 'FINALIZED',
-      field: 'status',
-      old_value: run.status,
-      new_value: PayrollRunStatus.FINALIZED,
+      action: 'FINALIZE_ALL',
       changed_by: auditActorLabel(user),
-      note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}, ${run.payroll_run_lines.length} employee line(s).`,
+      note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}: ${finalizedNow.length} employee line(s) finalized, ${skipped.length} skipped.`,
     });
 
     // Test runs are throwaway/repeatable — no reason to page a test employee
@@ -1246,7 +1469,7 @@ export class PayrollService {
     if (!run.is_test) {
       const title = 'Payroll finalized';
       const body = `Your payroll for ${periodLabel} has been finalized.`;
-      for (const line of run.payroll_run_lines) {
+      for (const line of finalizedNow) {
         const userId = line.employee_profiles.user_id;
         if (!userId) continue;
         void this.employeeNoticeBoard
@@ -1255,15 +1478,27 @@ export class PayrollService {
       }
     }
 
-    return this.getRun(id, user);
+    const updatedRun = await this.getRun(id, user);
+    return { ...updatedRun, finalize_summary: { finalized: finalizedNow.length, skipped } };
   }
 
   async deleteRun(id: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
     if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status === PayrollRunStatus.FINALIZED && !run.is_test) {
-      throw new BadRequestException('Finalized payroll runs cannot be deleted.');
+    if (!run.is_test) {
+      // payroll_runs.status can no longer be trusted alone here — it only
+      // reads FINALIZED once every line is done, but a single finalized/
+      // settled line (with colleagues still pending) would otherwise leave
+      // this check silently bypassed and cascade-delete real payroll history.
+      const finalizedLineCount = await this.prisma.payroll_run_lines.count({
+        where: { payroll_run_id: id, finalized_at: { not: null } },
+      });
+      if (finalizedLineCount > 0) {
+        throw new BadRequestException(
+          `This payroll run has ${finalizedLineCount} finalized employee line(s) and cannot be deleted.`,
+        );
+      }
     }
     await this.prisma.payroll_runs.delete({ where: { id } });
 
@@ -1323,6 +1558,7 @@ export class PayrollService {
       period_start: line.payroll_runs.period_start.toISOString().slice(0, 10),
       period_end: line.payroll_runs.period_end.toISOString().slice(0, 10),
       run_status: line.payroll_runs.status,
+      line_status: this.deriveLineStatus(line),
       disbursed_at: line.disbursed_at?.toISOString() ?? null,
       disbursement_notes: line.disbursement_notes,
       monthly_pay: Number(line.monthly_pay),
@@ -1397,6 +1633,7 @@ export class PayrollService {
       net_pay: Number(line.net_pay),
       overtime_days: line.overtime_days,
       disbursed_at: line.disbursed_at?.toISOString() ?? null,
+      line_status: this.deriveLineStatus(line),
       run: line.payroll_runs,
       settlement: payroll_settlements
         ? {
@@ -1416,8 +1653,14 @@ export class PayrollService {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status !== PayrollRunStatus.FINALIZED) {
-      throw new BadRequestException('Disbursement is only allowed on finalized payroll runs');
+
+    const existingLine = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { finalized_at: true },
+    });
+    if (!existingLine) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
+    if (!existingLine.finalized_at) {
+      throw new BadRequestException("Disbursement is only allowed once this employee's payroll line has been finalized");
     }
 
     const disbursedAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
@@ -1449,16 +1692,13 @@ export class PayrollService {
       note: [`Disbursement for ${employeeLabel}.`, dto.notes].filter(Boolean).join(' '),
     });
 
-    return line;
+    return { ...line, line_status: this.deriveLineStatus(line) };
   }
 
   async disburseAll(runId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status !== PayrollRunStatus.FINALIZED) {
-      throw new BadRequestException('Disbursement is only allowed on finalized payroll runs');
-    }
 
     const disbursedAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
     if (Number.isNaN(disbursedAt.getTime())) {
@@ -1466,7 +1706,7 @@ export class PayrollService {
     }
 
     const { count } = await this.prisma.payroll_run_lines.updateMany({
-      where: { payroll_run_id: runId, disbursed_at: null },
+      where: { payroll_run_id: runId, disbursed_at: null, finalized_at: { not: null } },
       data: {
         disbursed_at: disbursedAt,
         disbursed_by: user.sub,
@@ -1521,15 +1761,15 @@ export class PayrollService {
     });
     if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
     this.assertCampusAccess(user, run.campus_id);
-    if (run.status !== PayrollRunStatus.FINALIZED) {
-      throw new BadRequestException('Settlement is only allowed on finalized payroll runs');
-    }
 
     const line = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
       include: { employee_profiles: { select: { full_name: true, employee_code: true, job_title: true, user_id: true } } },
     });
     if (!line) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
+    if (!line.finalized_at) {
+      throw new BadRequestException("Settlement is only allowed once this employee's payroll line has been finalized");
+    }
 
     const settledAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
     if (Number.isNaN(settledAt.getTime())) {
@@ -1668,7 +1908,7 @@ export class PayrollService {
         .catch((err) => this.logger.error(`Failed to send payroll-settled notice for employee ${employeeId}`, err));
     }
 
-    return { ...updatedLine, payroll_settlements: finalSettlement };
+    return { ...updatedLine, line_status: this.deriveLineStatus(updatedLine), payroll_settlements: finalSettlement };
   }
 
   /** Returns the persisted payslip URL for an already-settled employee line. */

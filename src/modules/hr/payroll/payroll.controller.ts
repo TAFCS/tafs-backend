@@ -89,6 +89,28 @@ export class PayrollController {
     return createApiResponse(data, HttpStatus.OK, 'All undisbursed payroll lines marked as disbursed');
   }
 
+  @Post(':runId/lines/:employeeId/regenerate')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async regenerateLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.regenerateLine(runId, employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll line regenerated successfully');
+  }
+
+  @Post(':runId/lines/:employeeId/finalize')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async finalizeLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.finalizeLine(runId, employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll line finalized successfully');
+  }
+
   @Post(':runId/lines/:employeeId/settle')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
   async settleLine(
