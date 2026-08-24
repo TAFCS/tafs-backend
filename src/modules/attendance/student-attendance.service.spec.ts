@@ -10,6 +10,9 @@ describe('StudentAttendanceService.bulkManualMark', () => {
         findMany: jest.fn(),
         upsert: jest.fn(),
       },
+      zk_attendance_scans: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       $transaction: jest.fn((promises: Array<Promise<unknown>>) => Promise.all(promises)),
     };
 
@@ -19,6 +22,7 @@ describe('StudentAttendanceService.bulkManualMark', () => {
 
     const auditLogs = {
       log: jest.fn().mockResolvedValue(1),
+      logGroup: jest.fn().mockResolvedValue(1),
     };
 
     const service = new StudentAttendanceService(
@@ -36,7 +40,14 @@ describe('StudentAttendanceService.bulkManualMark', () => {
     const { service, prisma, calendarResolver } = makeService();
 
     prisma.students.findMany.mockResolvedValue([
-      { cc: 10, class_id: 1, section_id: 1 },
+      {
+        cc: 10,
+        full_name: 'Test Student',
+        class_id: 1,
+        section_id: 1,
+        classes: { description: 'Grade 1' },
+        sections: { description: 'A' },
+      },
     ]);
     calendarResolver.resolveStudentDay.mockResolvedValue({
       isWorkingDay: false,
@@ -58,10 +69,17 @@ describe('StudentAttendanceService.bulkManualMark', () => {
   });
 
   it('upserts attendance_student_daily with source=MANUAL, status and marked_by', async () => {
-    const { service, prisma, calendarResolver } = makeService();
+    const { service, prisma, calendarResolver, auditLogs } = makeService();
 
     prisma.students.findMany.mockResolvedValue([
-      { cc: 10, class_id: 1, section_id: 1 },
+      {
+        cc: 10,
+        full_name: 'Test Student',
+        class_id: 1,
+        section_id: 1,
+        classes: { description: 'Grade 1' },
+        sections: { description: 'A' },
+      },
     ]);
 
     calendarResolver.resolveStudentDay.mockResolvedValue({
@@ -71,7 +89,9 @@ describe('StudentAttendanceService.bulkManualMark', () => {
       source: 'CALENDAR',
     });
 
-    prisma.attendance_student_daily.findMany.mockResolvedValue([]);
+    prisma.attendance_student_daily.findMany.mockResolvedValue([
+      { student_cc: 10, status: RollRecordStatus.ABSENT },
+    ]);
     prisma.attendance_student_daily.upsert.mockResolvedValue({
       student_cc: 10,
     });
@@ -94,6 +114,18 @@ describe('StudentAttendanceService.bulkManualMark', () => {
     expect(call.create.status).toBe(RollRecordStatus.EXCUSED);
     expect(call.create.source).toBe(AttendanceSource.MANUAL);
     expect(call.create.marked_by).toBe('staff-sub');
+
+    expect(auditLogs.logGroup).toHaveBeenCalledTimes(1);
+    const [parent, children] = (auditLogs.logGroup as jest.Mock).mock.calls[0];
+    expect(parent.note).toBe('Marked 1 student(s) for 2026-06-22 (manual).');
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({
+      student_id: 10,
+      field: 'status',
+      old_value: RollRecordStatus.ABSENT,
+      new_value: RollRecordStatus.EXCUSED,
+      note: 'Test Student · Grade 1 · Section A',
+    });
   });
 });
 

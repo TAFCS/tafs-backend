@@ -956,7 +956,14 @@ export class StudentAttendanceService {
         status: 'ENROLLED',
         deleted_at: null,
       },
-      select: { cc: true, class_id: true, section_id: true },
+      select: {
+        cc: true,
+        full_name: true,
+        class_id: true,
+        section_id: true,
+        classes: { select: { description: true } },
+        sections: { select: { description: true } },
+      },
     });
 
     const found = new Set(students.map((s) => s.cc));
@@ -965,6 +972,13 @@ export class StudentAttendanceService {
       throw new BadRequestException(
         `Some students are not enrolled in campus ${dto.campus_id}: ${missing.join(', ')}`,
       );
+    }
+
+    const studentByCc = new Map(students.map((s) => [s.cc, s]));
+    // Last mark wins if the same student appears more than once in the payload.
+    const statusByCc = new Map<number, (typeof dto.records)[number]['status']>();
+    for (const mark of dto.records) {
+      statusByCc.set(mark.student_cc, mark.status);
     }
 
     // Resolve working day status per student (based on their class/section calendars).
@@ -996,6 +1010,7 @@ export class StudentAttendanceService {
         },
         select: {
           student_cc: true,
+          status: true,
           source: true,
           check_in_at: true,
           check_out_at: true,
@@ -1077,16 +1092,42 @@ export class StudentAttendanceService {
 
     await this.prisma.$transaction(upserts);
 
-    void this.auditLogs.log({
-      entity_type: 'STUDENT_ATTENDANCE',
-      entity_id: `BULK:${dto.campus_id}:${dto.date}`,
-      action: 'UPDATED',
-      section: 'attendance',
-      new_value: `bulk manual mark (${uniqueRequestedCcs.length})`,
-      changed_by: auditActorLabel(user),
-      student_id: null,
-      note: `Marked ${uniqueRequestedCcs.length} student(s) for ${dto.date} (manual).`,
-    });
+    const actor = auditActorLabel(user);
+    void this.auditLogs.logGroup(
+      {
+        entity_type: 'STUDENT_ATTENDANCE',
+        entity_id: `BULK:${dto.campus_id}:${dto.date}`,
+        action: 'UPDATED',
+        section: 'attendance',
+        new_value: `bulk manual mark (${uniqueRequestedCcs.length})`,
+        changed_by: actor,
+        student_id: null,
+        note: `Marked ${uniqueRequestedCcs.length} student(s) for ${dto.date} (manual).`,
+      },
+      uniqueRequestedCcs.map((studentCc) => {
+        const student = studentByCc.get(studentCc);
+        const className = student?.classes?.description?.trim() || null;
+        const sectionName = student?.sections?.description?.trim() || null;
+        const classSection = [className, sectionName ? `Section ${sectionName}` : null]
+          .filter(Boolean)
+          .join(' · ');
+        const name = student?.full_name?.trim() || `CC ${studentCc}`;
+        const existing = existingMap.get(studentCc);
+        const newStatus = statusByCc.get(studentCc) ?? null;
+
+        return {
+          entity_type: 'STUDENT_ATTENDANCE',
+          entity_id: String(studentCc),
+          action: 'UPDATED',
+          section: 'attendance',
+          field: 'status',
+          old_value: existing?.status ?? null,
+          new_value: newStatus,
+          student_id: studentCc,
+          note: classSection ? `${name} · ${classSection}` : name,
+        };
+      }),
+    );
 
     return { saved_count: uniqueRequestedCcs.length };
   }
