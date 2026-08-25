@@ -24,8 +24,10 @@ import { FinancialReportsService } from './financial-reports.service';
 import {
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
+  ExportFeeMatrixQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
+  ListFeeMatrixQueryDto,
 } from './dto/financial-report-query.dto';
 import {
   CreateFeeHeadsSnapshotDto,
@@ -139,6 +141,27 @@ export class FinancialReportsController {
     @Res() res: Response,
   ) {
     const file = await this.financialReportsService.exportDeposits(query, user);
+    this.sendFile(res, file);
+  }
+
+  @Get('fee-matrix')
+  @CheckPolicies(canReadAnalytics)
+  async listFeeMatrix(
+    @Query() query: ListFeeMatrixQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.listFeeMatrix(query, user);
+    return createApiResponse(data, HttpStatus.OK, 'Fee matrix report retrieved successfully');
+  }
+
+  @Get('fee-matrix/export')
+  @CheckPolicies(canReadAnalytics)
+  async exportFeeMatrix(
+    @Query() query: ExportFeeMatrixQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const file = await this.financialReportsService.exportFeeMatrix(query, user);
     this.sendFile(res, file);
   }
 
