@@ -1970,16 +1970,16 @@ export class VouchersService {
             throw new NotFoundException(`Voucher ${voucherId} not found`);
         }
 
+        if (voucher.status !== 'PAID') {
+            throw new BadRequestException('This challan is not marked paid yet.');
+        }
+
         if (voucher.paid_pdf_url) {
             return {
                 pdf_url: voucher.paid_pdf_url,
                 filename: voucher.paid_pdf_filename ?? undefined,
                 frozen: true,
             };
-        }
-
-        if (voucher.status !== 'PAID') {
-            throw new BadRequestException('This challan is not marked paid yet.');
         }
 
         // generatedByName intentionally omitted — ensureVoucherGenerationMeta's
@@ -2796,6 +2796,7 @@ export class VouchersService {
                     data: {
                         status: nextStatus,
                         late_fee_deposited: lateFeeDeposited,
+                        pdf_url: null,
                         // Same rule as clearDeposit: reversing the payment unfreezes
                         // the paid receipt so a later re-payment of a different
                         // amount can't resurface the old one. `refreshed` was read
@@ -3057,6 +3058,7 @@ export class VouchersService {
                     data: {
                         status: nextStatus,
                         late_fee_deposited: lateFeeDeposited,
+                        pdf_url: null,
                         // A payment reversal is the ONLY thing that unfreezes a paid
                         // receipt. A receipt documenting a payment that no longer
                         // exists must not survive to be re-served if the voucher is
@@ -3429,9 +3431,9 @@ export class VouchersService {
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        // Enforce paid stamp if the voucher is fully paid
+        // Enforce paid stamp strictly based on whether the voucher is fully paid in DB
         const isActuallyPaid = voucher.status === 'PAID';
-        const finalPaidStamp = paidStamp || isActuallyPaid;
+        const finalPaidStamp = isActuallyPaid;
 
         // ── FROZEN PAID RECEIPT ──────────────────────────────────────────────
         // A paid receipt is a permanent artifact of a payment that happened, not
@@ -3610,7 +3612,7 @@ export class VouchersService {
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const finalPaidStamp = paidStamp || voucher.status === 'PAID';
+        const finalPaidStamp = voucher.status === 'PAID';
 
         // Frozen paid receipt (see generatePdf): honouring "never re-render"
         // means fetching the stored bytes rather than rendering them again.

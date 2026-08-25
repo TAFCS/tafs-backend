@@ -18,8 +18,12 @@ describe('VouchersService paid PDF freeze', () => {
     const prisma: any = {
       vouchers: {
         findUnique: jest.fn().mockResolvedValue(voucherRow),
+        findFirst: jest.fn().mockResolvedValue(voucherRow),
         update: jest.fn().mockResolvedValue(voucherRow),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      students: {
+        findFirst: jest.fn().mockResolvedValue({ cc: 123 }),
       },
     };
     const storage: any = {
@@ -77,5 +81,49 @@ describe('VouchersService paid PDF freeze', () => {
 
     expect((result as any).frozen).toBe(true);
     expect(pdfService.generateVoucherPdf).not.toHaveBeenCalled();
+  });
+
+  it('ignores paid_stamp: true for non-PAID vouchers and does not freeze receipt', async () => {
+    const { service, prisma, storage, pdfService } = build({
+      id: 10,
+      status: 'UNPAID',
+      paid_pdf_url: null,
+      paid_pdf_filename: null,
+      issue_date: new Date(),
+      due_date: new Date(),
+      validity_date: new Date(),
+      fee_date: new Date(),
+      students: { id: 1, gr_number: 'GR123', name: 'Student' },
+      voucher_heads: [],
+    });
+
+    jest.spyOn(service as any, 'prepareVoucherPdfData').mockResolvedValue({
+      voucherData: {},
+      key: 'vouchers/1/GR123.pdf',
+      filename: 'GR123.pdf',
+    });
+    jest.spyOn(service as any, 'ensureVoucherGenerationMeta').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'freezePaidPdf').mockResolvedValue({});
+
+    const result = await service.generatePdf(10, true, true, 'Someone');
+
+    expect(result.frozen).toBe(false);
+    expect((service as any).freezePaidPdf).not.toHaveBeenCalled();
+    expect(prisma.vouchers.update).toHaveBeenCalledWith({
+      where: { id: 10 },
+      data: { pdf_url: 'https://cdn/uploaded.pdf' },
+    });
+  });
+
+  it('ensurePaidPdfForParent throws BadRequestException for non-PAID vouchers even if paid_pdf_url exists', async () => {
+    const { service } = build({
+      id: 11,
+      status: 'UNPAID',
+      paid_pdf_url: 'https://cdn/stale_paid.pdf',
+    });
+
+    await expect(service.ensurePaidPdfForParent(11, 123, 456)).rejects.toThrow(
+      'This challan is not marked paid yet.',
+    );
   });
 });
