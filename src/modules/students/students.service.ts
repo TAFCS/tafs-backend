@@ -19,6 +19,7 @@ import { ReturnStudentDto } from './dto/return-student.dto';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { allocateSequentialGrNumbers, resolveCampusGrPrefix } from '../../common/utils/gr-number.util';
+import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
@@ -342,6 +343,16 @@ export class StudentsService {
       (where.AND as any).push({
         quick_admission_meta: { equals: Prisma.DbNull },
       });
+    }
+
+    // Graduation filters (where + when the student graduated).
+    const graduationConditions = buildGraduationFilterWhere(
+      query.graduated_from_class_id,
+      query.graduated_year_range,
+    );
+    if (graduationConditions.length) {
+      if (!where.AND) where.AND = [];
+      (where.AND as Prisma.studentsWhereInput[]).push(...graduationConditions);
     }
 
     if (user) {

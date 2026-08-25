@@ -16,6 +16,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, type TermContext } from '../../common/utils/academic-labels';
 import { getClassTermMap } from '../../common/utils/class-terms.util';
+import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -812,6 +813,8 @@ export class VouchersService {
         multipleFeeHeads?: boolean,
         classScope: 'current' | 'as_issued' = 'current',
         studentStatus?: student_status[],
+        graduatedFromClassId?: string,
+        graduatedYearRange?: string,
     ) {
         try {
             const skip = (page - 1) * limit;
@@ -907,6 +910,20 @@ export class VouchersService {
                 // apart from the students actually sitting in the class.
                 ...(studentStatus?.length ? { status: { in: studentStatus } } : {}),
             };
+
+            // Where + when the student graduated. Also applies under either
+            // class_scope — graduated_from_class_id/graduated_at belong to the
+            // student, not the voucher's placement snapshot.
+            const graduationConditions = buildGraduationFilterWhere(
+                toIdList(graduatedFromClassId),
+                graduatedYearRange,
+            );
+            if (graduationConditions.length) {
+                studentWhere.AND = [
+                    ...(Array.isArray(studentWhere.AND) ? studentWhere.AND : studentWhere.AND ? [studentWhere.AND] : []),
+                    ...graduationConditions,
+                ];
+            }
 
             const where: Prisma.vouchersWhereInput = {
                 // student_id or cc both resolve to student_id (cc is the student PK)

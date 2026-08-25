@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray, IsIn } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, IsEnum, IsArray, IsIn, Matches } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { StudentStatus } from '../../../constants/student-status.constant';
 import { toNumberArray, toStringArray } from '../../../common/transforms/query-array.transform';
@@ -97,4 +97,21 @@ export class GetStudentsDto {
   @IsOptional()
   @IsString()
   columns?: string;
+
+  /** Which class the student graduated from (students.graduated_from_class_id). */
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  graduated_from_class_id?: number[];
+
+  /**
+   * "YYYY-YYYY" academic-year range to match against students.graduated_at.
+   * The calendar window depends on the term system of graduated_from_class:
+   * Apr-Mar for term_start_month = 4, Aug-Jul otherwise (see buildStudentsWhere).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_year_range must be in YYYY-YYYY format' })
+  graduated_year_range?: string;
 }

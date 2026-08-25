@@ -124,6 +124,8 @@ export class VouchersController {
             query.multiple_fee_heads,
             query.class_scope,
             query.student_status,
+            query.graduated_from_class_id,
+            query.graduated_year_range,
         );
         return {
             success: true,
