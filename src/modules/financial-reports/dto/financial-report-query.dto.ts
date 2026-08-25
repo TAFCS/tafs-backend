@@ -128,12 +128,16 @@ export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   format?: 'xlsx' | 'csv';
 }
 
-const ACADEMIC_YEAR = /^\d{4}-\d{4}$/;
+const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export class ListFeeMatrixQueryDto {
   @IsString()
-  @Matches(ACADEMIC_YEAR, { message: 'academic_year must be YYYY-YYYY' })
-  academic_year: string;
+  @Matches(YEAR_MONTH, { message: 'from_month must be YYYY-MM' })
+  from_month: string;
+
+  @IsString()
+  @Matches(YEAR_MONTH, { message: 'to_month must be YYYY-MM' })
+  to_month: string;
 
   @IsOptional()
   @Transform(toNumberArray)

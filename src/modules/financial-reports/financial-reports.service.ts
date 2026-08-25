@@ -12,9 +12,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { applyStudentScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import {
-  DEFAULT_TERM_START_MONTH,
+  calendarYearOf,
   getMonthYearLabel,
-  isSpecial,
   termOfHead,
 } from '../../common/utils/academic-labels';
 import { createPaginationMeta } from '../../utils/serializer.util';
@@ -37,6 +36,8 @@ import type {
 const EXPORT_ROW_CAP = 25_000;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
 const STATS_ROW_CAP = 50_000;
+/** Safety valve on the matrix's month-range width (3 years) — an absurdly wide range is capped, not failed. */
+const MATRIX_MAX_MONTHS = 36;
 const HEADER_FILL: ExcelJS.Fill = {
   type: 'pattern',
   pattern: 'solid',
@@ -116,10 +117,20 @@ const MATRIX_HEAD_SELECT = {
   id: true,
   student_id: true,
   target_month: true,
+  academic_year: true,
+  term_start_month: true,
   amount: true,
   status: true,
   description_prefix: true,
+  fee_type_id: true,
   fee_types: { select: { description: true } },
+  students: {
+    select: {
+      status: true,
+      class_id: true,
+      graduated_from_class_id: true,
+    },
+  },
 } satisfies Prisma.student_feesSelect;
 
 type MatrixCell = {
@@ -128,12 +139,6 @@ type MatrixCell = {
   amount: number;
   status: fee_status_enum;
 };
-
-const MATRIX_STATS_HEAD_SELECT = {
-  amount: true,
-  fee_type_id: true,
-  fee_types: { select: { description: true } },
-} satisfies Prisma.student_feesSelect;
 
 type DistributionStats = {
   count: number;
@@ -854,69 +859,69 @@ export class FinancialReportsService {
   }
 
   /**
-   * Rows = students, columns = the 12 months of one academic cycle, cells =
-   * the fee head(s) whose target_month lands in that column. Excludes
-   * discounts and arrear (late payment) surcharges, same as the Fee Heads
-   * report. Column/grand totals cover every student matching the filters,
-   * not just the current page — pagination only limits which rows render.
+   * Rows = students, columns = every calendar month from from_month to
+   * to_month inclusive, cells = the fee head(s) whose target_month resolves
+   * (via each head's own term_start_month, falling back to its class) to
+   * that calendar month. Excludes discounts and arrear (late payment)
+   * surcharges, same as the Fee Heads report. Column/grand totals and
+   * statistics cover every student matching the filters, not just the
+   * current page — pagination only limits which rows render.
    */
   async listFeeMatrix(query: ListFeeMatrixQueryDto, user: IJwtStaffPayload) {
-    const termStartMonth = this.matrixTermStartMonth(query.class_id);
-    const cycleMonths = this.matrixCycleMonths(termStartMonth);
-    const leaf = this.matrixLeafWhere(query);
+    this.assertMonthRange(query);
+    const from = this.parseYearMonth(query.from_month);
+    const to = this.parseYearMonth(query.to_month);
+    const columns = this.matrixMonthColumns(from, to);
+    const candidateYears = this.matrixCandidateAcademicYears(columns);
+    const leaf = this.matrixLeafWhere(query, candidateYears);
     const studentWhere = this.buildMatrixStudentWhere(query, user);
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 25, 200);
 
-    const [students, studentCount, monthTotals, studentTotalGroups, statsHeads] =
-      await Promise.all([
-        this.prisma.students.findMany({
-          where: { ...studentWhere, student_fees: { some: leaf } },
-          select: MATRIX_STUDENT_SELECT,
-          orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
-          skip: (page - 1) * limit,
-          take: limit,
-        }),
-        this.prisma.students.count({
-          where: { ...studentWhere, student_fees: { some: leaf } },
-        }),
-        this.prisma.student_fees.groupBy({
-          by: ['target_month'],
-          where: { ...leaf, students: studentWhere },
-          _sum: { amount: true },
-        }),
-        // Every filtered student's total, independent of pagination — feeds
-        // the mean/median/mode/variance/stddev of row totals below.
-        this.prisma.student_fees.groupBy({
-          by: ['student_id'],
-          where: { ...leaf, students: studentWhere },
-          _sum: { amount: true },
-        }),
-        // Every filtered individual head — feeds the overall and
-        // per-fee-type distributions below.
-        this.prisma.student_fees.findMany({
-          where: { ...leaf, students: studentWhere },
-          select: MATRIX_STATS_HEAD_SELECT,
-          take: STATS_ROW_CAP,
-        }),
-      ]);
+    const [students, studentCount, classTerms] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+        select: MATRIX_STUDENT_SELECT,
+        orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+      this.loadClassTerms(),
+    ]);
 
     const ccs = students.map((s) => s.cc);
-    const heads = ccs.length
-      ? await this.prisma.student_fees.findMany({
-          where: { ...leaf, student_id: { in: ccs } },
-          select: MATRIX_HEAD_SELECT,
-          orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
-        })
-      : [];
-    const headsByStudent = this.groupHeadsByStudent(heads);
+    const [pageHeads, allHeads] = await Promise.all([
+      ccs.length
+        ? this.prisma.student_fees.findMany({
+            where: { ...leaf, student_id: { in: ccs } },
+            select: MATRIX_HEAD_SELECT,
+            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
+          })
+        : Promise.resolve([]),
+      // Every filtered head, independent of pagination — feeds column
+      // totals, the grand total, and every statistic below.
+      this.prisma.student_fees.findMany({
+        where: { ...leaf, students: studentWhere },
+        select: MATRIX_HEAD_SELECT,
+        take: STATS_ROW_CAP,
+      }),
+    ]);
+
+    const columnPosition = new Map<string, number>(
+      columns.map((c, i) => [this.matrixMonthKey(c), i]),
+    );
+    const headsByStudent = this.groupHeadsByStudent(pageHeads);
 
     const items = students.map((student) => {
-      const cells: MatrixCell[][] = Array.from({ length: 12 }, () => []);
+      const cells: MatrixCell[][] = Array.from({ length: columns.length }, () => []);
       let rowTotal = 0;
       for (const head of headsByStudent.get(student.cc) ?? []) {
-        const columnIndex = cycleMonths.indexOf(head.target_month);
-        if (columnIndex === -1) continue;
+        const resolved = this.resolveHeadCalendarMonth(head, classTerms);
+        const columnIndex = resolved ? columnPosition.get(this.matrixMonthKey(resolved)) : undefined;
+        if (columnIndex === undefined) continue;
         const amount = this.toMoney(head.amount);
         cells[columnIndex].push({
           id: head.id,
@@ -938,23 +943,42 @@ export class FinancialReportsService {
       };
     });
 
-    const columnTotals = cycleMonths.map((month) => {
-      const row = monthTotals.find((m) => m.target_month === month);
-      return this.toMoney(row?._sum.amount);
-    });
+    // Restrict the (over-fetched, candidate-year) allHeads down to the heads
+    // that actually resolve into the requested month range, before any
+    // totals or statistics are computed from them.
+    const columnTotals = new Array(columns.length).fill(0) as number[];
+    const inRangeHeads: typeof allHeads = [];
+    for (const head of allHeads) {
+      const resolved = this.resolveHeadCalendarMonth(head, classTerms);
+      const columnIndex = resolved ? columnPosition.get(this.matrixMonthKey(resolved)) : undefined;
+      if (columnIndex === undefined) continue;
+      inRangeHeads.push(head);
+      columnTotals[columnIndex] = this.roundMoney(
+        columnTotals[columnIndex] + this.toMoney(head.amount),
+      );
+    }
     const grandTotal = this.roundMoney(
       columnTotals.reduce((sum, value) => sum + value, 0),
     );
 
-    const studentTotals = studentTotalGroups.map((g) => this.toMoney(g._sum.amount));
-    const feeAmounts = statsHeads.map((h) => this.toMoney(h.amount));
+    const studentSums = new Map<number, number>();
+    for (const head of inRangeHeads) {
+      const amount = this.toMoney(head.amount);
+      studentSums.set(
+        head.student_id,
+        this.roundMoney((studentSums.get(head.student_id) ?? 0) + amount),
+      );
+    }
+    const studentTotals = [...studentSums.values()];
+    const feeAmounts = inRangeHeads.map((h) => this.toMoney(h.amount));
 
     return {
-      academic_year: query.academic_year,
-      term_start_month: termStartMonth,
-      columns: cycleMonths.map((month) => ({
-        month,
-        label: getMonthYearLabel(month, query.academic_year, { termStartMonth }),
+      from_month: query.from_month,
+      to_month: query.to_month,
+      columns: columns.map((c) => ({
+        year: c.year,
+        month: c.month,
+        label: this.formatColumnLabel(c),
       })),
       items,
       pagination: createPaginationMeta(page, limit, studentCount),
@@ -970,8 +994,8 @@ export class FinancialReportsService {
       statistics: {
         student_totals: this.describeDistribution(studentTotals),
         fee_amounts: this.describeDistribution(feeAmounts),
-        by_fee_type: this.buildFeeTypeStatistics(statsHeads),
-        truncated: statsHeads.length >= STATS_ROW_CAP,
+        by_fee_type: this.buildFeeTypeStatistics(inRangeHeads),
+        truncated: allHeads.length >= STATS_ROW_CAP,
       },
     };
   }
@@ -980,17 +1004,23 @@ export class FinancialReportsService {
     query: ExportFeeMatrixQueryDto,
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
-    const termStartMonth = this.matrixTermStartMonth(query.class_id);
-    const cycleMonths = this.matrixCycleMonths(termStartMonth);
-    const leaf = this.matrixLeafWhere(query);
+    this.assertMonthRange(query);
+    const from = this.parseYearMonth(query.from_month);
+    const to = this.parseYearMonth(query.to_month);
+    const columns = this.matrixMonthColumns(from, to);
+    const candidateYears = this.matrixCandidateAcademicYears(columns);
+    const leaf = this.matrixLeafWhere(query, candidateYears);
     const studentWhere = this.buildMatrixStudentWhere(query, user);
 
-    const students = await this.prisma.students.findMany({
-      where: { ...studentWhere, student_fees: { some: leaf } },
-      select: MATRIX_STUDENT_SELECT,
-      orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
-      take: EXPORT_ROW_CAP + 1,
-    });
+    const [students, classTerms] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+        select: MATRIX_STUDENT_SELECT,
+        orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
+        take: EXPORT_ROW_CAP + 1,
+      }),
+      this.loadClassTerms(),
+    ]);
     this.assertExportCap(students.length);
 
     const ccs = students.map((s) => s.cc);
@@ -1002,19 +1032,20 @@ export class FinancialReportsService {
       : [];
     const headsByStudent = this.groupHeadsByStudent(heads);
 
-    const monthLabels = cycleMonths.map((month) =>
-      getMonthYearLabel(month, query.academic_year, { termStartMonth }),
+    const columnPosition = new Map<string, number>(
+      columns.map((c, i) => [this.matrixMonthKey(c), i]),
     );
-    const columns: ExportColumn[] = [
+    const monthLabels = columns.map((c) => this.formatColumnLabel(c));
+    const columnsSpec: ExportColumn[] = [
       { header: 'CC', key: 'cc', width: 10 },
       { header: 'GR', key: 'gr_number', width: 12 },
       { header: 'Name', key: 'student_name', width: 28 },
       { header: 'Campus', key: 'campus', width: 18 },
       { header: 'Class', key: 'class_name', width: 16 },
       { header: 'Section', key: 'section', width: 12 },
-      ...cycleMonths.map((month, index) => ({
+      ...columns.map((_, index) => ({
         header: monthLabels[index],
-        key: `m${month}`,
+        key: `c${index}`,
         width: 24,
       })),
       { header: 'Total', key: 'row_total', width: 14 },
@@ -1030,25 +1061,32 @@ export class FinancialReportsService {
         class_name: this.resolveStudentClassName(student),
         section: student.sections?.description ?? '',
       };
+      const perColumn: Array<{ label: string; amount: number }[]> = Array.from(
+        { length: columns.length },
+        () => [],
+      );
       let rowTotal = 0;
-      for (const month of cycleMonths) {
-        const monthHeads = studentHeads.filter((h) => h.target_month === month);
-        const amount = this.roundMoney(
-          monthHeads.reduce((sum, h) => sum + this.toMoney(h.amount), 0),
-        );
+      for (const head of studentHeads) {
+        const resolved = this.resolveHeadCalendarMonth(head, classTerms);
+        const columnIndex = resolved ? columnPosition.get(this.matrixMonthKey(resolved)) : undefined;
+        if (columnIndex === undefined) continue;
+        const amount = this.toMoney(head.amount);
+        perColumn[columnIndex].push({ label: this.matrixFeeTypeLabel(head), amount });
         rowTotal = this.roundMoney(rowTotal + amount);
-        row[`m${month}`] = monthHeads
-          .map((h) => `${this.matrixFeeTypeLabel(h)}: ${this.toMoney(h.amount).toLocaleString()}`)
-          .join('; ');
       }
+      columns.forEach((_, index) => {
+        row[`c${index}`] = perColumn[index]
+          .map((h) => `${h.label}: ${h.amount.toLocaleString()}`)
+          .join('; ');
+      });
       row.row_total = rowTotal;
       return row;
     });
 
     return this.buildExportFile(
       'Fee Matrix',
-      `fee-matrix-${query.academic_year}`,
-      columns,
+      `fee-matrix-${query.from_month}-to-${query.to_month}`,
+      columnsSpec,
       data,
       query.format,
     );
@@ -1471,31 +1509,111 @@ export class FinancialReportsService {
     });
   }
 
-  /** Excludes discounts and arrear (late payment) surcharges, scoped to one academic year. */
+  /**
+   * Excludes discounts and arrear (late payment) surcharges. academicYears is
+   * a superset — every academic_year string that could plausibly contain a
+   * month in the requested range under either term system — because SQL
+   * can't evaluate the term-aware calendar-month resolution that narrows it
+   * precisely; resolveHeadCalendarMonth does that narrowing in JS afterward.
+   */
   private matrixLeafWhere(
     query: ListFeeMatrixQueryDto,
+    academicYears: string[],
   ): Prisma.student_feesWhereInput {
     return {
       is_discount: false,
       is_arrear_surcharge: false,
-      academic_year: query.academic_year,
+      academic_year: { in: academicYears },
       ...(query.status?.length && { status: { in: query.status } }),
     };
   }
 
-  /**
-   * Aug-Jul unless every selected class is one of the Apr-Mar special classes
-   * (15-19) — matches the rule the rest of the codebase already applies via
-   * isSpecial(). No class filter defaults to Aug-Jul.
-   */
-  private matrixTermStartMonth(classIds?: number[]): number {
-    if (classIds?.length && classIds.every((id) => isSpecial(id))) return 4;
-    return DEFAULT_TERM_START_MONTH;
+  private assertMonthRange(query: { from_month: string; to_month: string }): void {
+    if (query.from_month > query.to_month) {
+      throw new BadRequestException('from_month must be on or before to_month');
+    }
   }
 
-  /** The 12 target_month values in cycle order, starting at termStartMonth. */
-  private matrixCycleMonths(termStartMonth: number): number[] {
-    return Array.from({ length: 12 }, (_, i) => ((termStartMonth - 1 + i) % 12) + 1);
+  private parseYearMonth(value: string): { year: number; month: number } {
+    const [year, month] = value.split('-').map(Number);
+    return { year, month };
+  }
+
+  private matrixMonthKey(month: { year: number; month: number }): string {
+    return `${month.year}-${month.month}`;
+  }
+
+  private formatColumnLabel(month: { year: number; month: number }): string {
+    const MONTH_ABBR = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return `${MONTH_ABBR[month.month - 1]} ${String(month.year).slice(-2)}`;
+  }
+
+  /** Every calendar month from `from` to `to` inclusive, capped at MATRIX_MAX_MONTHS. */
+  private matrixMonthColumns(
+    from: { year: number; month: number },
+    to: { year: number; month: number },
+  ): Array<{ year: number; month: number }> {
+    const columns: Array<{ year: number; month: number }> = [];
+    let year = from.year;
+    let month = from.month;
+    while (
+      (year < to.year || (year === to.year && month <= to.month)) &&
+      columns.length < MATRIX_MAX_MONTHS
+    ) {
+      columns.push({ year, month });
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+    return columns;
+  }
+
+  /**
+   * Every academic_year string that could contain one of `months` under
+   * either term system (4 = Apr-Mar, 8 = Aug-Jul) — see matrixLeafWhere.
+   */
+  private matrixCandidateAcademicYears(
+    months: Array<{ year: number; month: number }>,
+  ): string[] {
+    const years = new Set<string>();
+    for (const { year, month } of months) {
+      for (const cutoff of [4, 8]) {
+        const startYear = month >= cutoff ? year : year - 1;
+        years.add(`${startYear}-${startYear + 1}`);
+      }
+    }
+    return [...years];
+  }
+
+  /**
+   * Resolves one head's target_month + academic_year to the real calendar
+   * month it falls in, using the head's own term_start_month and falling
+   * back to its student's class — same precedence as termOfHead everywhere
+   * else in this file. Null when the academic_year string can't be parsed.
+   */
+  private resolveHeadCalendarMonth(
+    head: {
+      target_month: number;
+      academic_year: string;
+      term_start_month: number | null;
+      students: {
+        status?: student_status | null;
+        class_id?: number | null;
+        graduated_from_class_id?: number | null;
+      };
+    },
+    classTerms: ReadonlyMap<number, number>,
+  ): { year: number; month: number } | null {
+    const classId = this.effectiveClassId(head.students);
+    const term = termOfHead(head, { classId, classTerms });
+    const year = calendarYearOf(head.target_month, head.academic_year, term);
+    if (year == null) return null;
+    return { year, month: head.target_month };
   }
 
   private matrixFeeTypeLabel(head: {
