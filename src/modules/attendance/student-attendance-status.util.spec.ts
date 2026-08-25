@@ -2,11 +2,11 @@ import { RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from './student-attendance-status.util';
 
 describe('resolveStudentAttendanceStatus', () => {
-  const todayKey = '2026-06-23';
+  const todayKey = '2026-08-25';
 
-  it('past working day with no record and no scans should infer ABSENT', () => {
+  it('past working day with no record and no scans should infer ABSENT after biometric go-live', () => {
     const result = resolveStudentAttendanceStatus({
-      dateKey: '2026-06-22',
+      dateKey: '2026-08-10',
       todayKey,
       isWorkingDay: true,
       recordStatus: null,
@@ -16,9 +16,33 @@ describe('resolveStudentAttendanceStatus', () => {
     expect(result).toBe(RollRecordStatus.ABSENT);
   });
 
+  it('past working day before biometric go-live should not infer ABSENT', () => {
+    const result = resolveStudentAttendanceStatus({
+      dateKey: '2026-08-05',
+      todayKey,
+      isWorkingDay: true,
+      recordStatus: null,
+      recordSource: null,
+      hasCheckIn: false,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('July working day with no record should not infer ABSENT', () => {
+    const result = resolveStudentAttendanceStatus({
+      dateKey: '2026-07-15',
+      todayKey,
+      isWorkingDay: true,
+      recordStatus: null,
+      recordSource: null,
+      hasCheckIn: false,
+    });
+    expect(result).toBeNull();
+  });
+
   it('today with no record and no scans should return null', () => {
     const result = resolveStudentAttendanceStatus({
-      dateKey: '2026-06-23',
+      dateKey: '2026-08-25',
       todayKey,
       isWorkingDay: true,
       recordStatus: null,
@@ -30,7 +54,7 @@ describe('resolveStudentAttendanceStatus', () => {
 
   it('future working day should return null', () => {
     const result = resolveStudentAttendanceStatus({
-      dateKey: '2026-06-24',
+      dateKey: '2026-08-26',
       todayKey,
       isWorkingDay: true,
       recordStatus: null,
@@ -42,7 +66,7 @@ describe('resolveStudentAttendanceStatus', () => {
 
   it('past working day with PRESENT record should return PRESENT', () => {
     const result = resolveStudentAttendanceStatus({
-      dateKey: '2026-06-22',
+      dateKey: '2026-08-10',
       todayKey,
       isWorkingDay: true,
       recordStatus: RollRecordStatus.PRESENT,
@@ -90,7 +114,7 @@ describe('resolveStudentAttendanceStatus', () => {
 
   it('past working day with SYSTEM-excused record should resolve to ABSENT if no check-in', () => {
     const result = resolveStudentAttendanceStatus({
-      dateKey: '2026-06-22',
+      dateKey: '2026-08-10',
       todayKey,
       isWorkingDay: true,
       recordStatus: RollRecordStatus.EXCUSED,

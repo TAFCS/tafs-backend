@@ -1,9 +1,18 @@
 import { RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { STUDENT_LATE_MARKING_ENABLED } from './zk-attendance-processor.service';
 
+/**
+ * First calendar day (Asia/Karachi YYYY-MM-DD) on which biometric absence
+ * inference applies. Days before this must not show as ABSENT when there is
+ * no scan — devices / enrollment were not live yet.
+ *
+ * User-facing: "5 Aug and prior" should not count as absences → start = 6 Aug.
+ */
+export const STUDENT_BIOMETRIC_ABSENCE_START_DATE = '2026-08-06';
+
 export function resolveStudentAttendanceStatus(input: {
-  dateKey: string;          // YYYY-MM-DD UTC
-  todayKey: string;         // YYYY-MM-DD UTC
+  dateKey: string;          // YYYY-MM-DD UTC / PKT date key
+  todayKey: string;         // YYYY-MM-DD UTC / PKT date key
   isWorkingDay: boolean;
   recordStatus: RollRecordStatus | null;
   recordSource: AttendanceSource | null;
@@ -44,11 +53,16 @@ export function resolveStudentAttendanceStatus(input: {
   }
 
   // 4. If past working day and has no check-in -> ABSENT
-  if (input.dateKey < input.todayKey && !input.hasCheckIn) {
+  //    (only once biometric tracking was live)
+  if (
+    input.dateKey >= STUDENT_BIOMETRIC_ABSENCE_START_DATE &&
+    input.dateKey < input.todayKey &&
+    !input.hasCheckIn
+  ) {
     return RollRecordStatus.ABSENT;
   }
 
-  // 5. Otherwise -> null (e.g. today or future day with no check-in yet)
+  // 5. Otherwise -> null (e.g. today, future, or pre–go-live with no check-in)
   return null;
 }
 
