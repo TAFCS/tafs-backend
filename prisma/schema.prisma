@@ -1374,12 +1374,12 @@ model payroll_runs {
 }
 
 /// *
-///  * An employee deliberately left out of a still-pending payroll cycle (e.g.
-///  * attendance wasn't tracked for them this period) — distinct from simply not
-///  * having a payroll_run_lines row yet, so a later "Regen All" or single-employee
-///  * regenerate never silently re-adds them. Only meaningful while the run isn't
-///  * finalized for that employee; excluding removes their line (if any) and this
-///  * record blocks recomputation until it's deleted via the "include" action.
+/// * An employee deliberately left out of a still-pending payroll cycle (e.g.
+/// * attendance wasn't tracked for them this period) — distinct from simply not
+/// * having a payroll_run_lines row yet, so a later "Regen All" or single-employee
+/// * regenerate never silently re-adds them. Only meaningful while the run isn't
+/// * finalized for that employee; excluding removes their line (if any) and this
+/// * record blocks recomputation until it's deleted via the "include" action.
 model payroll_run_exclusions {
   id                Int               @id @default(autoincrement())
   payroll_run_id    Int
@@ -1440,7 +1440,7 @@ model payroll_run_lines {
   sessi_employer_cost           Decimal                                  @default(0) @db.Decimal(12, 2)
   security_deposit_deduction    Decimal                                  @default(0) @db.Decimal(12, 2)
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
-  employee_loan_transactions    employee_loan_transactions[]
+  loan_transactions             employee_loan_transactions[]
   security_deposit_transactions employee_security_deposit_transactions[]
   disbursed_by_user             users?                                   @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employee_profiles             employee_profiles                        @relation(fields: [employee_id], references: [id], onDelete: Cascade)
@@ -1997,6 +1997,30 @@ model financial_report_snapshots {
   @@index([filters_hash])
 }
 
+model employee_loans {
+  id                     Int                          @id @default(autoincrement())
+  employee_id            Int
+  total_amount           Decimal                      @db.Decimal(12, 2)
+  amount_repaid_opening  Decimal                      @default(0) @db.Decimal(12, 2)
+  installment_count      Int
+  installment_amount     Decimal                      @db.Decimal(12, 2)
+  disbursement_date      DateTime                     @db.Date
+  start_period_start     DateTime                     @db.Date
+  recovered_amount       Decimal                      @default(0) @db.Decimal(12, 2)
+  lump_sum_repaid_amount Decimal                      @default(0) @db.Decimal(12, 2)
+  written_off_amount     Decimal                      @default(0) @db.Decimal(12, 2)
+  carried_forward_amount Decimal                      @default(0) @db.Decimal(12, 2)
+  status                 LoanStatus                   @default(ACTIVE)
+  notes                  String?                      @db.VarChar(500)
+  created_by             String
+  created_at             DateTime                     @default(now()) @db.Timestamp(6)
+  updated_at             DateTime                     @updatedAt @db.Timestamp(6)
+  transactions           employee_loan_transactions[]
+  employee_profiles      employee_profiles            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([employee_id, status])
+}
+
 model employee_loan_transactions {
   id                  Int                 @id @default(autoincrement())
   loan_id             Int
@@ -2008,35 +2032,11 @@ model employee_loan_transactions {
   reason              String?             @db.VarChar(500)
   created_by          String
   created_at          DateTime            @default(now()) @db.Timestamp(6)
-  employee_loans      employee_loans      @relation(fields: [loan_id], references: [id], onDelete: Cascade)
-  payroll_run_lines   payroll_run_lines?  @relation(fields: [payroll_run_line_id], references: [id], onDelete: Restrict)
+  loan                employee_loans      @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+  payroll_run_line    payroll_run_lines?  @relation(fields: [payroll_run_line_id], references: [id], onDelete: Restrict)
 
-  @@index([loan_id, created_at])
   @@index([payroll_run_line_id])
-}
-
-model employee_loans {
-  id                         Int                          @id @default(autoincrement())
-  employee_id                Int
-  total_amount               Decimal                      @db.Decimal(12, 2)
-  amount_repaid_opening      Decimal                      @default(0) @db.Decimal(12, 2)
-  installment_count          Int
-  installment_amount         Decimal                      @db.Decimal(12, 2)
-  disbursement_date          DateTime                     @db.Date
-  start_period_start         DateTime                     @db.Date
-  recovered_amount           Decimal                      @default(0) @db.Decimal(12, 2)
-  lump_sum_repaid_amount     Decimal                      @default(0) @db.Decimal(12, 2)
-  written_off_amount         Decimal                      @default(0) @db.Decimal(12, 2)
-  carried_forward_amount     Decimal                      @default(0) @db.Decimal(12, 2)
-  status                     LoanStatus                   @default(ACTIVE)
-  notes                      String?                      @db.VarChar(500)
-  created_by                 String
-  created_at                 DateTime                     @default(now()) @db.Timestamp(6)
-  updated_at                 DateTime                     @db.Timestamp(6)
-  employee_loan_transactions employee_loan_transactions[]
-  employee_profiles          employee_profiles            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-
-  @@index([employee_id, status])
+  @@index([loan_id, created_at])
 }
 
 enum BulkJobStatus {
