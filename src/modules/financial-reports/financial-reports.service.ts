@@ -12,7 +12,9 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { applyStudentScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import {
+  DEFAULT_TERM_START_MONTH,
   getMonthYearLabel,
+  isSpecial,
   termOfHead,
 } from '../../common/utils/academic-labels';
 import { createPaginationMeta } from '../../utils/serializer.util';
@@ -21,9 +23,11 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import type {
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
+  ExportFeeMatrixQueryDto,
   FinancialReportQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
+  ListFeeMatrixQueryDto,
 } from './dto/financial-report-query.dto';
 import type {
   CreateFeeHeadsSnapshotDto,
@@ -92,6 +96,36 @@ const DEPOSIT_SELECT = {
     },
   },
 } satisfies Prisma.depositsSelect;
+
+const MATRIX_STUDENT_SELECT = {
+  cc: true,
+  gr_number: true,
+  full_name: true,
+  status: true,
+  class_id: true,
+  graduated_from_class_id: true,
+  campuses: { select: { campus_name: true } },
+  classes: { select: { description: true } },
+  graduated_from_class: { select: { description: true } },
+  sections: { select: { description: true } },
+} satisfies Prisma.studentsSelect;
+
+const MATRIX_HEAD_SELECT = {
+  id: true,
+  student_id: true,
+  target_month: true,
+  amount: true,
+  status: true,
+  description_prefix: true,
+  fee_types: { select: { description: true } },
+} satisfies Prisma.student_feesSelect;
+
+type MatrixCell = {
+  id: number;
+  fee_type: string;
+  amount: number;
+  status: fee_status_enum;
+};
 
 export type ExportFile = {
   buffer: Buffer;
@@ -791,6 +825,179 @@ export class FinancialReportsService {
     );
   }
 
+  /**
+   * Rows = students, columns = the 12 months of one academic cycle, cells =
+   * the fee head(s) whose target_month lands in that column. Excludes
+   * discounts and arrear (late payment) surcharges, same as the Fee Heads
+   * report. Column/grand totals cover every student matching the filters,
+   * not just the current page — pagination only limits which rows render.
+   */
+  async listFeeMatrix(query: ListFeeMatrixQueryDto, user: IJwtStaffPayload) {
+    const termStartMonth = this.matrixTermStartMonth(query.class_id);
+    const cycleMonths = this.matrixCycleMonths(termStartMonth);
+    const leaf = this.matrixLeafWhere(query);
+    const studentWhere = this.buildMatrixStudentWhere(query, user);
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 25, 200);
+
+    const [students, studentCount, monthTotals] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+        select: MATRIX_STUDENT_SELECT,
+        orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['target_month'],
+        where: { ...leaf, students: studentWhere },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const ccs = students.map((s) => s.cc);
+    const heads = ccs.length
+      ? await this.prisma.student_fees.findMany({
+          where: { ...leaf, student_id: { in: ccs } },
+          select: MATRIX_HEAD_SELECT,
+          orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
+        })
+      : [];
+    const headsByStudent = this.groupHeadsByStudent(heads);
+
+    const items = students.map((student) => {
+      const cells: MatrixCell[][] = Array.from({ length: 12 }, () => []);
+      let rowTotal = 0;
+      for (const head of headsByStudent.get(student.cc) ?? []) {
+        const columnIndex = cycleMonths.indexOf(head.target_month);
+        if (columnIndex === -1) continue;
+        const amount = this.toMoney(head.amount);
+        cells[columnIndex].push({
+          id: head.id,
+          fee_type: this.matrixFeeTypeLabel(head),
+          amount,
+          status: (head.status ?? fee_status_enum.NOT_ISSUED) as fee_status_enum,
+        });
+        rowTotal = this.roundMoney(rowTotal + amount);
+      }
+      return {
+        cc: student.cc,
+        gr_number: student.gr_number,
+        student_name: student.full_name,
+        campus: student.campuses?.campus_name ?? '',
+        class_name: this.resolveStudentClassName(student),
+        section: student.sections?.description ?? '',
+        cells,
+        row_total: rowTotal,
+      };
+    });
+
+    const columnTotals = cycleMonths.map((month) => {
+      const row = monthTotals.find((m) => m.target_month === month);
+      return this.toMoney(row?._sum.amount);
+    });
+    const grandTotal = this.roundMoney(
+      columnTotals.reduce((sum, value) => sum + value, 0),
+    );
+
+    return {
+      academic_year: query.academic_year,
+      term_start_month: termStartMonth,
+      columns: cycleMonths.map((month) => ({
+        month,
+        label: getMonthYearLabel(month, query.academic_year, { termStartMonth }),
+      })),
+      items,
+      pagination: createPaginationMeta(page, limit, studentCount),
+      totals: {
+        student_count: studentCount,
+        column_totals: columnTotals,
+        grand_total: grandTotal,
+      },
+    };
+  }
+
+  async exportFeeMatrix(
+    query: ExportFeeMatrixQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const termStartMonth = this.matrixTermStartMonth(query.class_id);
+    const cycleMonths = this.matrixCycleMonths(termStartMonth);
+    const leaf = this.matrixLeafWhere(query);
+    const studentWhere = this.buildMatrixStudentWhere(query, user);
+
+    const students = await this.prisma.students.findMany({
+      where: { ...studentWhere, student_fees: { some: leaf } },
+      select: MATRIX_STUDENT_SELECT,
+      orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
+      take: EXPORT_ROW_CAP + 1,
+    });
+    this.assertExportCap(students.length);
+
+    const ccs = students.map((s) => s.cc);
+    const heads = ccs.length
+      ? await this.prisma.student_fees.findMany({
+          where: { ...leaf, student_id: { in: ccs } },
+          select: MATRIX_HEAD_SELECT,
+        })
+      : [];
+    const headsByStudent = this.groupHeadsByStudent(heads);
+
+    const monthLabels = cycleMonths.map((month) =>
+      getMonthYearLabel(month, query.academic_year, { termStartMonth }),
+    );
+    const columns: ExportColumn[] = [
+      { header: 'CC', key: 'cc', width: 10 },
+      { header: 'GR', key: 'gr_number', width: 12 },
+      { header: 'Name', key: 'student_name', width: 28 },
+      { header: 'Campus', key: 'campus', width: 18 },
+      { header: 'Class', key: 'class_name', width: 16 },
+      { header: 'Section', key: 'section', width: 12 },
+      ...cycleMonths.map((month, index) => ({
+        header: monthLabels[index],
+        key: `m${month}`,
+        width: 24,
+      })),
+      { header: 'Total', key: 'row_total', width: 14 },
+    ];
+
+    const data = students.map((student) => {
+      const studentHeads = headsByStudent.get(student.cc) ?? [];
+      const row: Record<string, string | number> = {
+        cc: student.cc,
+        gr_number: student.gr_number ?? '',
+        student_name: student.full_name,
+        campus: student.campuses?.campus_name ?? '',
+        class_name: this.resolveStudentClassName(student),
+        section: student.sections?.description ?? '',
+      };
+      let rowTotal = 0;
+      for (const month of cycleMonths) {
+        const monthHeads = studentHeads.filter((h) => h.target_month === month);
+        const amount = this.roundMoney(
+          monthHeads.reduce((sum, h) => sum + this.toMoney(h.amount), 0),
+        );
+        rowTotal = this.roundMoney(rowTotal + amount);
+        row[`m${month}`] = monthHeads
+          .map((h) => `${this.matrixFeeTypeLabel(h)}: ${this.toMoney(h.amount).toLocaleString()}`)
+          .join('; ');
+      }
+      row.row_total = rowTotal;
+      return row;
+    });
+
+    return this.buildExportFile(
+      'Fee Matrix',
+      `fee-matrix-${query.academic_year}`,
+      columns,
+      data,
+      query.format,
+    );
+  }
+
   async listFilterOptions() {
     const segments = await this.prisma.segments.findMany({
       select: { id: true, code: true, name: true, display_order: true },
@@ -1164,6 +1371,94 @@ export class FinancialReportsService {
       campus_id: query.campus_id,
       class_id: query.class_id,
     });
+  }
+
+  /**
+   * Same shape as buildStudentWhere plus a single-student (cc) filter for the
+   * matrix's simple-search picker. Kept separate rather than widening
+   * FinancialReportQueryDto because the matrix has no date range.
+   */
+  private buildMatrixStudentWhere(
+    query: ListFeeMatrixQueryDto,
+    user: IJwtStaffPayload,
+  ): Prisma.studentsWhereInput {
+    const includesGraduated = query.student_status?.includes(
+      student_status.GRADUATED,
+    );
+    const studentWhere: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      ...(query.cc != null && { cc: query.cc }),
+      ...(query.campus_id?.length && { campus_id: { in: query.campus_id } }),
+      ...(query.class_id?.length && {
+        OR: includesGraduated
+          ? [
+              { class_id: { in: query.class_id } },
+              { graduated_from_class_id: { in: query.class_id } },
+            ]
+          : [{ class_id: { in: query.class_id } }],
+      }),
+      ...(query.section_id?.length && { section_id: { in: query.section_id } }),
+      ...(query.segment_id?.length && {
+        classes: { segment_id: { in: query.segment_id } },
+      }),
+      ...(query.student_status?.length && { status: { in: query.student_status } }),
+      ...(query.is_fee_endowment !== undefined && {
+        is_fee_endowment: query.is_fee_endowment,
+      }),
+      ...(query.is_complementary !== undefined && {
+        is_complementary: query.is_complementary,
+      }),
+    };
+    return applyStudentScope(user, studentWhere, {
+      campus_id: query.campus_id,
+      class_id: query.class_id,
+    });
+  }
+
+  /** Excludes discounts and arrear (late payment) surcharges, scoped to one academic year. */
+  private matrixLeafWhere(
+    query: ListFeeMatrixQueryDto,
+  ): Prisma.student_feesWhereInput {
+    return {
+      is_discount: false,
+      is_arrear_surcharge: false,
+      academic_year: query.academic_year,
+    };
+  }
+
+  /**
+   * Aug-Jul unless every selected class is one of the Apr-Mar special classes
+   * (15-19) — matches the rule the rest of the codebase already applies via
+   * isSpecial(). No class filter defaults to Aug-Jul.
+   */
+  private matrixTermStartMonth(classIds?: number[]): number {
+    if (classIds?.length && classIds.every((id) => isSpecial(id))) return 4;
+    return DEFAULT_TERM_START_MONTH;
+  }
+
+  /** The 12 target_month values in cycle order, starting at termStartMonth. */
+  private matrixCycleMonths(termStartMonth: number): number[] {
+    return Array.from({ length: 12 }, (_, i) => ((termStartMonth - 1 + i) % 12) + 1);
+  }
+
+  private matrixFeeTypeLabel(head: {
+    description_prefix: string | null;
+    fee_types: { description: string } | null;
+  }): string {
+    const feeName = head.fee_types?.description ?? '';
+    return [head.description_prefix, feeName].filter(Boolean).join(' ') || '—';
+  }
+
+  private groupHeadsByStudent<T extends { student_id: number }>(
+    heads: T[],
+  ): Map<number, T[]> {
+    const map = new Map<number, T[]>();
+    for (const head of heads) {
+      const list = map.get(head.student_id) ?? [];
+      list.push(head);
+      map.set(head.student_id, list);
+    }
+    return map;
   }
 
   private feeHeadsLeafWhere(

@@ -127,3 +127,75 @@ export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
 }
+
+const ACADEMIC_YEAR = /^\d{4}-\d{4}$/;
+
+export class ListFeeMatrixQueryDto {
+  @IsString()
+  @Matches(ACADEMIC_YEAR, { message: 'academic_year must be YYYY-YYYY' })
+  academic_year: string;
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  class_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  section_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  segment_id?: number[];
+
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(student_status, { each: true })
+  student_status?: student_status[];
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_fee_endowment?: boolean;
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_complementary?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  cc?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number = 25;
+}
+
+export class ExportFeeMatrixQueryDto extends ListFeeMatrixQueryDto {
+  @IsOptional()
+  @IsIn(['xlsx', 'csv'])
+  format?: 'xlsx' | 'csv';
+}
