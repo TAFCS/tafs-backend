@@ -9,7 +9,7 @@ import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.se
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
 import { StorageService } from '../../../common/storage/storage.service';
 import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
@@ -112,6 +112,13 @@ const runInclude = {
     },
   },
   payroll_flags: true,
+  payroll_run_exclusions: {
+    include: {
+      employee_profiles: {
+        select: { id: true, full_name: true, employee_code: true, job_title: true, photo_url: true },
+      },
+    },
+  },
 };
 
 /**
@@ -890,6 +897,14 @@ export class PayrollService {
       throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
     }
 
+    const excluded = await this.prisma.payroll_run_exclusions.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { id: true },
+    });
+    if (excluded) {
+      throw new BadRequestException('This employee is excluded from this payroll run — use "Include" to bring them back first.');
+    }
+
     const employee = await this.prisma.employee_profiles.findFirst({
       where: { id: employeeId, campus_id: run.campus_id, monthly_pay: { not: null } },
       select: this.employeeLineSelect,
@@ -999,6 +1014,113 @@ export class PayrollService {
     return this.getRun(runId, user);
   }
 
+  /**
+   * Removes one employee from a still-pending payroll cycle — e.g. their
+   * attendance wasn't reliably tracked this period, so their numbers
+   * shouldn't be computed (or paid) yet. Deletes their line (and any flags,
+   * which aren't cascade-linked to the line — see syncPayrollFlagsForEmployee)
+   * and records the exclusion so "Regen All" and per-employee regenerate
+   * leave them out until an explicit "Include" reverses it.
+   */
+  async excludeLine(runId: number, employeeId: number, dto: ExcludePayrollLineDto, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+    if (run.is_test) {
+      throw new BadRequestException('Test runs do not support excluding employees.');
+    }
+
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { id: true, finalized_at: true },
+    });
+    if (line?.finalized_at) {
+      throw new BadRequestException("This employee's payroll line is already finalized and cannot be excluded.");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (line) {
+        await tx.payroll_run_lines.delete({ where: { id: line.id } });
+      }
+      await tx.payroll_flags.deleteMany({ where: { payroll_run_id: runId, employee_id: employeeId } });
+      await tx.payroll_run_exclusions.upsert({
+        where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+        create: { payroll_run_id: runId, employee_id: employeeId, reason: dto.reason ?? null, excluded_by: user.sub },
+        update: { reason: dto.reason ?? null, excluded_by: user.sub, excluded_at: new Date() },
+      });
+      await this.recomputeRunStatus(runId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_EXCLUDED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: [`Excluded employee ${employeeId} from this payroll run.`, dto.reason].filter(Boolean).join(' '),
+    });
+
+    return this.getRun(runId, user);
+  }
+
+  /** Reverses excludeLine — re-computes the employee's line and removes the exclusion record. */
+  async includeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
+    this.assertCampusAccess(user, run.campus_id);
+
+    const exclusion = await this.prisma.payroll_run_exclusions.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+    });
+    if (!exclusion) {
+      throw new NotFoundException('This employee is not excluded from this payroll run.');
+    }
+
+    const employee = await this.prisma.employee_profiles.findFirst({
+      where: { id: employeeId, campus_id: run.campus_id, monthly_pay: { not: null } },
+      select: this.employeeLineSelect,
+    });
+
+    if (!employee) {
+      // No longer payroll-eligible (e.g. left, or monthly_pay cleared) — just
+      // lift the exclusion, there's nothing to compute a line from.
+      await this.prisma.payroll_run_exclusions.delete({ where: { id: exclusion.id } });
+      await this.recomputeRunStatus(runId);
+    } else {
+      const [{ employee_id, ...lineData }] = await this.computeEmployeeLinesForRange(
+        [employee],
+        run.campus_id,
+        run.period_start,
+        run.period_end,
+      );
+      const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.payroll_run_lines.upsert({
+          where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id } },
+          create: { payroll_run_id: runId, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
+          update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
+        });
+        await this.syncPayrollFlagsForEmployee(runId, employee_id, detected, lineData.daily_rate, tx);
+        await tx.payroll_run_exclusions.delete({ where: { id: exclusion.id } });
+        await this.recomputeRunStatus(runId, tx);
+      });
+    }
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_INCLUDED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Re-included employee ${employeeId} on this payroll run.`,
+    });
+
+    return this.getRun(runId, user);
+  }
+
   async generateRun(dto: GeneratePayrollRunDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
 
@@ -1094,17 +1216,24 @@ export class PayrollService {
       }
     } else {
       // "Regen All" on a real run: never touch an employee whose line is
-      // already finalized/settled — everyone else (including a newly
-      // eligible employee with no line here yet, e.g. a new hire, who simply
-      // isn't in lockedIds) is upserted in place. Upsert keeps an existing
-      // line's id, so it never orphans a payroll_settlements row or reshuffles
-      // payroll_flags identity the way the old delete+recreate did.
-      const existingLines = await this.prisma.payroll_run_lines.findMany({
-        where: { payroll_run_id: run.id },
-        select: { employee_id: true, finalized_at: true },
-      });
+      // already finalized/settled, or who's been deliberately excluded (see
+      // excludeLine) — everyone else (including a newly eligible employee
+      // with no line here yet, e.g. a new hire) is upserted in place. Upsert
+      // keeps an existing line's id, so it never orphans a payroll_settlements
+      // row or reshuffles payroll_flags identity the way delete+recreate did.
+      const [existingLines, exclusions] = await Promise.all([
+        this.prisma.payroll_run_lines.findMany({
+          where: { payroll_run_id: run.id },
+          select: { employee_id: true, finalized_at: true },
+        }),
+        this.prisma.payroll_run_exclusions.findMany({
+          where: { payroll_run_id: run.id },
+          select: { employee_id: true },
+        }),
+      ]);
       const lockedIds = new Set(existingLines.filter((l) => l.finalized_at).map((l) => l.employee_id));
-      const toCompute = employees.filter((e) => !lockedIds.has(e.id));
+      const excludedIds = new Set(exclusions.map((e) => e.employee_id));
+      const toCompute = employees.filter((e) => !lockedIds.has(e.id) && !excludedIds.has(e.id));
       touchedCount = toCompute.length;
 
       if (toCompute.length > 0) {

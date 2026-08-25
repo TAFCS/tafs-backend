@@ -7,6 +7,12 @@ export class DecidePayrollFlagDto {
   status: 'APPLIED' | 'EXEMPTED';
 }
 
+export class ExcludePayrollLineDto {
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
 export class DisbursePayrollLineDto {
   @IsOptional()
   @IsString()

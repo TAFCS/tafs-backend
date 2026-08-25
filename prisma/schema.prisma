@@ -861,6 +861,7 @@ model users {
   processed_change_requests                                                parent_change_requests[]
   payroll_run_lines_disbursed                                              payroll_run_lines[]          @relation("PayrollLineDisbursedBy")
   payroll_run_lines_finalized                                              payroll_run_lines[]          @relation("PayrollLineFinalizedBy")
+  payroll_run_exclusions_excluded                                          payroll_run_exclusions[]     @relation("PayrollExclusionExcludedBy")
   payroll_settlements_settled                                              payroll_settlements[]        @relation("PayrollSettlementSettledBy")
   postdated_cheques_cashed                                                 postdated_cheques[]          @relation("ChequeCashedBy")
   postdated_cheques_received                                               postdated_cheques[]          @relation("ChequeReceivedBy")
@@ -1209,6 +1210,7 @@ model employee_profiles {
   employee_work_schedules            employee_work_schedules[]
   leave_requests                     leave_requests[]
   payroll_flags                      payroll_flags[]
+  payroll_run_exclusions             payroll_run_exclusions[]
   payroll_run_lines                  payroll_run_lines[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
   teaching_groups                    teaching_groups[]
@@ -1370,10 +1372,33 @@ model payroll_runs {
   notes             String?             @db.VarChar(500)
   is_test           Boolean             @default(false)
   payroll_flags     payroll_flags[]
+  payroll_run_exclusions payroll_run_exclusions[]
   payroll_run_lines payroll_run_lines[]
   campuses          campuses            @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
   @@unique([campus_id, period_start, period_end, is_test])
+}
+
+/**
+ * An employee deliberately left out of a still-pending payroll cycle (e.g.
+ * attendance wasn't tracked for them this period) — distinct from simply not
+ * having a payroll_run_lines row yet, so a later "Regen All" or single-employee
+ * regenerate never silently re-adds them. Only meaningful while the run isn't
+ * finalized for that employee; excluding removes their line (if any) and this
+ * record blocks recomputation until it's deleted via the "include" action.
+ */
+model payroll_run_exclusions {
+  id                Int               @id @default(autoincrement())
+  payroll_run_id    Int
+  employee_id       Int
+  reason            String?           @db.VarChar(300)
+  excluded_by       String
+  excluded_at       DateTime          @default(now()) @db.Timestamp(6)
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  payroll_runs      payroll_runs      @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
+  excluded_by_user  users             @relation("PayrollExclusionExcludedBy", fields: [excluded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([payroll_run_id, employee_id])
 }
 
 model payroll_run_lines {

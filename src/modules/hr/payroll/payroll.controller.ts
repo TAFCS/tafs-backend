@@ -10,7 +10,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DecidePayrollFlagDto, DisbursePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -109,6 +109,29 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.finalizeLine(runId, employeeId, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll line finalized successfully');
+  }
+
+  @Post(':runId/lines/:employeeId/exclude')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async excludeLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: ExcludePayrollLineDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.excludeLine(runId, employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee excluded from payroll run');
+  }
+
+  @Post(':runId/lines/:employeeId/include')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  async includeLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.includeLine(runId, employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee re-included on payroll run');
   }
 
   @Post(':runId/lines/:employeeId/settle')
