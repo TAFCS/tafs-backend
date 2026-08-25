@@ -221,6 +221,20 @@ export class StaffEditingController {
     );
   }
 
+  @Delete('guardians/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteGuardian(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const result = await this.staffEditingService.deleteGuardian(id, user.username);
+    return createApiResponse(
+      result,
+      HttpStatus.OK,
+      STAFF_EDITING_MESSAGES.GUARDIAN_DELETE_SUCCESS,
+    );
+  }
+
   // ─── Sub-table CRUD ──────────────────────────────────────────────────────
 
   @Post('students/:id/admissions')
