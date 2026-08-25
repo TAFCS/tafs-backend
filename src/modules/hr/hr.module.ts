@@ -10,6 +10,8 @@ import { PoliciesController } from './policies/policies.controller';
 import { PoliciesService } from './policies/policies.service';
 import { PayrollRulesController } from './payroll-rules/payroll-rules.controller';
 import { PayrollRulesService } from './payroll-rules/payroll-rules.service';
+import { SecurityDepositsController } from './security-deposits/security-deposits.controller';
+import { SecurityDepositsService } from './security-deposits/security-deposits.service';
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { CalendarDayResolverService } from './calendar/calendar-day-resolver.service';
@@ -59,6 +61,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     PayrollSelfController,
     PayrollMatrixController,
     PayrollRulesController,
+    SecurityDepositsController,
   ],
   providers: [
     EmployeesService,
@@ -66,6 +69,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     SegmentsService,
     PoliciesService,
     PayrollRulesService,
+    SecurityDepositsService,
     CalendarService,
     CalendarDayResolverService,
     HolidayAttendanceSyncService,
