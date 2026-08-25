@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { isWeekendDate, isSaturdayDate, parseCalendarDateKey } from './student-calendar-day.util';
 import { HolidayAttendanceSyncService } from './holiday-attendance-sync.service';
-import { CalendarNotificationService } from './calendar-notification.service';
+import { CalendarNotificationService, formatNotificationReport, type CalendarNotificationReport } from './calendar-notification.service';
 import { StaffCalendarNotificationService } from './staff-calendar-notification.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 
@@ -153,6 +153,9 @@ export interface BulkCalendarCreateResult {
   errors: { campus_id: number; message: string }[];
   /** Campuses where the calendar row saved but the attendance re-sync failed. */
   sync_failed: number;
+  /** Aggregated family notification delivery across campuses that were created. */
+  notification_report?: CalendarNotificationReport | null;
+  notification_warning?: string | null;
 }
 
 @Injectable()
@@ -329,11 +332,28 @@ export class CalendarService {
     }
     const conflictWarning = await this.checkSaturdayConflict(day);
 
+    let notificationReport: CalendarNotificationReport | null = null;
+    let notificationWarning: string | null = null;
     if (day.applies_to === 'STUDENT') {
-      if (day.day_type === 'HOLIDAY') {
-        await this.notificationService.notifyFamiliesForCalendarDay(day);
-      } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
-        await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      try {
+        if (day.day_type === 'HOLIDAY') {
+          notificationReport = await this.notificationService.notifyFamiliesForCalendarDay(day);
+        } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
+          notificationReport = await this.notificationService.notifySchoolOpenForCalendarDay(day);
+        }
+        notificationWarning = formatNotificationReport(notificationReport);
+      } catch (err: any) {
+        console.error('[Calendar] Student notify (created) failed:', err?.message);
+        notificationReport = {
+          attempted: 0,
+          notified: 0,
+          already_notified: 0,
+          skipped_no_family: 0,
+          failed: 1,
+          failures: [{ student_cc: 0, reason: err?.message || 'Notification batch failed' }],
+        };
+        notificationWarning =
+          'Calendar entry saved, but sending family notifications failed — check notification templates / FCM.';
       }
     } else if (day.applies_to === 'STAFF') {
       void this.staffNotificationService
@@ -354,7 +374,13 @@ export class CalendarService {
       note: `${day.day_type} on ${this.dateKeyFromRow(day)} for ${day.applies_to}, campus #${day.campus_id}.${day.description ? ` ${day.description}` : ''}`,
     });
 
-    return { ...day, sync_warning: syncWarning, conflict_warning: conflictWarning };
+    return {
+      ...day,
+      sync_warning: syncWarning,
+      conflict_warning: conflictWarning,
+      notification_report: notificationReport,
+      notification_warning: notificationWarning,
+    };
   }
 
   async createBulk(dto: CreateBulkCalendarDayDto, createdBy?: string, changedBy?: string): Promise<BulkCalendarCreateResult> {
@@ -367,6 +393,14 @@ export class CalendarService {
     this.validateStudentDayType({ ...template, campus_id: 0 });
 
     const campuses = await this.prisma.campuses.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
+    const aggregatedNotify: CalendarNotificationReport = {
+      attempted: 0,
+      notified: 0,
+      already_notified: 0,
+      skipped_no_family: 0,
+      failed: 0,
+      failures: [],
+    };
     const result: BulkCalendarCreateResult = {
       campuses_total: campuses.length,
       created: 0,
@@ -374,6 +408,8 @@ export class CalendarService {
       failed: 0,
       errors: [],
       sync_failed: 0,
+      notification_report: null,
+      notification_warning: null,
     };
 
     for (const campus of campuses) {
@@ -381,6 +417,17 @@ export class CalendarService {
         const day = await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy);
         result.created++;
         if (day.sync_warning) result.sync_failed++;
+        const nr = day.notification_report as CalendarNotificationReport | null | undefined;
+        if (nr) {
+          aggregatedNotify.attempted += nr.attempted;
+          aggregatedNotify.notified += nr.notified;
+          aggregatedNotify.already_notified += nr.already_notified;
+          aggregatedNotify.skipped_no_family += nr.skipped_no_family;
+          aggregatedNotify.failed += nr.failed;
+          if (aggregatedNotify.failures.length < 20) {
+            aggregatedNotify.failures.push(...nr.failures.slice(0, 20 - aggregatedNotify.failures.length));
+          }
+        }
       } catch (err) {
         const message = err instanceof BadRequestException ? String(err.message) : (err as Error).message;
         if (message.includes('same scope already exists')) {
@@ -396,6 +443,11 @@ export class CalendarService {
       throw new BadRequestException(
         `Failed to create calendar entry on all campuses (${result.failed} failed, ${result.skipped} skipped).`,
       );
+    }
+
+    if (aggregatedNotify.attempted > 0 || aggregatedNotify.failed > 0 || aggregatedNotify.skipped_no_family > 0) {
+      result.notification_report = aggregatedNotify;
+      result.notification_warning = formatNotificationReport(aggregatedNotify);
     }
 
     return result;
@@ -775,11 +827,28 @@ export class CalendarService {
         : null;
     const conflictWarning = await this.checkSaturdayConflict(day);
 
+    let notificationReport: CalendarNotificationReport | null = null;
+    let notificationWarning: string | null = null;
     if (day.applies_to === 'STUDENT') {
-      if (day.day_type === 'HOLIDAY') {
-        await this.notificationService.notifyFamiliesForCalendarDay(day);
-      } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
-        await this.notificationService.notifySchoolOpenForCalendarDay(day);
+      try {
+        if (day.day_type === 'HOLIDAY') {
+          notificationReport = await this.notificationService.notifyFamiliesForCalendarDay(day);
+        } else if (day.day_type === 'WORKDAY' && isWeekendDate(day.date)) {
+          notificationReport = await this.notificationService.notifySchoolOpenForCalendarDay(day);
+        }
+        notificationWarning = formatNotificationReport(notificationReport);
+      } catch (err: any) {
+        console.error('[Calendar] Student notify (updated) failed:', err?.message);
+        notificationReport = {
+          attempted: 0,
+          notified: 0,
+          already_notified: 0,
+          skipped_no_family: 0,
+          failed: 1,
+          failures: [{ student_cc: 0, reason: err?.message || 'Notification batch failed' }],
+        };
+        notificationWarning =
+          'Calendar entry updated, but sending family notifications failed — check notification templates / FCM.';
       }
     } else if (day.applies_to === 'STAFF') {
       const dateChanged = this.dateKeyFromRow(day) !== this.dateKeyFromRow(existing);
@@ -826,7 +895,13 @@ export class CalendarService {
       note: changes.length > 0 ? changes.join('; ') : 'No field changes detected.',
     });
 
-    return { ...day, sync_warning: syncWarning, conflict_warning: conflictWarning };
+    return {
+      ...day,
+      sync_warning: syncWarning,
+      conflict_warning: conflictWarning,
+      notification_report: notificationReport,
+      notification_warning: notificationWarning,
+    };
   }
 
   async remove(id: number, changedBy: string) {
