@@ -70,6 +70,32 @@ export class SecurityDepositsService {
     };
   }
 
+  async listOpen(user: IJwtStaffPayload, status?: SecurityDepositStatus) {
+    const statuses = status ? [status] : OPEN_STATUSES;
+    const where: Prisma.employee_security_depositsWhereInput = {
+      status: { in: statuses },
+    };
+    if (user.campusId != null) {
+      where.employee_profiles = { campus_id: user.campusId };
+    }
+
+    const plans = await this.prisma.employee_security_deposits.findMany({
+      where,
+      include: {
+        employee_profiles: {
+          select: {
+            id: true,
+            full_name: true,
+            employee_code: true,
+            campuses: { select: { campus_name: true } },
+          },
+        },
+      },
+      orderBy: [{ status: 'asc' }, { start_period_start: 'desc' }, { id: 'desc' }],
+    });
+    return plans.map((plan) => this.serializeListRow(plan));
+  }
+
   async create(employeeId: number, dto: CreateSecurityDepositDto, user: IJwtStaffPayload) {
     await this.assertEmployee(employeeId);
     const open = await this.prisma.employee_security_deposits.findFirst({
@@ -131,9 +157,7 @@ export class SecurityDepositsService {
       }
       const refunded = money(plan.refunded_amount).plus(amount);
       const heldAfter = money(plan.recovered_amount).minus(refunded).minus(plan.forfeited_amount);
-      const status = heldAfter.lte(0)
-        ? this.closedStatus(refunded, plan.forfeited_amount)
-        : plan.status;
+      const status = this.nextStatus(plan.total_amount, plan.recovered_amount, refunded, plan.forfeited_amount);
 
       await tx.employee_security_deposit_transactions.create({
         data: {
@@ -179,9 +203,7 @@ export class SecurityDepositsService {
       }
       const forfeited = money(plan.forfeited_amount).plus(amount);
       const heldAfter = money(plan.recovered_amount).minus(plan.refunded_amount).minus(forfeited);
-      const status = heldAfter.lte(0)
-        ? this.closedStatus(plan.refunded_amount, forfeited)
-        : plan.status;
+      const status = this.nextStatus(plan.total_amount, plan.recovered_amount, plan.refunded_amount, forfeited);
 
       await tx.employee_security_deposit_transactions.create({
         data: {
@@ -314,9 +336,7 @@ export class SecurityDepositsService {
     const carry = recovered.gte(plan.total_amount)
       ? ZERO
       : Prisma.Decimal.max(ZERO, due.minus(amount)).toDecimalPlaces(2);
-    const status = recovered.gte(plan.total_amount)
-      ? (heldAfter.lte(0) ? this.closedStatus(plan.refunded_amount, plan.forfeited_amount) : SecurityDepositStatus.COMPLETED)
-      : SecurityDepositStatus.ACTIVE;
+    const status = this.nextStatus(plan.total_amount, recovered, plan.refunded_amount, plan.forfeited_amount);
 
     try {
       await tx.employee_security_deposit_transactions.create({
@@ -369,6 +389,19 @@ export class SecurityDepositsService {
     return held.lt(0) ? ZERO : held;
   }
 
+  /** Close only after the target is fully recovered and nothing remains held. */
+  private nextStatus(
+    total: Prisma.Decimal | number | string,
+    recovered: Prisma.Decimal | number | string,
+    refunded: Prisma.Decimal | number | string,
+    forfeited: Prisma.Decimal | number | string,
+  ): SecurityDepositStatus {
+    if (money(recovered).lt(total)) return SecurityDepositStatus.ACTIVE;
+    const held = money(recovered).minus(refunded).minus(forfeited);
+    if (held.gt(0)) return SecurityDepositStatus.COMPLETED;
+    return this.closedStatus(refunded, forfeited);
+  }
+
   private closedStatus(refunded: Prisma.Decimal | number | string, forfeited: Prisma.Decimal | number | string): SecurityDepositStatus {
     const hasRefund = money(refunded).gt(0);
     const hasForfeit = money(forfeited).gt(0);
@@ -400,6 +433,36 @@ export class SecurityDepositsService {
       select: { id: true },
     });
     if (!employee) throw new NotFoundException(`Employee ${employeeId} not found`);
+  }
+
+  private serializeListRow(plan: employee_security_deposits & {
+    employee_profiles: {
+      id: number;
+      full_name: string | null;
+      employee_code: string | null;
+      campuses: { campus_name: string } | null;
+    };
+  }) {
+    const recovered = Number(plan.recovered_amount);
+    const refunded = Number(plan.refunded_amount);
+    const forfeited = Number(plan.forfeited_amount);
+    const total = Number(plan.total_amount);
+    return {
+      id: plan.id,
+      employee_id: plan.employee_id,
+      full_name: plan.employee_profiles.full_name,
+      employee_code: plan.employee_profiles.employee_code,
+      campus_name: plan.employee_profiles.campuses?.campus_name ?? null,
+      total_amount: total,
+      recovered_amount: recovered,
+      held_amount: Math.max(0, recovered - refunded - forfeited),
+      remaining_to_collect: Math.max(0, total - recovered),
+      carried_forward_amount: Number(plan.carried_forward_amount),
+      installment_amount: Number(plan.installment_amount),
+      installment_count: plan.installment_count,
+      start_period_start: dateOnly(plan.start_period_start),
+      status: plan.status,
+    };
   }
 
   private serializePlan(plan: employee_security_deposits & {
