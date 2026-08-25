@@ -1083,12 +1083,45 @@ export class StaffEditingService {
     };
   }
 
+  /**
+   * Unique households linked to a guardian via student_guardians → students → families.
+   * Used by staff guardian search so the UI can show / open the associated family.
+   */
+  private async familiesForGuardian(guardianId: number): Promise<Array<{ id: number; household_name: string | null }>> {
+    const links = await this.prisma.student_guardians.findMany({
+      where: { guardian_id: guardianId },
+      select: {
+        students: {
+          select: {
+            families: {
+              select: { id: true, household_name: true },
+            },
+          },
+        },
+      },
+    });
+
+    const byId = new Map<number, { id: number; household_name: string | null }>();
+    for (const link of links) {
+      const family = link.students?.families;
+      if (family?.id != null && !byId.has(family.id)) {
+        byId.set(family.id, {
+          id: family.id,
+          household_name: family.household_name ?? null,
+        });
+      }
+    }
+    return Array.from(byId.values());
+  }
+
   async getGuardian(id: number) {
     const guardian = await this.prisma.guardians.findUnique({ where: { id } });
     if (!guardian) throw new NotFoundException(`Guardian #${id} not found`);
+    const families = await this.familiesForGuardian(guardian.id);
     return {
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
+      families,
     };
   }
   async updateGuardian(id: number, dto: UpdateGuardianDto, changedBy: string) {
@@ -1207,9 +1240,11 @@ export class StaffEditingService {
       where: { cnic: nic },
     });
     if (!guardian) return null;
+    const families = await this.familiesForGuardian(guardian.id);
     return {
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
+      families,
     };
   }
 
