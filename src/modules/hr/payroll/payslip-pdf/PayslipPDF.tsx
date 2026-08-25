@@ -164,6 +164,7 @@ export interface PayslipPDFProps {
     consecutiveLateDeduction: number;
     eobiDeduction: number;
     incomeTaxDeduction: number;
+    securityDepositDeduction: number;
     totalDeductions: number;
     netPay: number;
   };
@@ -311,6 +312,12 @@ export const PayslipPDF = ({ employee, period, attendance, pay, overtime, netPai
           <View style={styles.tableRow}>
             <Text style={styles.colLabel}>Income Tax</Text>
             <Text style={styles.deductionValue}>-{money(pay.incomeTaxDeduction)}</Text>
+          </View>
+        )}
+        {pay.securityDepositDeduction > 0 && (
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>Security Deposit</Text>
+            <Text style={styles.deductionValue}>-{money(pay.securityDepositDeduction)}</Text>
           </View>
         )}
         <View style={styles.totalRow}>

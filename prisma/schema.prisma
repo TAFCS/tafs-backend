@@ -451,14 +451,6 @@ model timetable_blocks {
   label        String?  @db.VarChar(20)
 }
 
-// Per (campus, class) bell schedule -- replaces the single global
-// timetable_blocks template. Different classes/segments run different
-// period lengths and break windows (e.g. O1/O2 at 50-min periods with a
-// 10:30-11:00 break vs O3 at 60-min periods with a 10:50-11:10 break), so
-// block times are no longer one-size-fits-all. block_number lines up with
-// timetable_slots.block_number for the same (campus, class). A row with
-// is_break=true has no corresponding slots -- it's a display-only divider
-// (e.g. "BREAK 10:30-11:00").
 model class_timetable_periods {
   id           Int      @id @default(autoincrement())
   campus_id    Int
@@ -690,8 +682,6 @@ model students {
   family_id                   Int?
   campus_id                   Int?
   gr_number                   String?                       @db.VarChar(50)
-  /// School Leaving Certificate serial — independent of CC / GR.
-  slc_number                  Int?                          @unique
   dob                         DateTime?                     @db.Date
   gender                      String?                       @db.VarChar(10)
   nationality                 String?                       @db.VarChar(50)
@@ -737,6 +727,8 @@ model students {
   complementary_until         DateTime?                     @db.Date
   fee_endowment_reason        String?                       @db.VarChar(500)
   fee_endowment_until         DateTime?                     @db.Date
+  /// School Leaving Certificate serial — independent of CC / GR.
+  slc_number                  Int?                          @unique
   attendance_notifications    attendance_notifications[]
   attendance_roll_records     attendance_roll_records[]
   attendance_student_daily    attendance_student_daily[]
@@ -838,7 +830,6 @@ model users {
   id                                                                       String                       @id
   username                                                                 String                       @unique @db.VarChar(50)
   password_hash                                                            String                       @db.VarChar(255)
-  password_reveal                                                         String?                      @db.Text
   email                                                                    String?                      @unique @db.VarChar(100)
   full_name                                                                String                       @db.VarChar(100)
   role                                                                     StaffRole
@@ -848,6 +839,7 @@ model users {
   updated_at                                                               DateTime                     @updatedAt
   deleted_at                                                               DateTime?                    @db.Timestamp(6)
   allowed_class_ids                                                        Int[]                        @default([])
+  password_reveal                                                          String?
   attendance_objections_reviewed                                           attendance_objections[]      @relation("ObjectionReviewedBy")
   attendance_roll_sessions_attendance_roll_sessions_created_by_idTousers   attendance_roll_sessions[]   @relation("attendance_roll_sessions_created_by_idTousers")
   attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[]   @relation("attendance_roll_sessions_submitted_by_idTousers")
@@ -1200,11 +1192,12 @@ model employee_profiles {
   employee_notice_posts              employee_notice_posts[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
-  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id], onDelete: SetNull)
+  reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
+  employee_security_deposits         employee_security_deposits[]
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
   leave_requests                     leave_requests[]
@@ -1377,54 +1370,56 @@ model payroll_runs {
 }
 
 model payroll_run_lines {
-  id                         Int                  @id @default(autoincrement())
-  payroll_run_id             Int
-  employee_id                Int
-  scheduled_working_days     Int
-  present_days               Int
-  late_days                  Int
-  half_days                  Int
-  absent_days                Int
-  excused_days               Int
-  unresolved_days            Int                  @default(0)
-  total_break_minutes        Int                  @default(0)
-  monthly_pay                Decimal              @db.Decimal(12, 2)
-  daily_rate                 Decimal              @db.Decimal(12, 2)
-  per_minute_rate            Decimal              @db.Decimal(12, 4)
-  absence_deduction          Decimal              @db.Decimal(12, 2)
-  half_day_deduction         Decimal              @db.Decimal(12, 2)
-  break_deduction            Decimal              @db.Decimal(12, 2)
-  total_deductions           Decimal              @db.Decimal(12, 2)
-  net_pay                    Decimal              @db.Decimal(12, 2)
-  created_at                 DateTime             @default(now()) @db.Timestamp(6)
-  updated_at                 DateTime             @updatedAt @db.Timestamp(6)
-  daily_breakdown            Json                 @default("[]")
-  disbursed_at               DateTime?            @db.Timestamp(0)
-  disbursed_by               String?
-  disbursement_notes         String?              @db.VarChar(300)
-  total_late_minutes         Int                  @default(0)
-  late_deduction             Decimal              @default(0) @db.Decimal(12, 2)
-  unpaid_leave_days          Int                  @default(0)
-  has_salary                 Boolean              @default(true)
-  is_mapped                  Boolean              @default(true)
-  has_punches                Boolean              @default(true)
-  total_calendar_days        Int                  @default(0)
-  total_overtime_minutes     Int                  @default(0)
-  scheduled_minutes_per_day  Int                  @default(0)
-  consecutive_late_deduction Decimal              @default(0) @db.Decimal(12, 2)
-  overtime_days              Int                  @default(0)
-  sandwich_deduction         Decimal              @default(0) @db.Decimal(12, 2)
-  eobi_deduction             Decimal              @default(0) @db.Decimal(12, 2)
-  income_tax_deduction       Decimal              @default(0) @db.Decimal(12, 2)
-  eobi_employer_cost         Decimal              @default(0) @db.Decimal(12, 2)
-  sessi_employer_cost        Decimal              @default(0) @db.Decimal(12, 2)
-  finalized_at               DateTime?            @db.Timestamp(6)
-  finalized_by               String?
-  disbursed_by_user          users?               @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  finalized_by_user          users?               @relation("PayrollLineFinalizedBy", fields: [finalized_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  employee_profiles          employee_profiles    @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  payroll_runs               payroll_runs         @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
-  payroll_settlements        payroll_settlements?
+  id                            Int                                      @id @default(autoincrement())
+  payroll_run_id                Int
+  employee_id                   Int
+  scheduled_working_days        Int
+  present_days                  Int
+  late_days                     Int
+  half_days                     Int
+  absent_days                   Int
+  excused_days                  Int
+  unresolved_days               Int                                      @default(0)
+  total_break_minutes           Int                                      @default(0)
+  monthly_pay                   Decimal                                  @db.Decimal(12, 2)
+  daily_rate                    Decimal                                  @db.Decimal(12, 2)
+  per_minute_rate               Decimal                                  @db.Decimal(12, 4)
+  absence_deduction             Decimal                                  @db.Decimal(12, 2)
+  half_day_deduction            Decimal                                  @db.Decimal(12, 2)
+  break_deduction               Decimal                                  @db.Decimal(12, 2)
+  total_deductions              Decimal                                  @db.Decimal(12, 2)
+  net_pay                       Decimal                                  @db.Decimal(12, 2)
+  created_at                    DateTime                                 @default(now()) @db.Timestamp(6)
+  updated_at                    DateTime                                 @updatedAt @db.Timestamp(6)
+  daily_breakdown               Json                                     @default("[]")
+  disbursed_at                  DateTime?                                @db.Timestamp(0)
+  disbursed_by                  String?
+  disbursement_notes            String?                                  @db.VarChar(300)
+  total_late_minutes            Int                                      @default(0)
+  late_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
+  unpaid_leave_days             Int                                      @default(0)
+  has_salary                    Boolean                                  @default(true)
+  is_mapped                     Boolean                                  @default(true)
+  has_punches                   Boolean                                  @default(true)
+  total_calendar_days           Int                                      @default(0)
+  total_overtime_minutes        Int                                      @default(0)
+  scheduled_minutes_per_day     Int                                      @default(0)
+  consecutive_late_deduction    Decimal                                  @default(0) @db.Decimal(12, 2)
+  overtime_days                 Int                                      @default(0)
+  sandwich_deduction            Decimal                                  @default(0) @db.Decimal(12, 2)
+  finalized_at                  DateTime?                                @db.Timestamp(6)
+  finalized_by                  String?
+  eobi_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
+  income_tax_deduction          Decimal                                  @default(0) @db.Decimal(12, 2)
+  eobi_employer_cost            Decimal                                  @default(0) @db.Decimal(12, 2)
+  sessi_employer_cost           Decimal                                  @default(0) @db.Decimal(12, 2)
+  security_deposit_deduction    Decimal                                  @default(0) @db.Decimal(12, 2)
+  security_deposit_transactions employee_security_deposit_transactions[]
+  disbursed_by_user             users?                                   @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employee_profiles             employee_profiles                        @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  finalized_by_user             users?                                   @relation("PayrollLineFinalizedBy", fields: [finalized_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payroll_runs                  payroll_runs                             @relation(fields: [payroll_run_id], references: [id], onDelete: Cascade)
+  payroll_settlements           payroll_settlements?
 
   @@unique([payroll_run_id, employee_id])
 }
@@ -1479,6 +1474,46 @@ model payroll_statutory_rules {
 
   @@unique([rule_type, effective_from])
   @@index([rule_type])
+}
+
+model employee_security_deposits {
+  id                     Int                                      @id @default(autoincrement())
+  employee_id            Int
+  total_amount           Decimal                                  @db.Decimal(12, 2)
+  installment_count      Int
+  installment_amount     Decimal                                  @db.Decimal(12, 2)
+  start_period_start     DateTime                                 @db.Date
+  recovered_amount       Decimal                                  @default(0) @db.Decimal(12, 2)
+  refunded_amount        Decimal                                  @default(0) @db.Decimal(12, 2)
+  forfeited_amount       Decimal                                  @default(0) @db.Decimal(12, 2)
+  carried_forward_amount Decimal                                  @default(0) @db.Decimal(12, 2)
+  status                 SecurityDepositStatus                    @default(ACTIVE)
+  notes                  String?                                  @db.VarChar(500)
+  created_by             String
+  created_at             DateTime                                 @default(now()) @db.Timestamp(6)
+  updated_at             DateTime                                 @updatedAt @db.Timestamp(6)
+  transactions           employee_security_deposit_transactions[]
+  employee_profiles      employee_profiles                        @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([employee_id, status])
+}
+
+model employee_security_deposit_transactions {
+  id                  Int                            @id @default(autoincrement())
+  deposit_id          Int
+  type                SecurityDepositTransactionType
+  payroll_run_line_id Int?
+  due_amount          Decimal                        @db.Decimal(12, 2)
+  amount              Decimal                        @db.Decimal(12, 2)
+  running_balance     Decimal                        @db.Decimal(12, 2)
+  reason              String?                        @db.VarChar(500)
+  created_by          String
+  created_at          DateTime                       @default(now()) @db.Timestamp(6)
+  deposit             employee_security_deposits     @relation(fields: [deposit_id], references: [id], onDelete: Cascade)
+  payroll_run_line    payroll_run_lines?             @relation(fields: [payroll_run_line_id], references: [id], onDelete: Restrict)
+
+  @@index([payroll_run_line_id])
+  @@index([deposit_id, created_at], map: "employee_security_deposit_transactions_deposit_id_created_at_id")
 }
 
 model attendance_objections {
@@ -1619,7 +1654,7 @@ model zk_attendance_scans {
   zk_push_log_id        Int?
   received_at           DateTime                @default(now()) @db.Timestamp(6)
   attendance_objections attendance_objections[]
-  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id], onDelete: SetNull)
+  employee_profiles     employee_profiles?      @relation(fields: [employee_id], references: [id])
   students              students?               @relation(fields: [student_cc], references: [cc])
   zk_push_logs          zk_push_logs?           @relation(fields: [zk_push_log_id], references: [id])
 
@@ -1913,6 +1948,28 @@ model unconfirmed_admissions {
   campuses        campuses? @relation(fields: [campus_id], references: [id], onUpdate: NoAction)
 }
 
+model financial_report_snapshots {
+  id           Int                           @id @default(autoincrement())
+  report_type  FinancialReportType
+  from_date    DateTime                      @db.Date
+  to_date      DateTime                      @db.Date
+  view         String                        @db.VarChar(32)
+  filters      Json
+  filters_hash String                        @db.VarChar(64)
+  status       FinancialReportSnapshotStatus @default(DRAFT)
+  totals       Json
+  reconciles   Boolean                       @default(true)
+  generated_by String?                       @db.VarChar(100)
+  generated_at DateTime                      @default(now()) @db.Timestamp(6)
+  finalized_by String?                       @db.VarChar(100)
+  finalized_at DateTime?                     @db.Timestamp(6)
+  notes        String?                       @db.VarChar(500)
+
+  @@index([report_type, from_date, to_date])
+  @@index([status])
+  @@index([filters_hash])
+}
+
 enum BulkJobStatus {
   PENDING
   PROCESSING
@@ -2060,6 +2117,20 @@ enum PayrollFlagStatus {
   EXEMPTED
 }
 
+enum SecurityDepositStatus {
+  ACTIVE
+  COMPLETED
+  REFUNDED
+  FORFEITED
+  PARTIALLY_FORFEITED
+}
+
+enum SecurityDepositTransactionType {
+  DEDUCTION
+  REFUND
+  FORFEIT
+}
+
 enum AttendanceObjectionStatus {
   PENDING
   ACCEPTED
@@ -2118,26 +2189,4 @@ enum FinancialReportType {
 enum FinancialReportSnapshotStatus {
   DRAFT
   FINALIZED
-}
-
-model financial_report_snapshots {
-  id            Int                           @id @default(autoincrement())
-  report_type   FinancialReportType
-  from_date     DateTime                      @db.Date
-  to_date       DateTime                      @db.Date
-  view          String                        @db.VarChar(32)
-  filters       Json
-  filters_hash  String                        @db.VarChar(64)
-  status        FinancialReportSnapshotStatus @default(DRAFT)
-  totals        Json
-  reconciles    Boolean                       @default(true)
-  generated_by  String?                       @db.VarChar(100)
-  generated_at  DateTime                      @default(now()) @db.Timestamp(6)
-  finalized_by  String?                       @db.VarChar(100)
-  finalized_at  DateTime?                     @db.Timestamp(6)
-  notes         String?                       @db.VarChar(500)
-
-  @@index([report_type, from_date, to_date])
-  @@index([status])
-  @@index([filters_hash])
 }
