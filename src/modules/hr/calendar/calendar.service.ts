@@ -355,6 +355,19 @@ export class CalendarService {
         notificationWarning =
           'Calendar entry saved, but sending family notifications failed — check notification templates / FCM.';
       }
+      if (notificationReport) {
+        await this.persistNotificationReport({
+          calendarDayId: day.id,
+          campusId: day.campus_id,
+          date: day.date,
+          dayType: day.day_type,
+          alertType: day.day_type === 'HOLIDAY' ? 'HOLIDAY' : 'SCHOOL_OPEN',
+          description: day.description,
+          report: notificationReport,
+          summary: notificationWarning,
+          createdBy: changedBy ?? createdBy ?? null,
+        });
+      }
     } else if (day.applies_to === 'STAFF') {
       void this.staffNotificationService
         .notifyForCalendarChange(day, 'CREATED')
@@ -850,6 +863,19 @@ export class CalendarService {
         notificationWarning =
           'Calendar entry updated, but sending family notifications failed — check notification templates / FCM.';
       }
+      if (notificationReport) {
+        await this.persistNotificationReport({
+          calendarDayId: day.id,
+          campusId: day.campus_id,
+          date: day.date,
+          dayType: day.day_type,
+          alertType: day.day_type === 'HOLIDAY' ? 'HOLIDAY' : 'SCHOOL_OPEN',
+          description: day.description,
+          report: notificationReport,
+          summary: notificationWarning,
+          createdBy: changedBy ?? null,
+        });
+      }
     } else if (day.applies_to === 'STAFF') {
       const dateChanged = this.dateKeyFromRow(day) !== this.dateKeyFromRow(existing);
       const onNotifyError = (err: any) => console.error('[Calendar] Staff notice (updated) failed:', err?.message);
@@ -934,5 +960,144 @@ export class CalendarService {
     });
 
     return { ...deleted, sync_warning: syncWarning };
+  }
+
+  private async persistNotificationReport(params: {
+    calendarDayId: number;
+    campusId: number;
+    date: Date;
+    dayType: string;
+    alertType: string;
+    description: string | null;
+    report: CalendarNotificationReport;
+    summary: string | null;
+    createdBy: string | null;
+  }) {
+    try {
+      await this.prisma.calendar_notification_reports.create({
+        data: {
+          calendar_day_id: params.calendarDayId,
+          campus_id: params.campusId,
+          date: params.date,
+          day_type: params.dayType,
+          alert_type: params.alertType,
+          description: params.description,
+          attempted: params.report.attempted,
+          notified: params.report.notified,
+          already_notified: params.report.already_notified,
+          skipped_no_family: params.report.skipped_no_family,
+          failed: params.report.failed,
+          failures: params.report.failures.length > 0 ? (params.report.failures as any) : undefined,
+          summary: params.summary,
+          created_by: params.createdBy,
+        },
+      });
+    } catch (err: any) {
+      console.error('[Calendar] Failed to persist notification report:', err?.message);
+    }
+  }
+
+  /**
+   * Saved delivery snapshots for a campus, plus reconstructed counts from
+   * calendar_notifications for older holidays that predate report storage.
+   */
+  async listNotificationReports(campusId: number, limit = 50) {
+    if (!campusId || Number.isNaN(campusId)) {
+      throw new BadRequestException('campusId is required');
+    }
+    const take = Math.min(Math.max(limit, 1), 100);
+
+    const saved = await this.prisma.calendar_notification_reports.findMany({
+      where: { campus_id: campusId },
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      take,
+    });
+
+    const savedKeys = new Set(
+      saved.map((r) => `${r.date.toISOString().slice(0, 10)}:${r.alert_type}`),
+    );
+
+    // Reconstruct older delivery counts from in-app notification rows when no snapshot exists.
+    const legacyRows = await this.prisma.calendar_notifications.findMany({
+      where: {
+        alert_type: { in: ['HOLIDAY', 'SCHOOL_OPEN'] },
+        students: { campus_id: campusId },
+      },
+      select: { date: true, alert_type: true, created_at: true },
+    });
+
+    const legacyMap = new Map<
+      string,
+      { date: Date; alert_type: string; count: number; firstAt: Date | null }
+    >();
+    for (const row of legacyRows) {
+      const key = `${row.date.toISOString().slice(0, 10)}:${row.alert_type}`;
+      if (savedKeys.has(key)) continue;
+      const existing = legacyMap.get(key);
+      if (!existing) {
+        legacyMap.set(key, {
+          date: row.date,
+          alert_type: row.alert_type,
+          count: 1,
+          firstAt: row.created_at,
+        });
+      } else {
+        existing.count += 1;
+        if (row.created_at && (!existing.firstAt || row.created_at < existing.firstAt)) {
+          existing.firstAt = row.created_at;
+        }
+      }
+    }
+
+    const legacy = Array.from(legacyMap.values()).map((g) => ({
+      id: null as number | null,
+      calendar_day_id: null as number | null,
+      campus_id: campusId,
+      date: g.date,
+      day_type: g.alert_type === 'SCHOOL_OPEN' ? 'WORKDAY' : 'HOLIDAY',
+      alert_type: g.alert_type,
+      description: null as string | null,
+      attempted: g.count,
+      notified: g.count,
+      already_notified: 0,
+      skipped_no_family: 0,
+      failed: 0,
+      failures: [] as CalendarNotificationReport['failures'],
+      summary: `Notifications: ${g.count} student(s) covered (historical estimate from delivery log)`,
+      created_by: null as string | null,
+      created_at: g.firstAt,
+      source: 'reconstructed' as const,
+    }));
+
+    const mappedSaved = saved.map((r) => ({
+      id: r.id,
+      calendar_day_id: r.calendar_day_id,
+      campus_id: r.campus_id,
+      date: r.date,
+      day_type: r.day_type,
+      alert_type: r.alert_type,
+      description: r.description,
+      attempted: r.attempted,
+      notified: r.notified,
+      already_notified: r.already_notified,
+      skipped_no_family: r.skipped_no_family,
+      failed: r.failed,
+      failures: (Array.isArray(r.failures) ? r.failures : []) as CalendarNotificationReport['failures'],
+      summary: r.summary,
+      created_by: r.created_by,
+      created_at: r.created_at,
+      source: 'saved' as const,
+    }));
+
+    return [...mappedSaved, ...legacy]
+      .sort((a, b) => {
+        const at = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bt = b.created_at ? new Date(b.created_at).getTime() : 0;
+        if (bt !== at) return bt - at;
+        const ad = new Date(a.date).getTime();
+        const bd = new Date(b.date).getTime();
+        return bd - ad;
+      })
+      .slice(0, take);
   }
 }

@@ -58,6 +58,19 @@ export class CalendarController {
     return createApiResponse(data, HttpStatus.OK, 'Calendar days retrieved successfully');
   }
 
+  @Get('notification-reports')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Calendar'))
+  async listNotificationReports(
+    @Query('campusId') campusId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const data = await this.calendarService.listNotificationReports(
+      campusId ? parseInt(campusId, 10) : NaN,
+      limit ? parseInt(limit, 10) : 50,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'Calendar notification reports retrieved successfully');
+  }
+
   @Post('sync-attendance')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Calendar'))
   async syncAttendance(

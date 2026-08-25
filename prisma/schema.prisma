@@ -111,6 +111,7 @@ model campuses {
   attendance_roll_sessions    attendance_roll_sessions[]
   attendance_staff_daily      attendance_staff_daily[]
   attendance_student_daily    attendance_student_daily[]
+  calendar_notification_reports calendar_notification_reports[]
   campus_classes              campus_classes[]
   campus_sections             campus_sections[]
   class_check_in_schedules    class_check_in_schedules[]
@@ -1246,6 +1247,7 @@ model academic_calendar_days {
   employee          employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   sections          sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
   staff_categories  staff_categories?  @relation(fields: [staff_category_id], references: [id], onDelete: Cascade)
+  notification_reports calendar_notification_reports[]
 
   @@unique([campus_id, date, applies_to, class_id, section_id, department_id, staff_category_id, employee_id], map: "academic_calendar_days_scope_key")
   @@index([campus_id, date, applies_to])
@@ -1754,6 +1756,31 @@ model calendar_notifications {
 
   @@unique([family_id, student_cc, date, alert_type])
   @@index([family_id, created_at(sort: Desc)])
+}
+
+/// Snapshot of family notification delivery when a student calendar day is saved.
+model calendar_notification_reports {
+  id                Int                     @id @default(autoincrement())
+  calendar_day_id   Int?
+  campus_id         Int
+  date              DateTime                @db.Date
+  day_type          String                  @db.VarChar(20)
+  alert_type        String                  @db.VarChar(20)
+  description       String?                 @db.VarChar(255)
+  attempted         Int                     @default(0)
+  notified          Int                     @default(0)
+  already_notified  Int                     @default(0)
+  skipped_no_family Int                     @default(0)
+  failed            Int                     @default(0)
+  failures          Json?
+  summary           String?
+  created_by        String?
+  created_at        DateTime                @default(now()) @db.Timestamp(6)
+  campuses          campuses                @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  academic_calendar_days academic_calendar_days? @relation(fields: [calendar_day_id], references: [id], onDelete: SetNull)
+
+  @@index([campus_id, created_at(sort: Desc)])
+  @@index([campus_id, date])
 }
 
 model voucher_notifications {
