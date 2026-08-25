@@ -83,7 +83,7 @@ export class FinancialReportQueryDto {
   @IsInt({ each: true })
   graduated_from_class_id?: number[];
 
-  /** Graduation academic-year range, "YYYY-YYYY" — see buildGraduatedYearRangeWhere. */
+  /** Graduation academic-year range, "YYYY-YYYY" — see buildGraduationFilterWhere. */
   @IsOptional()
   @IsString()
   @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_year_range must be in YYYY-YYYY format' })
@@ -199,7 +199,7 @@ export class ListFeeMatrixQueryDto {
   @IsInt({ each: true })
   graduated_from_class_id?: number[];
 
-  /** Graduation academic-year range, "YYYY-YYYY" — see buildGraduatedYearRangeWhere. */
+  /** Graduation academic-year range, "YYYY-YYYY" — see buildGraduationFilterWhere. */
   @IsOptional()
   @IsString()
   @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_year_range must be in YYYY-YYYY format' })

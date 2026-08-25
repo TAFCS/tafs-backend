@@ -724,6 +724,7 @@ model students {
   not_pursuing                Boolean                       @default(false)
   quick_admission_meta        Json?
   graduated_at                DateTime?                     @db.Date
+  graduated_academic_year     String?                       @db.VarChar(10)
   complementary_reason        String?                       @db.VarChar(500)
   complementary_until         DateTime?                     @db.Date
   fee_endowment_reason        String?                       @db.VarChar(500)

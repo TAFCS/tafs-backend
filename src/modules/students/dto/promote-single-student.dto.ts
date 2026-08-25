@@ -4,6 +4,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   Min,
   ValidateIf,
   ValidateNested,
@@ -45,6 +46,18 @@ export class PromoteSingleStudentDto {
   @IsOptional()
   @IsString()
   target_academic_year?: string;
+
+  /**
+   * Explicit academic year to record as graduated_academic_year — the year the
+   * student was studying in when they graduated. Only meaningful when `graduate`
+   * is true. If omitted, defaults to the student's own current academic_year.
+   * NOT the same as `target_academic_year` (destination academic_year going
+   * forward).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_academic_year must be in YYYY-YYYY format' })
+  graduated_academic_year?: string;
 
   @IsOptional()
   @Type(() => Number)
