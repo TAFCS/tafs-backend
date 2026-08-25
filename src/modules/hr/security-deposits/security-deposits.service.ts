@@ -258,8 +258,11 @@ export class SecurityDepositsService {
   /**
    * Snapshot the cycle's deposit deduction onto a payroll line after attendance,
    * statutory, and applied-flag amounts are already stored. Caps at remaining
-   * net so discretionary installments never push pay below zero. Loan slot is
-   * reserved (collects 0 until employee loans exist) and is applied first.
+   * net so discretionary installments never push pay below zero. Loans are
+   * applied first ù `EmployeeLoansService.applySnapshotToLine` must have run
+   * (and written `loan_deduction`) before this, which is why every caller
+   * (PayrollService, and the loans service's own recap) always calls the loan
+   * pass immediately before this one.
    */
   async applySnapshotToLine(
     runId: number,
@@ -283,7 +286,7 @@ export class SecurityDepositsService {
 
     const monthly = money(line.monthly_pay);
     const available = Prisma.Decimal.max(ZERO, monthly.minus(base));
-    const loanCollected = ZERO;
+    const loanCollected = money(line.loan_deduction);
     const remainingForDeposit = Prisma.Decimal.max(ZERO, available.minus(loanCollected));
 
     const plan = await this.findCollectingPlan(employeeId, tx);
@@ -293,7 +296,7 @@ export class SecurityDepositsService {
       collected = Prisma.Decimal.min(due, remainingForDeposit).toDecimalPlaces(2);
     }
 
-    const totalDeductions = base.plus(collected).toDecimalPlaces(2);
+    const totalDeductions = base.plus(loanCollected).plus(collected).toDecimalPlaces(2);
     const netPay = monthly.minus(totalDeductions).toDecimalPlaces(2);
 
     await tx.payroll_run_lines.update({

@@ -17,6 +17,7 @@ import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../payroll-rules/payroll-tax-calculator.util';
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
+import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -169,7 +170,27 @@ export class PayrollService {
     private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
     private readonly payrollRules: PayrollRulesService,
     private readonly securityDeposits: SecurityDepositsService,
+    private readonly employeeLoans: EmployeeLoansService,
   ) {}
+
+  /**
+   * Sequences the two discretionary-deduction plans in the agreed priority
+   * order — loan first, then caution money — since the deposit pass reads
+   * `loan_deduction` back off the line to know how much room it has left.
+   */
+  private async applyDiscretionaryDeductionsToLine(
+    runId: number,
+    employeeId: number,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await this.employeeLoans.applySnapshotToLine(runId, employeeId, tx);
+    await this.securityDeposits.applySnapshotToLine(runId, employeeId, tx);
+  }
+
+  private async commitDiscretionaryDeductions(lineId: number, createdBy: string, tx: Prisma.TransactionClient): Promise<void> {
+    await this.employeeLoans.commitLineDeduction(lineId, createdBy, tx);
+    await this.securityDeposits.commitLineDeduction(lineId, createdBy, tx);
+  }
 
   // Fixed school payroll cycle — see payroll-period.util.ts
   private computePayrollWindow(year: number, month: number) {
@@ -748,7 +769,7 @@ export class PayrollService {
         consecutive_late_deduction: consecutiveLateDeduction,
       },
     });
-    await this.securityDeposits.applySnapshotToLine(runId, employeeId, tx);
+    await this.applyDiscretionaryDeductionsToLine(runId, employeeId, tx);
   }
 
   /**
@@ -979,12 +1000,12 @@ export class PayrollService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await this.securityDeposits.applySnapshotToLine(runId, employeeId, tx);
+      await this.applyDiscretionaryDeductionsToLine(runId, employeeId, tx);
       await tx.payroll_run_lines.update({
         where: { id: line.id },
         data: { finalized_at: new Date(), finalized_by: user.sub },
       });
-      await this.securityDeposits.commitLineDeduction(line.id, user.sub, tx);
+      await this.commitDiscretionaryDeductions(line.id, user.sub, tx);
       await this.recomputeRunStatus(runId, tx);
     });
 
@@ -1435,6 +1456,7 @@ export class PayrollService {
       { header: 'Break (min)', width: 12, getValue: (l) => l.total_break_minutes },
       { header: 'Daily Rate', width: 14, getValue: (l) => Number(l.daily_rate) },
       { header: 'Total Pay', width: 14, getValue: (l) => Number(l.monthly_pay) },
+      { header: 'Loan', width: 16, getValue: (l) => Number(l.loan_deduction) },
       { header: 'Security Deposit', width: 16, getValue: (l) => Number(l.security_deposit_deduction) },
       { header: 'Deductions', width: 14, getValue: (l) => Number(l.total_deductions) },
       { header: 'Net Pay', width: 14, getValue: (l) => Number(l.net_pay) },
@@ -1613,12 +1635,12 @@ export class PayrollService {
         continue;
       }
       await this.prisma.$transaction(async (tx) => {
-        await this.securityDeposits.applySnapshotToLine(id, line.employee_id, tx);
+        await this.applyDiscretionaryDeductionsToLine(id, line.employee_id, tx);
         await tx.payroll_run_lines.update({
           where: { id: line.id },
           data: { finalized_at: finalizedAt, finalized_by: user.sub },
         });
-        await this.securityDeposits.commitLineDeduction(line.id, user.sub, tx);
+        await this.commitDiscretionaryDeductions(line.id, user.sub, tx);
       });
       finalizedNow.push(line);
     }
@@ -1738,6 +1760,7 @@ export class PayrollService {
       eobi_deduction: Number(line.eobi_deduction),
       income_tax_deduction: Number(line.income_tax_deduction),
       security_deposit_deduction: Number(line.security_deposit_deduction),
+      loan_deduction: Number(line.loan_deduction),
       net_pay: Number(line.net_pay),
       overtime_days: line.overtime_days,
       settlement: line.payroll_settlements
@@ -1811,6 +1834,7 @@ export class PayrollService {
       eobi_deduction: Number(line.eobi_deduction),
       income_tax_deduction: Number(line.income_tax_deduction),
       security_deposit_deduction: Number(line.security_deposit_deduction),
+      loan_deduction: Number(line.loan_deduction),
       total_deductions: Number(line.total_deductions),
       net_pay: Number(line.net_pay),
       overtime_days: line.overtime_days,
@@ -2035,6 +2059,7 @@ export class PayrollService {
           eobiDeduction: Number(line.eobi_deduction),
           incomeTaxDeduction: Number(line.income_tax_deduction),
           securityDepositDeduction: Number(line.security_deposit_deduction),
+          loanDeduction: Number(line.loan_deduction),
           totalDeductions: Number(line.total_deductions),
           netPay: Number(line.net_pay),
         },

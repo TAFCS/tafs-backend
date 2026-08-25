@@ -13,6 +13,9 @@ import { PayrollRulesService } from './payroll-rules/payroll-rules.service';
 import { SecurityDepositsController } from './security-deposits/security-deposits.controller';
 import { SecurityDepositsListController } from './security-deposits/security-deposits-list.controller';
 import { SecurityDepositsService } from './security-deposits/security-deposits.service';
+import { EmployeeLoansController } from './employee-loans/employee-loans.controller';
+import { EmployeeLoansListController } from './employee-loans/employee-loans-list.controller';
+import { EmployeeLoansService } from './employee-loans/employee-loans.service';
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { CalendarDayResolverService } from './calendar/calendar-day-resolver.service';
@@ -64,6 +67,8 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     PayrollRulesController,
     SecurityDepositsListController,
     SecurityDepositsController,
+    EmployeeLoansListController,
+    EmployeeLoansController,
   ],
   providers: [
     EmployeesService,
@@ -72,6 +77,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     PoliciesService,
     PayrollRulesService,
     SecurityDepositsService,
+    EmployeeLoansService,
     CalendarService,
     CalendarDayResolverService,
     HolidayAttendanceSyncService,
