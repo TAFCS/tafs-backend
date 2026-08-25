@@ -35,6 +35,8 @@ import type {
 } from './dto/financial-report-snapshot.dto';
 
 const EXPORT_ROW_CAP = 25_000;
+/** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
+const STATS_ROW_CAP = 50_000;
 const HEADER_FILL: ExcelJS.Fill = {
   type: 'pattern',
   pattern: 'solid',
@@ -125,6 +127,32 @@ type MatrixCell = {
   fee_type: string;
   amount: number;
   status: fee_status_enum;
+};
+
+const MATRIX_STATS_HEAD_SELECT = {
+  amount: true,
+  fee_type_id: true,
+  fee_types: { select: { description: true } },
+} satisfies Prisma.student_feesSelect;
+
+type DistributionStats = {
+  count: number;
+  sum: number;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  /** Values tied for most frequent; empty when nothing repeats (no mode). */
+  mode: number[];
+  variance_population: number;
+  variance_sample: number;
+  stddev_population: number;
+  stddev_sample: number;
+};
+
+type FeeTypeStatistics = DistributionStats & {
+  fee_type_id: number;
+  fee_type: string;
 };
 
 export type ExportFile = {
@@ -840,23 +868,38 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 25, 200);
 
-    const [students, studentCount, monthTotals] = await Promise.all([
-      this.prisma.students.findMany({
-        where: { ...studentWhere, student_fees: { some: leaf } },
-        select: MATRIX_STUDENT_SELECT,
-        orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.students.count({
-        where: { ...studentWhere, student_fees: { some: leaf } },
-      }),
-      this.prisma.student_fees.groupBy({
-        by: ['target_month'],
-        where: { ...leaf, students: studentWhere },
-        _sum: { amount: true },
-      }),
-    ]);
+    const [students, studentCount, monthTotals, studentTotalGroups, statsHeads] =
+      await Promise.all([
+        this.prisma.students.findMany({
+          where: { ...studentWhere, student_fees: { some: leaf } },
+          select: MATRIX_STUDENT_SELECT,
+          orderBy: [{ full_name: 'asc' }, { cc: 'asc' }],
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.prisma.students.count({
+          where: { ...studentWhere, student_fees: { some: leaf } },
+        }),
+        this.prisma.student_fees.groupBy({
+          by: ['target_month'],
+          where: { ...leaf, students: studentWhere },
+          _sum: { amount: true },
+        }),
+        // Every filtered student's total, independent of pagination — feeds
+        // the mean/median/mode/variance/stddev of row totals below.
+        this.prisma.student_fees.groupBy({
+          by: ['student_id'],
+          where: { ...leaf, students: studentWhere },
+          _sum: { amount: true },
+        }),
+        // Every filtered individual head — feeds the overall and
+        // per-fee-type distributions below.
+        this.prisma.student_fees.findMany({
+          where: { ...leaf, students: studentWhere },
+          select: MATRIX_STATS_HEAD_SELECT,
+          take: STATS_ROW_CAP,
+        }),
+      ]);
 
     const ccs = students.map((s) => s.cc);
     const heads = ccs.length
@@ -903,6 +946,9 @@ export class FinancialReportsService {
       columnTotals.reduce((sum, value) => sum + value, 0),
     );
 
+    const studentTotals = studentTotalGroups.map((g) => this.toMoney(g._sum.amount));
+    const feeAmounts = statsHeads.map((h) => this.toMoney(h.amount));
+
     return {
       academic_year: query.academic_year,
       term_start_month: termStartMonth,
@@ -916,6 +962,16 @@ export class FinancialReportsService {
         student_count: studentCount,
         column_totals: columnTotals,
         grand_total: grandTotal,
+      },
+      /**
+       * Every stat here is computed over the whole filtered set (all pages),
+       * same scope as totals above — never just the rows on screen.
+       */
+      statistics: {
+        student_totals: this.describeDistribution(studentTotals),
+        fee_amounts: this.describeDistribution(feeAmounts),
+        by_fee_type: this.buildFeeTypeStatistics(statsHeads),
+        truncated: statsHeads.length >= STATS_ROW_CAP,
       },
     };
   }
@@ -1423,6 +1479,7 @@ export class FinancialReportsService {
       is_discount: false,
       is_arrear_surcharge: false,
       academic_year: query.academic_year,
+      ...(query.status?.length && { status: { in: query.status } }),
     };
   }
 
@@ -1459,6 +1516,97 @@ export class FinancialReportsService {
       map.set(head.student_id, list);
     }
     return map;
+  }
+
+  /**
+   * Mean/median/mode plus variance and standard deviation computed both ways
+   * (population: divide by n — treats these values as the whole population;
+   * sample: divide by n-1 — Bessel's correction, used when these values are
+   * a sample standing in for a larger population). Mode is every value tied
+   * for most frequent; empty when every value is unique (no mode).
+   */
+  private describeDistribution(rawValues: number[]): DistributionStats {
+    const values = [...rawValues].sort((a, b) => a - b);
+    const count = values.length;
+    if (count === 0) {
+      return {
+        count: 0,
+        sum: 0,
+        min: 0,
+        max: 0,
+        mean: 0,
+        median: 0,
+        mode: [],
+        variance_population: 0,
+        variance_sample: 0,
+        stddev_population: 0,
+        stddev_sample: 0,
+      };
+    }
+
+    const sum = this.roundMoney(values.reduce((a, b) => a + b, 0));
+    const mean = this.roundMoney(sum / count);
+    const mid = Math.floor(count / 2);
+    const median = this.roundMoney(
+      count % 2 === 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2,
+    );
+
+    const frequency = new Map<number, number>();
+    for (const v of values) frequency.set(v, (frequency.get(v) ?? 0) + 1);
+    const maxFrequency = Math.max(...frequency.values());
+    const mode =
+      maxFrequency > 1
+        ? [...frequency.entries()]
+            .filter(([, freq]) => freq === maxFrequency)
+            .map(([value]) => value)
+            .sort((a, b) => a - b)
+        : [];
+
+    const sumSquaredDiffs = values.reduce((acc, v) => acc + (v - mean) ** 2, 0);
+    const variancePopulation = this.roundMoney(sumSquaredDiffs / count);
+    const varianceSample =
+      count > 1 ? this.roundMoney(sumSquaredDiffs / (count - 1)) : 0;
+
+    return {
+      count,
+      sum,
+      min: values[0],
+      max: values[count - 1],
+      mean,
+      median,
+      mode,
+      variance_population: variancePopulation,
+      variance_sample: varianceSample,
+      stddev_population: this.roundMoney(Math.sqrt(variancePopulation)),
+      stddev_sample: this.roundMoney(Math.sqrt(varianceSample)),
+    };
+  }
+
+  /** Same distribution stats as describeDistribution, one set per fee_type_id. */
+  private buildFeeTypeStatistics(
+    heads: Array<{
+      amount: Prisma.Decimal | number | null;
+      fee_type_id: number | null;
+      fee_types: { description: string } | null;
+    }>,
+  ): FeeTypeStatistics[] {
+    const groups = new Map<number, { label: string; values: number[] }>();
+    for (const head of heads) {
+      const key = head.fee_type_id ?? 0;
+      const group = groups.get(key) ?? {
+        label: head.fee_types?.description ?? 'Unknown',
+        values: [],
+      };
+      group.values.push(this.toMoney(head.amount));
+      groups.set(key, group);
+    }
+    return [...groups.entries()]
+      .map(([feeTypeId, group]) => ({
+        fee_type_id: feeTypeId,
+        fee_type: group.label,
+        ...this.describeDistribution(group.values),
+      }))
+      .sort((a, b) => b.sum - a.sum);
   }
 
   private feeHeadsLeafWhere(

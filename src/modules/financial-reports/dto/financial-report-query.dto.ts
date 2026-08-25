@@ -181,6 +181,12 @@ export class ListFeeMatrixQueryDto {
   cc?: number;
 
   @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(fee_status_enum, { each: true })
+  status?: fee_status_enum[];
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
