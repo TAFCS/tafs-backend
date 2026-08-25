@@ -9,5 +9,6 @@ export const STAFF_EDITING_MESSAGES = {
   GUARDIAN_RELATIONSHIP_UPDATE_SUCCESS: 'Guardian relationship updated successfully',
   GUARDIAN_UNLINKED_SUCCESS: 'Guardian unlinked from student successfully',
   GUARDIAN_LINKED_SUCCESS: 'Guardian linked to student successfully',
+  GUARDIAN_DELETE_SUCCESS: 'Guardian deleted successfully',
   STUDENT_DELETE_SUCCESS: 'Student profile permanently deleted',
 } as const;

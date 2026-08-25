@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { SecurityDepositStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+
+const OPEN_STATUS_FILTER = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED] as const;
+
+export class ListSecurityDepositsQueryDto {
+  @ApiPropertyOptional({ enum: OPEN_STATUS_FILTER, description: 'Filter open plans by status' })
+  @IsOptional()
+  @IsEnum(SecurityDepositStatus)
+  @IsIn(OPEN_STATUS_FILTER)
+  status?: SecurityDepositStatus;
+}
 
 export class CreateSecurityDepositDto {
   @ApiProperty({ example: 50000, description: 'Total caution-money amount to recover from salary' })

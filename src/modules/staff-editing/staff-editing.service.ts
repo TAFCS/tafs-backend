@@ -1116,7 +1116,7 @@ export class StaffEditingService {
 
   async getGuardian(id: number) {
     const guardian = await this.prisma.guardians.findUnique({ where: { id } });
-    if (!guardian) throw new NotFoundException(`Guardian #${id} not found`);
+    if (!guardian || guardian.deleted_at) throw new NotFoundException(`Guardian #${id} not found`);
     const families = await this.familiesForGuardian(guardian.id);
     return {
       ...guardian,
@@ -1239,13 +1239,57 @@ export class StaffEditingService {
     const guardian = await this.prisma.guardians.findUnique({
       where: { cnic: nic },
     });
-    if (!guardian) return null;
+    if (!guardian || guardian.deleted_at) return null;
     const families = await this.familiesForGuardian(guardian.id);
     return {
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
       families,
     };
+  }
+
+  /**
+   * Soft-delete a standalone guardian. Refuses if still linked to any students —
+   * unlink those first. Clears CNIC so the unique constraint can be reused.
+   */
+  async deleteGuardian(id: number, changedBy: string) {
+    const guardian = await this.prisma.guardians.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        full_name: true,
+        cnic: true,
+        deleted_at: true,
+        _count: { select: { student_guardians: true } },
+      },
+    });
+    if (!guardian || guardian.deleted_at) {
+      throw new NotFoundException(`Guardian #${id} not found`);
+    }
+    if (guardian._count.student_guardians > 0) {
+      throw new BadRequestException(
+        `Guardian #${id} is still linked to ${guardian._count.student_guardians} student(s). Unlink them first.`,
+      );
+    }
+
+    await this.prisma.guardians.update({
+      where: { id },
+      data: {
+        deleted_at: new Date(),
+        // Free the unique CNIC slot so a new guardian can be created with the same NIC.
+        cnic: null,
+      },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'GUARDIAN',
+      entity_id: String(id),
+      action: 'DELETED',
+      changed_by: changedBy,
+      note: `Deleted guardian #${id} (${guardian.full_name || 'unnamed'}${guardian.cnic ? `, CNIC ${guardian.cnic}` : ''}).`,
+    });
+
+    return { deleted: true, id };
   }
 
   async updateGuardianRelationship(
