@@ -96,6 +96,14 @@ export class StartBulkJobDto {
     @IsOptional()
     send_notification?: boolean;
 
+    /**
+     * When true, every voucher this job produces is held from parents until an
+     * admin releases the batch. Default (omitted/false) matches today's behaviour.
+     */
+    @IsBoolean()
+    @IsOptional()
+    hold_for_release?: boolean;
+
     @Type(() => Number)
     @IsNumber()
     @IsOptional()

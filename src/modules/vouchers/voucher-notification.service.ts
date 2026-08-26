@@ -136,6 +136,8 @@ export class VoucherNotificationService {
       return null;
     }
 
+    if (!voucher.released_to_parent_at) return null;
+
     const familyId = voucher.students?.family_id;
     if (!familyId || voucher.students?.deleted_at) {
       this.logger.warn(`[VOUCHER_ISSUED] Skipped voucher #${voucherId} — no linked family`);
@@ -178,6 +180,7 @@ export class VoucherNotificationService {
         where: {
           status: 'UNPAID',
           due_date: targetDueDate,
+          released_to_parent_at: { not: null },
           students: {
             deleted_at: null,
             family_id: { not: null },
@@ -225,6 +228,7 @@ export class VoucherNotificationService {
         where: {
           status: 'OVERDUE',
           validity_date: targetValidityDate,
+          released_to_parent_at: { not: null },
           students: {
             deleted_at: null,
             family_id: { not: null },
@@ -266,6 +270,7 @@ export class VoucherNotificationService {
       where: {
         id: { in: voucherIds },
         status: 'OVERDUE',
+        released_to_parent_at: { not: null },
         students: {
           deleted_at: null,
           family_id: { not: null },

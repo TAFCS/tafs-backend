@@ -26,11 +26,13 @@ import { VouchersService } from './vouchers.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { FilterVouchersDto } from './dto/filter-vouchers.dto';
+import { FilterPendingReleaseVouchersDto } from './dto/filter-pending-release-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { ClearDepositDto } from './dto/clear-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
 import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
+import { ReleaseVouchersDto } from './dto/release-vouchers.dto';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { StartBulkJobDto } from '../bulk-voucher-jobs/dto/start-bulk-job.dto';
 import { BulkVoucherJobsService } from '../bulk-voucher-jobs/bulk-voucher-jobs.service';
@@ -147,6 +149,69 @@ export class VouchersController {
             success: true,
             message: 'Student vouchers retrieved successfully',
             data: vouchers,
+        };
+    }
+
+    @Get('pending-release')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Manage, 'VoucherRelease') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async findPendingRelease(@Query() query: FilterPendingReleaseVouchersDto) {
+        const data = await this.vouchersService.findPendingRelease({
+            campus_id: query.campus_id,
+            class_id: query.class_id,
+            bulk_voucher_job_id: query.bulk_voucher_job_id,
+            cc: query.cc,
+            gr: query.gr,
+            page: query.page,
+            limit: query.limit,
+        });
+        return {
+            success: true,
+            message: 'Pending-release vouchers retrieved successfully',
+            data,
+        };
+    }
+
+    @Post('pending-release/release')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Manage, 'VoucherRelease') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async releaseVouchers(@Body() dto: ReleaseVouchersDto, @Req() req: any) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.releaseVouchers(dto.ids, changedBy);
+        return {
+            success: true,
+            message: `${result.released} voucher(s) released to parents`,
+            data: result,
+        };
+    }
+
+    @Post('pending-release/release-job/:jobId')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Manage, 'VoucherRelease') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async releaseByBulkJob(
+        @Param('jobId', ParseIntPipe) jobId: number,
+        @Req() req: any,
+    ) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.releaseByBulkJobId(jobId, changedBy);
+        return {
+            success: true,
+            message: `${result.released} voucher(s) released to parents`,
+            data: result,
         };
     }
 

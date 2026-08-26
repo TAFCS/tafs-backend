@@ -72,6 +72,14 @@ export class CaslAbilityFactory {
         return;
       }
 
+      // finance.vouchers.release is its own subject so it does not grant
+      // Manage on Voucher (create/edit/delete) via the generic 3-part mapper.
+      if (parts[0] === 'finance' && parts[1] === 'vouchers' && parts[2] === 'release') {
+        can(Action.Manage, 'VoucherRelease');
+        if (user.campusId) can(Action.Manage, 'VoucherRelease', { campus_id: user.campusId } as any);
+        return;
+      }
+
       // attendance.student.rollcall.mark / .view / .edit_locked
       if (parts[0] === 'attendance' && parts[1] === 'student') {
         const subAction = parts.slice(2).join('.');

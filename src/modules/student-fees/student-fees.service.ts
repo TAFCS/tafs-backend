@@ -220,6 +220,7 @@ export class StudentFeesService {
         const vouchers = await this.prisma.vouchers.findMany({
             where: {
                 student_id: studentCc,
+                released_to_parent_at: { not: null },
                 OR: [
                     { status: { not: 'VOID' } },
                     {
@@ -268,9 +269,11 @@ export class StudentFeesService {
                         ? 'PAID'
                         : bucket.totalPaid > 0
                             ? 'PARTIALLY_PAID'
-                            : bucket.notIssuedCount === bucket.rowCount
+                            : !activeVoucher
                                 ? 'NOT_ISSUED'
-                                : 'ISSUED';
+                                : bucket.notIssuedCount === bucket.rowCount
+                                    ? 'NOT_ISSUED'
+                                    : 'ISSUED';
 
                 // For the primary month of the bill, show the FULL amount including all arrears.
                 // For historical months where this voucher just contains arrears, we return null

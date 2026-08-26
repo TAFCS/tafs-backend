@@ -259,7 +259,7 @@ export class SecurityDepositsService {
    * Snapshot the cycle's deposit deduction onto a payroll line after attendance,
    * statutory, and applied-flag amounts are already stored. Caps at remaining
    * net so discretionary installments never push pay below zero. Loans are
-   * applied first ù `EmployeeLoansService.applySnapshotToLine` must have run
+   * applied first ÔøΩ `EmployeeLoansService.applySnapshotToLine` must have run
    * (and written `loan_deduction`) before this, which is why every caller
    * (PayrollService, and the loans service's own recap) always calls the loan
    * pass immediately before this one.

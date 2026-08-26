@@ -66,7 +66,9 @@ model bulk_voucher_jobs {
   section_ids         Int[]         @default([])
   job_type            String        @default("BULK") @db.VarChar(20)
   send_notification   Boolean       @default(true)
+  hold_for_release    Boolean       @default(false)
   bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers            vouchers[]
 
   @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
   @@index([status], map: "idx_bulk_jobs_status")
@@ -101,33 +103,33 @@ model campus_sections {
 }
 
 model campuses {
-  id                          Int                           @id @default(autoincrement())
-  campus_code                 String                        @unique @db.VarChar(10)
-  campus_name                 String                        @db.VarChar(100)
-  address                     String?
-  campus_prefix               String?                       @db.VarChar(10)
-  is_active                   Boolean                       @default(true)
-  academic_calendar_days      academic_calendar_days[]
-  attendance_roll_sessions    attendance_roll_sessions[]
-  attendance_staff_daily      attendance_staff_daily[]
-  attendance_student_daily    attendance_student_daily[]
+  id                            Int                             @id @default(autoincrement())
+  campus_code                   String                          @unique @db.VarChar(10)
+  campus_name                   String                          @db.VarChar(100)
+  address                       String?
+  campus_prefix                 String?                         @db.VarChar(10)
+  is_active                     Boolean                         @default(true)
+  academic_calendar_days        academic_calendar_days[]
+  attendance_roll_sessions      attendance_roll_sessions[]
+  attendance_staff_daily        attendance_staff_daily[]
+  attendance_student_daily      attendance_student_daily[]
   calendar_notification_reports calendar_notification_reports[]
-  campus_classes              campus_classes[]
-  campus_sections             campus_sections[]
-  class_check_in_schedules    class_check_in_schedules[]
-  class_fee_schedule          class_fee_schedule[]
-  class_timetable_periods     class_timetable_periods[]
-  employee_profiles           employee_profiles[]
-  hr_policy_sets              hr_policy_sets[]
-  payroll_runs                payroll_runs[]
-  student_academic_history    student_academic_history[]
-  student_progression_periods student_progression_periods[]
-  students                    students[]
-  teaching_groups             teaching_groups[]
-  timetables                  timetables[]
-  unconfirmed_admissions      unconfirmed_admissions[]
-  users                       users[]
-  vouchers                    vouchers[]
+  campus_classes                campus_classes[]
+  campus_sections               campus_sections[]
+  class_check_in_schedules      class_check_in_schedules[]
+  class_fee_schedule            class_fee_schedule[]
+  class_timetable_periods       class_timetable_periods[]
+  employee_profiles             employee_profiles[]
+  hr_policy_sets                hr_policy_sets[]
+  payroll_runs                  payroll_runs[]
+  student_academic_history      student_academic_history[]
+  student_progression_periods   student_progression_periods[]
+  students                      students[]
+  teaching_groups               teaching_groups[]
+  timetables                    timetables[]
+  unconfirmed_admissions        unconfirmed_admissions[]
+  users                         users[]
+  vouchers                      vouchers[]
 }
 
 model class_fee_schedule {
@@ -724,13 +726,13 @@ model students {
   not_pursuing                Boolean                       @default(false)
   quick_admission_meta        Json?
   graduated_at                DateTime?                     @db.Date
-  graduated_academic_year     String?                       @db.VarChar(10)
   complementary_reason        String?                       @db.VarChar(500)
   complementary_until         DateTime?                     @db.Date
   fee_endowment_reason        String?                       @db.VarChar(500)
   fee_endowment_until         DateTime?                     @db.Date
   /// School Leaving Certificate serial — independent of CC / GR.
   slc_number                  Int?                          @unique
+  graduated_academic_year     String?                       @db.VarChar(10)
   attendance_notifications    attendance_notifications[]
   attendance_roll_records     attendance_roll_records[]
   attendance_student_daily    attendance_student_daily[]
@@ -945,15 +947,22 @@ model vouchers {
   /// which is mutable — see buildVoucherFilename / voucher-filename.util.ts.
   paid_pdf_filename         String?                     @db.VarChar(255)
   paid_pdf_generated_at     DateTime?                   @db.Timestamp(6)
+  bulk_voucher_job_id       Int?
+  released_to_parent_at     DateTime?                   @db.Timestamp(6)
+  released_by               String?                     @db.VarChar(100)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]
   voucher_notifications     voucher_notifications[]
   bank_accounts             bank_accounts               @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bulk_voucher_jobs         bulk_voucher_jobs?          @relation(fields: [bulk_voucher_job_id], references: [id])
   campuses                  campuses                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                   classes                     @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                  sections?                   @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students                  students                    @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([bulk_voucher_job_id])
+  @@index([released_to_parent_at])
 }
 
 model bundle_fee_type_names {
@@ -1230,24 +1239,24 @@ model employee_class_section_assignments {
 }
 
 model academic_calendar_days {
-  id                Int                @id @default(autoincrement())
-  campus_id         Int
-  date              DateTime           @db.Date
-  day_type          String             @db.VarChar(20)
-  description       String?            @db.VarChar(255)
-  applies_to        String             @default("STUDENT") @db.VarChar(20)
-  class_id          Int?
-  section_id        Int?
-  department_id     Int?
-  employee_id       Int?
-  created_by        String?
-  staff_category_id Int?
-  campuses          campuses           @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes           classes?           @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  departments       departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
-  employee          employee_profiles? @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  sections          sections?          @relation(fields: [section_id], references: [id], onDelete: Cascade)
-  staff_categories  staff_categories?  @relation(fields: [staff_category_id], references: [id], onDelete: Cascade)
+  id                   Int                             @id @default(autoincrement())
+  campus_id            Int
+  date                 DateTime                        @db.Date
+  day_type             String                          @db.VarChar(20)
+  description          String?                         @db.VarChar(255)
+  applies_to           String                          @default("STUDENT") @db.VarChar(20)
+  class_id             Int?
+  section_id           Int?
+  department_id        Int?
+  employee_id          Int?
+  created_by           String?
+  staff_category_id    Int?
+  campuses             campuses                        @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes              classes?                        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  departments          departments?                    @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  employee             employee_profiles?              @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  sections             sections?                       @relation(fields: [section_id], references: [id], onDelete: Cascade)
+  staff_categories     staff_categories?               @relation(fields: [staff_category_id], references: [id], onDelete: Cascade)
   notification_reports calendar_notification_reports[]
 
   @@unique([campus_id, date, applies_to, class_id, section_id, department_id, staff_category_id, employee_id], map: "academic_calendar_days_scope_key")
@@ -1761,24 +1770,24 @@ model calendar_notifications {
 
 /// Snapshot of family notification delivery when a student calendar day is saved.
 model calendar_notification_reports {
-  id                Int                     @id @default(autoincrement())
-  calendar_day_id   Int?
-  campus_id         Int
-  date              DateTime                @db.Date
-  day_type          String                  @db.VarChar(20)
-  alert_type        String                  @db.VarChar(20)
-  description       String?                 @db.VarChar(255)
-  attempted         Int                     @default(0)
-  notified          Int                     @default(0)
-  already_notified  Int                     @default(0)
-  skipped_no_family Int                     @default(0)
-  failed            Int                     @default(0)
-  failures          Json?
-  summary           String?
-  created_by        String?
-  created_at        DateTime                @default(now()) @db.Timestamp(6)
-  campuses          campuses                @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  academic_calendar_days academic_calendar_days? @relation(fields: [calendar_day_id], references: [id], onDelete: SetNull)
+  id                     Int                     @id @default(autoincrement())
+  calendar_day_id        Int?
+  campus_id              Int
+  date                   DateTime                @db.Date
+  day_type               String                  @db.VarChar(20)
+  alert_type             String                  @db.VarChar(20)
+  description            String?                 @db.VarChar(255)
+  attempted              Int                     @default(0)
+  notified               Int                     @default(0)
+  already_notified       Int                     @default(0)
+  skipped_no_family      Int                     @default(0)
+  failed                 Int                     @default(0)
+  failures               Json?
+  summary                String?
+  created_by             String?
+  created_at             DateTime                @default(now()) @db.Timestamp(6)
+  academic_calendar_days academic_calendar_days? @relation(fields: [calendar_day_id], references: [id])
+  campuses               campuses                @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
   @@index([campus_id, created_at(sort: Desc)])
   @@index([campus_id, date])

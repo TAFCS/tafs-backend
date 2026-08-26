@@ -218,6 +218,7 @@ export class BulkVoucherJobsService {
                 fail_count: 0,
                 waive_surcharge: dto.waive_surcharge ?? false,
                 send_notification: dto.send_notification ?? true,
+                hold_for_release: dto.hold_for_release ?? false,
                 job_type: dto.job_type || 'BULK',
                 updated_at: new Date(),
             },
@@ -236,6 +237,7 @@ export class BulkVoucherJobsService {
                 `Total items=${totalCount}`,
                 `Academic year=${academicYear}`,
                 `Instant parent notification=${dto.send_notification === false ? 'No' : 'Yes'}`,
+                `Hold for release=${dto.hold_for_release ? 'Yes' : 'No'}`,
             ].join(' | '),
         });
 
@@ -406,7 +408,7 @@ export class BulkVoucherJobsService {
 
                 const results = await Promise.allSettled(
                     chunk.map((item) =>
-                        this.processWorkItem(item, dto, createdBy, generatedByName, auditParentId),
+                        this.processWorkItem(item, dto, createdBy, generatedByName, auditParentId, jobId),
                     ),
                 );
 
@@ -569,6 +571,7 @@ export class BulkVoucherJobsService {
         createdBy: string,
         generatedByName?: string,
         auditParentId?: number | null,
+        jobId?: number,
     ): Promise<{ buffer: Buffer; url: string; voucher_id: number }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
 
@@ -606,13 +609,14 @@ export class BulkVoucherJobsService {
             waive_surcharge: dto.waive_surcharge ?? false,
             waived_by: createdBy,
             send_notification: dto.send_notification ?? true,
+            requires_release: dto.hold_for_release ?? false,
             academic_year: item.academicYear,
             fee_date: dateStr,
             precedence: 1,
             orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
-        }, undefined, createdBy, auditParentId);
+        }, undefined, createdBy, auditParentId, jobId);
 
         const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
         return { ...pdfResult, voucher_id: voucher.id };
