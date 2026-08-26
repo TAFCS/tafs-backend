@@ -1,8 +1,8 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, student_status } from '@prisma/client';
 
 /**
  * Combines a `graduated_from_class_id` filter and/or a graduation academic-year
- * filter into an AND-able WHERE fragment, pinned to graduated_at not being null.
+ * filter into an AND-able WHERE fragment, pinned to status = GRADUATED.
  *
  * The year filter is a plain equality check against `graduated_academic_year`,
  * captured at write time (or chosen by staff) as the academic year a student
@@ -10,11 +10,14 @@ import { Prisma } from '@prisma/client';
  * join needed at read time — this sidesteps the UTC/Asia-Karachi timezone edge
  * case a date-derived "graduated in year X" check was exposed to.
  *
- * The graduated_at pin matters because reinstating a graduated student (POST
- * /students/:id/return) clears graduated_at (and graduated_academic_year) but
- * leaves graduated_from_class_id in place as a restore hint — without the pin,
- * a currently-ENROLLED reinstated student would still match a "graduated from
- * X" filter on their stale value.
+ * The pin matters because reinstating a graduated student (POST
+ * /students/:id/return) clears graduated_at/graduated_academic_year but leaves
+ * graduated_from_class_id in place as a restore hint — without a pin, a
+ * currently-ENROLLED reinstated student would still match a "graduated from X"
+ * filter on their stale value. `status = GRADUATED` is used rather than
+ * `graduated_at IS NOT NULL` because graduated_at was added by a later
+ * migration with no backfill: most pre-existing graduated rows have it NULL,
+ * so pinning on it excluded almost every legitimately-graduated student.
  */
 export function buildGraduationFilterWhere(
   graduatedFromClassIds?: number[] | null,
@@ -27,6 +30,6 @@ export function buildGraduationFilterWhere(
   if (yearRange) {
     conditions.push({ graduated_academic_year: yearRange });
   }
-  if (conditions.length) conditions.push({ graduated_at: { not: null } });
+  if (conditions.length) conditions.push({ status: student_status.GRADUATED });
   return conditions;
 }
