@@ -15,6 +15,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
     online: 'IBFT',
     pos: 'POS',
     pay_order: 'PAY ORDER',
+    meezan: 'MEEZAN BANK',
 };
 
 function formatPaymentMethod(value?: string | null): string {

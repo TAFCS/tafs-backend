@@ -168,7 +168,15 @@ export class MeezanService {
         return { StatusCode: '00', StatusDesc: 'Lodged/Returned — not posted' };
       }
 
-      const remarks = dto.ChequeNo ? `CHQ: ${dto.ChequeNo}` : 'Meezan Bank payment';
+      // Every deposit collected through the Meezan Bank integration is booked
+      // under the dedicated `meezan` method — it is the collection channel, not
+      // a cheque handed to the school. The instrument the payer actually used at
+      // the branch (dto.PaymentMode: CASH / CHQ / ONLINE …) is kept in remarks
+      // for reconciliation.
+      const modeNote = dto.PaymentMode
+        ? `Meezan Bank — ${dto.PaymentMode}`
+        : 'Meezan Bank payment';
+      const remarks = dto.ChequeNo ? `${modeNote} (CHQ: ${dto.ChequeNo})` : modeNote;
 
       const dateOfReturn = dto.DateOfReturn
         ? new Date(
@@ -182,7 +190,7 @@ export class MeezanService {
             student_id: voucher.student_id,
             total_amount: Number(dto.TransAmount),
             deposit_date: today,
-            payment_method: dto.PaymentMode,
+            payment_method: 'meezan',
             reference_number: dto.TransAuthenticationCode,
             remarks,
             bank_code: dto.BankCode,
@@ -262,7 +270,8 @@ export class MeezanService {
           `Amount=Rs. ${dto.TransAmount}`,
           `Consumer/voucher no=${dto.VoucherNumber}`,
           `Payment ref=${dto.TransAuthenticationCode}`,
-          `Mode=${dto.PaymentMode}`,
+          `Method=meezan`,
+          `Bank mode=${dto.PaymentMode}`,
         ].join(' | '),
       });
 
