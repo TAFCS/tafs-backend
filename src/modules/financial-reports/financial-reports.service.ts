@@ -58,6 +58,8 @@ const FEE_HEAD_SELECT = {
   academic_year: true,
   term_start_month: true,
   description_prefix: true,
+  is_discount: true,
+  discount_presets: { select: { title: true } },
   students: {
     select: {
       cc: true,
@@ -124,6 +126,8 @@ const MATRIX_HEAD_SELECT = {
   status: true,
   description_prefix: true,
   fee_type_id: true,
+  is_discount: true,
+  discount_presets: { select: { title: true } },
   fee_types: { select: { description: true } },
   students: {
     select: {
@@ -236,10 +240,11 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
+    const nonDiscountWhere: Prisma.student_feesWhereInput = { ...where, is_discount: false };
     const [groups, totals, studentCount] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
-        where,
+        where: nonDiscountWhere,
         _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
         orderBy: { student_id: 'asc' },
@@ -253,30 +258,45 @@ export class FinancialReportsService {
     ]);
 
     const studentIds = groups.map((g) => g.student_id);
-    const students = studentIds.length
-      ? await this.prisma.students.findMany({
-          where: { cc: { in: studentIds } },
-          select: {
-            cc: true,
-            gr_number: true,
-            full_name: true,
-            status: true,
-            class_id: true,
-            graduated_from_class_id: true,
-            campuses: { select: { campus_name: true } },
-            classes: { select: { description: true } },
-            graduated_from_class: { select: { description: true } },
-            sections: { select: { description: true } },
-          },
-        })
-      : [];
+    const [students, discGroups] = studentIds.length
+      ? await Promise.all([
+          this.prisma.students.findMany({
+            where: { cc: { in: studentIds } },
+            select: {
+              cc: true,
+              gr_number: true,
+              full_name: true,
+              status: true,
+              class_id: true,
+              graduated_from_class_id: true,
+              campuses: { select: { campus_name: true } },
+              classes: { select: { description: true } },
+              graduated_from_class: { select: { description: true } },
+              sections: { select: { description: true } },
+            },
+          }),
+          // Discount amounts for exactly this page's students — merged in below,
+          // sign-flipped, so "amount" nets to what's actually owed. See
+          // financial-reports.service.ts's discount-handling notes above feeHeadMoneyTotals.
+          this.prisma.student_fees.groupBy({
+            by: ['student_id'],
+            where: { ...where, is_discount: true, student_id: { in: studentIds } },
+            _sum: { amount: true },
+            _count: { _all: true },
+          }),
+        ])
+      : [[], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
+    const discountByStudent = new Map(
+      discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
 
     return {
       view: 'student' as const,
       items: groups.map((group) => {
         const student = studentMap.get(group.student_id);
-        const billed = this.toMoney(group._sum.amount);
+        const discount = discountByStudent.get(group.student_id);
+        const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
         const paid = this.toMoney(group._sum.amount_paid);
         return {
           cc: group.student_id,
@@ -285,7 +305,7 @@ export class FinancialReportsService {
           campus: student?.campuses?.campus_name ?? '',
           class_name: this.resolveStudentClassName(student),
           section: student?.sections?.description ?? '',
-          head_count: group._count._all,
+          head_count: group._count._all + (discount?.count ?? 0),
           amount: billed,
           amount_paid: paid,
           outstanding: this.roundMoney(billed - paid),
@@ -313,13 +333,23 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, totals, studentCount, feeTypes] = await Promise.all([
+    // Discount rows have fee_type_id: null and no description_prefix, so they all fold
+    // into one generic bucket here rather than being broken out per discount preset —
+    // that finer detail is only available in the flat "heads" view and the Fee Matrix,
+    // where each row/cell is labeled individually from discount_presets.title.
+    const [groups, discGroups, totals, studentCount, feeTypes] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['fee_type_id', 'description_prefix'],
-        where,
+        where: { ...where, is_discount: false },
         _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
         orderBy: [{ fee_type_id: 'asc' }, { description_prefix: 'asc' }],
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['fee_type_id', 'description_prefix'],
+        where: { ...where, is_discount: true },
+        _sum: { amount: true },
+        _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
       this.prisma.students.count({
@@ -331,20 +361,42 @@ export class FinancialReportsService {
     ]);
 
     const feeTypeMap = new Map(feeTypes.map((ft) => [ft.id, ft.description ?? '']));
+    const groupKey = (g: { fee_type_id: number | null; description_prefix: string | null }) =>
+      `${g.fee_type_id ?? ''}|${g.description_prefix ?? ''}`;
+    const discountByKey = new Map(
+      discGroups.map((d) => [groupKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
+    const seenKeys = new Set(groups.map(groupKey));
     const items = groups.map((group) => {
-      const amount = this.toMoney(group._sum.amount);
+      const discount = discountByKey.get(groupKey(group));
+      const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
       const amountPaid = this.toMoney(group._sum.amount_paid);
       const feeName = group.fee_type_id != null ? feeTypeMap.get(group.fee_type_id) ?? '' : '';
       const feeType = [group.description_prefix, feeName].filter(Boolean).join(' ');
       return {
         fee_type_id: group.fee_type_id,
-        fee_type: feeType || '—',
-        head_count: group._count._all,
+        fee_type: feeType || (group.fee_type_id == null ? 'Discount' : '—'),
+        head_count: group._count._all + (discount?.count ?? 0),
         amount,
         amount_paid: amountPaid,
         outstanding: this.roundMoney(amount - amountPaid),
       };
     });
+    // A discount bucket with no matching non-discount row (e.g. every fee head it
+    // offsets fell outside this filter) still needs its own row so its amount isn't
+    // silently dropped from the view.
+    for (const disc of discGroups) {
+      const key = groupKey(disc);
+      if (seenKeys.has(key)) continue;
+      items.push({
+        fee_type_id: disc.fee_type_id,
+        fee_type: 'Discount',
+        head_count: disc._count._all,
+        amount: -this.toMoney(disc._sum.amount),
+        amount_paid: 0,
+        outstanding: -this.toMoney(disc._sum.amount),
+      });
+    }
     const start = (page - 1) * limit;
 
     return {
@@ -372,13 +424,19 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, totals, studentCount, classTerms] = await Promise.all([
+    const [groups, discGroups, totals, studentCount, classTerms] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['target_month', 'academic_year', 'term_start_month'],
-        where,
+        where: { ...where, is_discount: false },
         _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
         orderBy: [{ academic_year: 'asc' }, { target_month: 'asc' }],
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['target_month', 'academic_year', 'term_start_month'],
+        where: { ...where, is_discount: true },
+        _sum: { amount: true },
+        _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
       this.prisma.students.count({
@@ -387,26 +445,61 @@ export class FinancialReportsService {
       this.loadClassTerms(),
     ]);
 
-    const items = groups.map((group) => {
-      const amount = this.toMoney(group._sum.amount);
-      const amountPaid = this.toMoney(group._sum.amount_paid);
+    const periodKey = (g: { target_month: number; academic_year: string; term_start_month: number | null }) =>
+      `${g.target_month}|${g.academic_year}|${g.term_start_month ?? ''}`;
+    const discountByPeriod = new Map(
+      discGroups.map((d) => [periodKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
+    const seenPeriodKeys = new Set(groups.map(periodKey));
+    const buildPeriodItem = (
+      targetMonth: number,
+      academicYear: string,
+      termStartMonth: number | null,
+      amount: number,
+      amountPaid: number,
+      headCount: number,
+    ) => {
       const termStart =
-        group.term_start_month ??
-        (classTerms.size ? [...classTerms.values()][0] : 8);
+        termStartMonth ?? (classTerms.size ? [...classTerms.values()][0] : 8);
       return {
-        target_month: group.target_month,
-        academic_year: group.academic_year,
-        period_label: getMonthYearLabel(
-          group.target_month,
-          group.academic_year,
-          { termStartMonth: termStart },
-        ),
-        head_count: group._count._all,
+        target_month: targetMonth,
+        academic_year: academicYear,
+        period_label: getMonthYearLabel(targetMonth, academicYear, { termStartMonth: termStart }),
+        head_count: headCount,
         amount,
         amount_paid: amountPaid,
         outstanding: this.roundMoney(amount - amountPaid),
       };
+    };
+    const items = groups.map((group) => {
+      const discount = discountByPeriod.get(periodKey(group));
+      const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
+      const amountPaid = this.toMoney(group._sum.amount_paid);
+      return buildPeriodItem(
+        group.target_month,
+        group.academic_year,
+        group.term_start_month,
+        amount,
+        amountPaid,
+        group._count._all + (discount?.count ?? 0),
+      );
     });
+    // A period with only discount rows (no matching non-discount head this filter)
+    // still needs its own row rather than being silently dropped.
+    for (const disc of discGroups) {
+      if (seenPeriodKeys.has(periodKey(disc))) continue;
+      items.push(
+        buildPeriodItem(
+          disc.target_month,
+          disc.academic_year,
+          disc.term_start_month,
+          -this.toMoney(disc._sum.amount),
+          0,
+          disc._count._all,
+        ),
+      );
+    }
+    items.sort((a, b) => a.academic_year.localeCompare(b.academic_year) || a.target_month - b.target_month);
     const start = (page - 1) * limit;
 
     return {
@@ -434,11 +527,17 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, totals, studentCount] = await Promise.all([
+    const [groups, discGroups, totals, studentCount] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
-        where,
+        where: { ...where, is_discount: false },
         _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['student_id'],
+        where: { ...where, is_discount: true },
+        _sum: { amount: true },
         _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
@@ -447,7 +546,25 @@ export class FinancialReportsService {
       }),
     ]);
 
-    const studentIds = groups.map((g) => g.student_id);
+    // Merge each student's discount total into their fee-head total before class
+    // bucketing, so a class's amount is net-of-discount. Union both group sets so a
+    // student with only a discount row (no fee head this filter) still gets a row.
+    const perStudent = new Map<number, { amount: number; amountPaid: number; headCount: number }>();
+    for (const group of groups) {
+      perStudent.set(group.student_id, {
+        amount: this.toMoney(group._sum.amount),
+        amountPaid: this.toMoney(group._sum.amount_paid),
+        headCount: group._count._all,
+      });
+    }
+    for (const disc of discGroups) {
+      const existing = perStudent.get(disc.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0 };
+      existing.amount = this.roundMoney(existing.amount - this.toMoney(disc._sum.amount));
+      existing.headCount += disc._count._all;
+      perStudent.set(disc.student_id, existing);
+    }
+
+    const studentIds = [...perStudent.keys()];
     const students = studentIds.length
       ? await this.prisma.students.findMany({
           where: { cc: { in: studentIds } },
@@ -476,8 +593,8 @@ export class FinancialReportsService {
       }
     >();
 
-    for (const group of groups) {
-      const student = studentMap.get(group.student_id);
+    for (const [studentId, sums] of perStudent) {
+      const student = studentMap.get(studentId);
       const effectiveClassId = this.effectiveClassId(student);
       const bucketKey = effectiveClassId ?? 'unassigned';
       const existing = classBuckets.get(bucketKey) ?? {
@@ -489,12 +606,10 @@ export class FinancialReportsService {
         amount_paid: 0,
         outstanding: 0,
       };
-      const amount = this.toMoney(group._sum.amount);
-      const amountPaid = this.toMoney(group._sum.amount_paid);
       existing.student_count += 1;
-      existing.head_count += group._count._all;
-      existing.amount = this.roundMoney(existing.amount + amount);
-      existing.amount_paid = this.roundMoney(existing.amount_paid + amountPaid);
+      existing.head_count += sums.headCount;
+      existing.amount = this.roundMoney(existing.amount + sums.amount);
+      existing.amount_paid = this.roundMoney(existing.amount_paid + sums.amountPaid);
       existing.outstanding = this.roundMoney(existing.amount - existing.amount_paid);
       classBuckets.set(bucketKey, existing);
     }
@@ -522,7 +637,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [rows, cash, byType] = await Promise.all([
+    const [rows, cash, byType, discounts] = await Promise.all([
       this.prisma.deposits.findMany({
         where,
         select: DEPOSIT_SELECT,
@@ -540,12 +655,17 @@ export class FinancialReportsService {
         where: { deposits: where },
         _sum: { amount: true },
       }),
+      this.depositsDiscountTotal(query, user),
     ]);
 
     return {
       items: rows.map((row) => this.mapDeposit(row)),
       pagination: createPaginationMeta(page, limit, cash._count),
-      totals: this.buildDepositTotals(cash, byType),
+      totals: {
+        ...this.buildDepositTotals(cash, byType),
+        discounts_total: discounts.amount,
+        discounts_count: discounts.count,
+      },
     };
   }
 
@@ -633,7 +753,7 @@ export class FinancialReportsService {
     };
     const groups = await this.prisma.student_fees.groupBy({
       by: ['student_id'],
-      where,
+      where: { ...where, is_discount: false },
       _sum: { amount: true, amount_paid: true },
       _count: { _all: true },
       orderBy: { student_id: 'asc' },
@@ -641,24 +761,36 @@ export class FinancialReportsService {
     });
     this.assertExportCap(groups.length);
 
-    const students = groups.length
-      ? await this.prisma.students.findMany({
-          where: { cc: { in: groups.map((g) => g.student_id) } },
-          select: {
-            cc: true,
-            gr_number: true,
-            full_name: true,
-            status: true,
-            class_id: true,
-            graduated_from_class_id: true,
-            campuses: { select: { campus_name: true } },
-            classes: { select: { description: true } },
-            graduated_from_class: { select: { description: true } },
-            sections: { select: { description: true } },
-          },
-        })
-      : [];
+    const studentIds = groups.map((g) => g.student_id);
+    const [students, discGroups] = studentIds.length
+      ? await Promise.all([
+          this.prisma.students.findMany({
+            where: { cc: { in: studentIds } },
+            select: {
+              cc: true,
+              gr_number: true,
+              full_name: true,
+              status: true,
+              class_id: true,
+              graduated_from_class_id: true,
+              campuses: { select: { campus_name: true } },
+              classes: { select: { description: true } },
+              graduated_from_class: { select: { description: true } },
+              sections: { select: { description: true } },
+            },
+          }),
+          this.prisma.student_fees.groupBy({
+            by: ['student_id'],
+            where: { ...where, is_discount: true, student_id: { in: studentIds } },
+            _sum: { amount: true },
+            _count: { _all: true },
+          }),
+        ])
+      : [[], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
+    const discountByStudent = new Map(
+      discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
     const columns: ExportColumn[] = [
       { header: 'CC', key: 'cc', width: 10 },
       { header: 'GR', key: 'gr_number', width: 12 },
@@ -673,7 +805,8 @@ export class FinancialReportsService {
     ];
     const data = groups.map((group) => {
       const student = studentMap.get(group.student_id);
-      const billed = this.toMoney(group._sum.amount);
+      const discount = discountByStudent.get(group.student_id);
+      const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
       const paid = this.toMoney(group._sum.amount_paid);
       return {
         cc: group.student_id,
@@ -682,7 +815,7 @@ export class FinancialReportsService {
         campus: student?.campuses?.campus_name ?? '',
         class_name: this.resolveStudentClassName(student),
         section: student?.sections?.description ?? '',
-        head_count: group._count._all,
+        head_count: group._count._all + (discount?.count ?? 0),
         amount: billed,
         amount_paid: paid,
         outstanding: this.roundMoney(billed - paid),
@@ -863,10 +996,12 @@ export class FinancialReportsService {
    * Rows = students, columns = every calendar month from from_month to
    * to_month inclusive, cells = the fee head(s) whose target_month resolves
    * (via each head's own term_start_month, falling back to its class) to
-   * that calendar month. Excludes discounts and arrear (late payment)
-   * surcharges, same as the Fee Heads report. Column/grand totals and
-   * statistics cover every student matching the filters, not just the
-   * current page — pagination only limits which rows render.
+   * that calendar month. Excludes arrear (late payment) surcharges, same as
+   * the Fee Heads report. Discount rows are included as negative-amount
+   * cells (see signedAmount) so row/column/grand totals and the statistics
+   * panel are net-of-discount. Column/grand totals and statistics cover
+   * every student matching the filters, not just the current page —
+   * pagination only limits which rows render.
    */
   async listFeeMatrix(query: ListFeeMatrixQueryDto, user: IJwtStaffPayload) {
     this.assertMonthRange(query);
@@ -923,7 +1058,7 @@ export class FinancialReportsService {
         const resolved = this.resolveHeadCalendarMonth(head, classTerms);
         const columnIndex = resolved ? columnPosition.get(this.matrixMonthKey(resolved)) : undefined;
         if (columnIndex === undefined) continue;
-        const amount = this.toMoney(head.amount);
+        const amount = this.signedAmount(head);
         cells[columnIndex].push({
           id: head.id,
           fee_type: this.matrixFeeTypeLabel(head),
@@ -955,7 +1090,7 @@ export class FinancialReportsService {
       if (columnIndex === undefined) continue;
       inRangeHeads.push(head);
       columnTotals[columnIndex] = this.roundMoney(
-        columnTotals[columnIndex] + this.toMoney(head.amount),
+        columnTotals[columnIndex] + this.signedAmount(head),
       );
     }
     const grandTotal = this.roundMoney(
@@ -964,14 +1099,14 @@ export class FinancialReportsService {
 
     const studentSums = new Map<number, number>();
     for (const head of inRangeHeads) {
-      const amount = this.toMoney(head.amount);
+      const amount = this.signedAmount(head);
       studentSums.set(
         head.student_id,
         this.roundMoney((studentSums.get(head.student_id) ?? 0) + amount),
       );
     }
     const studentTotals = [...studentSums.values()];
-    const feeAmounts = inRangeHeads.map((h) => this.toMoney(h.amount));
+    const feeAmounts = inRangeHeads.map((h) => this.signedAmount(h));
 
     return {
       from_month: query.from_month,
@@ -1071,7 +1206,7 @@ export class FinancialReportsService {
         const resolved = this.resolveHeadCalendarMonth(head, classTerms);
         const columnIndex = resolved ? columnPosition.get(this.matrixMonthKey(resolved)) : undefined;
         if (columnIndex === undefined) continue;
-        const amount = this.toMoney(head.amount);
+        const amount = this.signedAmount(head);
         perColumn[columnIndex].push({ label: this.matrixFeeTypeLabel(head), amount });
         rowTotal = this.roundMoney(rowTotal + amount);
       }
@@ -1532,7 +1667,6 @@ export class FinancialReportsService {
     academicYears: string[],
   ): Prisma.student_feesWhereInput {
     return {
-      is_discount: false,
       is_arrear_surcharge: false,
       academic_year: { in: academicYears },
       ...(query.status?.length && { status: { in: query.status } }),
@@ -1630,7 +1764,10 @@ export class FinancialReportsService {
   private matrixFeeTypeLabel(head: {
     description_prefix: string | null;
     fee_types: { description: string } | null;
+    is_discount?: boolean;
+    discount_presets?: { title: string } | null;
   }): string {
+    if (head.is_discount) return head.discount_presets?.title ?? 'Discount';
     const feeName = head.fee_types?.description ?? '';
     return [head.description_prefix, feeName].filter(Boolean).join(' ') || '—';
   }
@@ -1711,22 +1848,28 @@ export class FinancialReportsService {
     };
   }
 
-  /** Same distribution stats as describeDistribution, one set per fee_type_id. */
+  /**
+   * Same distribution stats as describeDistribution, one set per fee_type_id.
+   * Discount rows (fee_type_id: null) land in the shared "Unknown" bucket rather
+   * than being broken out per discount preset — that finer detail is only
+   * available in the flat "heads" view and the matrix's own cell labels.
+   */
   private buildFeeTypeStatistics(
     heads: Array<{
       amount: Prisma.Decimal | number | null;
       fee_type_id: number | null;
       fee_types: { description: string } | null;
+      is_discount: boolean;
     }>,
   ): FeeTypeStatistics[] {
     const groups = new Map<number, { label: string; values: number[] }>();
     for (const head of heads) {
       const key = head.fee_type_id ?? 0;
       const group = groups.get(key) ?? {
-        label: head.fee_types?.description ?? 'Unknown',
+        label: head.is_discount ? 'Discount' : (head.fee_types?.description ?? 'Unknown'),
         values: [],
       };
-      group.values.push(this.toMoney(head.amount));
+      group.values.push(this.signedAmount(head));
       groups.set(key, group);
     }
     return [...groups.entries()]
@@ -1742,7 +1885,6 @@ export class FinancialReportsService {
     query: ListFeeHeadsQueryDto,
   ): Prisma.student_feesWhereInput {
     return {
-      is_discount: false,
       is_arrear_surcharge: false,
       fee_date: {
         gte: this.parseDateOnlyUtc(query.from_date),
@@ -1766,17 +1908,38 @@ export class FinancialReportsService {
    * Billed = already on a voucher (ISSUED / PARTIALLY_PAID / PAID / DISCOUNT).
    * To be billed = NOT_ISSUED (scheduled, no voucher yet).
    * Total = both. Paid / outstanding still cover the full filtered set.
+   *
+   * Discount rows (is_discount=true) store a POSITIVE amount — the sign flip to
+   * negative is a convention every reader applies explicitly (see signedAmount;
+   * VouchersService.normalizeVoucher and StudentFeesService.getMonthlyStatusForParent
+   * do the same). Prisma's aggregate/groupBy can't conditionally negate in SQL, so
+   * discounts are queried separately here and subtracted in JS. Discount rows are
+   * always status=DISCOUNT (never NOT_ISSUED), so they always net out of "billed".
    */
   private async feeHeadMoneyTotals(where: Prisma.student_feesWhereInput) {
-    const [totalsAgg, byStatus] = await Promise.all([
+    const nonDiscountWhere: Prisma.student_feesWhereInput = { ...where, is_discount: false };
+    const discountWhere: Prisma.student_feesWhereInput = { ...where, is_discount: true };
+
+    const [totalsAgg, discAgg, byStatus, discByStatus] = await Promise.all([
       this.prisma.student_fees.aggregate({
-        where,
+        where: nonDiscountWhere,
         _sum: { amount: true, amount_paid: true },
+        _count: true,
+      }),
+      this.prisma.student_fees.aggregate({
+        where: discountWhere,
+        _sum: { amount: true },
         _count: true,
       }),
       this.prisma.student_fees.groupBy({
         by: ['status'],
-        where,
+        where: nonDiscountWhere,
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['status'],
+        where: discountWhere,
         _sum: { amount: true },
         _count: { _all: true },
       }),
@@ -1797,11 +1960,17 @@ export class FinancialReportsService {
         billedCount += count;
       }
     }
+    for (const row of discByStatus) {
+      billed = this.roundMoney(billed - this.toMoney(row._sum.amount));
+      billedCount += row._count._all;
+    }
 
-    const amount = this.toMoney(totalsAgg._sum.amount);
-    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid);
+    const amount = this.roundMoney(
+      this.toMoney(totalsAgg._sum.amount) - this.toMoney(discAgg._sum.amount),
+    );
+    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid); // discount rows always have amount_paid=0
     return {
-      count: totalsAgg._count,
+      count: totalsAgg._count + discAgg._count,
       billed_count: billedCount,
       to_be_billed_count: toBeBilledCount,
       billed,
@@ -1829,12 +1998,43 @@ export class FinancialReportsService {
     };
   }
 
+  /**
+   * Discounts never touch deposit_allocations — a discount head's voucher_heads.balance
+   * is hardcoded to 0 at creation and can never be deposited against (see
+   * VouchersService.recordDeposit's allowedAmount clamp), so they're invisible to the
+   * cash-vs-allocations reconciliation in buildDepositTotals. This is a separate,
+   * non-cash total shown for cross-report context only — dated by each discount's own
+   * fee_date within [from_date, to_date], a different date semantic than deposits'
+   * deposit_date filter above. Never fold this into allocations_total/reconciles.
+   */
+  private async depositsDiscountTotal(
+    query: ListDepositsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<{ amount: number; count: number }> {
+    const studentWhere = this.buildStudentWhere(query, user);
+    const agg = await this.prisma.student_fees.aggregate({
+      where: {
+        is_discount: true,
+        fee_date: {
+          gte: this.parseDateOnlyUtc(query.from_date),
+          lte: this.parseDateOnlyUtc(query.to_date),
+        },
+        students: studentWhere,
+      },
+      _sum: { amount: true },
+      _count: true,
+    });
+    // Positive magnitude — "amount discounted", not a signed netting figure like the
+    // Fee Heads/Matrix reports use, since this is a standalone summary tile.
+    return { amount: this.toMoney(agg._sum.amount), count: agg._count };
+  }
+
   private mapFeeHead(
     row: Prisma.student_feesGetPayload<{ select: typeof FEE_HEAD_SELECT }>,
     classTerms: ReadonlyMap<number, number>,
   ) {
-    const amount = this.toMoney(row.amount);
-    const amountPaid = this.toMoney(row.amount_paid);
+    const amount = this.signedAmount(row);
+    const amountPaid = this.toMoney(row.amount_paid); // always 0 for discount rows
     const classId =
       row.students.class_id ??
       row.students.graduated_from_class_id ??
@@ -1842,7 +2042,9 @@ export class FinancialReportsService {
       row.students.graduated_from_class?.id ??
       null;
     const feeName = row.fee_types?.description ?? '';
-    const feeType = [row.description_prefix, feeName].filter(Boolean).join(' ');
+    const feeType = row.is_discount
+      ? (row.discount_presets?.title ?? 'Discount')
+      : [row.description_prefix, feeName].filter(Boolean).join(' ');
 
     return {
       id: row.id,
@@ -2102,6 +2304,19 @@ export class FinancialReportsService {
   private toMoney(value: Prisma.Decimal | number | string | null | undefined): number {
     if (value == null) return 0;
     return this.roundMoney(Number(value));
+  }
+
+  /**
+   * student_fees.amount is stored POSITIVE even for discount rows (is_discount=true;
+   * StudentFeesService.createDiscount validates amount > 0) — the sign flip to negative
+   * is a convention applied by every reader, never persisted. VouchersService.normalizeVoucher
+   * and StudentFeesService.getMonthlyStatusForParent both do the same flip independently.
+   * Anything here that sums or displays a discount's amount must go through this, or
+   * totals will be overstated instead of netted.
+   */
+  private signedAmount(row: { amount: Prisma.Decimal | number | null; is_discount: boolean }): number {
+    const raw = this.toMoney(row.amount);
+    return row.is_discount ? -raw : raw;
   }
 
   private roundMoney(value: number): number {
