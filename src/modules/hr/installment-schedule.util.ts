@@ -37,9 +37,10 @@ export function parseInstallmentSchedule(
   fallbackAmount: Prisma.Decimal,
 ): Prisma.Decimal[] {
   if (Array.isArray(raw) && raw.length > 0) {
-    return raw
-      .map((value) => money(typeof value === 'number' || typeof value === 'string' ? value : 0))
-      .filter((amount) => amount.gt(0));
+    return raw.map((value) => {
+      const amount = money(typeof value === 'number' || typeof value === 'string' ? value : 0);
+      return amount.lt(0) ? ZERO : amount;
+    });
   }
   const fallback = money(fallbackAmount);
   return fallback.gt(0) ? [fallback] : [];
@@ -92,13 +93,18 @@ export function assertScheduleMatchesRemaining(amounts: number[], remaining: Pri
   }
   const schedule: number[] = [];
   let sum = ZERO;
+  let hasCollectingMonth = false;
   for (const raw of amounts) {
     const amount = money(raw);
-    if (amount.lte(0)) {
-      throw new BadRequestException('Each month must be greater than zero.');
+    if (amount.lt(0)) {
+      throw new BadRequestException('A month cannot be negative. Use 0 to skip that cycle.');
     }
+    if (amount.gt(0)) hasCollectingMonth = true;
     schedule.push(Number(amount.toFixed(2)));
     sum = sum.plus(amount);
+  }
+  if (!hasCollectingMonth) {
+    throw new BadRequestException('Skip months with 0 if needed, but at least one month must collect something.');
   }
   if (!sum.eq(money(remaining))) {
     throw new BadRequestException(

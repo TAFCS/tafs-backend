@@ -425,7 +425,9 @@ export class EmployeeLoansService {
 
     const due = this.cycleDue(loan);
     const amount = money(line.loan_deduction);
-    if (due.lte(0) && amount.lte(0)) return;
+    const remainingNow = this.outstandingBalance(loan);
+    // A 0 due with remaining balance is a skipped cycle — still consume the slot.
+    if (due.lte(0) && amount.lte(0) && remainingNow.lte(0)) return;
 
     const existing = await tx.employee_loan_transactions.findFirst({
       where: {

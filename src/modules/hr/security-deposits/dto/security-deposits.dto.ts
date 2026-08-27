@@ -40,13 +40,13 @@ export class CreateSecurityDepositDto {
 }
 
 export class UpdateInstallmentScheduleDto {
-  @ApiProperty({ type: [Number], example: [10000, 10000, 5000], description: 'Remaining monthly amounts in order. Must sum to what is still left to collect.' })
+  @ApiProperty({ type: [Number], example: [10000, 0, 10000], description: 'Remaining monthly amounts in order. Use 0 to skip a cycle. Must sum to what is still left to collect.' })
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(120)
   @Transform(({ value }) => (Array.isArray(value) ? value.map((item: unknown) => Number(item)) : value))
   @IsNumber({ maxDecimalPlaces: 2 }, { each: true })
-  @Min(0.01, { each: true })
+  @Min(0, { each: true })
   installment_amounts: number[];
 }
 

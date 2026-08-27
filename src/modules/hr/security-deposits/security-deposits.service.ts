@@ -361,7 +361,9 @@ export class SecurityDepositsService {
 
     const due = this.cycleDue(plan);
     const amount = money(line.security_deposit_deduction);
-    if (due.lte(0) && amount.lte(0)) return;
+    const remainingNow = money(plan.total_amount).minus(plan.recovered_amount);
+    // A 0 due with remaining balance is a skipped cycle — still consume the slot.
+    if (due.lte(0) && amount.lte(0) && remainingNow.lte(0)) return;
 
     const existing = await tx.employee_security_deposit_transactions.findFirst({
       where: {
