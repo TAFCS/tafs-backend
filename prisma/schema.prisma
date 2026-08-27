@@ -1531,6 +1531,7 @@ model employee_security_deposits {
   created_by             String
   created_at             DateTime                                 @default(now()) @db.Timestamp(6)
   updated_at             DateTime                                 @updatedAt @db.Timestamp(6)
+  installment_schedule   Json                                     @default("[]")
   transactions           employee_security_deposit_transactions[]
   employee_profiles      employee_profiles                        @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
@@ -2052,6 +2053,7 @@ model employee_loans {
   created_by             String
   created_at             DateTime                     @default(now()) @db.Timestamp(6)
   updated_at             DateTime                     @updatedAt @db.Timestamp(6)
+  installment_schedule   Json                         @default("[]")
   transactions           employee_loan_transactions[]
   employee_profiles      employee_profiles            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 

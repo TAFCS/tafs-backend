@@ -12,22 +12,22 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } from '../payroll/payroll-period.util';
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
-import { CreateLoanDto, LumpSumRepaymentDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import {
+  assertScheduleMatchesRemaining,
+  buildEqualSchedule,
+  money,
+  nextScheduledAmount,
+  scheduleAsNumbers,
+  scheduleJson,
+  shiftScheduleAfterCollection,
+} from '../installment-schedule.util';
+import { CreateLoanDto, LumpSumRepaymentDto, UpdateInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: LoanStatus[] = [LoanStatus.ACTIVE, LoanStatus.OUTSTANDING];
 const OFFBOARDED_STATUSES: EmployeeStatus[] = [EmployeeStatus.LEFT, EmployeeStatus.TERMINATED];
 
 type Tx = Prisma.TransactionClient;
-
-function money(value: Prisma.Decimal | number | string): Prisma.Decimal {
-  return new Prisma.Decimal(value).toDecimalPlaces(2);
-}
-
-function installmentAmount(total: Prisma.Decimal, count: number): Prisma.Decimal {
-  const cents = total.times(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
-  return cents.dividedToIntegerBy(count).dividedBy(100).toDecimalPlaces(2);
-}
 
 function dateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
@@ -115,8 +115,8 @@ export class EmployeeLoansService {
       throw new BadRequestException('Opening repaid amount must be less than the total loan amount.');
     }
     const remaining = total.minus(opening);
-    const installment = installmentAmount(remaining, dto.installment_count);
-    if (installment.lte(0)) {
+    const schedule = buildEqualSchedule(remaining, dto.installment_count);
+    if (schedule.length === 0) {
       throw new BadRequestException('Installment amount must be greater than zero. Increase the total or reduce the number of months.');
     }
     const disbursedAt = dto.disbursement_date
@@ -134,8 +134,9 @@ export class EmployeeLoansService {
             employee_id: employeeId,
             total_amount: total,
             amount_repaid_opening: opening,
-            installment_count: dto.installment_count,
-            installment_amount: installment,
+            installment_count: schedule.length,
+            installment_amount: money(schedule[0]),
+            installment_schedule: scheduleJson(schedule),
             disbursement_date: disbursedAt,
             start_period_start: start,
             notes: dto.notes?.trim() || null,
@@ -169,7 +170,44 @@ export class EmployeeLoansService {
       entity_id: String(employeeId),
       action: 'LOAN_CREATED',
       changed_by: auditActorLabel(user),
-      note: `Recorded a loan of ${total.toFixed(2)} (${opening.toFixed(2)} already repaid) over ${dto.installment_count} month(s), starting ${dateOnly(start)}.`,
+      note: `Recorded a loan of ${total.toFixed(2)} (${opening.toFixed(2)} already repaid) over ${schedule.length} month(s), starting ${dateOnly(start)}.`,
+    });
+
+    return this.getForEmployee(employeeId);
+  }
+
+  async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertEmployee(employeeId, tx);
+      const loan = await tx.employee_loans.findFirst({
+        where: { employee_id: employeeId, status: LoanStatus.ACTIVE },
+      });
+      if (!loan) {
+        throw new NotFoundException('No collecting loan for this employee.');
+      }
+      const remaining = this.outstandingBalance(loan);
+      if (remaining.lte(0)) {
+        throw new BadRequestException('There is nothing left to collect on this loan.');
+      }
+      const schedule = assertScheduleMatchesRemaining(dto.installment_amounts, remaining);
+      await tx.employee_loans.update({
+        where: { id: loan.id },
+        data: {
+          installment_schedule: scheduleJson(schedule),
+          installment_count: schedule.length,
+          installment_amount: money(schedule[0]),
+          carried_forward_amount: ZERO,
+        },
+      });
+      await this.recapOpenDraftLines(employeeId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'LOAN_SCHEDULE_UPDATED',
+      changed_by: auditActorLabel(user),
+      note: `Updated remaining recovery to ${dto.installment_amounts.length} month(s).`,
     });
 
     return this.getForEmployee(employeeId);
@@ -408,6 +446,14 @@ export class EmployeeLoansService {
       : Prisma.Decimal.max(ZERO, due.minus(amount)).toDecimalPlaces(2);
     const status = this.nextStatus(loan.total_amount, loan.amount_repaid_opening, recovered, loan.lump_sum_repaid_amount, loan.written_off_amount);
     const balanceAfter = this.balanceAfter(loan.total_amount, loan.amount_repaid_opening, recovered, loan.lump_sum_repaid_amount, loan.written_off_amount);
+    const remainingAfter = balanceAfter;
+    const collectedFullDue = amount.gte(due) || remainingAfter.lte(0);
+    const shifted = shiftScheduleAfterCollection(
+      loan.installment_schedule,
+      money(loan.installment_amount),
+      collectedFullDue,
+      remainingAfter,
+    );
 
     try {
       await tx.employee_loan_transactions.create({
@@ -432,6 +478,9 @@ export class EmployeeLoansService {
         recovered_amount: recovered,
         carried_forward_amount: carry,
         status,
+        installment_schedule: scheduleJson(shifted.schedule),
+        installment_count: shifted.installment_count,
+        installment_amount: shifted.installment_amount,
       },
     });
   }
@@ -475,7 +524,7 @@ export class EmployeeLoansService {
     const remaining = this.outstandingBalance(loan);
     if (remaining.lte(0)) return ZERO;
     return Prisma.Decimal.min(
-      money(loan.installment_amount).plus(loan.carried_forward_amount),
+      nextScheduledAmount(loan.installment_schedule, money(loan.installment_amount)).plus(loan.carried_forward_amount),
       remaining,
     ).toDecimalPlaces(2);
   }
@@ -548,6 +597,7 @@ export class EmployeeLoansService {
       carried_forward_amount: Number(loan.carried_forward_amount),
       installment_amount: Number(loan.installment_amount),
       installment_count: loan.installment_count,
+      installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
       status: loan.status,
@@ -579,6 +629,7 @@ export class EmployeeLoansService {
       amount_repaid_opening: Number(loan.amount_repaid_opening),
       installment_count: loan.installment_count,
       installment_amount: Number(loan.installment_amount),
+      installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
       recovered_amount: Number(loan.recovered_amount),

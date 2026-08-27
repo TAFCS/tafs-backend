@@ -8,7 +8,7 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { EmployeeLoansService } from './employee-loans.service';
-import { CreateLoanDto, LumpSumRepaymentDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { CreateLoanDto, LumpSumRepaymentDto, UpdateInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
 
 @ApiTags('HR Employee Loans')
 @ApiBearerAuth()
@@ -33,6 +33,17 @@ export class EmployeeLoansController {
   ) {
     const data = await this.employeeLoans.create(employeeId, dto, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Loan created successfully');
+  }
+
+  @Post('schedule')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateSchedule(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: UpdateInstallmentScheduleDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeeLoans.updateSchedule(employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Loan recovery plan updated');
   }
 
   @Post('lump-sum')

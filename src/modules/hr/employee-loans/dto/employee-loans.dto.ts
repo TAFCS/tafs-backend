@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LoanStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
-import { IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 const OPEN_STATUS_FILTER = [LoanStatus.ACTIVE, LoanStatus.OUTSTANDING] as const;
 
@@ -49,6 +49,17 @@ export class CreateLoanDto {
   @IsString()
   @MaxLength(500)
   notes?: string;
+}
+
+export class UpdateInstallmentScheduleDto {
+  @ApiProperty({ type: [Number], example: [10000, 10000, 5000], description: 'Remaining monthly amounts in order. Must sum to the outstanding balance.' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(120)
+  @Transform(({ value }) => (Array.isArray(value) ? value.map((item: unknown) => Number(item)) : value))
+  @IsNumber({ maxDecimalPlaces: 2 }, { each: true })
+  @Min(0.01, { each: true })
+  installment_amounts: number[];
 }
 
 export class LumpSumRepaymentDto {

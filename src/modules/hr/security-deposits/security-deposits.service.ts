@@ -10,21 +10,21 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } from '../payroll/payroll-period.util';
-import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto } from './dto/security-deposits.dto';
+import {
+  assertScheduleMatchesRemaining,
+  buildEqualSchedule,
+  money,
+  nextScheduledAmount,
+  scheduleAsNumbers,
+  scheduleJson,
+  shiftScheduleAfterCollection,
+} from '../installment-schedule.util';
+import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: SecurityDepositStatus[] = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED];
 
 type Tx = Prisma.TransactionClient;
-
-function money(value: Prisma.Decimal | number | string): Prisma.Decimal {
-  return new Prisma.Decimal(value).toDecimalPlaces(2);
-}
-
-function installmentAmount(total: Prisma.Decimal, count: number): Prisma.Decimal {
-  const cents = total.times(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
-  return cents.dividedToIntegerBy(count).dividedBy(100).toDecimalPlaces(2);
-}
 
 function dateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
@@ -106,8 +106,8 @@ export class SecurityDepositsService {
     }
 
     const total = money(dto.total_amount);
-    const installment = installmentAmount(total, dto.installment_count);
-    if (installment.lte(0)) {
+    const schedule = buildEqualSchedule(total, dto.installment_count);
+    if (schedule.length === 0) {
       throw new BadRequestException('Installment amount must be greater than zero. Increase the total or reduce the number of months.');
     }
     const start = dto.start_period_start
@@ -120,8 +120,9 @@ export class SecurityDepositsService {
           data: {
             employee_id: employeeId,
             total_amount: total,
-            installment_count: dto.installment_count,
-            installment_amount: installment,
+            installment_count: schedule.length,
+            installment_amount: money(schedule[0]),
+            installment_schedule: scheduleJson(schedule),
             start_period_start: start,
             notes: dto.notes?.trim() || null,
             created_by: user.sub,
@@ -141,7 +142,44 @@ export class SecurityDepositsService {
       entity_id: String(employeeId),
       action: 'SECURITY_DEPOSIT_CREATED',
       changed_by: auditActorLabel(user),
-      note: `Started security deposit of ${total.toFixed(2)} over ${dto.installment_count} month(s), starting ${dateOnly(start)}.`,
+      note: `Started security deposit of ${total.toFixed(2)} over ${schedule.length} month(s), starting ${dateOnly(start)}.`,
+    });
+
+    return this.getForEmployee(employeeId);
+  }
+
+  async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertEmployee(employeeId, tx);
+      const plan = await tx.employee_security_deposits.findFirst({
+        where: { employee_id: employeeId, status: SecurityDepositStatus.ACTIVE },
+      });
+      if (!plan) {
+        throw new NotFoundException('No collecting security deposit plan for this employee.');
+      }
+      const remaining = money(plan.total_amount).minus(plan.recovered_amount);
+      if (remaining.lte(0)) {
+        throw new BadRequestException('There is nothing left to collect on this plan.');
+      }
+      const schedule = assertScheduleMatchesRemaining(dto.installment_amounts, remaining);
+      await tx.employee_security_deposits.update({
+        where: { id: plan.id },
+        data: {
+          installment_schedule: scheduleJson(schedule),
+          installment_count: schedule.length,
+          installment_amount: money(schedule[0]),
+          carried_forward_amount: ZERO,
+        },
+      });
+      await this.recapOpenDraftLines(employeeId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'SECURITY_DEPOSIT_SCHEDULE_UPDATED',
+      changed_by: auditActorLabel(user),
+      note: `Updated remaining recovery to ${dto.installment_amounts.length} month(s).`,
     });
 
     return this.getForEmployee(employeeId);
@@ -340,6 +378,14 @@ export class SecurityDepositsService {
       ? ZERO
       : Prisma.Decimal.max(ZERO, due.minus(amount)).toDecimalPlaces(2);
     const status = this.nextStatus(plan.total_amount, recovered, plan.refunded_amount, plan.forfeited_amount);
+    const remainingAfter = money(plan.total_amount).minus(recovered);
+    const collectedFullDue = amount.gte(due) || remainingAfter.lte(0);
+    const shifted = shiftScheduleAfterCollection(
+      plan.installment_schedule,
+      money(plan.installment_amount),
+      collectedFullDue,
+      remainingAfter,
+    );
 
     try {
       await tx.employee_security_deposit_transactions.create({
@@ -364,6 +410,9 @@ export class SecurityDepositsService {
         recovered_amount: recovered,
         carried_forward_amount: carry,
         status,
+        installment_schedule: scheduleJson(shifted.schedule),
+        installment_count: shifted.installment_count,
+        installment_amount: shifted.installment_amount,
       },
     });
   }
@@ -382,7 +431,7 @@ export class SecurityDepositsService {
     const remaining = money(plan.total_amount).minus(plan.recovered_amount);
     if (remaining.lte(0)) return ZERO;
     return Prisma.Decimal.min(
-      money(plan.installment_amount).plus(plan.carried_forward_amount),
+      nextScheduledAmount(plan.installment_schedule, money(plan.installment_amount)).plus(plan.carried_forward_amount),
       remaining,
     ).toDecimalPlaces(2);
   }
@@ -463,6 +512,7 @@ export class SecurityDepositsService {
       carried_forward_amount: Number(plan.carried_forward_amount),
       installment_amount: Number(plan.installment_amount),
       installment_count: plan.installment_count,
+      installment_schedule: scheduleAsNumbers(plan.installment_schedule, money(plan.installment_amount)),
       start_period_start: dateOnly(plan.start_period_start),
       status: plan.status,
     };
@@ -496,6 +546,7 @@ export class SecurityDepositsService {
       total_amount: total,
       installment_count: plan.installment_count,
       installment_amount: Number(plan.installment_amount),
+      installment_schedule: scheduleAsNumbers(plan.installment_schedule, money(plan.installment_amount)),
       start_period_start: dateOnly(plan.start_period_start),
       recovered_amount: recovered,
       refunded_amount: refunded,

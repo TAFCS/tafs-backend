@@ -8,7 +8,7 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { SecurityDepositsService } from './security-deposits.service';
-import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto } from './dto/security-deposits.dto';
+import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 @ApiTags('HR Employee Security Deposits')
 @ApiBearerAuth()
@@ -33,6 +33,17 @@ export class SecurityDepositsController {
   ) {
     const data = await this.securityDeposits.create(employeeId, dto, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Security deposit plan created successfully');
+  }
+
+  @Post('schedule')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateSchedule(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: UpdateInstallmentScheduleDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.securityDeposits.updateSchedule(employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Security deposit recovery plan updated');
   }
 
   @Post('refund')
