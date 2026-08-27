@@ -621,6 +621,10 @@ export class PayrollService {
    * per streak with deduction_days = floor(streakLength / 3) — the mod-3
    * remainder (1-2 stray lates) never counts.
    */
+  // Temporarily disabled — do not detect new 3-consecutive-late flags at all.
+  // Flip back to true to re-enable; sandwich detection is untouched either way.
+  private readonly CONSECUTIVE_LATE_RULE_ENABLED = false;
+
   private detectPayrollFlags(dailyBreakdown: DayBreakdownEntry[]): DetectedFlag[] {
     const flags: DetectedFlag[] = [];
 
@@ -651,24 +655,26 @@ export class PayrollService {
       }
     }
 
-    let streakDates: string[] = [];
-    const flushLateStreak = () => {
-      const groups = Math.floor(streakDates.length / 3);
-      if (groups >= 1) {
-        const dates = streakDates.slice(0, groups * 3);
-        flags.push({ flag_type: PayrollFlagType.CONSECUTIVE_LATE, anchor_date: dates[0], dates, deduction_days: groups });
+    if (this.CONSECUTIVE_LATE_RULE_ENABLED) {
+      let streakDates: string[] = [];
+      const flushLateStreak = () => {
+        const groups = Math.floor(streakDates.length / 3);
+        if (groups >= 1) {
+          const dates = streakDates.slice(0, groups * 3);
+          flags.push({ flag_type: PayrollFlagType.CONSECUTIVE_LATE, anchor_date: dates[0], dates, deduction_days: groups });
+        }
+        streakDates = [];
+      };
+      for (const day of dailyBreakdown) {
+        if (!day.is_working_day) continue;
+        if (day.classification === 'LATE') {
+          streakDates.push(day.date);
+        } else {
+          flushLateStreak();
+        }
       }
-      streakDates = [];
-    };
-    for (const day of dailyBreakdown) {
-      if (!day.is_working_day) continue;
-      if (day.classification === 'LATE') {
-        streakDates.push(day.date);
-      } else {
-        flushLateStreak();
-      }
+      flushLateStreak();
     }
-    flushLateStreak();
 
     return flags;
   }

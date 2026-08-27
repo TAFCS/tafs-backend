@@ -73,6 +73,7 @@ import { Coral9AttendanceWriterService } from './coral9-attendance-writer.servic
     StaffAttendanceService,
     StudentAttendanceService,
     AttendancePolicyResolverService,
+    ZkAttendanceProcessorService,
   ],
 })
 export class AttendanceModule {}
