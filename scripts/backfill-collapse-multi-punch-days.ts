@@ -1,36 +1,39 @@
 /**
- * One-off backfill for the 26 Jul – 25 Aug payroll cycle: staff sometimes
- * scanned the biometric device more than once within a couple of minutes,
- * unsure the first one had registered. Payroll pairs scans IN/OUT by index,
- * so a stray close-together scan can read as a spurious few-minute BREAK.
+ * One-off backfill for the 26 Jul – 25 Aug payroll cycle: staff repeatedly
+ * scanned the biometric device to make sure it registered, and some (e.g.
+ * guards on a long continuous shift) also get extra incidental scans through
+ * the day that were never meant to mark a break. Payroll pairs scans IN/OUT
+ * by index, so a person with more than 2 scans in a day gets any scan after
+ * the first read as OUT and the next as IN again — turning ordinary mid-shift
+ * activity into a bogus multi-hour BREAK and a real pay deduction (confirmed
+ * on IRFAN ALI / GKF-06-0001, 2026-07-27: scans at 06:17, 07:24, 16:00, 18:34
+ * were read as a 516-minute break and deducted ~Rs 10,760 — he was on shift
+ * the whole time).
  *
- * IMPORTANT: an earlier version of this script collapsed every multi-scan
- * day down to just its first and last punch. A dry run showed that's wrong —
- * most "extra" scans on a given day are hours apart (gate-in, break-out,
- * break-in, gate-out), i.e. real activity, not device anxiety. This version
- * only merges scans that land within WINDOW_MS of the previous *kept* scan
- * for that person-day — the same "gap since last accepted scan" rule the
- * codebase already uses for its always-on 2-minute dedup window
- * (zk-attendance-processor.service.ts DEDUP_WINDOW_MS / recomputeDayDuplicates),
- * just widened for this one-off cleanup pass. Scans genuinely spread through
- * the day are left completely alone.
+ * NOTE: an earlier version of this script only merged scans within a 15-
+ * minute window of each other, on the theory that widely-spaced extra scans
+ * were legitimate lunch/break punches. The above case disproves that for
+ * this organization — extra scans, however spaced out, are not meant to
+ * split the shift. This version goes back to the originally requested fix:
+ * for every day with more than 2 scans, keep only the very first and very
+ * last, regardless of the gaps between them.
  *
- * For every cluster of near-duplicate scans, only the first scan in the
- * cluster is kept; the rest are soft-excluded (is_duplicate = true — rows
- * are never deleted, so the audit trail is kept and it's fully reversible).
- * The affected day's attendance_staff_daily row is then rebuilt from the
- * surviving scans.
+ * Operates on ALL scans for the day (not just currently-non-duplicate ones),
+ * so it's safe to re-run after the earlier narrower pass — the first/last
+ * scan of each day is explicitly kept (is_duplicate = false) and everything
+ * else explicitly excluded (is_duplicate = true), superseding any previous
+ * partial exclusion. Rows are never deleted — reversible, audit trail kept.
  *
  * Dry-run by default (prints the report, writes nothing). Pass --apply to
  * actually execute.
  *
  * Usage:
- *   npx ts-node scripts/backfill-collapse-near-duplicate-punches.ts            # dry run
- *   npx ts-node scripts/backfill-collapse-near-duplicate-punches.ts --apply    # execute
+ *   npx ts-node scripts/backfill-collapse-multi-punch-days.ts            # dry run
+ *   npx ts-node scripts/backfill-collapse-multi-punch-days.ts --apply    # execute
  *
- * Override the date range or window with env vars (defaults to the
- * 26 Jul – 25 Aug 2026 cycle and a 15-minute clustering window):
- *   BACKFILL_START=2026-07-26 BACKFILL_END=2026-08-25 BACKFILL_WINDOW_MIN=15 npx ts-node ...
+ * Override the date range with env vars (defaults to the 26 Jul – 25 Aug
+ * 2026 cycle):
+ *   BACKFILL_START=2026-07-26 BACKFILL_END=2026-08-25 npx ts-node ...
  */
 import { NestFactory } from '@nestjs/core';
 import { Module } from '@nestjs/common';
@@ -47,7 +50,6 @@ class BackfillModule {}
 
 const START = process.env.BACKFILL_START ?? '2026-07-26';
 const END = process.env.BACKFILL_END ?? '2026-08-25';
-const WINDOW_MS = (Number(process.env.BACKFILL_WINDOW_MIN) || 15) * 60 * 1000;
 const APPLY = process.argv.includes('--apply');
 
 function toUtcDate(s: string): Date {
@@ -63,7 +65,6 @@ async function main() {
   const endDate = toUtcDate(END);
 
   console.log(`Range: ${START} – ${END} (STAFF only)`);
-  console.log(`Clustering window: ${WINDOW_MS / 60000} minute(s)`);
   console.log(`Mode: ${APPLY ? 'APPLY (writes will happen)' : 'DRY RUN (no writes)'}\n`);
 
   // ── Report step: is there already a payroll run covering this period? ──
@@ -86,14 +87,13 @@ async function main() {
     console.log('No payroll run exists yet for this period — nothing to regenerate.\n');
   }
 
-  // ── Find affected person-days ──
+  // ── Find affected person-days (ALL scans, not just currently-non-duplicate ones) ──
   const scans = await prisma.zk_attendance_scans.findMany({
     where: {
       person_type: DevicePersonType.STAFF,
-      is_duplicate: false,
       attendance_date: { gte: startDate, lte: endDate },
     },
-    select: { id: true, employee_id: true, attendance_date: true, scan_time: true },
+    select: { id: true, employee_id: true, attendance_date: true, scan_time: true, is_duplicate: true },
     orderBy: [{ employee_id: 'asc' }, { attendance_date: 'asc' }, { scan_time: 'asc' }],
   });
 
@@ -108,47 +108,35 @@ async function main() {
     else groups.set(key, { employeeId: s.employee_id, date: s.attendance_date, scans: [s] });
   }
 
-  // Cluster each day's scans by gap-since-last-kept-scan, same rule as the
-  // codebase's own recomputeDayDuplicates, just with a wider window.
-  function clusterExcludes(dayScans: Scan[]): Scan[] {
-    const excluded: Scan[] = [];
-    let lastKept: Scan | null = null;
-    for (const s of dayScans) {
-      if (lastKept && s.scan_time.getTime() - lastKept.scan_time.getTime() < WINDOW_MS) {
-        excluded.push(s);
-      } else {
-        lastKept = s;
-      }
-    }
-    return excluded;
-  }
-
-  const affected: { group: Group; excluded: Scan[] }[] = [];
-  for (const g of groups.values()) {
-    if (g.scans.length < 2) continue;
-    const excluded = clusterExcludes(g.scans);
-    if (excluded.length > 0) affected.push({ group: g, excluded });
-  }
+  const affected = [...groups.values()].filter((g) => g.scans.length > 2);
 
   if (affected.length === 0) {
-    console.log('No near-duplicate scans found within the clustering window — nothing to backfill.');
+    console.log('No person-days with more than 2 scans found — nothing to backfill.');
     await app.close();
     return;
   }
 
   console.log(`Found ${affected.length} affected person-day(s):`);
   let totalExcluded = 0;
-  for (const { group: g, excluded } of affected) {
-    totalExcluded += excluded.length;
-    const excludedIds = new Set(excluded.map((s) => s.id));
-    const kept = g.scans.filter((s) => !excludedIds.has(s.id));
+  let alreadyCorrect = 0;
+  for (const g of affected) {
+    const first = g.scans[0];
+    const last = g.scans[g.scans.length - 1];
+    const middle = g.scans.slice(1, -1);
+    const needsChange =
+      middle.some((s) => !s.is_duplicate) || first.is_duplicate || last.is_duplicate;
+    if (!needsChange) {
+      alreadyCorrect++;
+      continue;
+    }
+    totalExcluded += middle.length;
     console.log(
-      `  employee=${g.employeeId} date=${g.date.toISOString().slice(0, 10)} scans=${g.scans.length} -> keeping ${kept.length} ` +
-        `[${kept.map((s) => s.scan_time.toISOString().slice(11, 19)).join(', ')}], ` +
-        `excluding ${excluded.length} [${excluded.map((s) => s.scan_time.toISOString().slice(11, 19)).join(', ')}]`,
+      `  employee=${g.employeeId} date=${g.date.toISOString().slice(0, 10)} scans=${g.scans.length} ` +
+        `(keeping first ${first.scan_time.toISOString()} + last ${last.scan_time.toISOString()}, ` +
+        `excluding ${middle.length})`,
     );
   }
-  console.log(`\nTotal scans to soft-exclude: ${totalExcluded}`);
+  console.log(`\nTotal scans to soft-exclude: ${totalExcluded} (${alreadyCorrect} day(s) already correctly first+last from the earlier pass)`);
 
   if (!APPLY) {
     console.log('\nDry run only — re-run with --apply to execute.');
@@ -159,18 +147,26 @@ async function main() {
   console.log('\nApplying...');
   let daysTouched = 0;
   const outcomeCounts = new Map<string, number>();
-  for (const { group: g, excluded } of affected) {
-    await prisma.zk_attendance_scans.updateMany({
-      where: { id: { in: excluded.map((s) => s.id) } },
-      data: { is_duplicate: true },
-    });
+  for (const g of affected) {
+    const first = g.scans[0];
+    const last = g.scans[g.scans.length - 1];
+    const middleIds = g.scans.slice(1, -1).map((s) => s.id);
+
+    const needsChange = g.scans.slice(1, -1).some((s) => !s.is_duplicate) || first.is_duplicate || last.is_duplicate;
+    if (!needsChange) continue;
+
+    await prisma.$transaction([
+      prisma.zk_attendance_scans.updateMany({ where: { id: { in: middleIds } }, data: { is_duplicate: true } }),
+      prisma.zk_attendance_scans.update({ where: { id: first.id }, data: { is_duplicate: false } }),
+      prisma.zk_attendance_scans.update({ where: { id: last.id }, data: { is_duplicate: false } }),
+    ]);
 
     const outcome = await processor.recomputePersonDay(
       DevicePersonType.STAFF,
       g.employeeId,
       null,
       g.date,
-      { actor: 'backfill-collapse-near-duplicate-punches', recomputeDuplicates: false },
+      { actor: 'backfill-collapse-multi-punch-days', recomputeDuplicates: false },
     );
     outcomeCounts.set(outcome.action, (outcomeCounts.get(outcome.action) ?? 0) + 1);
     if (outcome.action !== 'UPSERTED') {
