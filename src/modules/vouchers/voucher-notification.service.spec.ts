@@ -175,6 +175,16 @@ describe('VoucherNotificationService', () => {
       month: 7,
       status: 'UNPAID',
       students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
+      voucher_heads: [
+        {
+          student_fees: {
+            target_month: 7,
+            academic_year: '2025-2026',
+            fee_date: null,
+            term_start_month: 8,
+          },
+        },
+      ],
     });
 
     await service.sendVoucherIssuedNotification(100);
@@ -196,6 +206,101 @@ describe('VoucherNotificationService', () => {
     );
   });
 
+  it('sendVoucherIssuedNotification uses target_month for a single billed month', async () => {
+    prisma.vouchers.findUnique.mockResolvedValue({
+      id: 100,
+      student_id: 12345,
+      due_date: dateFromPktKey('2026-09-04'),
+      month: 7, // UI stamp — should be ignored when heads have target_month
+      fee_date: null,
+      class_id: null,
+      status: 'UNPAID',
+      students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
+      voucher_heads: [
+        {
+          student_fees: {
+            target_month: 8,
+            academic_year: '2025-2026',
+            fee_date: null,
+            term_start_month: 8,
+          },
+        },
+      ],
+    });
+
+    await service.sendVoucherIssuedNotification(100);
+
+    expect(fcm.sendToFamily).toHaveBeenCalledWith(
+      42,
+      'School Fees: AUG 25',
+      expect.stringContaining("Ali Khan's AUG 25 school fees"),
+      expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
+    );
+  });
+
+  it('sendVoucherIssuedNotification consolidates multi-month target_months', async () => {
+    prisma.vouchers.findUnique.mockResolvedValue({
+      id: 100,
+      student_id: 12345,
+      due_date: dateFromPktKey('2026-09-04'),
+      month: 7,
+      fee_date: null,
+      class_id: null,
+      status: 'UNPAID',
+      students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
+      voucher_heads: [
+        {
+          student_fees: {
+            target_month: 8,
+            academic_year: '2025-2026',
+            fee_date: null,
+            term_start_month: 8,
+          },
+        },
+        {
+          student_fees: {
+            target_month: 9,
+            academic_year: '2025-2026',
+            fee_date: null,
+            term_start_month: 8,
+          },
+        },
+      ],
+    });
+
+    await service.sendVoucherIssuedNotification(100);
+
+    expect(fcm.sendToFamily).toHaveBeenCalledWith(
+      42,
+      'School Fees: AUG 25 - SEP 25',
+      expect.stringContaining("Ali Khan's AUG 25 - SEP 25 school fees"),
+      expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
+    );
+  });
+
+  it('sendVoucherIssuedNotification falls back to voucher.month when heads have no target_month', async () => {
+    prisma.vouchers.findUnique.mockResolvedValue({
+      id: 100,
+      student_id: 12345,
+      due_date: dateFromPktKey('2026-07-10'),
+      month: 7,
+      fee_date: null,
+      class_id: null,
+      status: 'UNPAID',
+      students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
+      voucher_heads: [],
+    });
+
+    await service.sendVoucherIssuedNotification(100);
+
+    expect(fcm.sendToFamily).toHaveBeenCalledWith(
+      42,
+      'School Fees: July',
+      expect.stringContaining("Ali Khan's July school fees"),
+      expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
+    );
+  });
+
   it('sendVoucherIssuedNotification skips vouchers without family', async () => {
     prisma.vouchers.findUnique.mockResolvedValue({
       id: 100,
@@ -204,6 +309,7 @@ describe('VoucherNotificationService', () => {
       month: 7,
       status: 'UNPAID',
       students: { full_name: 'No Family', family_id: null, deleted_at: null },
+      voucher_heads: [],
     });
 
     const result = await service.sendVoucherIssuedNotification(100);

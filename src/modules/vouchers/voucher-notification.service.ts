@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { buildVoucherMonthsLabel } from '../../common/utils/academic-labels';
 import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 
@@ -31,6 +32,22 @@ const EXPIRY_REMINDER_OFFSETS: { days: number; alertType: VoucherAlertType }[] =
   { days: 1, alertType: VOUCHER_ALERT_TYPES.EXPIRY_REMINDER_1D },
 ];
 
+/** Prisma include for billed months on fee notifications (matches challan months_label). */
+const VOUCHER_FEE_MONTHS_INCLUDE = {
+  voucher_heads: {
+    include: {
+      student_fees: {
+        select: {
+          target_month: true,
+          academic_year: true,
+          fee_date: true,
+          term_start_month: true,
+        },
+      },
+    },
+  },
+} as const;
+
 function formatDatePKT(date: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
     weekday: 'long',
@@ -57,9 +74,18 @@ export function addPktDays(pktKey: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function monthLabel(month: number | null | undefined): string {
-  if (month == null || month < 1 || month > 12) return 'Fee';
-  return new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(2000, month - 1, 1));
+/** Same label as challan / parent-app months_label (from student_fees.target_month). */
+function voucherFeeMonthsLabel(voucher: {
+  month?: number | null;
+  fee_date?: Date | string | null;
+  class_id?: number | null;
+  voucher_heads?: Parameters<typeof buildVoucherMonthsLabel>[0];
+}): string {
+  return buildVoucherMonthsLabel(voucher.voucher_heads, {
+    month: voucher.month,
+    feeDate: voucher.fee_date,
+    classId: voucher.class_id,
+  });
 }
 
 @Injectable()
@@ -129,6 +155,7 @@ export class VoucherNotificationService {
       where: { id: voucherId },
       include: {
         students: { select: { full_name: true, family_id: true, deleted_at: true } },
+        ...VOUCHER_FEE_MONTHS_INCLUDE,
       },
     });
 
@@ -143,7 +170,7 @@ export class VoucherNotificationService {
     }
 
     const studentName = voucher.students?.full_name ?? 'Student';
-    const label = monthLabel(voucher.month);
+    const label = voucherFeeMonthsLabel(voucher);
     const dueFormatted = formatDatePKT(voucher.due_date);
     const vars = { student_name: studentName, month: label, due_date: dueFormatted };
 
@@ -185,6 +212,7 @@ export class VoucherNotificationService {
         },
         include: {
           students: { select: { full_name: true, family_id: true, cc: true } },
+          ...VOUCHER_FEE_MONTHS_INCLUDE,
         },
       });
 
@@ -194,7 +222,7 @@ export class VoucherNotificationService {
 
         const studentName = voucher.students?.full_name ?? 'Student';
         const dueFormatted = formatDatePKT(voucher.due_date);
-        const label = monthLabel(voucher.month);
+        const label = voucherFeeMonthsLabel(voucher);
         const daysKey = alertType.replace('DUE_REMINDER_', '').toLowerCase();
         const templateKey = `notif_fee_due_${daysKey}_title`;
         if (await isTemplateDisabled(this.prisma, templateKey)) continue;
@@ -273,6 +301,7 @@ export class VoucherNotificationService {
       },
       include: {
         students: { select: { full_name: true, family_id: true, cc: true } },
+        ...VOUCHER_FEE_MONTHS_INCLUDE,
       },
     });
 
@@ -283,7 +312,7 @@ export class VoucherNotificationService {
 
       const studentName = voucher.students?.full_name ?? 'Student';
       const dueFormatted = formatDatePKT(voucher.due_date);
-      const label = monthLabel(voucher.month);
+      const label = voucherFeeMonthsLabel(voucher);
       if (await isTemplateDisabled(this.prisma, 'notif_fee_overdue_title')) continue;
 
       const vars = { student_name: studentName, month: label, due_date: dueFormatted };
