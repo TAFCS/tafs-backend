@@ -40,6 +40,7 @@ const permissionsList = [
     { key: 'finance.vouchers.view', module: 'Finance Operations', description: 'View vouchers' },
     { key: 'finance.vouchers.download', module: 'Finance Operations', description: 'Download voucher PDFs' },
     { key: 'finance.vouchers.split_partial', module: 'Finance Operations', description: 'Split vouchers for partial pay' },
+    { key: 'finance.vouchers.release', module: 'Finance Operations', description: 'Release held vouchers to parents' },
     { key: 'finance.deposits.record', module: 'Finance Operations', description: 'Record new deposits' },
     { key: 'finance.deposits.view', module: 'Finance Operations', description: 'View deposit history' },
     { key: 'finance.banks.view', module: 'Finance Operations', description: 'View bank accounts' },
@@ -107,7 +108,7 @@ async function main() {
             'students.registration.view', 'students.enrollment.view', 'students.directory.view', 'students.families.view',
             'students.directory.edit', 'students.families.edit', // Principal can usually edit kids
             'fee_admin.fee_types.view', 'fee_admin.classwise_schedule.view', 'fee_admin.studentwise_schedule.view', 'fee_admin.bundles.view',
-            'finance.vouchers.view', 'finance.deposits.view', 'finance.banks.view',
+            'finance.vouchers.view', 'finance.vouchers.release', 'finance.deposits.view', 'finance.banks.view',
             'system.analytics.view', 'system.analytics.view_amounts',
             'hr.employees.view', 'hr.leave.apply', 'hr.leave.approve', 'attendance.reports.view',
             'attendance.staff.mark',

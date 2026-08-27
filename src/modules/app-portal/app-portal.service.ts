@@ -58,6 +58,11 @@ export class AppPortalService {
       },
       include: {
         fee_types: true,
+        voucher_heads: {
+          select: {
+            vouchers: { select: { released_to_parent_at: true } },
+          },
+        },
       },
       orderBy: [
         { academic_year: 'desc' },
@@ -65,7 +70,16 @@ export class AppPortalService {
       ],
     });
 
+    const isHeldFromParents = (fee: (typeof allFees)[number]) => {
+      const linked = fee.voucher_heads
+        .map((h) => h.vouchers)
+        .filter(Boolean);
+      if (linked.length === 0) return false;
+      return linked.every((v) => v.released_to_parent_at == null);
+    };
+
     const outstandingHeads = allFees.filter(fee => {
+      if (isHeldFromParents(fee)) return false;
       const isIssued = fee.status === 'ISSUED';
       const isPartial = fee.status === 'PARTIALLY_PAID';
       const notPaid = fee.status !== 'PAID';

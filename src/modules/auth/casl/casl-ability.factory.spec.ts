@@ -43,4 +43,23 @@ describe('CaslAbilityFactory', () => {
 
     expect(ability.can(Action.Manage, 'Chat')).toBe(true);
   });
+
+  it('maps finance.vouchers.release to VoucherRelease and not Voucher manage', () => {
+    const ability = factory.createForStaff(
+      staff({ permissions: ['finance.vouchers.release'] }),
+    );
+
+    expect(ability.can(Action.Manage, 'VoucherRelease')).toBe(true);
+    expect(ability.can(Action.Manage, 'Voucher')).toBe(false);
+    expect(ability.can(Action.Create, 'Voucher')).toBe(false);
+  });
+
+  it('does not grant VoucherRelease from finance.vouchers.generate_single', () => {
+    const ability = factory.createForStaff(
+      staff({ permissions: ['finance.vouchers.generate_single'] }),
+    );
+
+    expect(ability.can(Action.Manage, 'Voucher')).toBe(true);
+    expect(ability.can(Action.Manage, 'VoucherRelease')).toBe(false);
+  });
 });

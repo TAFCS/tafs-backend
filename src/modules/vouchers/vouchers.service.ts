@@ -16,6 +16,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, type TermContext } from '../../common/utils/academic-labels';
 import { getClassTermMap } from '../../common/utils/class-terms.util';
+import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
@@ -269,6 +270,7 @@ export class VouchersService {
         pdfBuffer?: Buffer,
         changedBy: string = 'system',
         auditParentId?: number | null,
+        bulkVoucherJobId?: number | null,
     ) {
         // --- Temporary Debug Check for orderedFeeIds ---
         if (!dto.orderedFeeIds || dto.orderedFeeIds.length === 0) {
@@ -379,6 +381,8 @@ export class VouchersService {
                     surcharge_waived_by: dto.waived_by || null,
                     generated_by_name: generatorName ?? null,
                     generated_at: new Date(),
+                    bulk_voucher_job_id: bulkVoucherJobId ?? null,
+                    released_to_parent_at: dto.requires_release ? null : new Date(),
                 },
                 include: VOUCHER_INCLUDE,
             });
@@ -727,6 +731,7 @@ export class VouchersService {
             monthLabel ? `Month: ${monthLabel}` : null,
             finalVoucher.academic_year ? `AY: ${finalVoucher.academic_year}` : null,
             `Instant parent notification: ${dto.send_notification === false ? 'No' : 'Yes'}`,
+            `Held for release: ${dto.requires_release ? 'Yes' : 'No'}`,
         ].filter(Boolean).join(' | ');
 
         if (auditParentId != null) {
@@ -774,10 +779,16 @@ export class VouchersService {
             });
         }
 
-        // Instant "voucher issued" push to the parents. The admin can opt out at
-        // generation time (send_notification === false); everything else — the
-        // scheduled due/overdue/expiry reminders — is unaffected by that choice.
-        if (dto.send_notification === false) {
+        // Instant "voucher issued" push to the parents. Held vouchers stay silent
+        // until an admin releases them (that path always fires the issued push).
+        // send_notification === false still suppresses the instant push for
+        // immediately-released vouchers; scheduled reminders are unaffected by
+        // that choice but skip anything still held.
+        if (dto.requires_release) {
+            this.logger.log(
+                `[Voucher ${finalVoucher.id}] Held for release — issued notification deferred until an admin releases it.`,
+            );
+        } else if (dto.send_notification === false) {
             this.logger.log(
                 `[Voucher ${finalVoucher.id}] Instant issued notification suppressed by admin at generation.`,
             );
@@ -812,6 +823,8 @@ export class VouchersService {
         multipleFeeHeads?: boolean,
         classScope: 'current' | 'as_issued' = 'current',
         studentStatus?: student_status[],
+        graduatedFromClassId?: string,
+        graduatedYearRange?: string,
     ) {
         try {
             const skip = (page - 1) * limit;
@@ -907,6 +920,20 @@ export class VouchersService {
                 // apart from the students actually sitting in the class.
                 ...(studentStatus?.length ? { status: { in: studentStatus } } : {}),
             };
+
+            // Where + when the student graduated. Also applies under either
+            // class_scope — graduated_from_class_id/graduated_at belong to the
+            // student, not the voucher's placement snapshot.
+            const graduationConditions = buildGraduationFilterWhere(
+                toIdList(graduatedFromClassId),
+                graduatedYearRange,
+            );
+            if (graduationConditions.length) {
+                studentWhere.AND = [
+                    ...(Array.isArray(studentWhere.AND) ? studentWhere.AND : studentWhere.AND ? [studentWhere.AND] : []),
+                    ...graduationConditions,
+                ];
+            }
 
             const where: Prisma.vouchersWhereInput = {
                 // student_id or cc both resolve to student_id (cc is the student PK)
@@ -1022,7 +1049,65 @@ export class VouchersService {
         }
     }
 
+    async findPendingRelease(filters: {
+        campus_id?: string;
+        class_id?: string;
+        bulk_voucher_job_id?: number;
+        cc?: number;
+        gr?: string;
+        page?: number;
+        limit?: number;
+    }) {
+        const page = filters.page ?? 1;
+        const limit = filters.limit ?? 50;
+        const skip = (page - 1) * limit;
 
+        const toIdList = (value?: string): number[] | undefined =>
+            value
+                ? value.split(',').map((v) => parseInt(v.trim(), 10)).filter((v) => !isNaN(v))
+                : undefined;
+
+        const campusIds = toIdList(filters.campus_id);
+        const classIds = toIdList(filters.class_id);
+
+        const studentWhere: Prisma.studentsWhereInput = {
+            ...(filters.gr ? { gr_number: { contains: filters.gr, mode: 'insensitive' as const } } : {}),
+        };
+
+        const where: Prisma.vouchersWhereInput = {
+            released_to_parent_at: null,
+            ...(filters.cc ? { student_id: filters.cc } : {}),
+            ...(filters.bulk_voucher_job_id != null ? { bulk_voucher_job_id: filters.bulk_voucher_job_id } : {}),
+            ...(campusIds?.length ? { campus_id: { in: campusIds } } : {}),
+            ...(classIds?.length ? { class_id: { in: classIds } } : {}),
+            ...(Object.keys(studentWhere).length ? { students: studentWhere } : {}),
+        };
+
+        const [total, vouchers, classTerms] = await Promise.all([
+            this.prisma.vouchers.count({ where }),
+            this.prisma.vouchers.findMany({
+                where,
+                include: VOUCHER_INCLUDE,
+                orderBy: [
+                    { bulk_voucher_job_id: 'asc' },
+                    { generated_at: 'desc' },
+                ],
+                skip,
+                take: limit,
+            }),
+            getClassTermMap(this.prisma),
+        ]);
+
+        return {
+            items: vouchers.map((v) => this.normalizeVoucher(v, classTerms)),
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit) || 1,
+            },
+        };
+    }
 
     /**
      * Is this voucher_head an "arrear" relative to the voucher it's on?
@@ -1922,11 +2007,16 @@ export class VouchersService {
                 ],
             };
 
+        // Staff by-student (no familyId) must still see held vouchers so they can
+        // review them. Parent-facing calls always pass familyId and must not.
+        const releaseFilter = familyId ? { released_to_parent_at: { not: null } } : {};
+
         const [vouchers, classTerms] = await Promise.all([
             this.prisma.vouchers.findMany({
                 where: {
                     student_id: cc,
                     ...voidFilter,
+                    ...releaseFilter,
                     ...(familyId ? { students: { family_id: familyId } } : {})
                 },
                 include: VOUCHER_INCLUDE,
@@ -1962,7 +2052,7 @@ export class VouchersService {
         // Scoped by student_id so a parent cannot mint another family's receipt
         // by guessing a voucher id.
         const voucher = await this.prisma.vouchers.findFirst({
-            where: { id: voucherId, student_id: studentCc },
+            where: { id: voucherId, student_id: studentCc, released_to_parent_at: { not: null } },
             select: { id: true, status: true, paid_pdf_url: true, paid_pdf_filename: true },
         });
 
@@ -2014,6 +2104,7 @@ export class VouchersService {
         // parent can see it and request regeneration (APP-01).
         const baseWhere = {
             student_id: studentCc,
+            released_to_parent_at: { not: null },
             OR: [
                 { academic_year: academicYear },
                 {
@@ -4166,6 +4257,9 @@ export class VouchersService {
                 // Stamp the splitter as generator of the new vouchers (new records).
                 generated_by_name: (await this.resolveGeneratedByName(changedBy)) ?? null,
                 generated_at: new Date(),
+                bulk_voucher_job_id: original.bulk_voucher_job_id ?? null,
+                released_to_parent_at: original.released_to_parent_at,
+                released_by: original.released_by,
             };
 
             // ── Step 5: Compute arrear totals for each split side.
@@ -5445,6 +5539,74 @@ export class VouchersService {
         });
 
         return deleted;
+    }
+
+    async releaseVouchers(ids: number[], changedBy: string = 'system') {
+        const uniqueIds = [...new Set(ids.filter((id) => Number.isFinite(id)))];
+        if (uniqueIds.length === 0) {
+            return { released: 0, skipped: 0, voucher_ids: [] as number[] };
+        }
+
+        const candidates = await this.prisma.vouchers.findMany({
+            where: { id: { in: uniqueIds } },
+            select: { id: true, released_to_parent_at: true, student_id: true, voucher_number: true },
+        });
+
+        const held = candidates.filter((v) => v.released_to_parent_at == null);
+        const skipped = uniqueIds.length - held.length;
+        const voucherIds = held.map((v) => v.id);
+
+        if (voucherIds.length === 0) {
+            return { released: 0, skipped, voucher_ids: [] as number[] };
+        }
+
+        const now = new Date();
+        await this.prisma.vouchers.updateMany({
+            where: { id: { in: voucherIds }, released_to_parent_at: null },
+            data: {
+                released_to_parent_at: now,
+                released_by: changedBy,
+            },
+        });
+
+        const [first, ...rest] = held;
+        await this.auditLogs.logGroup(
+            {
+                entity_type: 'VOUCHER',
+                entity_id: String(first.id),
+                action: 'RELEASED',
+                changed_by: changedBy,
+                student_id: first.student_id,
+                note: `Released ${voucherIds.length} voucher(s) to parents.`,
+            },
+            rest.map((v) => ({
+                entity_type: 'VOUCHER',
+                entity_id: String(v.id),
+                action: 'RELEASED',
+                student_id: v.student_id,
+                note: `Voucher #${v.id} (no. ${v.voucher_number || 'N/A'}) released to parents.`,
+            })),
+        );
+
+        for (const id of voucherIds) {
+            this.voucherNotificationService
+                .sendVoucherIssuedNotification(id)
+                .catch((err) =>
+                    this.logger.error(
+                        `[Voucher ${id}] Issued notification after release failed: ${(err as Error).message}`,
+                    ),
+                );
+        }
+
+        return { released: voucherIds.length, skipped, voucher_ids: voucherIds };
+    }
+
+    async releaseByBulkJobId(jobId: number, changedBy: string = 'system') {
+        const held = await this.prisma.vouchers.findMany({
+            where: { bulk_voucher_job_id: jobId, released_to_parent_at: null },
+            select: { id: true },
+        });
+        return this.releaseVouchers(held.map((v) => v.id), changedBy);
     }
 
     async remove(id: number, changedBy: string = 'system') {

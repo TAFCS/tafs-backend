@@ -25,4 +25,5 @@ export type AppSubjects =
   | 'SupportTicket'
   | 'Chat'
   | 'Timetable'
+  | 'VoucherRelease'
   | 'all';

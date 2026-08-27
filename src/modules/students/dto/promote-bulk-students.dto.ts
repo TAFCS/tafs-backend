@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   Min,
   ValidateIf,
   ValidateNested,
@@ -81,6 +82,18 @@ export class PromoteBulkStudentsDto {
   @IsOptional()
   @IsString()
   target_academic_year?: string;
+
+  /**
+   * Explicit academic year to record as graduated_academic_year — the year the
+   * student was studying in when they graduated. Only meaningful when `graduate`
+   * is true. If omitted, defaults to each student's own current academic_year.
+   * NOT the same as `target_academic_year` (destination academic_year going
+   * forward) or `academic_year` (source filter, below).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_academic_year must be in YYYY-YYYY format' })
+  graduated_academic_year?: string;
 
   /** SOURCE filter — which campus students must currently be on. */
   @IsOptional()

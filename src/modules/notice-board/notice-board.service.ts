@@ -188,6 +188,18 @@ export class NoticeBoardService {
         })
       : [];
     const creatorMap = new Map(creators.map((u) => [u.id, u.full_name]));
+    const holidayReadCounts = await this._holidayReadCounts(holidays);
+    const holidayReachCache = new Map<string, number>();
+    const uniqueHolidayScopes = new Map<string, (typeof holidays)[number]>();
+    for (const h of holidays) {
+      const key = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
+      if (!uniqueHolidayScopes.has(key)) uniqueHolidayScopes.set(key, h);
+    }
+    await Promise.all(
+      [...uniqueHolidayScopes.entries()].map(async ([key, h]) => {
+        holidayReachCache.set(key, await this._countAudienceFamilies(this._holidayAudience(h)));
+      }),
+    );
 
     const holidayPosts = holidays.map((h) => {
       const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
@@ -195,6 +207,7 @@ export class NoticeBoardService {
       const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || defaultDesc);
       const creatorName = h.created_by ? creatorMap.get(h.created_by) : null;
       const title = h.day_type === 'WORKDAY' ? 'School Open' : 'School Closed';
+      const reachKey = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
       return {
         id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
         posted_by: h.created_by || 'System',
@@ -214,8 +227,8 @@ export class NoticeBoardService {
         expires_at: null,
         deleted_at: null,
         users: { full_name: creatorName || h.created_by || 'System' },
-        _count: { post_reads: 0 },
-        total_reached: 0,
+        _count: { post_reads: holidayReadCounts.get(h.id) ?? 0 },
+        total_reached: holidayReachCache.get(reachKey) ?? 0,
       };
     });
 
@@ -556,11 +569,17 @@ export class NoticeBoardService {
 
   async getReadStats(postId: string | number) {
     if (String(postId).startsWith('holiday-')) {
-      return {
-        post_id: postId,
-        total_reached: 0,
-        total_read: 0,
-      };
+      const holidayId = parseInt(String(postId).replace('holiday-', ''), 10);
+      const holiday = await this.prisma.academic_calendar_days.findUnique({
+        where: { id: holidayId },
+      });
+      if (!holiday) throw new NotFoundException('Holiday not found');
+
+      const [total_reached, total_read] = await Promise.all([
+        this._countAudienceFamilies(this._holidayAudience(holiday)),
+        this._countHolidayFamilyReads(holiday),
+      ]);
+      return { post_id: postId, total_reached, total_read };
     }
 
     const numericId = typeof postId === 'number' ? postId : parseInt(postId, 10);
@@ -700,6 +719,99 @@ export class NoticeBoardService {
     if (studentStatuses.length) parts.push(`status ${studentStatuses.join(', ')}`);
     if (academicYears.length) parts.push(academicYears.join(', '));
     return parts.join(', ') || 'targeted';
+  }
+
+  private _holidayAlertType(dayType: string): 'HOLIDAY' | 'SCHOOL_OPEN' {
+    return dayType === 'WORKDAY' ? 'SCHOOL_OPEN' : 'HOLIDAY';
+  }
+
+  private _holidayAudience(h: {
+    campus_id: number;
+    class_id: number | null;
+    section_id: number | null;
+  }) {
+    return {
+      campus_ids: [h.campus_id],
+      class_ids: h.class_id ? [h.class_id] : [],
+      section_ids: h.section_id ? [h.section_id] : [],
+      student_ccs: [],
+      student_statuses: [student_status.ENROLLED],
+      academic_years: [],
+    };
+  }
+
+  private _sameCalendarDate(a: Date, b: Date): boolean {
+    return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+  }
+
+  private async _countHolidayFamilyReads(h: {
+    date: Date;
+    campus_id: number;
+    class_id: number | null;
+    section_id: number | null;
+    day_type: string;
+  }): Promise<number> {
+    const rows = await this.prisma.calendar_notifications.findMany({
+      where: {
+        date: h.date,
+        alert_type: this._holidayAlertType(h.day_type),
+        read_at: { not: null },
+        students: {
+          campus_id: h.campus_id,
+          ...(h.class_id ? { class_id: h.class_id } : {}),
+          ...(h.section_id ? { section_id: h.section_id } : {}),
+        },
+      },
+      distinct: ['family_id'],
+      select: { family_id: true },
+    });
+    return rows.length;
+  }
+
+  private async _holidayReadCounts(
+    holidays: {
+      id: number;
+      date: Date;
+      campus_id: number;
+      class_id: number | null;
+      section_id: number | null;
+      day_type: string;
+    }[],
+  ): Promise<Map<number, number>> {
+    const counts = new Map<number, number>();
+    if (!holidays.length) return counts;
+
+    const rows = await this.prisma.calendar_notifications.findMany({
+      where: {
+        date: { in: holidays.map((h) => h.date) },
+        alert_type: { in: ['HOLIDAY', 'SCHOOL_OPEN'] },
+        read_at: { not: null },
+        students: {
+          campus_id: { in: [...new Set(holidays.map((h) => h.campus_id))] },
+        },
+      },
+      select: {
+        family_id: true,
+        date: true,
+        alert_type: true,
+        students: { select: { campus_id: true, class_id: true, section_id: true } },
+      },
+    });
+
+    for (const h of holidays) {
+      const alertType = this._holidayAlertType(h.day_type);
+      const families = new Set<number>();
+      for (const row of rows) {
+        if (row.alert_type !== alertType) continue;
+        if (!this._sameCalendarDate(row.date, h.date)) continue;
+        if (row.students.campus_id !== h.campus_id) continue;
+        if (h.class_id != null && row.students.class_id !== h.class_id) continue;
+        if (h.section_id != null && row.students.section_id !== h.section_id) continue;
+        families.add(row.family_id);
+      }
+      counts.set(h.id, families.size);
+    }
+    return counts;
   }
 
   private async _countAudienceFamilies(post: {

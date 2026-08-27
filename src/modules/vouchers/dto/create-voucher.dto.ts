@@ -157,6 +157,20 @@ export class CreateVoucherDto {
     @IsOptional()
     send_notification?: boolean;
 
+    /**
+     * When true, the voucher is created held (`released_to_parent_at` stays null):
+     * invisible to parents and silent until an admin with finance.vouchers.release
+     * explicitly releases it. Default (omitted/false) matches today's behaviour.
+     */
+    @Transform(({ value }) =>
+        value === undefined || value === null || value === ''
+            ? undefined
+            : value === 'true' || value === true,
+    )
+    @IsBoolean()
+    @IsOptional()
+    requires_release?: boolean;
+
     /** Pre-computed surcharge groups from an outer computeArrears() call. When present,
      *  create() skips its internal computeArrears() call to avoid a redundant DB round-trip. */
     @IsOptional()

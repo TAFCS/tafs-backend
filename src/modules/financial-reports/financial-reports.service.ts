@@ -11,6 +11,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { applyStudentScope } from '../../common/staff-scope';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
+import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 import {
   calendarYearOf,
   getMonthYearLabel,
@@ -1438,6 +1439,10 @@ export class FinancialReportsService {
     const includesGraduated = query.student_status?.includes(
       student_status.GRADUATED,
     );
+    const graduationConditions = buildGraduationFilterWhere(
+      query.graduated_from_class_id,
+      query.graduated_year_range,
+    );
     const studentWhere: Prisma.studentsWhereInput = {
       deleted_at: null,
       ...(query.campus_id?.length && { campus_id: { in: query.campus_id } }),
@@ -1460,6 +1465,7 @@ export class FinancialReportsService {
       ...(query.is_complementary !== undefined && {
         is_complementary: query.is_complementary,
       }),
+      ...(graduationConditions.length && { AND: graduationConditions }),
     };
     return applyStudentScope(user, studentWhere, {
       campus_id: query.campus_id,
@@ -1478,6 +1484,10 @@ export class FinancialReportsService {
   ): Prisma.studentsWhereInput {
     const includesGraduated = query.student_status?.includes(
       student_status.GRADUATED,
+    );
+    const graduationConditions = buildGraduationFilterWhere(
+      query.graduated_from_class_id,
+      query.graduated_year_range,
     );
     const studentWhere: Prisma.studentsWhereInput = {
       deleted_at: null,
@@ -1502,6 +1512,7 @@ export class FinancialReportsService {
       ...(query.is_complementary !== undefined && {
         is_complementary: query.is_complementary,
       }),
+      ...(graduationConditions.length && { AND: graduationConditions }),
     };
     return applyStudentScope(user, studentWhere, {
       campus_id: query.campus_id,

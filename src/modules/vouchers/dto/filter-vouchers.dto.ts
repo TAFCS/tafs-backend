@@ -129,4 +129,14 @@ export class FilterVouchersDto {
     @IsOptional()
     @IsIn(['current', 'as_issued'])
     class_scope?: 'current' | 'as_issued' = 'current';
+
+    @ApiPropertyOptional({ description: 'Filter by the class the student graduated from (students.graduated_from_class_id), comma-separated for multiple. Applies under either class_scope.' })
+    @IsOptional()
+    @IsString()
+    graduated_from_class_id?: string;
+
+    @ApiPropertyOptional({ description: 'Filter by graduation academic-year range, "YYYY-YYYY" (e.g. 2025-2026). Window is Apr-Mar or Aug-Jul depending on the graduated class\'s term system.' })
+    @IsOptional()
+    @IsString()
+    graduated_year_range?: string;
 }

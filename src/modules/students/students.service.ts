@@ -19,6 +19,7 @@ import { ReturnStudentDto } from './dto/return-student.dto';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { allocateSequentialGrNumbers, resolveCampusGrPrefix } from '../../common/utils/gr-number.util';
+import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
 
@@ -342,6 +343,16 @@ export class StudentsService {
       (where.AND as any).push({
         quick_admission_meta: { equals: Prisma.DbNull },
       });
+    }
+
+    // Graduation filters (where + when the student graduated).
+    const graduationConditions = buildGraduationFilterWhere(
+      query.graduated_from_class_id,
+      query.graduated_year_range,
+    );
+    if (graduationConditions.length) {
+      if (!where.AND) where.AND = [];
+      (where.AND as Prisma.studentsWhereInput[]).push(...graduationConditions);
     }
 
     if (user) {
@@ -1791,7 +1802,10 @@ export class StudentsService {
       status: StudentStatus.ENROLLED,
     };
     if (nextClassId != null) updateData.class_id = nextClassId;
-    if (departureStatus === StudentStatus.GRADUATED) updateData.graduated_at = null;
+    if (departureStatus === StudentStatus.GRADUATED) {
+      updateData.graduated_at = null;
+      updateData.graduated_academic_year = null;
+    }
     if (isReadmission) {
       updateData.gr_number = nextGrNumber;
       updateData.house_id = nextHouseId;
@@ -1928,7 +1942,7 @@ export class StudentsService {
     return this.prisma.$transaction(run);
   }
 
-  async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload) {
+  async changeStatus(id: number, newStatus: StudentStatus, reason?: string, changedBy?: string, user?: IJwtStaffPayload, graduatedAcademicYear?: string) {
     const student = await this.prisma.students.findUnique({
       where: { cc: id },
       select: { cc: true, status: true, deleted_at: true, class_id: true, academic_year: true, campus_id: true, full_name: true, graduated_from_class_id: true },
@@ -1976,6 +1990,9 @@ export class StudentsService {
         }
         updateData.class_id = null;
         updateData.graduated_at = new Date();
+        // Staff override if provided, else the year they were studying in —
+        // captured BEFORE incrementAcademicYear() below.
+        updateData.graduated_academic_year = graduatedAcademicYear?.trim() || student.academic_year;
         // Auto-increment academic year (e.g. 2023-2024 → 2024-2025)
         updateData.academic_year = this.incrementAcademicYear(student.academic_year);
       } else if (student.status === StudentStatus.GRADUATED && newStatus === StudentStatus.ENROLLED) {
@@ -1984,6 +2001,7 @@ export class StudentsService {
           updateData.class_id = student.graduated_from_class_id;
         }
         updateData.graduated_at = null;
+        updateData.graduated_academic_year = null;
       }
 
       const updated = await tx.students.update({
@@ -2245,6 +2263,7 @@ export class StudentsService {
       expel: dto.expel,
       left: dto.left,
       target_academic_year: dto.target_academic_year,
+      graduated_academic_year: dto.graduated_academic_year,
       to_section_id: dto.to_section_id,
       student_ids: [dto.student_id],
       reason: dto.reason,
@@ -2383,6 +2402,7 @@ export class StudentsService {
             dto.to_section_id,
             dto.reason,
             dto.target_academic_year,
+            dto.graduated_academic_year,
             dryRun,
             classActiveCache,
             sectionActiveCache,
@@ -2409,6 +2429,7 @@ export class StudentsService {
             dto.to_section_id,
             dto.reason,
             dto.target_academic_year,
+            dto.graduated_academic_year,
             dryRun,
             classActiveCache,
             sectionActiveCache,
@@ -2516,6 +2537,7 @@ export class StudentsService {
     toSectionId: number | undefined,
     reason: string | undefined,
     targetAcademicYear: string | undefined,
+    graduatedAcademicYear: string | undefined,
     dryRun: boolean,
     classActiveCache: Map<string, boolean>,
     sectionActiveCache: Map<string, boolean>,
@@ -2598,6 +2620,11 @@ export class StudentsService {
     const nextAcademicYear = targetAcademicYear?.trim()
       ? targetAcademicYear.trim()
       : this.incrementAcademicYear(student.academic_year);
+
+    // Staff override if provided, else the year they were studying in.
+    const graduatedAcademicYearValue = graduatedAcademicYear?.trim()
+      ? graduatedAcademicYear.trim()
+      : student.academic_year;
 
     // ── Already at target guard ──────────────────────────────────────────────
     if (!isGraduating && toClass) {
@@ -2827,6 +2854,7 @@ export class StudentsService {
               graduated_from_class_id: student.class_id,
               class_id: null,
               graduated_at: new Date(),
+              graduated_academic_year: graduatedAcademicYearValue,
               academic_year: nextAcademicYear,
             },
           });

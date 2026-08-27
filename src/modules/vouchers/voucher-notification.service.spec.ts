@@ -52,6 +52,7 @@ describe('VoucherNotificationService', () => {
     validity_date: dateFromPktKey('2026-07-10'),
     month: 7,
     status: 'UNPAID',
+    released_to_parent_at: dateFromPktKey('2026-07-01'),
     students: {
       full_name: 'Ali Khan',
       family_id: 42,
@@ -97,6 +98,7 @@ describe('VoucherNotificationService', () => {
         where: expect.objectContaining({
           status: 'UNPAID',
           due_date: dateFromPktKey('2026-07-04'),
+          released_to_parent_at: { not: null },
         }),
       }),
     );
@@ -156,6 +158,7 @@ describe('VoucherNotificationService', () => {
         where: expect.objectContaining({
           status: 'OVERDUE',
           validity_date: dateFromPktKey('2026-07-04'),
+          released_to_parent_at: { not: null },
         }),
       }),
     );
@@ -174,6 +177,7 @@ describe('VoucherNotificationService', () => {
       due_date: dateFromPktKey('2026-07-10'),
       month: 7,
       status: 'UNPAID',
+      released_to_parent_at: dateFromPktKey('2026-07-01'),
       students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
       voucher_heads: [
         {
@@ -308,8 +312,25 @@ describe('VoucherNotificationService', () => {
       due_date: dateFromPktKey('2026-07-10'),
       month: 7,
       status: 'UNPAID',
+      released_to_parent_at: dateFromPktKey('2026-07-01'),
       students: { full_name: 'No Family', family_id: null, deleted_at: null },
       voucher_heads: [],
+    });
+
+    const result = await service.sendVoucherIssuedNotification(100);
+    expect(result).toBeNull();
+    expect(fcm.sendToFamily).not.toHaveBeenCalled();
+  });
+
+  it('sendVoucherIssuedNotification skips vouchers still held for release', async () => {
+    prisma.vouchers.findUnique.mockResolvedValue({
+      id: 100,
+      student_id: 12345,
+      due_date: dateFromPktKey('2026-07-10'),
+      month: 7,
+      status: 'UNPAID',
+      released_to_parent_at: null,
+      students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
     });
 
     const result = await service.sendVoucherIssuedNotification(100);
