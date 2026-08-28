@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MeezanBillInquiryDto } from './dto/bill-inquiry.dto';
 import { MeezanBillPaymentDto } from './dto/bill-payment.dto';
-import { fee_status_enum } from '@prisma/client';
+import { Prisma, fee_status_enum } from '@prisma/client';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { VouchersService } from '../vouchers/vouchers.service';
 
 @Injectable()
 export class MeezanService {
@@ -12,6 +13,7 @@ export class MeezanService {
   constructor(
     private prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly vouchersService: VouchersService,
   ) {}
 
   private validateAuth(serviceUserId: string, userPassword: string, billCompanyCode?: string) {
@@ -199,28 +201,61 @@ export class MeezanService {
           },
         });
 
+        // Cap what gets credited by what the bank actually collected
+        // (dto.TransAmount) — this used to blindly pay off every head's full
+        // balance regardless of the transferred amount, which also meant a
+        // discount-bearing voucher had its discount's own positive `amount`
+        // auto-collected as if it were real fee cash. The gap left by an
+        // attached discount is closed below via applyDiscountCreditInTx,
+        // the same helper VouchersService.recordDeposit uses.
+        let pool = new Prisma.Decimal(dto.TransAmount);
+        const touchedHeadIds: number[] = [];
+
         for (const head of voucher.voucher_heads) {
-          const headBalance =
-            Number(head.student_fees.amount) - Number(head.student_fees.amount_paid);
-          if (headBalance <= 0) continue;
+          if (head.student_fees.is_discount) continue; // never auto-collect a discount head as cash
+          if (pool.lte(0)) break;
+
+          const headBalance = new Prisma.Decimal(head.student_fees.amount ?? 0).sub(
+            new Prisma.Decimal(head.student_fees.amount_paid ?? 0),
+          );
+          if (headBalance.lte(0)) continue;
+
+          const toApply = Prisma.Decimal.min(pool, headBalance);
+          if (toApply.lte(0)) continue;
 
           await tx.deposit_allocations.create({
             data: {
               deposit_id: deposit.id,
               student_fee_id: head.student_fee_id,
               voucher_id: voucher.id,
-              amount: headBalance,
+              amount: toApply,
               type: 'FEE_HEAD',
             },
           });
 
+          const totalPaid = new Prisma.Decimal(head.student_fees.amount_paid ?? 0).add(toApply);
           await tx.student_fees.update({
             where: { id: head.student_fee_id },
             data: {
-              amount_paid: { increment: headBalance },
-              status: fee_status_enum.PAID,
+              amount_paid: totalPaid,
+              status: toApply.eq(headBalance) ? fee_status_enum.PAID : fee_status_enum.PARTIALLY_PAID,
             },
           });
+
+          const newDeposited = new Prisma.Decimal(head.amount_deposited ?? 0).add(toApply);
+          await tx.voucher_heads.update({
+            where: { id: head.id },
+            data: {
+              amount_deposited: newDeposited,
+              balance: Prisma.Decimal.max(
+                new Prisma.Decimal(head.net_amount ?? 0).sub(newDeposited),
+                new Prisma.Decimal(0),
+              ),
+            },
+          });
+
+          touchedHeadIds.push(head.id);
+          pool = pool.sub(toApply);
         }
 
         // Surcharges exist because of an OLDER unpaid month, not because this
@@ -228,31 +263,73 @@ export class MeezanService {
         // bank quoted and collected (total_payable_before_due), so they must
         // always be settled here regardless of isOverdue. Gating this on
         // isOverdue let the bank collect the surcharge cash while the system
-        // kept recording it as unpaid.
+        // kept recording it as unpaid. Also capped by the same pool as heads.
         const surcharges = voucher.voucher_arrear_surcharges.filter((s) => !s.waived);
         for (const s of surcharges) {
-          const sBalance = Number(s.amount) - Number(s.amount_paid);
-          if (sBalance <= 0) continue;
+          if (pool.lte(0)) break;
+          const sBalance = new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0));
+          if (sBalance.lte(0)) continue;
+          const toApply = Prisma.Decimal.min(pool, sBalance);
+          if (toApply.lte(0)) continue;
 
           await tx.deposit_allocations.create({
             data: {
               deposit_id: deposit.id,
               voucher_id: voucher.id,
               surcharge_id: s.id,
-              amount: sBalance,
+              amount: toApply,
               type: 'SURCHARGE',
             },
           });
 
           await tx.voucher_arrear_surcharges.update({
             where: { id: s.id },
-            data: { amount_paid: { increment: sBalance } },
+            data: { amount_paid: { increment: toApply } },
           });
+
+          pool = pool.sub(toApply);
         }
+
+        // Close any remaining shortfall (typically exactly the size of an
+        // attached discount) via discount credit, same as a manual deposit.
+        if (touchedHeadIds.length > 0) {
+          await this.vouchersService.applyDiscountCreditInTx(
+            tx,
+            voucher.id,
+            touchedHeadIds,
+            deposit.id,
+          );
+        }
+
+        // Recompute status from what's actually left, instead of assuming the
+        // bank's transaction always covers the voucher in full.
+        const refreshedHeads = await tx.voucher_heads.findMany({ where: { voucher_id: voucher.id } });
+        const remainingHeads = refreshedHeads.reduce(
+          (sum, h) => sum.add(new Prisma.Decimal(h.balance ?? 0)),
+          new Prisma.Decimal(0),
+        );
+        const refreshedSurcharges = await (tx as any).voucher_arrear_surcharges.findMany({
+          where: { voucher_id: voucher.id, waived: false },
+        });
+        const remainingSurcharges = refreshedSurcharges.reduce(
+          (sum: Prisma.Decimal, s: any) =>
+            sum.add(new Prisma.Decimal(s.amount).sub(new Prisma.Decimal(s.amount_paid ?? 0))),
+          new Prisma.Decimal(0),
+        );
+        const anyDeposited =
+          refreshedHeads.some((h) => new Prisma.Decimal(h.amount_deposited ?? 0).gt(0)) ||
+          refreshedSurcharges.some((s: any) => new Prisma.Decimal(s.amount_paid ?? 0).gt(0));
+
+        const nextStatus =
+          remainingHeads.lte(0) && remainingSurcharges.lte(0)
+            ? 'PAID'
+            : anyDeposited
+              ? 'PARTIALLY_PAID'
+              : voucher.status;
 
         await tx.vouchers.update({
           where: { id: voucher.id },
-          data: { status: 'PAID' },
+          data: { status: nextStatus },
         });
       });
 

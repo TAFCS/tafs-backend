@@ -637,7 +637,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [rows, cash, byType, discounts] = await Promise.all([
+    const [rows, cash, byType, discounts, appliedDiscounts] = await Promise.all([
       this.prisma.deposits.findMany({
         where,
         select: DEPOSIT_SELECT,
@@ -656,6 +656,7 @@ export class FinancialReportsService {
         _sum: { amount: true },
       }),
       this.depositsDiscountTotal(query, user),
+      this.depositsAppliedDiscountTotal(query, user),
     ]);
 
     return {
@@ -665,6 +666,8 @@ export class FinancialReportsService {
         ...this.buildDepositTotals(cash, byType),
         discounts_total: discounts.amount,
         discounts_count: discounts.count,
+        discounts_applied_total: appliedDiscounts.amount,
+        discounts_applied_count: appliedDiscounts.count,
       },
     };
   }
@@ -2029,6 +2032,30 @@ export class FinancialReportsService {
     return { amount: this.toMoney(agg._sum.amount), count: agg._count };
   }
 
+  /**
+   * Sibling to depositsDiscountTotal above, not a replacement — that one answers
+   * "how much discount is scheduled in this period" (by fee_date, useful even for
+   * discounts not yet realized against a paid voucher); this one answers "how much
+   * discount was actually realized/applied to close a voucher in this period" (by
+   * deposit_date, via the 'DISCOUNT' deposit_allocations VouchersService.recordDeposit
+   * and MeezanService.handleBillPayment now write). Both are legitimate, different
+   * questions — keep both tiles rather than picking one.
+   */
+  private async depositsAppliedDiscountTotal(
+    query: ListDepositsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<{ amount: number; count: number }> {
+    const agg = await this.prisma.deposit_allocations.aggregate({
+      where: {
+        type: 'DISCOUNT',
+        deposits: this.buildDepositsWhere(query, user),
+      },
+      _sum: { amount: true },
+      _count: true,
+    });
+    return { amount: this.toMoney(agg._sum.amount), count: agg._count };
+  }
+
   private mapFeeHead(
     row: Prisma.student_feesGetPayload<{ select: typeof FEE_HEAD_SELECT }>,
     classTerms: ReadonlyMap<number, number>,
@@ -2165,10 +2192,14 @@ export class FinancialReportsService {
     const allocationsTotal = this.roundMoney(feeHeads + lateFee + surcharge);
     const totalAmount = this.toMoney(cash._sum.total_amount);
     const cashDecimal = new Prisma.Decimal(cash._sum.total_amount ?? 0);
-    const allocDecimal = byType.reduce(
-      (sum, row) => sum.plus(row._sum.amount ?? 0),
-      new Prisma.Decimal(0),
-    );
+    // 'DISCOUNT' allocations are a non-cash credit (see
+    // VouchersService.applyDiscountCreditInTx) — excluded here the same way
+    // allocationsTotal above already only names FEE_HEAD/LATE_FEE/SURCHARGE,
+    // otherwise a legitimately-applied discount would make this look like an
+    // unreconciled cash discrepancy.
+    const allocDecimal = byType
+      .filter((row) => row.type !== 'DISCOUNT')
+      .reduce((sum, row) => sum.plus(row._sum.amount ?? 0), new Prisma.Decimal(0));
 
     return {
       count: cash._count,

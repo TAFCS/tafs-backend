@@ -3415,6 +3415,12 @@ export class StudentsService {
     const paymentDays: number[] = [];
 
     fees.forEach((f) => {
+      // A discount isn't something the student owes — it reduces what's owed. Without
+      // this it inflated total_due with no consistent offset (amount_paid on a
+      // discount row only starts moving once it's actually applied to close a real
+      // head's balance — see VouchersService.applyDiscountCreditInTx).
+      if ((f as any).is_discount) return;
+
       // Rule: total dues should only calculate the fees of challans with status NOT void
       // This ensures we exclude "NOT_ISSUED" fees and "VOID" vouchers from the collection rate denominator.
       const hasValidVoucher = f.voucher_heads.some((vh) => vh.vouchers.status !== 'VOID');
@@ -3502,14 +3508,26 @@ export class StudentsService {
       })),
       voucher_totals: {
         total_payable: Number(v.total_payable_before_due),
-        total_deposited: v.deposit_allocations.reduce((s, a) => s + Number(a.amount), 0),
-        outstanding_balance: Number(v.total_payable_before_due) - v.deposit_allocations.reduce((s, a) => s + Number(a.amount), 0)
+        // 'DISCOUNT' allocations are a non-cash credit, not money banked — exclude
+        // them so this stays a real cash-collected figure (see
+        // VouchersService.applyDiscountCreditInTx for why they exist).
+        total_deposited: v.deposit_allocations
+          .filter((a) => (a as any).type !== 'DISCOUNT')
+          .reduce((s, a) => s + Number(a.amount), 0),
+        outstanding_balance: Number(v.total_payable_before_due) - v.deposit_allocations
+          .filter((a) => (a as any).type !== 'DISCOUNT')
+          .reduce((s, a) => s + Number(a.amount), 0)
       }
     }));
 
     // Format Fee Heads Tab
     const monthMap = new Map<number, any>();
     fees.forEach((f) => {
+      // Same rationale as the totalDue/totalPaid loop above — a discount isn't a
+      // fee the student owes, and showing its amount_paid grow as it's applied
+      // would confusingly read as "the discount is now being paid".
+      if ((f as any).is_discount) return;
+
       if (!monthMap.has(f.target_month)) {
         monthMap.set(f.target_month, {
           target_month: f.target_month,
@@ -3566,7 +3584,14 @@ export class StudentsService {
       allocations: d.deposit_allocations.map((a) => {
         const sf = a.student_fees as any;
         let feeTypeDescription: string;
-        if (sf) {
+        // Checked before the `sf` branch below: a 'DISCOUNT' allocation's
+        // student_fee_id points at the *target* head it closed (see
+        // VouchersService.applyDiscountCreditInTx), not the discount itself, so
+        // without this it would silently fall into the `sf` branch and get
+        // mislabeled as an ordinary cash payment on that head.
+        if ((a as any).type === 'DISCOUNT') {
+          feeTypeDescription = 'Discount Applied';
+        } else if (sf) {
           const prefix = sf.description_prefix ? `${sf.description_prefix} ` : '';
           feeTypeDescription = `${prefix}${sf.fee_types?.description || 'Fee'}`;
         } else if ((a as any).type === 'LATE_FEE') {
