@@ -2383,6 +2383,7 @@ export class VouchersService {
         }
 
         let createdDepositId: number | undefined;
+        let discountApplied = new Prisma.Decimal(0);
 
         // 2. LEAN TRANSACTION
         await this.prisma.$transaction(
@@ -2621,6 +2622,21 @@ export class VouchersService {
                     );
                 }
 
+                // ── Step C2: auto-apply any available discount credit ──────────
+                // If a discount is attached to this voucher, whichever of the heads
+                // just touched by this deposit is still short after cash (because
+                // staff/auto-fill entered the discounted total, not the gross one)
+                // gets that shortfall closed by the discount here — see
+                // applyDiscountCreditInTx for why this can't just be cash.
+                if (distributionHeadIds.length > 0) {
+                    discountApplied = await this.applyDiscountCreditInTx(
+                        tx,
+                        voucherId,
+                        distributionHeadIds,
+                        depositRecord.id,
+                    );
+                }
+
                 // ── Step D: Update late_fee_deposited on voucher ───────────────
                 if (lateFeeAmount.gt(0)) {
                     await tx.vouchers.update({
@@ -2702,18 +2718,183 @@ export class VouchersService {
         );
 
         if (createdDepositId) {
+            const discountNote = discountApplied.gt(0)
+                ? ` Discount credit of Rs. ${discountApplied.toFixed(2)} auto-applied to close the remaining balance.`
+                : '';
             await this.auditLogs.log({
                 entity_type: 'DEPOSIT',
                 entity_id: String(createdDepositId),
                 action: 'CREATED',
                 changed_by: changedBy,
                 student_id: voucher.student_id,
-                note: `Deposit of Rs. ${depositAmount.toFixed(2)} registered (Ref: ${dto.reference_number || 'N/A'}, Method: ${dto.payment_method || 'N/A'}) against Voucher #${voucherId}.`,
+                note: `Deposit of Rs. ${depositAmount.toFixed(2)} registered (Ref: ${dto.reference_number || 'N/A'}, Method: ${dto.payment_method || 'N/A'}) against Voucher #${voucherId}.${discountNote}`,
             });
         }
 
         // 3. FINAL FULL FETCH
         return this.findOne(voucherId);
+    }
+
+    /**
+     * Applies a voucher's still-available discount capacity to close the
+     * balance on whichever of `eligibleHeadIds` (voucher_heads ids) still has
+     * a positive balance — normally because cash was distributed to it up to
+     * the *net-of-discount* amount, leaving a gap exactly the size of the
+     * discount. A discount head's own `voucher_heads.balance` is hardcoded to
+     * 0 at creation (see `create()`) and can never itself receive a cash
+     * distribution, so this is the only place a discount actually gets
+     * "spent" against what a family owes.
+     *
+     * `student_fees.amount` on a discount row is stored POSITIVE (the
+     * discount's size) — see StudentFeesService.createDiscount. The sign
+     * flip only ever happens on `voucher_heads.net_amount` at voucher
+     * creation; this method works directly with that positive capacity.
+     *
+     * `eligibleHeadIds`: the specific voucher_heads ids this deposit touched,
+     * or `'ALL'` for automated flows (Meezan) with no interactive "which
+     * heads did staff pick" concept. Restricting to touched heads for manual
+     * deposits keeps this from ever reaching into a head the depositor
+     * didn't intend to pay this cycle.
+     *
+     * Candidate heads are closed in `id` ascending order — a plain,
+     * deterministic tie-break. In the overwhelming common case there is at
+     * most one head left short, so ordering doesn't matter; multiple
+     * simultaneously-short heads only happen from unusual manual partial
+     * distributions, where there is no domain-defined "correct" order anyway.
+     *
+     * Returns the total amount actually applied (0 if there's no discount on
+     * this voucher, or no capacity left).
+     */
+    /** Public — MeezanService's bank auto-reconciliation flow also uses this. */
+    async applyDiscountCreditInTx(
+        tx: Prisma.TransactionClient,
+        voucherId: number,
+        eligibleHeadIds: number[] | 'ALL',
+        depositId: number,
+    ): Promise<Prisma.Decimal> {
+        const heads = await tx.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            include: { student_fees: true },
+        });
+
+        const discountFees = heads
+            .filter((h) => h.student_fees?.is_discount)
+            .map((h) => h.student_fees!)
+            .sort((a, b) => a.id - b.id);
+        if (discountFees.length === 0) return new Prisma.Decimal(0);
+
+        const totalCapacity = discountFees.reduce(
+            (sum, f) => sum.add(new Prisma.Decimal(f.amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+
+        const consumedAgg = await tx.deposit_allocations.aggregate({
+            where: { voucher_id: voucherId, type: 'DISCOUNT' },
+            _sum: { amount: true },
+        });
+        let remainingPool = Prisma.Decimal.max(
+            totalCapacity.sub(new Prisma.Decimal(consumedAgg._sum.amount ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        if (remainingPool.lte(0)) return new Prisma.Decimal(0);
+
+        const candidateHeads = heads
+            .filter((h) => !h.student_fees?.is_discount)
+            .filter((h) => eligibleHeadIds === 'ALL' || eligibleHeadIds.includes(h.id))
+            .filter((h) => new Prisma.Decimal(h.balance ?? 0).gt(0))
+            .sort((a, b) => a.id - b.id);
+
+        let totalApplied = new Prisma.Decimal(0);
+        for (const head of candidateHeads) {
+            if (remainingPool.lte(0)) break;
+            const fee = head.student_fees!;
+            const headBalance = new Prisma.Decimal(head.balance ?? 0);
+            const toApply = Prisma.Decimal.min(remainingPool, headBalance);
+            if (toApply.lte(0)) continue;
+
+            const newDeposited = new Prisma.Decimal(head.amount_deposited ?? 0).add(toApply);
+            const newBalance = Prisma.Decimal.max(
+                new Prisma.Decimal(head.net_amount ?? 0).sub(newDeposited),
+                new Prisma.Decimal(0),
+            );
+            await tx.voucher_heads.update({
+                where: { id: head.id },
+                data: { amount_deposited: newDeposited, balance: newBalance },
+            });
+
+            const totalPaid = new Prisma.Decimal(fee.amount_paid ?? 0).add(toApply);
+            const canonicalAmount = new Prisma.Decimal(fee.amount ?? 0);
+            const nextStatus = totalPaid.gte(canonicalAmount)
+                ? 'PAID'
+                : totalPaid.gt(0)
+                    ? 'PARTIALLY_PAID'
+                    : 'ISSUED';
+            await tx.student_fees.update({
+                where: { id: fee.id },
+                data: { amount_paid: totalPaid, status: nextStatus as any },
+            });
+
+            await tx.deposit_allocations.create({
+                data: {
+                    deposit_id: depositId,
+                    voucher_id: voucherId,
+                    student_fee_id: fee.id,
+                    amount: toApply,
+                    type: 'DISCOUNT',
+                },
+            });
+
+            totalApplied = totalApplied.add(toApply);
+            remainingPool = remainingPool.sub(toApply);
+        }
+
+        if (totalApplied.gt(0)) {
+            await this.syncDiscountHeadsAmountPaidInTx(tx, voucherId);
+        }
+
+        return totalApplied;
+    }
+
+    /**
+     * Keeps a discount head's own `amount_paid` in sync with how much of it
+     * has actually been consumed. No `deposit_allocations` row ever points at
+     * a discount head's own id (a 'DISCOUNT' allocation's `student_fee_id` is
+     * the *target* head it closed — see applyDiscountCreditInTx), so nothing
+     * else derives this. Purely a bookkeeping/display value: it feeds
+     * normalizeVoucher's "how much of this discount is still available"
+     * check and lets a discount head visibly show as consumed. Recomputed
+     * from source (never incremented) so a deposit reversal that removes
+     * 'DISCOUNT' allocations correctly brings this back down too.
+     */
+    private async syncDiscountHeadsAmountPaidInTx(
+        tx: Prisma.TransactionClient,
+        voucherId: number,
+    ): Promise<void> {
+        const heads = await tx.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            include: { student_fees: true },
+        });
+        const discountFees = heads
+            .filter((h) => h.student_fees?.is_discount)
+            .map((h) => h.student_fees!)
+            .sort((a, b) => a.id - b.id);
+        if (discountFees.length === 0) return;
+
+        const consumedAgg = await tx.deposit_allocations.aggregate({
+            where: { voucher_id: voucherId, type: 'DISCOUNT' },
+            _sum: { amount: true },
+        });
+        let remaining = new Prisma.Decimal(consumedAgg._sum.amount ?? 0);
+
+        for (const fee of discountFees) {
+            const capacity = new Prisma.Decimal(fee.amount ?? 0);
+            const applied = Prisma.Decimal.min(remaining, capacity);
+            remaining = remaining.sub(applied);
+            await tx.student_fees.update({
+                where: { id: fee.id },
+                data: { amount_paid: applied },
+            });
+        }
     }
 
     /**
@@ -2828,6 +3009,11 @@ export class VouchersService {
                         data: { amount_deposited: deposited, balance },
                     });
                 }
+
+                // A reversed deposit may have included a 'DISCOUNT' allocation (the
+                // cascade delete on `deposits` already removed it) — bring the
+                // discount head's own amount_paid back down to match.
+                await this.syncDiscountHeadsAmountPaidInTx(tx, vId);
 
                 const remLate = await tx.deposit_allocations.aggregate({
                     where: { voucher_id: vId, type: 'LATE_FEE' },
@@ -2977,6 +3163,12 @@ export class VouchersService {
             await tx.deposit_allocations.deleteMany({
                 where: { deposit_id: depositId, voucher_id: voucherId },
             });
+
+            // Sync the discount head's own amount_paid now, before branching below —
+            // whichever branch runs (destroy or recompute), the voucher/heads still
+            // exist at this point, and this deposit's 'DISCOUNT' allocation (if any)
+            // is already gone.
+            await this.syncDiscountHeadsAmountPaidInTx(tx, voucherId);
 
             // ── Step 2: Delete the deposit record if it is now fully orphaned.
             const remainingOnDeposit = await tx.deposit_allocations.count({
@@ -4802,6 +4994,12 @@ export class VouchersService {
         const updatedHeads: any[] = [];
         let totalRemHeads = new Prisma.Decimal(0);
         let anyHeadPaidSomewhere = false;
+        // How much of this voucher's attached discount(s) hasn't yet been consumed
+        // by applyDiscountCreditInTx — subtracted from the live balance below so
+        // total_balance (what the deposit UI asks for) is net-of-discount. amount_paid
+        // on a discount row is stored positive and only ever moves via that helper /
+        // syncDiscountHeadsAmountPaidInTx, never by a cash deposit against the row itself.
+        let totalUnappliedDiscount = new Prisma.Decimal(0);
 
         this.logger.debug(`Normalizing Voucher #${voucher.id} (DB Status: ${voucher.status})`);
 
@@ -4817,8 +5015,15 @@ export class VouchersService {
             // Discount rows (is_discount=true) have net_amount<0 and balance=0.
             // They reduce total_payable at voucher creation time and must never be
             // counted in totalRemHeads — doing so would add the discount amount as
-            // positive debt instead of subtracting it.
+            // positive debt instead of subtracting it. Their still-unconsumed
+            // capacity is tracked separately (totalUnappliedDiscount) and subtracted
+            // from the live balance further down.
             if (fee.is_discount) {
+                const capacity = new Prisma.Decimal(fee.amount ?? 0);
+                const consumed = new Prisma.Decimal(fee.amount_paid ?? 0);
+                totalUnappliedDiscount = totalUnappliedDiscount.add(
+                    Prisma.Decimal.max(capacity.sub(consumed), new Prisma.Decimal(0)),
+                );
                 updatedHeads.push({
                     ...h,
                     balance: '0',
@@ -4926,6 +5131,16 @@ export class VouchersService {
         dueDate.setHours(0, 0, 0, 0);
         const isOverdue = today > dueDate;
         const remOverall = isOverdue ? totalRemHeads.add(remLS) : totalRemHeads;
+        // A discount never offsets a late payment surcharge — only subtract it from
+        // the heads portion before adding remLS, so total_balance (what staff are
+        // asked to actually collect) is net-of-discount without ever waiving a late
+        // fee. Status derivation (allHeadsPaid, below) intentionally still uses the
+        // raw totalRemHeads — a voucher only becomes PAID from a real deposit.
+        const netTotalRemHeads = Prisma.Decimal.max(
+            totalRemHeads.sub(totalUnappliedDiscount),
+            new Prisma.Decimal(0),
+        );
+        const netRemOverall = isOverdue ? netTotalRemHeads.add(remLS) : netTotalRemHeads;
 
         this.logger.debug(`  Voucher #${voucher.id} Final Calculation: headRemTotal=${totalRemHeads}, remLS=${remLS}, isOverdue=${isOverdue} => remOverall=${remOverall}`);
 
@@ -4982,7 +5197,8 @@ export class VouchersService {
             // Add explicitly for frontend convenience
             surcharge_balance: surchargeRemTotal.toFixed(2),
             head_balance: totalRemHeads.toFixed(2),
-            total_balance: (remOverall.add(surchargeRemTotal)).toFixed(2),
+            total_balance: (netRemOverall.add(surchargeRemTotal)).toFixed(2),
+            total_discount_unapplied: totalUnappliedDiscount.toFixed(2),
             total_deposited: (updatedHeads.reduce((s, h) => s.add(new Prisma.Decimal(h.amount_deposited ?? 0)), new Prisma.Decimal(0)).add(depLS).add(surchargeDepTotal)).toFixed(2),
         };
     }
