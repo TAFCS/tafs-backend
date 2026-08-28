@@ -340,7 +340,14 @@ export class RollSessionsService {
         },
         include: this.sessionInclude(),
       });
-      await this.announcements.announceSessionSkipped(session.id);
+      void this.announcements
+        .announceSessionSkipped(session.id)
+        .catch((e) =>
+          console.error(
+            `Roll session #${session.id}: announceSessionSkipped failed`,
+            e,
+          ),
+        );
       return this.enrichWithRoster(session);
     }
 
@@ -504,7 +511,14 @@ export class RollSessionsService {
         note: `Roll session #${id} submitted (${recordCount}/${rosterCount} marked).`,
       });
 
-      await this.announcements.announceSessionTaken(id);
+      // Fire-and-forget: a failure in the parent/admin announcement fan-out
+      // (socket emit, FCM, chat message write) must not fail the request —
+      // the attendance itself is already committed at this point.
+      void this.announcements
+        .announceSessionTaken(id)
+        .catch((e) =>
+          console.error(`Roll session #${id}: announceSessionTaken failed`, e),
+        );
     }
 
     return this.findOne(id, user);
@@ -545,7 +559,11 @@ export class RollSessionsService {
       note: `Roll session #${id} skipped: ${dto.reason || 'no reason'}.`,
     });
 
-    await this.announcements.announceSessionSkipped(id);
+    void this.announcements
+      .announceSessionSkipped(id)
+      .catch((e) =>
+        console.error(`Roll session #${id}: announceSessionSkipped failed`, e),
+      );
     return this.findOne(id, user);
   }
 
