@@ -53,6 +53,7 @@ staff-data/cleaned/employee-credentials.csv
 # temp directory
 .temp
 .tmp
+temp-backups/
 
 # Runtime data
 pids

@@ -25,7 +25,7 @@ const PERMS = [
 const TARGETS: Array<{ username: string; campus_id: number; label: string }> = [
   { username: 's.amir', campus_id: 1, label: 'Sultana Amir (JOHAR)' },
   { username: 'samreen.ali', campus_id: 1, label: 'Samreen Ali (JOHAR)' },
-  { username: 'anita.principal', campus_id: 1, label: 'Syeda Anita (JOHAR)' },
+  { username: 'syeda.anita', campus_id: 1, label: 'Syeda Anita (JOHAR)' },
   { username: 'sana.zaka', campus_id: 1, label: 'Sana Zaka (JOHAR)' },
   { username: 'jasmine.nusrat', campus_id: 1, label: 'Jasmine Nusrat (JOHAR)' },
   { username: 'rehmat.kamran', campus_id: 1, label: 'Rehmat Kamran (JOHAR)' },
