@@ -77,18 +77,22 @@ export class RollSessionsService {
   }
 
   /**
-   * A class/teaching group with an actual timetable slot on this weekday
-   * genuinely holds lessons that day — that's stronger evidence than the
-   * generic Mon–Fri weekend default, which has no idea A-Level runs
-   * Saturday classes. Only overrides the *default* weekend fallback; an
-   * explicit calendar HOLIDAY/WEEKEND row (a real day off) still wins.
+   * Roll-call classes (A-Level AS/A2) hold Saturday lessons, but the generic
+   * Mon–Fri weekend default has no idea of that and reports Saturday as a day
+   * off. Treat that *default* Saturday weekend as a working day for roll call.
+   * Sunday stays off, and an explicit calendar HOLIDAY/WEEKEND row for the
+   * date (source 'CALENDAR' — a real declared day off) still wins.
    */
   private isRollCallWorkingDay(
     dayResolved: ResolvedCalendarDay,
-    hasTimetableSlot: boolean,
+    sessionDate: Date,
   ): boolean {
     if (dayResolved.isWorkingDay) return true;
-    return hasTimetableSlot && dayResolved.source === 'DEFAULT' && dayResolved.dayType === 'WEEKEND';
+    return (
+      dayResolved.source === 'DEFAULT' &&
+      dayResolved.dayType === 'WEEKEND' &&
+      sessionDate.getUTCDay() === 6
+    );
   }
 
   private async assertCampusSection(
@@ -371,7 +375,7 @@ export class RollSessionsService {
       return this.enrichWithRoster(existing);
     }
 
-    if (!this.isRollCallWorkingDay(dayResolved, Boolean(timetableSlotId))) {
+    if (!this.isRollCallWorkingDay(dayResolved, sessionDate)) {
       const skipReason = `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`;
       const session = await this.prisma.attendance_roll_sessions.create({
         data: {
@@ -461,7 +465,7 @@ export class RollSessionsService {
       session.session_date,
     );
     if (
-      !this.isRollCallWorkingDay(dayResolved, Boolean(session.timetable_slot_id)) &&
+      !this.isRollCallWorkingDay(dayResolved, session.session_date) &&
       dto.records?.length
     ) {
       throw new BadRequestException(
@@ -656,10 +660,7 @@ export class RollSessionsService {
           session.section_id,
           today,
         );
-        const reason = !this.isRollCallWorkingDay(
-          dayResolved,
-          Boolean(session.timetable_slot_id),
-        )
+        const reason = !this.isRollCallWorkingDay(dayResolved, today)
           ? `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`
           : `Auto-skipped: roll call not submitted by ${cutoffTime}`;
 
