@@ -615,6 +615,8 @@ model student_fees {
   @@index([precedence_override], map: "idx_student_fees_precedence")
   @@index([student_id, is_discount], map: "idx_student_fees_discount")
   @@index([fee_date], map: "idx_student_fees_fee_date")
+  @@index([student_id, status, fee_date], map: "idx_student_fees_student_status_fee_date")
+  @@index([student_id, academic_year, target_month], map: "idx_student_fees_student_year_month")
 }
 
 model discount_presets {
@@ -908,6 +910,7 @@ model voucher_arrear_surcharges {
   vouchers            vouchers              @relation(fields: [voucher_id], references: [id], onDelete: Cascade)
 
   @@index([voucher_id])
+  @@index([voucher_id, waived], map: "idx_voucher_arrear_surcharges_voucher_waived")
 }
 
 model vouchers {
@@ -963,6 +966,7 @@ model vouchers {
 
   @@index([bulk_voucher_job_id])
   @@index([released_to_parent_at])
+  @@index([student_id, status], map: "idx_vouchers_student_status")
 }
 
 model bundle_fee_type_names {

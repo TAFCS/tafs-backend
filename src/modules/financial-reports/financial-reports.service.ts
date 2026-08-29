@@ -15,19 +15,32 @@ import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter
 import {
   calendarYearOf,
   getMonthYearLabel,
+  monthAbsoluteIndex,
   termOfHead,
 } from '../../common/utils/academic-labels';
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import {
+  bandForMonthsBehind,
+  LPS_PER_ARREAR_MONTH,
+  SEVERITY_BANDS,
+  SEVERITY_BAND_LABELS,
+  type SeverityBand,
+} from './defaulter-severity';
 import type {
+  DefaulterSortField,
+  DefaulterView,
+  ExportDefaultersQueryDto,
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
   FinancialReportQueryDto,
+  ListDefaultersQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
   ListFeeMatrixQueryDto,
+  StudentScopeFilterQueryDto,
 } from './dto/financial-report-query.dto';
 import type {
   CreateFeeHeadsSnapshotDto,
@@ -169,6 +182,124 @@ export type ExportFile = {
   buffer: Buffer;
   filename: string;
   contentType: string;
+};
+
+/**
+ * Hard ceiling on the Defaulters report's scoped student fetch. Unlike
+ * STATS_ROW_CAP this THROWS rather than truncating — see listDefaulters.
+ */
+const SCOPE_ROW_CAP = 25_000;
+
+const DEFAULTER_STUDENT_SELECT = {
+  cc: true,
+  gr_number: true,
+  full_name: true,
+  status: true,
+  campus_id: true,
+  class_id: true,
+  graduated_from_class_id: true,
+  is_fee_endowment: true,
+  is_complementary: true,
+  campuses: { select: { campus_name: true } },
+  classes: { select: { description: true } },
+  graduated_from_class: { select: { description: true } },
+  sections: { select: { description: true } },
+} satisfies Prisma.studentsSelect;
+
+/** MATRIX_HEAD_SELECT plus the three columns the arrear predicate needs. */
+const DEFAULTER_HEAD_SELECT = {
+  ...MATRIX_HEAD_SELECT,
+  fee_date: true,
+  amount_paid: true,
+  amount_before_discount: true,
+  is_arrear_surcharge: true,
+} satisfies Prisma.student_feesSelect;
+
+type DefaulterStudent = Prisma.studentsGetPayload<{
+  select: typeof DEFAULTER_STUDENT_SELECT;
+}>;
+type DefaulterHead = Prisma.student_feesGetPayload<{
+  select: typeof DEFAULTER_HEAD_SELECT;
+}>;
+
+/** Raw shape off $queryRaw, before ::int/::float8 values are normalised. */
+type DefaulterAggregateRaw = {
+  student_id: number;
+  months_behind: number;
+  months_behind_billed: number;
+  months_behind_unbilled: number;
+  arrears_outstanding: number | null;
+  arrear_head_count: number;
+  oldest_arrear_fee_date: Date | null;
+  newest_arrear_fee_date: Date | null;
+};
+
+type DefaulterAggregate = {
+  student_id: number;
+  months_behind: number;
+  months_behind_billed: number;
+  months_behind_unbilled: number;
+  arrears_outstanding: number;
+  arrear_head_count: number;
+  oldest_arrear_fee_date: Date | null;
+  newest_arrear_fee_date: Date | null;
+};
+
+type DefaulterRow = DefaulterAggregate & {
+  severity: SeverityBand;
+  student: DefaulterStudent;
+};
+
+type StripCellState = 'not_billed' | 'unpaid' | 'partial' | 'paid';
+
+type StripCell = {
+  year: number;
+  month: number;
+  state: StripCellState;
+  /** Counted toward months_behind — this, not `state`, is what gets tinted red. */
+  is_arrear: boolean;
+  amount: number;
+  outstanding: number;
+  head_count: number;
+  /** (academic_year, target_month) keys in this cell; >1 when a term change straddles it. */
+  group_keys: string[];
+};
+
+type LpsTotals = {
+  charged: number;
+  paid: number;
+  outstanding: number;
+  waived: number;
+};
+
+type LpsPerStudent = LpsTotals & {
+  distinct_months: number;
+  unreleased_voucher_count: number;
+};
+
+type PaymentBehaviour = {
+  last_payment_date: Date | null;
+  payments_last_6m: number;
+  paid_last_6m: number;
+  payments_last_12m: number;
+  paid_last_12m: number;
+};
+
+const EMPTY_LPS: LpsPerStudent = {
+  charged: 0,
+  paid: 0,
+  outstanding: 0,
+  waived: 0,
+  distinct_months: 0,
+  unreleased_voucher_count: 0,
+};
+
+const EMPTY_PAYMENTS: PaymentBehaviour = {
+  last_payment_date: null,
+  payments_last_6m: 0,
+  paid_last_6m: 0,
+  payments_last_12m: 0,
+  paid_last_12m: 0,
 };
 
 @Injectable()
@@ -1231,6 +1362,1133 @@ export class FinancialReportsService {
     );
   }
 
+  /**
+   * Defaulters — students carrying arrears across multiple distinct months.
+   *
+   * THE DEFINITION HERE IS VouchersService.computeArrears (vouchers.service.ts
+   * :5214) AND NOTHING ELSE. An arrear is an unpaid, non-discount fee head with
+   * a fee_date strictly before as_of_date and outstanding > 0; "one month
+   * behind" is one distinct (academic_year, target_month) pair among those
+   * heads — the same key computeArrears groups on to decide how many Rs 1000
+   * late payment surcharges the next voucher carries. So months_behind is also
+   * the surcharge count that voucher would bill.
+   *
+   * Two other, mutually contradictory "arrears" definitions exist in this
+   * codebase — students.service.ts:3399 (academic_year mismatch) and
+   * analytics.service.ts:104 (due_date < today, ISSUED/PARTIALLY_PAID only,
+   * which explicitly documents the former as wrong). This report matches
+   * NEITHER, on purpose. Expect the numbers to differ from both.
+   *
+   * NOT_ISSUED heads count, matching the engine — but they mean the office
+   * never billed the family, so they are also reported separately as
+   * months_behind_unbilled rather than being silently folded into severity.
+   */
+  async listDefaulters(
+    query: ListDefaultersQueryDto,
+    user: IJwtStaffPayload,
+    /**
+     * Page-size ceiling. Defaults to the HTTP page cap; only exportDefaulters
+     * raises it. Without this the export would silently emit 200 rows of a
+     * 500-row list — the same clamp does exactly that to the Fee Heads rollup
+     * exports today (they pass EXPORT_ROW_CAP+1 into methods that cap at 200).
+     */
+    options: { maxLimit?: number } = {},
+  ) {
+    const asOfDate = query.as_of_date ?? this.todayDateOnly();
+    const stripMonths = Math.min(query.strip_months ?? 12, 24);
+    const view = query.view ?? 'students';
+    const minMonthsBehind = query.min_months_behind ?? 1;
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 50, options.maxLimit ?? 200);
+
+    const asOf = this.parseYearMonthOfDate(asOfDate);
+    const columns = view === 'students' ? this.stripMonthColumns(asOf, stripMonths) : [];
+
+    // Step 1 — resolve the scoped student set through the SAME path every other
+    // report uses. applyStudentScope throws ForbiddenException for out-of-scope
+    // campus/class, and this is the only place that can happen: the raw query
+    // below is scoped purely by construction, seeing only ids that survive here.
+    const studentWhere: Prisma.studentsWhereInput = {
+      ...this.buildStudentWhere(query, user),
+      ...(query.cc != null && { cc: query.cc }),
+    };
+    const scoped = await this.prisma.students.findMany({
+      where: studentWhere,
+      select: DEFAULTER_STUDENT_SELECT,
+      take: SCOPE_ROW_CAP + 1,
+    });
+    // Throw rather than truncate. Unlike the matrix's STATS_ROW_CAP — where a
+    // clipped tail only degrades a sidebar statistic — a clipped student set
+    // here corrupts months_behind ranking, pagination, and every rollup
+    // denominator, silently and invisibly.
+    if (scoped.length > SCOPE_ROW_CAP) {
+      throw new BadRequestException(
+        `This report is limited to ${SCOPE_ROW_CAP.toLocaleString()} students. Narrow the campus, class, or status filters.`,
+      );
+    }
+    if (scoped.length === 0) {
+      return this.emptyDefaultersResponse(asOfDate, stripMonths, view, columns, page, limit);
+    }
+
+    // Step 2 — one pass in Postgres. See loadDefaulterAggregates.
+    const [aggregates, classTerms] = await Promise.all([
+      this.loadDefaulterAggregates(
+        scoped.map((s) => s.cc),
+        asOfDate,
+        minMonthsBehind,
+      ),
+      this.loadClassTerms(),
+    ]);
+
+    // Step 3 — join metadata, band, apply the severity filter. Everything from
+    // here to the page slice runs over the WHOLE filtered set, so totals and
+    // rollups never describe just the rows on screen.
+    const studentByCc = new Map(scoped.map((s) => [s.cc, s]));
+    let rows: DefaulterRow[] = [];
+    for (const agg of aggregates) {
+      const student = studentByCc.get(agg.student_id);
+      const severity = bandForMonthsBehind(agg.months_behind);
+      if (!student || !severity) continue;
+      rows.push({ ...agg, severity, student });
+    }
+    if (query.severity?.length) {
+      const wanted = new Set(query.severity);
+      rows = rows.filter((r) => wanted.has(r.severity));
+    }
+
+    const lpsTotals = await this.loadDefaulterLpsTotals(
+      rows.map((r) => r.student_id),
+    );
+
+    const shared = {
+      as_of_date: asOfDate,
+      strip_months: stripMonths,
+      view,
+      columns: columns.map((c) => ({
+        year: c.year,
+        month: c.month,
+        label: this.formatColumnLabel(c),
+      })),
+      totals: this.buildDefaulterTotals(rows, scoped.length, lpsTotals),
+      severity_distribution: this.buildSeverityDistribution(rows),
+      truncated: false,
+    };
+
+    if (view === 'aging') {
+      const items = this.buildAgingRows(rows, scoped.length);
+      return {
+        ...shared,
+        items,
+        pagination: createPaginationMeta(1, items.length || 1, items.length),
+      };
+    }
+
+    if (view === 'by_class' || view === 'by_campus') {
+      const all = this.buildDefaulterRollup(rows, scoped, view);
+      return {
+        ...shared,
+        items: all.slice((page - 1) * limit, page * limit),
+        pagination: createPaginationMeta(page, limit, all.length),
+      };
+    }
+
+    // students view — sort the whole set, then hydrate only the page slice with
+    // the strip, LPS, and payment-behaviour figures.
+    const sorted = this.sortDefaulterRows(rows, query.sort_by, query.sort_dir);
+    const pageRows = sorted.slice((page - 1) * limit, page * limit);
+    const items = await this.buildDefaulterStudentRows(
+      pageRows,
+      columns,
+      classTerms,
+      asOfDate,
+    );
+
+    return {
+      ...shared,
+      items,
+      pagination: createPaginationMeta(page, limit, sorted.length),
+    };
+  }
+
+  /**
+   * One pass in Postgres: for every scoped student, the unpaid heads before the
+   * as-of date, grouped into distinct arrear months.
+   *
+   * Raw SQL rather than Prisma because months_behind is a COUNT of DISTINCT
+   * (academic_year, target_month) pairs, which Prisma cannot express — and it is
+   * the sort key AND the pagination key, so it cannot be approximated by
+   * fetching a capped set of heads and aggregating in JS the way listFeeMatrix
+   * does. The candidate set is also unbounded in time (no lower fee_date bound,
+   * NOT_ISSUED included), i.e. the entire unpaid tail of student_fees.
+   *
+   * Every predicate below mirrors computeArrears (vouchers.service.ts:5222):
+   *  - COALESCE(amount, amount_before_discount, 0) is `fee.amount ??
+   *    fee.amount_before_discount ?? 0` — amount is nullable, and dropping the
+   *    fallback loses real dues from both the filter and the money total.
+   *  - The `> 0` outstanding filter is the `outstanding.lte(0) continue` guard.
+   *    Status alone is NOT sufficient: an ISSUED head can be fully covered by
+   *    allocations without its status having flipped.
+   *  - fee_date IS NOT NULL is stated rather than left to SQL's three-valued
+   *    logic, so the exclusion is a choice. Undated heads genuinely cannot be
+   *    arrears (computeArrears:5253 asserts fee_date non-null downstream).
+   *  - fee_date < as_of is STRICTLY less than: a head dated exactly as_of_date
+   *    is not an arrear.
+   *  - Scalar `<> 'PAID'` rather than NOT IN so the query still matches if a
+   *    partial index is ever justified outside Prisma (see the migration note).
+   *    Caveat: status is nullable, and `NULL <> 'PAID'` is NULL, so NULL-status
+   *    rows drop — identical to Prisma's notIn, which the engine uses.
+   */
+  private async loadDefaulterAggregates(
+    ids: number[],
+    asOfDate: string,
+    minMonthsBehind: number,
+  ): Promise<DefaulterAggregate[]> {
+    // Prisma.join([]) emits invalid SQL.
+    if (ids.length === 0) return [];
+
+    const rows = await this.prisma.$queryRaw<DefaulterAggregateRaw[]>(Prisma.sql`
+      WITH candidates AS (
+          SELECT sf.student_id,
+                 NULLIF(btrim(sf.academic_year), '') AS academic_year,
+                 sf.target_month,
+                 sf.fee_date,
+                 sf.status,
+                 COALESCE(sf.amount, sf.amount_before_discount, 0)
+                   - COALESCE(sf.amount_paid, 0) AS outstanding
+          FROM public.student_fees sf
+          WHERE sf.student_id IN (${Prisma.join(ids)})
+            AND sf.fee_date IS NOT NULL
+            AND sf.fee_date < ${asOfDate}::date
+            AND sf.is_arrear_surcharge = false
+            AND sf.is_discount = false
+            AND sf.status <> 'PAID'
+            AND sf.status <> 'DISCOUNT'
+            AND COALESCE(sf.amount, sf.amount_before_discount, 0)
+                  - COALESCE(sf.amount_paid, 0) > 0
+      ),
+      -- Money counts EVERY candidate, matching computeArrears' total_arrears.
+      money AS (
+          SELECT student_id,
+                 SUM(outstanding)::float8 AS arrears_outstanding,
+                 COUNT(*)::int            AS arrear_head_count,
+                 MIN(fee_date)            AS oldest_arrear_fee_date,
+                 MAX(fee_date)            AS newest_arrear_fee_date
+          FROM candidates
+          GROUP BY student_id
+      ),
+      -- Months count only rows with a usable year+month, matching the
+      -- "fee.academic_year && fee.target_month != null" guard at :5254.
+      -- NULLIF(btrim(...), '') above reproduces that JS truthiness on ''.
+      groups AS (
+          SELECT student_id, academic_year, target_month,
+                 bool_or(status <> 'NOT_ISSUED') AS was_billed
+          FROM candidates
+          WHERE academic_year IS NOT NULL AND target_month IS NOT NULL
+          GROUP BY student_id, academic_year, target_month
+      ),
+      per_student AS (
+          SELECT student_id,
+                 COUNT(*)::int                               AS months_behind,
+                 COUNT(*) FILTER (WHERE was_billed)::int     AS months_behind_billed,
+                 COUNT(*) FILTER (WHERE NOT was_billed)::int AS months_behind_unbilled
+          FROM groups
+          GROUP BY student_id
+      )
+      SELECT m.student_id,
+             COALESCE(p.months_behind, 0)          AS months_behind,
+             COALESCE(p.months_behind_billed, 0)   AS months_behind_billed,
+             COALESCE(p.months_behind_unbilled, 0) AS months_behind_unbilled,
+             m.arrears_outstanding,
+             m.arrear_head_count,
+             m.oldest_arrear_fee_date,
+             m.newest_arrear_fee_date
+      FROM money m
+      LEFT JOIN per_student p ON p.student_id = m.student_id
+      WHERE COALESCE(p.months_behind, 0) >= ${minMonthsBehind}
+    `);
+
+    // COUNT returns bigint, cast ::int above so these arrive as JS numbers
+    // rather than BigInt (which JSON.stringify refuses). SUM is cast ::float8
+    // and re-rounded here so the file's money contract still holds.
+    return rows.map((r) => ({
+      student_id: Number(r.student_id),
+      months_behind: Number(r.months_behind),
+      months_behind_billed: Number(r.months_behind_billed),
+      months_behind_unbilled: Number(r.months_behind_unbilled),
+      arrears_outstanding: this.roundMoney(Number(r.arrears_outstanding ?? 0)),
+      arrear_head_count: Number(r.arrear_head_count),
+      oldest_arrear_fee_date: r.oldest_arrear_fee_date,
+      newest_arrear_fee_date: r.newest_arrear_fee_date,
+    }));
+  }
+
+  /** The strip_months calendar months ending at (and including) the as-of month. */
+  private stripMonthColumns(
+    asOf: { year: number; month: number },
+    stripMonths: number,
+  ): Array<{ year: number; month: number }> {
+    const span = Math.min(Math.max(stripMonths, 1), MATRIX_MAX_MONTHS);
+    let year = asOf.year;
+    let month = asOf.month - (span - 1);
+    while (month <= 0) {
+      month += 12;
+      year -= 1;
+    }
+    return this.matrixMonthColumns({ year, month }, asOf);
+  }
+
+  /**
+   * Is this head one of the arrear candidates counted by months_behind?
+   *
+   * Deliberately the same predicate as the CTE in loadDefaulterAggregates, so a
+   * red cell in the strip can never disagree with the headline number.
+   */
+  private isArrearCandidate(
+    head: {
+      fee_date: Date | null;
+      status: fee_status_enum | null;
+      is_discount: boolean;
+      is_arrear_surcharge: boolean;
+      amount: Prisma.Decimal | null;
+      amount_before_discount: Prisma.Decimal | null;
+      amount_paid: Prisma.Decimal | null;
+    },
+    asOfExclusive: Date,
+  ): boolean {
+    if (!head.fee_date || head.fee_date >= asOfExclusive) return false;
+    if (head.is_discount || head.is_arrear_surcharge) return false;
+    if (head.status === fee_status_enum.PAID || head.status === fee_status_enum.DISCOUNT) {
+      return false;
+    }
+    return this.headOutstanding(head) > 0;
+  }
+
+  /** amount ?? amount_before_discount ?? 0, minus amount_paid — the engine's formula. */
+  private headOutstanding(head: {
+    amount: Prisma.Decimal | null;
+    amount_before_discount: Prisma.Decimal | null;
+    amount_paid: Prisma.Decimal | null;
+  }): number {
+    const gross = this.toMoney(head.amount ?? head.amount_before_discount ?? 0);
+    return this.roundMoney(gross - this.toMoney(head.amount_paid));
+  }
+
+  /**
+   * Hydrate the page slice: the month strip, LPS, and payment behaviour.
+   *
+   * Only the page is hydrated. Sorting already happened over the whole set on
+   * fields the CTE supplies, which is exactly why sort_by excludes
+   * lps_outstanding and last_payment — see ListDefaultersQueryDto.
+   */
+  private async buildDefaulterStudentRows(
+    pageRows: DefaulterRow[],
+    columns: Array<{ year: number; month: number }>,
+    classTerms: ReadonlyMap<number, number>,
+    asOfDate: string,
+  ) {
+    const ccs = pageRows.map((r) => r.student_id);
+    if (ccs.length === 0) return [];
+
+    // The strip resolves heads by term-aware (target_month, academic_year), not
+    // by fee_date — see buildStripCells. That means the calendar month cannot be
+    // filtered in SQL, so over-fetch by candidate academic years and narrow in
+    // JS, exactly as listFeeMatrix does.
+    const candidateYears = this.matrixCandidateAcademicYears(columns);
+    const [heads, lpsByStudent, payments] = await Promise.all([
+      columns.length
+        ? this.prisma.student_fees.findMany({
+            where: {
+              student_id: { in: ccs },
+              is_arrear_surcharge: false,
+              academic_year: { in: candidateYears },
+            },
+            select: DEFAULTER_HEAD_SELECT,
+            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
+          })
+        : Promise.resolve([]),
+      this.loadDefaulterLpsByStudent(ccs),
+      this.loadDefaulterPaymentBehaviour(ccs, asOfDate),
+    ]);
+
+    const headsByStudent = this.groupHeadsByStudent(heads);
+    const asOfExclusive = this.parseDateOnlyUtc(asOfDate);
+    const asOfMs = this.parseLocalDayStart(asOfDate).getTime();
+
+    return pageRows.map((row) => {
+      const student = row.student;
+      const lps = lpsByStudent.get(row.student_id) ?? EMPTY_LPS;
+      const pay = payments.get(row.student_id) ?? EMPTY_PAYMENTS;
+      const { cells: strip, arrearGroupsInWindow } = this.buildStripCells(
+        headsByStudent.get(row.student_id) ?? [],
+        columns,
+        classTerms,
+        asOfExclusive,
+      );
+      const lastPaymentDate = pay.last_payment_date;
+
+      return {
+        cc: student.cc,
+        gr_number: student.gr_number,
+        student_name: student.full_name,
+        campus: student.campuses?.campus_name ?? '',
+        class_name: this.resolveStudentClassName(student),
+        section: student.sections?.description ?? '',
+        student_status: student.status,
+        is_fee_endowment: student.is_fee_endowment,
+        is_complementary: student.is_complementary,
+
+        months_behind: row.months_behind,
+        months_behind_billed: row.months_behind_billed,
+        months_behind_unbilled: row.months_behind_unbilled,
+        severity: row.severity,
+
+        arrears_outstanding: row.arrears_outstanding,
+        arrear_head_count: row.arrear_head_count,
+        oldest_arrear_fee_date: this.formatDateOnly(row.oldest_arrear_fee_date),
+        oldest_arrear_month_label: this.oldestArrearMonthLabel(
+          headsByStudent.get(row.student_id) ?? [],
+          classTerms,
+          asOfExclusive,
+        ),
+
+        lps_charged: lps.charged,
+        lps_paid: lps.paid,
+        lps_outstanding: lps.outstanding,
+        lps_waived: lps.waived,
+        lps_charged_distinct_months: lps.distinct_months,
+        lps_projected_next_voucher: this.roundMoney(
+          row.months_behind * LPS_PER_ARREAR_MONTH,
+        ),
+        unreleased_voucher_count: lps.unreleased_voucher_count,
+
+        last_payment_date: this.formatDateTimeOrNull(lastPaymentDate),
+        days_since_last_payment: lastPaymentDate
+          ? Math.max(0, Math.floor((asOfMs - lastPaymentDate.getTime()) / 86_400_000))
+          : null,
+        payments_last_6m: pay.payments_last_6m,
+        paid_last_6m: pay.paid_last_6m,
+        payments_last_12m: pay.payments_last_12m,
+        paid_last_12m: pay.paid_last_12m,
+
+        strip,
+        /**
+         * The strip window is backward-looking from as_of_date, but a fee head's
+         * target_month can be AHEAD of the date it was billed on — a whole
+         * year written at once with fee_date 1 Aug carries target months
+         * Aug..Jul, and every one of them is already an arrear the moment that
+         * fee_date passes. Those months land outside the window, so the strip
+         * cannot show them. Report the shortfall rather than letting the strip
+         * quietly understate the worst-off students.
+         */
+        arrear_months_in_window: arrearGroupsInWindow,
+        arrear_months_outside_window: Math.max(
+          0,
+          row.months_behind - arrearGroupsInWindow,
+        ),
+      };
+    });
+  }
+
+  /**
+   * One cell per calendar column, from the heads that resolve into it.
+   *
+   * Anchored on term-aware (target_month, academic_year) via
+   * resolveHeadCalendarMonth, NOT on raw fee_date. The arrear unit IS that
+   * pair, so fee_date columns would let a cell hold heads belonging to a
+   * different arrear group than its own label, and the count of red cells would
+   * stop matching months_behind — a strip that contradicts its own headline
+   * number is worse than no strip. (A head for August written late can carry a
+   * September fee_date; the engine still groups it under August.)
+   *
+   * is_arrear, not "unpaid", drives the red tint: an unpaid head whose fee_date
+   * is on or after as_of_date is billed-but-not-yet-due, and tinting it would
+   * make every student look one month worse than they are.
+   *
+   * Discounts are excluded from cell state — their amount is stored POSITIVE
+   * with inverted meaning and only signedAmount flips it; this path does not go
+   * through signedAmount, and a discount is never an arrear.
+   */
+  private buildStripCells(
+    heads: DefaulterHead[],
+    columns: Array<{ year: number; month: number }>,
+    classTerms: ReadonlyMap<number, number>,
+    asOfExclusive: Date,
+  ): { cells: StripCell[]; arrearGroupsInWindow: number } {
+    const position = new Map<string, number>(
+      columns.map((c, i) => [this.matrixMonthKey(c), i]),
+    );
+    const cells: StripCell[] = columns.map((c) => ({
+      year: c.year,
+      month: c.month,
+      state: 'not_billed',
+      is_arrear: false,
+      amount: 0,
+      outstanding: 0,
+      head_count: 0,
+      group_keys: [],
+    }));
+    const anyPaid = new Array(columns.length).fill(false) as boolean[];
+
+    for (const head of heads) {
+      if (head.is_discount) continue;
+      const resolved = this.resolveHeadCalendarMonth(head, classTerms);
+      const index = resolved ? position.get(this.matrixMonthKey(resolved)) : undefined;
+      if (index === undefined) continue;
+
+      const cell = cells[index];
+      const outstanding = this.headOutstanding(head);
+      cell.head_count += 1;
+      cell.amount = this.roundMoney(
+        cell.amount + this.toMoney(head.amount ?? head.amount_before_discount ?? 0),
+      );
+      cell.outstanding = this.roundMoney(cell.outstanding + Math.max(0, outstanding));
+      if (this.toMoney(head.amount_paid) > 0) anyPaid[index] = true;
+
+      // A student who crossed term systems can have two academic_year values
+      // resolve into one calendar month, i.e. two arrear groups in one cell.
+      // Keep both keys so is_arrear and the tooltip stay honest.
+      if (this.isArrearCandidate(head, asOfExclusive)) {
+        cell.is_arrear = true;
+        const key = `${head.academic_year}_${head.target_month}`;
+        if (!cell.group_keys.includes(key)) cell.group_keys.push(key);
+      }
+    }
+
+    for (let i = 0; i < cells.length; i += 1) {
+      const cell = cells[i];
+      if (cell.head_count === 0) continue;
+      if (cell.outstanding <= 0) cell.state = 'paid';
+      else if (anyPaid[i]) cell.state = 'partial';
+      else cell.state = 'unpaid';
+    }
+
+    const placed = new Set<string>();
+    for (const cell of cells) for (const key of cell.group_keys) placed.add(key);
+    return { cells, arrearGroupsInWindow: placed.size };
+  }
+
+  /**
+   * Term-aware label for the earliest arrear month, e.g. "Aug 25".
+   *
+   * (target_month, academic_year) alone cannot fix a calendar year — "June of
+   * 2025-2026" is Jun 2026 on an Aug-Jul term and Jun 2025 on an Apr-Mar one —
+   * so this goes through termOfHead/getMonthYearLabel. Null when no arrear head
+   * falls inside the fetched strip window; oldest_arrear_fee_date (straight
+   * from SQL, unambiguous) always covers that case.
+   */
+  private oldestArrearMonthLabel(
+    heads: DefaulterHead[],
+    classTerms: ReadonlyMap<number, number>,
+    asOfExclusive: Date,
+  ): string | null {
+    let best: { head: DefaulterHead; index: number } | null = null;
+    for (const head of heads) {
+      if (!this.isArrearCandidate(head, asOfExclusive)) continue;
+      const classId = this.effectiveClassId(head.students);
+      const term = termOfHead(head, { classId, classTerms });
+      const index = monthAbsoluteIndex(head.target_month, head.academic_year, term);
+      if (index == null) continue;
+      if (!best || index < best.index) best = { head, index };
+    }
+    if (!best) return null;
+    const classId = this.effectiveClassId(best.head.students);
+    return getMonthYearLabel(
+      best.head.target_month,
+      best.head.academic_year,
+      termOfHead(best.head, { classId, classTerms }),
+    );
+  }
+
+  /**
+   * Late payment surcharge totals across the whole filtered set.
+   *
+   * Surcharges have no student column — the only path is
+   * voucher_arrear_surcharges.voucher_id -> vouchers.student_id — and Prisma
+   * cannot groupBy a relation field, so totals come from aggregates through the
+   * relation filter and per-student figures from a separate fetch.
+   *
+   * status <> 'VOID' IS NOT OPTIONAL. Supersede sets the old voucher VOID
+   * (vouchers.service.ts:650) but surcharge rows are only removed by cascade on
+   * DELETE, never on void, and the consolidated voucher re-charges the same
+   * arrear month. Without this filter every superseded student's LPS is
+   * inflated by a full re-charge cycle.
+   */
+  private async loadDefaulterLpsTotals(ids: number[]): Promise<LpsTotals> {
+    if (ids.length === 0) {
+      return { charged: 0, paid: 0, outstanding: 0, waived: 0 };
+    }
+    const voucherFilter: Prisma.vouchersWhereInput = {
+      student_id: { in: ids },
+      status: { not: 'VOID' },
+    };
+    const [active, waived] = await Promise.all([
+      this.prisma.voucher_arrear_surcharges.aggregate({
+        where: { waived: false, vouchers: voucherFilter },
+        _sum: { amount: true, amount_paid: true },
+      }),
+      this.prisma.voucher_arrear_surcharges.aggregate({
+        where: { waived: true, vouchers: voucherFilter },
+        _sum: { amount: true },
+      }),
+    ]);
+    const charged = this.toMoney(active._sum.amount);
+    const paid = this.toMoney(active._sum.amount_paid);
+    return {
+      charged,
+      paid,
+      outstanding: this.roundMoney(Math.max(0, charged - paid)),
+      waived: this.toMoney(waived._sum.amount),
+    };
+  }
+
+  /** Per-student LPS for the page slice. Same VOID rule as loadDefaulterLpsTotals. */
+  private async loadDefaulterLpsByStudent(
+    ids: number[],
+  ): Promise<Map<number, LpsPerStudent>> {
+    const result = new Map<number, LpsPerStudent>();
+    if (ids.length === 0) return result;
+
+    const vouchers = await this.prisma.vouchers.findMany({
+      where: { student_id: { in: ids }, status: { not: 'VOID' } },
+      select: {
+        student_id: true,
+        released_to_parent_at: true,
+        voucher_arrear_surcharges: {
+          select: {
+            amount: true,
+            amount_paid: true,
+            waived: true,
+            arrear_month: true,
+            arrear_year: true,
+          },
+        },
+      },
+    });
+
+    const distinctMonths = new Map<number, Set<string>>();
+    for (const voucher of vouchers) {
+      const entry = result.get(voucher.student_id) ?? { ...EMPTY_LPS };
+      // Billed but never shown to the parent. Counted in charged (it IS
+      // charged), surfaced separately so staff can see whose arrears are the
+      // office's fault rather than the family's.
+      if (voucher.released_to_parent_at == null) {
+        entry.unreleased_voucher_count += 1;
+      }
+      for (const surcharge of voucher.voucher_arrear_surcharges) {
+        if (surcharge.waived) {
+          entry.waived = this.roundMoney(entry.waived + this.toMoney(surcharge.amount));
+          continue;
+        }
+        entry.charged = this.roundMoney(entry.charged + this.toMoney(surcharge.amount));
+        entry.paid = this.roundMoney(entry.paid + this.toMoney(surcharge.amount_paid));
+        // Supersede voids only COMPLETELY superseded vouchers
+        // (vouchers.service.ts:596), so two live vouchers can each legitimately
+        // carry a surcharge for the same arrear month. `charged` as a plain sum
+        // is still "what was billed" and can exceed months_behind x 1000; this
+        // distinct count is how you see that, rather than silently deduping.
+        const months = distinctMonths.get(voucher.student_id) ?? new Set<string>();
+        months.add(`${surcharge.arrear_year}_${surcharge.arrear_month}`);
+        distinctMonths.set(voucher.student_id, months);
+      }
+      result.set(voucher.student_id, entry);
+    }
+
+    for (const [cc, entry] of result) {
+      entry.outstanding = this.roundMoney(Math.max(0, entry.charged - entry.paid));
+      entry.distinct_months = distinctMonths.get(cc)?.size ?? 0;
+    }
+    return result;
+  }
+
+  /**
+   * Last payment, plus 6- and 12-month payment counts, for the page slice.
+   *
+   * date_of_return: null is a DELIBERATE divergence from buildDepositsWhere,
+   * which does not filter returned deposits. A bounced cheque is not a payment,
+   * and "last paid 3 days ago" off a returned cheque would actively mislead a
+   * recovery call.
+   *
+   * No on-time rate here: it needs deposit_allocations -> student_fees.due_date
+   * per student, which is why students.service.ts:3410 can afford it for one
+   * student and a list endpoint cannot.
+   */
+  private async loadDefaulterPaymentBehaviour(
+    ids: number[],
+    asOfDate: string,
+  ): Promise<Map<number, PaymentBehaviour>> {
+    const result = new Map<number, PaymentBehaviour>();
+    if (ids.length === 0) return result;
+
+    // deposit_date is a Timestamp, not a Date — an lte on midnight would drop
+    // the whole final day. Same bound listDeposits uses.
+    const upper = this.parseLocalDayAfter(asOfDate);
+    const since = (months: number) => {
+      const d = this.parseLocalDayStart(asOfDate);
+      d.setMonth(d.getMonth() - months);
+      return d;
+    };
+    const base: Prisma.depositsWhereInput = {
+      student_id: { in: ids },
+      date_of_return: null,
+      deposit_date: { lt: upper },
+    };
+    const window = (months: number): Prisma.depositsWhereInput => ({
+      ...base,
+      deposit_date: { gte: since(months), lt: upper },
+    });
+
+    const [allTime, last6, last12] = await Promise.all([
+      this.prisma.deposits.groupBy({
+        by: ['student_id'],
+        where: base,
+        _max: { deposit_date: true },
+      }),
+      this.prisma.deposits.groupBy({
+        by: ['student_id'],
+        where: window(6),
+        _count: { _all: true },
+        _sum: { total_amount: true },
+      }),
+      this.prisma.deposits.groupBy({
+        by: ['student_id'],
+        where: window(12),
+        _count: { _all: true },
+        _sum: { total_amount: true },
+      }),
+    ]);
+
+    const entry = (cc: number) => {
+      const existing = result.get(cc) ?? { ...EMPTY_PAYMENTS };
+      result.set(cc, existing);
+      return existing;
+    };
+    for (const row of allTime) {
+      entry(row.student_id).last_payment_date = row._max.deposit_date ?? null;
+    }
+    for (const row of last6) {
+      const e = entry(row.student_id);
+      e.payments_last_6m = row._count._all;
+      e.paid_last_6m = this.toMoney(row._sum.total_amount);
+    }
+    for (const row of last12) {
+      const e = entry(row.student_id);
+      e.payments_last_12m = row._count._all;
+      e.paid_last_12m = this.toMoney(row._sum.total_amount);
+    }
+    return result;
+  }
+
+  private sortDefaulterRows(
+    rows: DefaulterRow[],
+    sortBy: DefaulterSortField | undefined,
+    sortDir: 'asc' | 'desc' | undefined,
+  ): DefaulterRow[] {
+    const field = sortBy ?? 'months_behind';
+    const dir = (sortDir ?? 'desc') === 'asc' ? 1 : -1;
+    const value = (row: DefaulterRow): number | string => {
+      switch (field) {
+        case 'arrears_outstanding':
+          return row.arrears_outstanding;
+        case 'arrear_head_count':
+          return row.arrear_head_count;
+        case 'oldest_arrear':
+          return row.oldest_arrear_fee_date?.getTime() ?? Number.POSITIVE_INFINITY;
+        case 'student_name':
+          return row.student.full_name ?? '';
+        default:
+          return row.months_behind;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const av = value(a);
+      const bv = value(b);
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return String(av).localeCompare(String(bv)) * dir;
+      }
+      // Stable tiebreak so pagination cannot reshuffle rows between pages.
+      if (av !== bv) return (av - bv) * dir;
+      return a.student_id - b.student_id;
+    });
+  }
+
+  /**
+   * Every figure here is computed over the WHOLE filtered set, never the page —
+   * same contract as the matrix's statistics block.
+   *
+   * in_scope_students is the full scoped student count from step 1, NOT the
+   * defaulter count, so defaulter_rate answers "what share of these students
+   * are behind".
+   *
+   * LPS totals come from the two relation aggregates while per-row LPS comes
+   * from the page fetch; they use the same filter at different scope, so they
+   * agree by construction.
+   */
+  private buildDefaulterTotals(
+    rows: DefaulterRow[],
+    inScopeStudents: number,
+    lps: LpsTotals,
+  ) {
+    const monthsBehind = rows.map((r) => r.months_behind);
+    const arrears = rows.map((r) => r.arrears_outstanding);
+    const monthsTotal = monthsBehind.reduce((a, b) => a + b, 0);
+    const counts = this.countBySeverity(rows);
+
+    return {
+      in_scope_students: inScopeStudents,
+      defaulter_count: rows.length,
+      defaulter_rate: this.percentage(rows.length, inScopeStudents),
+
+      watch_count: counts.WATCH,
+      defaulter_band_count: counts.DEFAULTER,
+      severe_count: counts.SEVERE,
+      critical_count: counts.CRITICAL,
+
+      arrears_outstanding: this.roundMoney(arrears.reduce((a, b) => a + b, 0)),
+      arrear_head_count: rows.reduce((a, r) => a + r.arrear_head_count, 0),
+
+      months_behind_total: monthsTotal,
+      months_behind_avg: rows.length
+        ? Math.round((monthsTotal / rows.length) * 10) / 10
+        : 0,
+      months_behind_max: monthsBehind.length ? Math.max(...monthsBehind) : 0,
+      months_behind_unbilled_total: rows.reduce(
+        (a, r) => a + r.months_behind_unbilled,
+        0,
+      ),
+
+      lps_charged: lps.charged,
+      lps_paid: lps.paid,
+      lps_outstanding: lps.outstanding,
+      lps_waived: lps.waived,
+      lps_projected_next_voucher: this.roundMoney(monthsTotal * LPS_PER_ARREAR_MONTH),
+
+      // The MODE of months_behind is the useful one here: "most defaulters are
+      // exactly two months behind" is directly actionable.
+      arrears_distribution: this.describeDistribution(arrears),
+      months_behind_distribution: this.describeDistribution(monthsBehind),
+    };
+  }
+
+  private buildSeverityDistribution(rows: DefaulterRow[]) {
+    return SEVERITY_BANDS.map((band) => {
+      const inBand = rows.filter((r) => r.severity === band.id);
+      const months = inBand.reduce((a, r) => a + r.months_behind, 0);
+      return {
+        band: band.id,
+        label: band.label,
+        student_count: inBand.length,
+        arrears_outstanding: this.roundMoney(
+          inBand.reduce((a, r) => a + r.arrears_outstanding, 0),
+        ),
+        lps_projected: this.roundMoney(months * LPS_PER_ARREAR_MONTH),
+      };
+    });
+  }
+
+  /** All four bands are always emitted — a zero row is information. */
+  private buildAgingRows(rows: DefaulterRow[], inScopeStudents: number) {
+    return SEVERITY_BANDS.map((band) => {
+      const inBand = rows.filter((r) => r.severity === band.id);
+      const arrears = inBand.map((r) => r.arrears_outstanding);
+      const total = this.roundMoney(arrears.reduce((a, b) => a + b, 0));
+      const months = inBand.reduce((a, r) => a + r.months_behind, 0);
+      return {
+        band: band.id,
+        label: band.label,
+        months_behind_label: SEVERITY_BAND_LABELS[band.id],
+        student_count: inBand.length,
+        share_of_defaulters: this.percentage(inBand.length, rows.length),
+        share_of_in_scope: this.percentage(inBand.length, inScopeStudents),
+        arrears_outstanding: total,
+        arrears_avg: inBand.length ? this.roundMoney(total / inBand.length) : 0,
+        arrears_max: arrears.length ? Math.max(...arrears) : 0,
+        lps_projected: this.roundMoney(months * LPS_PER_ARREAR_MONTH),
+      };
+    });
+  }
+
+  /**
+   * Class/campus rollup. The denominator is every scoped student in the group,
+   * including non-defaulters, so defaulter_rate is comparable across groups of
+   * different sizes.
+   */
+  private buildDefaulterRollup(
+    rows: DefaulterRow[],
+    scoped: DefaulterStudent[],
+    view: 'by_class' | 'by_campus',
+  ) {
+    const keyOf = (student: DefaulterStudent): { id: number | null; name: string } =>
+      view === 'by_campus'
+        ? { id: student.campus_id ?? null, name: student.campuses?.campus_name ?? 'Unassigned' }
+        : {
+            id: this.effectiveClassId(student),
+            name: this.resolveStudentClassName(student) || 'Unassigned',
+          };
+
+    const groups = new Map<
+      string,
+      { id: number | null; name: string; inScope: number; rows: DefaulterRow[] }
+    >();
+    for (const student of scoped) {
+      const { id, name } = keyOf(student);
+      const key = String(id ?? `name:${name}`);
+      const group = groups.get(key) ?? { id, name, inScope: 0, rows: [] };
+      group.inScope += 1;
+      groups.set(key, group);
+    }
+    for (const row of rows) {
+      const { id, name } = keyOf(row.student);
+      const key = String(id ?? `name:${name}`);
+      const group = groups.get(key) ?? { id, name, inScope: 0, rows: [] };
+      group.rows.push(row);
+      groups.set(key, group);
+    }
+
+    return [...groups.values()]
+      .filter((g) => g.rows.length > 0)
+      .map((g) => {
+        const months = g.rows.map((r) => r.months_behind);
+        const monthsTotal = months.reduce((a, b) => a + b, 0);
+        const arrears = this.roundMoney(
+          g.rows.reduce((a, r) => a + r.arrears_outstanding, 0),
+        );
+        const counts = this.countBySeverity(g.rows);
+        return {
+          ...(view === 'by_campus'
+            ? { campus_id: g.id, campus: g.name }
+            : { class_id: g.id, class_name: g.name }),
+          in_scope_students: g.inScope,
+          defaulter_count: g.rows.length,
+          defaulter_rate: this.percentage(g.rows.length, g.inScope),
+          band_counts: counts,
+          months_behind_total: monthsTotal,
+          months_behind_avg: Math.round((monthsTotal / g.rows.length) * 10) / 10,
+          months_behind_max: Math.max(...months),
+          arrears_outstanding: arrears,
+          arrears_avg: this.roundMoney(arrears / g.rows.length),
+          lps_projected: this.roundMoney(monthsTotal * LPS_PER_ARREAR_MONTH),
+        };
+      })
+      .sort((a, b) => b.defaulter_count - a.defaulter_count);
+  }
+
+  private countBySeverity(rows: DefaulterRow[]): Record<SeverityBand, number> {
+    const counts = { WATCH: 0, DEFAULTER: 0, SEVERE: 0, CRITICAL: 0 };
+    for (const row of rows) counts[row.severity] += 1;
+    return counts;
+  }
+
+  /** One decimal, 0 when the denominator is 0. */
+  private percentage(part: number, whole: number): number {
+    if (!whole) return 0;
+    return Math.round((part / whole) * 1000) / 10;
+  }
+
+  private emptyDefaultersResponse(
+    asOfDate: string,
+    stripMonths: number,
+    view: DefaulterView,
+    columns: Array<{ year: number; month: number }>,
+    page: number,
+    limit: number,
+  ) {
+    const empty = { charged: 0, paid: 0, outstanding: 0, waived: 0 };
+    return {
+      as_of_date: asOfDate,
+      strip_months: stripMonths,
+      view,
+      columns: columns.map((c) => ({
+        year: c.year,
+        month: c.month,
+        label: this.formatColumnLabel(c),
+      })),
+      items: view === 'aging' ? this.buildAgingRows([], 0) : [],
+      pagination: createPaginationMeta(page, limit, 0),
+      totals: this.buildDefaulterTotals([], 0, empty),
+      severity_distribution: this.buildSeverityDistribution([]),
+      truncated: false,
+    };
+  }
+
+  /** Local calendar date, not UTC — "today" must mean the school's today. */
+  private todayDateOnly(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+  }
+
+  private parseYearMonthOfDate(value: string): { year: number; month: number } {
+    const [year, month] = value.split('-').map(Number);
+    return { year, month };
+  }
+
+  private formatDateTimeOrNull(value: Date | null): string | null {
+    return value ? this.formatDateTime(value) : null;
+  }
+
+  /**
+   * Flat rows per view. The month strip is deliberately not exported — a
+   * spreadsheet of 12 colour codes is unreadable, and every figure it encodes
+   * (months behind, oldest arrear, outstanding) is already its own column.
+   */
+  async exportDefaulters(
+    query: ExportDefaultersQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const view = query.view ?? 'students';
+    const data = await this.listDefaulters(
+      {
+        ...query,
+        // Aging always returns exactly four rows; the others page.
+        page: 1,
+        limit: view === 'aging' ? 50 : EXPORT_ROW_CAP + 1,
+        // The strip costs a full head fetch per row and is not exported.
+        strip_months: 1,
+      } as ListDefaultersQueryDto,
+      user,
+      { maxLimit: EXPORT_ROW_CAP + 1 },
+    );
+
+    const items = data.items as Array<Record<string, unknown>>;
+    this.assertExportCap(items.length);
+    const basename = `defaulters-${view}-as-of-${data.as_of_date}`;
+
+    if (view === 'aging') {
+      return this.buildExportFile(
+        'Defaulters Aging',
+        basename,
+        [
+          { header: 'Band', key: 'band', width: 14 },
+          { header: 'Months Behind', key: 'months', width: 14 },
+          { header: 'Students', key: 'students', width: 12 },
+          { header: '% of Defaulters', key: 'share_def', width: 16 },
+          { header: '% of In Scope', key: 'share_scope', width: 16 },
+          { header: 'Arrears Outstanding', key: 'arrears', width: 20 },
+          { header: 'Arrears Avg', key: 'arrears_avg', width: 16 },
+          { header: 'Arrears Max', key: 'arrears_max', width: 16 },
+          { header: 'LPS Projected', key: 'lps', width: 16 },
+        ],
+        items.map((r) => ({
+          band: String(r.label),
+          months: String(r.months_behind_label),
+          students: Number(r.student_count),
+          share_def: Number(r.share_of_defaulters),
+          share_scope: Number(r.share_of_in_scope),
+          arrears: Number(r.arrears_outstanding),
+          arrears_avg: Number(r.arrears_avg),
+          arrears_max: Number(r.arrears_max),
+          lps: Number(r.lps_projected),
+        })),
+        query.format,
+      );
+    }
+
+    if (view === 'by_class' || view === 'by_campus') {
+      const isCampus = view === 'by_campus';
+      return this.buildExportFile(
+        isCampus ? 'Defaulters by Campus' : 'Defaulters by Class',
+        basename,
+        [
+          { header: isCampus ? 'Campus' : 'Class', key: 'group', width: 26 },
+          { header: 'Students In Scope', key: 'in_scope', width: 18 },
+          { header: 'Defaulters', key: 'defaulters', width: 12 },
+          { header: 'Defaulter Rate %', key: 'rate', width: 16 },
+          { header: 'Watch (1m)', key: 'watch', width: 12 },
+          { header: 'Defaulter (2m)', key: 'defaulter', width: 14 },
+          { header: 'Severe (3m)', key: 'severe', width: 12 },
+          { header: 'Critical (4m+)', key: 'critical', width: 14 },
+          { header: 'Avg Months Behind', key: 'avg_months', width: 18 },
+          { header: 'Max Months Behind', key: 'max_months', width: 18 },
+          { header: 'Arrears Outstanding', key: 'arrears', width: 20 },
+          { header: 'Arrears Avg', key: 'arrears_avg', width: 16 },
+          { header: 'LPS Projected', key: 'lps', width: 16 },
+        ],
+        items.map((r) => {
+          const bands = r.band_counts as Record<SeverityBand, number>;
+          return {
+            group: String((isCampus ? r.campus : r.class_name) ?? ''),
+            in_scope: Number(r.in_scope_students),
+            defaulters: Number(r.defaulter_count),
+            rate: Number(r.defaulter_rate),
+            watch: bands.WATCH,
+            defaulter: bands.DEFAULTER,
+            severe: bands.SEVERE,
+            critical: bands.CRITICAL,
+            avg_months: Number(r.months_behind_avg),
+            max_months: Number(r.months_behind_max),
+            arrears: Number(r.arrears_outstanding),
+            arrears_avg: Number(r.arrears_avg),
+            lps: Number(r.lps_projected),
+          };
+        }),
+        query.format,
+      );
+    }
+
+    return this.buildExportFile(
+      'Defaulters',
+      basename,
+      [
+        { header: 'CC', key: 'cc', width: 10 },
+        { header: 'GR Number', key: 'gr', width: 14 },
+        { header: 'Student', key: 'name', width: 28 },
+        { header: 'Campus', key: 'campus', width: 18 },
+        { header: 'Class', key: 'class', width: 16 },
+        { header: 'Section', key: 'section', width: 12 },
+        { header: 'Status', key: 'status', width: 14 },
+        { header: 'Severity', key: 'severity', width: 12 },
+        { header: 'Months Behind', key: 'months', width: 14 },
+        { header: 'Months Billed', key: 'months_billed', width: 14 },
+        { header: 'Months Never Billed', key: 'months_unbilled', width: 18 },
+        { header: 'Oldest Arrear', key: 'oldest', width: 14 },
+        { header: 'Arrear Heads', key: 'heads', width: 13 },
+        { header: 'Arrears Outstanding', key: 'arrears', width: 20 },
+        { header: 'LPS Charged', key: 'lps_charged', width: 14 },
+        { header: 'LPS Paid', key: 'lps_paid', width: 12 },
+        { header: 'LPS Outstanding', key: 'lps_out', width: 16 },
+        { header: 'LPS Waived', key: 'lps_waived', width: 13 },
+        { header: 'LPS Next Voucher', key: 'lps_next', width: 17 },
+        { header: 'Unreleased Vouchers', key: 'unreleased', width: 19 },
+        { header: 'Last Payment', key: 'last_payment', width: 14 },
+        { header: 'Days Since Payment', key: 'days_since', width: 18 },
+        { header: 'Payments (6m)', key: 'pay6', width: 14 },
+        { header: 'Payments (12m)', key: 'pay12', width: 14 },
+      ],
+      items.map((r) => ({
+        cc: Number(r.cc),
+        gr: String(r.gr_number ?? ''),
+        name: String(r.student_name ?? ''),
+        campus: String(r.campus ?? ''),
+        class: String(r.class_name ?? ''),
+        section: String(r.section ?? ''),
+        status: String(r.student_status ?? ''),
+        severity: String(r.severity),
+        months: Number(r.months_behind),
+        months_billed: Number(r.months_behind_billed),
+        months_unbilled: Number(r.months_behind_unbilled),
+        oldest: String(r.oldest_arrear_fee_date ?? ''),
+        heads: Number(r.arrear_head_count),
+        arrears: Number(r.arrears_outstanding),
+        lps_charged: Number(r.lps_charged),
+        lps_paid: Number(r.lps_paid),
+        lps_out: Number(r.lps_outstanding),
+        lps_waived: Number(r.lps_waived),
+        lps_next: Number(r.lps_projected_next_voucher),
+        unreleased: Number(r.unreleased_voucher_count),
+        // "Never" rather than blank: never-paid is a different signal from
+        // no-data, and it is the one a recovery call cares about most.
+        last_payment: r.last_payment_date
+          ? String(r.last_payment_date).slice(0, 10)
+          : 'Never',
+        days_since: r.days_since_last_payment == null ? '' : Number(r.days_since_last_payment),
+        pay6: Number(r.payments_last_6m),
+        pay12: Number(r.payments_last_12m),
+      })),
+      query.format,
+    );
+  }
+
   async listFilterOptions() {
     const segments = await this.prisma.segments.findMany({
       select: { id: true, code: true, name: true, display_order: true },
@@ -1570,8 +2828,13 @@ export class FinancialReportsService {
     };
   }
 
+  /**
+   * Takes the shared scope block rather than FinancialReportQueryDto so the
+   * Defaulters report (which has no date range) reuses this one implementation
+   * — including the applyStudentScope throw — instead of adding a third copy.
+   */
   private buildStudentWhere(
-    query: FinancialReportQueryDto,
+    query: StudentScopeFilterQueryDto,
     user: IJwtStaffPayload,
   ): Prisma.studentsWhereInput {
     const includesGraduated = query.student_status?.includes(

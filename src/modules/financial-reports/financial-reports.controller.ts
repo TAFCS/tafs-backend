@@ -22,9 +22,11 @@ import type { AppAbility } from '../auth/casl/casl-ability.factory';
 import { createApiResponse } from '../../utils/serializer.util';
 import { FinancialReportsService } from './financial-reports.service';
 import {
+  ExportDefaultersQueryDto,
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
+  ListDefaultersQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
   ListFeeMatrixQueryDto,
@@ -162,6 +164,27 @@ export class FinancialReportsController {
     @Res() res: Response,
   ) {
     const file = await this.financialReportsService.exportFeeMatrix(query, user);
+    this.sendFile(res, file);
+  }
+
+  @Get('defaulters')
+  @CheckPolicies(canReadAnalytics)
+  async listDefaulters(
+    @Query() query: ListDefaultersQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.financialReportsService.listDefaulters(query, user);
+    return createApiResponse(data, HttpStatus.OK, 'Defaulters report retrieved successfully');
+  }
+
+  @Get('defaulters/export')
+  @CheckPolicies(canReadAnalytics)
+  async exportDefaulters(
+    @Query() query: ExportDefaultersQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const file = await this.financialReportsService.exportDefaulters(query, user);
     this.sendFile(res, file);
   }
 

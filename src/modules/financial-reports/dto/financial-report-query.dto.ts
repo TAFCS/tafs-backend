@@ -17,6 +17,7 @@ import {
   toNumberArray,
   toStringArray,
 } from '../../../common/transforms/query-array.transform';
+import { SEVERITY_BAND_IDS, SeverityBand } from '../defaulter-severity';
 
 function toOptionalBoolean({ value }: { value: unknown }): boolean | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -231,6 +232,165 @@ export class ListFeeMatrixQueryDto {
 }
 
 export class ExportFeeMatrixQueryDto extends ListFeeMatrixQueryDto {
+  @IsOptional()
+  @IsIn(['xlsx', 'csv'])
+  format?: 'xlsx' | 'csv';
+}
+
+/**
+ * The campus/class/section/segment/status/graduation scope block shared by every
+ * financial report, lifted out so the Defaulters report reuses one definition
+ * instead of adding a third copy.
+ *
+ * FinancialReportQueryDto and ListFeeMatrixQueryDto still declare these fields
+ * themselves and are NOT re-parented here — that would be a behaviour-neutral
+ * refactor of three live reports for no gain in this change. They remain
+ * structurally assignable to this type, which is all buildStudentWhere needs.
+ */
+export class StudentScopeFilterQueryDto {
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  class_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  section_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  segment_id?: number[];
+
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsEnum(student_status, { each: true })
+  student_status?: student_status[];
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_fee_endowment?: boolean;
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  is_complementary?: boolean;
+
+  /** Filter by the class the student graduated from (students.graduated_from_class_id). */
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  graduated_from_class_id?: number[];
+
+  /** Graduation academic-year range, "YYYY-YYYY" — see buildGraduationFilterWhere. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{4}$/, { message: 'graduated_year_range must be in YYYY-YYYY format' })
+  graduated_year_range?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number = 50;
+}
+
+export type DefaulterView = 'students' | 'by_class' | 'by_campus' | 'aging';
+export type DefaulterSortField =
+  | 'months_behind'
+  | 'arrears_outstanding'
+  | 'oldest_arrear'
+  | 'arrear_head_count'
+  | 'student_name';
+
+/**
+ * Deliberately not extending FinancialReportQueryDto: its from_date/to_date are
+ * required and meaningless here. The Defaulters report is "as of a date", not a
+ * date range.
+ */
+export class ListDefaultersQueryDto extends StudentScopeFilterQueryDto {
+  /**
+   * Cutoff, mirroring computeArrears' targetFeeDate: heads with fee_date
+   * STRICTLY BEFORE this date count as arrears. A head dated exactly
+   * as_of_date does not. Defaults to today.
+   */
+  @IsOptional()
+  @IsDateString()
+  @Matches(DATE_ONLY, { message: 'as_of_date must be YYYY-MM-DD' })
+  as_of_date?: string;
+
+  /** Width of the payment-history strip, in calendar months ending at as_of_date's month. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  strip_months?: number = 12;
+
+  @IsOptional()
+  @IsIn(['students', 'by_class', 'by_campus', 'aging'])
+  view?: DefaulterView;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(60)
+  min_months_behind?: number = 1;
+
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsIn(SEVERITY_BAND_IDS, { each: true })
+  severity?: SeverityBand[];
+
+  /**
+   * Excludes lps_outstanding and last_payment on purpose: sorting runs over the
+   * whole filtered set before pagination, but those two are only computed for
+   * the page slice. Offering them would mean LPS and deposit aggregates for
+   * every scoped student on every request.
+   */
+  @IsOptional()
+  @IsIn([
+    'months_behind',
+    'arrears_outstanding',
+    'oldest_arrear',
+    'arrear_head_count',
+    'student_name',
+  ])
+  sort_by?: DefaulterSortField;
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sort_dir?: 'asc' | 'desc';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  cc?: number;
+}
+
+export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
