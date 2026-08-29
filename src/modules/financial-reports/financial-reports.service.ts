@@ -1659,11 +1659,14 @@ export class FinancialReportsService {
   }
 
   /**
-   * Excludes discounts and arrear (late payment) surcharges. academicYears is
-   * a superset — every academic_year string that could plausibly contain a
-   * month in the requested range under either term system — because SQL
-   * can't evaluate the term-aware calendar-month resolution that narrows it
-   * precisely; resolveHeadCalendarMonth does that narrowing in JS afterward.
+   * Excludes arrear (late payment) surcharges only — discount rows pass
+   * through and are placed into the matrix as their own negative-amount
+   * cells under their own target_month, same as any other head (see the
+   * listFeeMatrix docstring above). academicYears is a superset — every
+   * academic_year string that could plausibly contain a month in the
+   * requested range under either term system — because SQL can't evaluate
+   * the term-aware calendar-month resolution that narrows it precisely;
+   * resolveHeadCalendarMonth does that narrowing in JS afterward.
    */
   private matrixLeafWhere(
     query: ListFeeMatrixQueryDto,
