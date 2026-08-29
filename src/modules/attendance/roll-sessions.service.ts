@@ -15,7 +15,10 @@ import {
   UpdateRollSessionDto,
 } from './dto/roll-sessions.dto';
 import { RollCallAnnouncementsService } from './roll-call-announcements.service';
-import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
+import {
+  CalendarDayResolverService,
+  ResolvedCalendarDay,
+} from '../hr/calendar/calendar-day-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
@@ -71,6 +74,21 @@ export class RollSessionsService {
     if (modes.length > 0) return modes.map((m) => m.class_id);
     // Graceful fallback if the table is empty (fresh deploy before seed)
     return DEFAULT_ROLL_CALL_CLASS_IDS;
+  }
+
+  /**
+   * A class/teaching group with an actual timetable slot on this weekday
+   * genuinely holds lessons that day — that's stronger evidence than the
+   * generic Mon–Fri weekend default, which has no idea A-Level runs
+   * Saturday classes. Only overrides the *default* weekend fallback; an
+   * explicit calendar HOLIDAY/WEEKEND row (a real day off) still wins.
+   */
+  private isRollCallWorkingDay(
+    dayResolved: ResolvedCalendarDay,
+    hasTimetableSlot: boolean,
+  ): boolean {
+    if (dayResolved.isWorkingDay) return true;
+    return hasTimetableSlot && dayResolved.source === 'DEFAULT' && dayResolved.dayType === 'WEEKEND';
   }
 
   private async assertCampusSection(
@@ -321,7 +339,7 @@ export class RollSessionsService {
       return this.enrichWithRoster(existing);
     }
 
-    if (!dayResolved.isWorkingDay) {
+    if (!this.isRollCallWorkingDay(dayResolved, Boolean(timetableSlotId))) {
       const skipReason = `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`;
       const session = await this.prisma.attendance_roll_sessions.create({
         data: {
@@ -406,7 +424,10 @@ export class RollSessionsService {
       session.section_id,
       session.session_date,
     );
-    if (!dayResolved.isWorkingDay && dto.records?.length) {
+    if (
+      !this.isRollCallWorkingDay(dayResolved, Boolean(session.timetable_slot_id)) &&
+      dto.records?.length
+    ) {
       throw new BadRequestException(
         `Cannot mark attendance on a holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`,
       );
@@ -599,7 +620,10 @@ export class RollSessionsService {
           session.section_id,
           today,
         );
-        const reason = !dayResolved.isWorkingDay
+        const reason = !this.isRollCallWorkingDay(
+          dayResolved,
+          Boolean(session.timetable_slot_id),
+        )
           ? `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`
           : `Auto-skipped: roll call not submitted by ${cutoffTime}`;
 
