@@ -117,6 +117,13 @@ export class RollSessionsService {
           employee_profiles: { select: { id: true, full_name: true } },
         },
       },
+      // Subject/teacher as they stood at the moment this session was created —
+      // frozen so a later timetable edit or teaching-group reassignment can't
+      // silently relabel history. Null on rows created before this snapshot
+      // existed; withResolvedSubjectTeacher() falls back to the live
+      // teaching_groups join for those.
+      subjects:          { select: { id: true, name: true, code: true } },
+      employee_profiles: { select: { id: true, full_name: true } },
       users_attendance_roll_sessions_created_by_idTousers:   { select: { id: true, full_name: true } },
       users_attendance_roll_sessions_submitted_by_idTousers: { select: { id: true, full_name: true } },
       attendance_roll_records: {
@@ -166,11 +173,12 @@ export class RollSessionsService {
         : {}),
     };
 
-    return this.prisma.attendance_roll_sessions.findMany({
+    const sessions = await this.prisma.attendance_roll_sessions.findMany({
       where,
       include: this.sessionInclude(),
       orderBy: [{ class_id: 'asc' }, { section_id: 'asc' }, { period: 'asc' }],
     });
+    return sessions.map((s) => this.withResolvedSubjectTeacher(s));
   }
 
   async findOne(id: number, user: IJwtStaffPayload) {
@@ -233,7 +241,21 @@ export class RollSessionsService {
     });
   }
 
+  /**
+   * Effective subject/teacher for a session: the snapshot taken at creation
+   * time if present, otherwise the live teaching_group join (only true for
+   * rows created before the snapshot columns existed).
+   */
+  private withResolvedSubjectTeacher(session: any) {
+    return {
+      ...session,
+      subject: session.subjects ?? session.teaching_groups?.subjects ?? null,
+      teacher: session.employee_profiles ?? session.teaching_groups?.employee_profiles ?? null,
+    };
+  }
+
   private async enrichWithRoster(session: any) {
+    session = this.withResolvedSubjectTeacher(session);
     const roster = await this.getRosterStudents(
       session.campus_id,
       session.class_id,
@@ -266,6 +288,12 @@ export class RollSessionsService {
 
     let sectionId: number | null = null;
     let teachingGroupId: number | null = null;
+    // Frozen at creation time so a later timetable edit or teaching-group
+    // reassignment can't silently relabel this session's history. The slot
+    // (if any) is more specific than the group's default assignment, so it
+    // wins when both are present.
+    let snapshotSubjectId: number | null = null;
+    let snapshotEmployeeId: number | null = null;
 
     if (dto.teaching_group_id) {
       const group = await this.prisma.teaching_groups.findUnique({
@@ -278,6 +306,8 @@ export class RollSessionsService {
         );
       }
       teachingGroupId = group.id;
+      snapshotSubjectId = group.subject_id;
+      snapshotEmployeeId = group.employee_id;
     } else {
       await this.assertCampusSection(dto.campus_id, dto.class_id, dto.section_id!);
       sectionId = dto.section_id!;
@@ -313,6 +343,8 @@ export class RollSessionsService {
       }
       period = slot.block_number;
       timetableSlotId = slot.id;
+      snapshotSubjectId = slot.subject_id;
+      snapshotEmployeeId = slot.employee_id;
     }
 
     const dayResolved = await this.calendarResolver.resolveStudentDay(
@@ -350,6 +382,8 @@ export class RollSessionsService {
           session_date: sessionDate,
           period,
           timetable_slot_id: timetableSlotId,
+          snapshot_subject_id: snapshotSubjectId,
+          snapshot_employee_id: snapshotEmployeeId,
           status: 'SKIPPED',
           skip_reason: skipReason,
           created_by_id: user.sub,
@@ -378,6 +412,8 @@ export class RollSessionsService {
         session_date: sessionDate,
         period,
         timetable_slot_id: timetableSlotId,
+        snapshot_subject_id: snapshotSubjectId,
+        snapshot_employee_id: snapshotEmployeeId,
         created_by_id: user.sub,
       },
       include: this.sessionInclude(),

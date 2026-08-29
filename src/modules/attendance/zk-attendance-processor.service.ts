@@ -3,6 +3,7 @@ import {
   attendance_student_daily,
   AttendanceSource,
   DevicePersonType,
+  ExpectedTimeSource,
   Prisma,
   RollRecordStatus,
   ScanDirection,
@@ -982,7 +983,12 @@ export class ZkAttendanceProcessorService {
 
   // Never overwrites a row whose source = MANUAL — admins marking e.g. EXCUSED
   // for approved leave won't get silently flipped back by a later scan.
-  async upsertStaffDaily(employeeId: number, date: Date, seg: DaySegment): Promise<void> {
+  async upsertStaffDaily(
+    employeeId: number,
+    date: Date,
+    seg: DaySegment,
+    forceRecompute = false,
+  ): Promise<void> {
     if (!seg.checkInAt) return;
 
     const employee = await this.loadStaffRecord(employeeId);
@@ -1000,12 +1006,36 @@ export class ZkAttendanceProcessorService {
       existing?.source === AttendanceSource.LEAVE
     ) return;
 
-    const policy = await this.policyResolver.resolveStaffCheckInPolicy(
-      employeeId,
-      employee.campus_id,
-      date,
-    );
-    const status = this.computeStaffStatus(seg.checkInAt, policy.expectedCheckIn, policy.graceMinutes);
+    // Once a day's expected check-in has been snapshotted, reuse it instead
+    // of re-deriving from EmployeeExpectedTimesService — a timetable edit or
+    // teaching-group reassignment made after the fact must not silently
+    // change what "on time" meant for a day that's already happened. Same-day
+    // re-scans (no snapshot yet on the first scan) still resolve live, so
+    // intraday behavior is unchanged. forceRecompute is the deliberate
+    // admin-triggered override (see recompute-late-status).
+    let expectedCheckIn: Date | null;
+    let expectedCheckOut: Date | null;
+    let graceMinutes: number;
+    let expectedSource: ExpectedTimeSource | null;
+
+    if (existing?.expected_check_in_snapshot && !forceRecompute) {
+      expectedCheckIn = existing.expected_check_in_snapshot;
+      expectedCheckOut = existing.expected_check_out_snapshot;
+      graceMinutes = existing.expected_grace_minutes_snapshot ?? 0;
+      expectedSource = existing.expected_time_source_snapshot;
+    } else {
+      const policy = await this.policyResolver.resolveStaffCheckInPolicy(
+        employeeId,
+        employee.campus_id,
+        date,
+      );
+      expectedCheckIn = policy.expectedCheckIn;
+      expectedCheckOut = policy.expectedCheckOut;
+      graceMinutes = policy.graceMinutes;
+      expectedSource = policy.source as ExpectedTimeSource;
+    }
+
+    const status = this.computeStaffStatus(seg.checkInAt, expectedCheckIn, graceMinutes);
 
     await this.prisma.attendance_staff_daily.upsert({
       where: { employee_id_date: { employee_id: employeeId, date } },
@@ -1018,6 +1048,10 @@ export class ZkAttendanceProcessorService {
         check_in_at: seg.checkInAt,
         check_out_at: seg.checkOutAt,
         last_scan_at: seg.lastScanAt,
+        expected_check_in_snapshot: expectedCheckIn,
+        expected_check_out_snapshot: expectedCheckOut,
+        expected_grace_minutes_snapshot: graceMinutes,
+        expected_time_source_snapshot: expectedSource,
       },
       update: {
         status,
@@ -1025,6 +1059,10 @@ export class ZkAttendanceProcessorService {
         check_in_at: seg.checkInAt,
         check_out_at: seg.checkOutAt,
         last_scan_at: seg.lastScanAt,
+        expected_check_in_snapshot: expectedCheckIn,
+        expected_check_out_snapshot: expectedCheckOut,
+        expected_grace_minutes_snapshot: graceMinutes,
+        expected_time_source_snapshot: expectedSource,
       },
     });
 

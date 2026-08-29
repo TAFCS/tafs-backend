@@ -365,6 +365,13 @@ export class AppPortalService {
       },
       include: {
         attendance_roll_records: { where: { student_cc: studentCc } },
+        // Subject/teacher as they stood when this session was recorded —
+        // preferred over the live weekly-schedule lookup below so a later
+        // timetable edit or teaching-group reassignment can't relabel a
+        // day that's already happened. Null on pre-snapshot rows, which
+        // fall back to the live lookup same as a day with no session yet.
+        subjects: { select: { id: true, name: true, code: true } },
+        employee_profiles: { select: { id: true, full_name: true } },
       },
     });
     const sessionByKey = new Map(
@@ -406,8 +413,8 @@ export class AppPortalService {
           start_time: slot.start_time,
           end_time: slot.end_time,
           label: slot.label,
-          subject: slot.subject,
-          teacher: slot.teacher,
+          subject: session?.subjects ?? slot.subject,
+          teacher: session?.employee_profiles ?? slot.teacher,
           room: slot.room,
           status,
           skip_reason: session?.status === 'SKIPPED' ? session.skip_reason : null,

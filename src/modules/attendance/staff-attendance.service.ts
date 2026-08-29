@@ -225,6 +225,21 @@ export class StaffAttendanceService {
 
     const expectedEntries = await Promise.all(
       employees.map(async (emp) => {
+        // Prefer the day's own snapshot (frozen when it was first evaluated)
+        // over a live re-derivation, so a timetable edit made since can't
+        // silently change what "on time" meant for a day that's already
+        // happened. Days with no record yet (e.g. today, before any scan)
+        // have nothing to reuse and fall back to live resolution.
+        const record = recordMap.get(emp.id);
+        if (record?.expected_check_in_snapshot) {
+          return [
+            emp.id,
+            {
+              expectedCheckIn: record.expected_check_in_snapshot,
+              graceMinutes: record.expected_grace_minutes_snapshot ?? 0,
+            },
+          ] as const;
+        }
         const resolved = await this.expectedTimes.resolveExpectedTimes(
           emp.id,
           this.empCampusId(emp, campusIds),
@@ -313,6 +328,19 @@ export class StaffAttendanceService {
 
     const expectedEntries = await Promise.all(
       employees.map(async (emp) => {
+        // Same snapshot-first preference as getCountsForDate() above.
+        const record = recordMap.get(emp.id);
+        if (record?.expected_check_in_snapshot) {
+          return [
+            emp.id,
+            {
+              expectedCheckIn: record.expected_check_in_snapshot,
+              expectedCheckOut: record.expected_check_out_snapshot,
+              graceMinutes: record.expected_grace_minutes_snapshot ?? 0,
+              source: record.expected_time_source_snapshot ?? 'NONE',
+            },
+          ] as const;
+        }
         const resolved = await this.expectedTimes.resolveExpectedTimes(
           emp.id,
           this.empCampusId(emp, campusIds),
@@ -529,9 +557,18 @@ export class StaffAttendanceService {
           )
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 
-      const expected = campusId
-        ? await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d))
-        : { expectedCheckIn: null as Date | null, expectedCheckOut: null as Date | null, source: 'NONE' as const };
+      // Prefer this day's own snapshot over a live re-derivation — a
+      // timetable edit made since a past day happened must not change what
+      // "on time" meant for it. Days with no record yet fall back to live.
+      const expected = record?.expected_check_in_snapshot
+        ? {
+            expectedCheckIn: record.expected_check_in_snapshot,
+            expectedCheckOut: record.expected_check_out_snapshot,
+            source: record.expected_time_source_snapshot ?? 'NONE',
+          }
+        : campusId
+          ? await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d))
+          : { expectedCheckIn: null as Date | null, expectedCheckOut: null as Date | null, source: 'NONE' as const };
 
       const dayScans = scansByDate.get(key) ?? [];
       days.push({
@@ -644,9 +681,13 @@ export class StaffAttendanceService {
         ? await this.calendarResolver.resolveStaffDay(employeeId, campusId, new Date(d))
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 
-      const expected = campusId
-        ? await this.expectedTimes.resolveExpectedTimes(employeeId, campusId, new Date(d))
-        : { expectedCheckOut: null as Date | null };
+      // Prefer this day's own snapshot over a live re-derivation — same
+      // reasoning as getMyAttendance() above.
+      const expected = record?.expected_check_in_snapshot
+        ? { expectedCheckOut: record.expected_check_out_snapshot }
+        : campusId
+          ? await this.expectedTimes.resolveExpectedTimes(employeeId, campusId, new Date(d))
+          : { expectedCheckOut: null as Date | null };
 
       let segments = this.buildDaySegments(
         scansByDate.get(key) ?? [],

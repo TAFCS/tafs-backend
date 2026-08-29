@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { EmployeeExpectedTimesService } from '../timetables/employee-expected-times.service';
+import {
+  EmployeeExpectedTimesService,
+  ExpectedTimesResult,
+} from '../timetables/employee-expected-times.service';
 
 type PolicyRuleRow = {
   rule_type: string;
@@ -16,7 +19,7 @@ export class AttendancePolicyResolverService {
   ) {}
 
   /** See CalendarDayResolverService.beginBatch — same contract. */
-  private batchCache: Map<string, { expectedCheckIn: Date | null; graceMinutes: number }> | null = null;
+  private batchCache: Map<string, unknown> | null = null;
 
   beginBatch(): void {
     this.batchCache = new Map();
@@ -26,13 +29,10 @@ export class AttendancePolicyResolverService {
     this.batchCache = null;
   }
 
-  private async memoPolicy(
-    key: string,
-    load: () => Promise<{ expectedCheckIn: Date | null; graceMinutes: number }>,
-  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+  private async memoPolicy<T>(key: string, load: () => Promise<T>): Promise<T> {
     if (!this.batchCache) return load();
     const hit = this.batchCache.get(key);
-    if (hit) return hit;
+    if (hit !== undefined) return hit as T;
     const val = await load();
     this.batchCache.set(key, val);
     return val;
@@ -210,25 +210,9 @@ export class AttendancePolicyResolverService {
     employeeId: number,
     campusId: number,
     date: Date,
-  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+  ): Promise<ExpectedTimesResult> {
     return this.memoPolicy(`stf:${employeeId}:${campusId}:${date.toISOString().slice(0, 10)}`, () =>
-      this.resolveStaffCheckInPolicyUncached(employeeId, campusId, date),
+      this.expectedTimes.resolveExpectedTimes(employeeId, campusId, date),
     );
-  }
-
-  private async resolveStaffCheckInPolicyUncached(
-    employeeId: number,
-    campusId: number,
-    date: Date,
-  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
-    const resolved = await this.expectedTimes.resolveExpectedTimes(
-      employeeId,
-      campusId,
-      date,
-    );
-    return {
-      expectedCheckIn: resolved.expectedCheckIn,
-      graceMinutes: resolved.graceMinutes,
-    };
   }
 }

@@ -356,13 +356,14 @@ model sections {
 }
 
 model subjects {
-  id              Int               @id @default(autoincrement())
-  code            String?           @db.VarChar(20)
-  name            String            @db.VarChar(100)
-  academic_system String?           @db.VarChar(20)
-  is_active       Boolean           @default(true)
-  teaching_groups teaching_groups[]
-  timetable_slots timetable_slots[]
+  id                       Int                        @id @default(autoincrement())
+  code                     String?                    @db.VarChar(20)
+  name                     String                     @db.VarChar(100)
+  academic_system          String?                    @db.VarChar(20)
+  is_active                Boolean                    @default(true)
+  attendance_roll_sessions attendance_roll_sessions[]
+  teaching_groups          teaching_groups[]
+  timetable_slots          timetable_slots[]
 
   @@unique([name, academic_system])
 }
@@ -1202,6 +1203,7 @@ model employee_profiles {
   secondary_phone                    String?                              @db.VarChar(60)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
+  attendance_roll_sessions           attendance_roll_sessions[]
   attendance_staff_daily             attendance_staff_daily[]
   device_user_mappings               device_user_mappings[]
   employee_class_section_assignments employee_class_section_assignments[]
@@ -1610,6 +1612,8 @@ model attendance_roll_sessions {
   updated_at                                            DateTime                  @updatedAt @db.Timestamp(6)
   timetable_slot_id                                     Int?
   teaching_group_id                                     Int?
+  snapshot_subject_id                                   Int?
+  snapshot_employee_id                                  Int?
   attendance_roll_records                               attendance_roll_records[]
   campuses                                              campuses                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1618,6 +1622,8 @@ model attendance_roll_sessions {
   users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   teaching_groups                                       teaching_groups?          @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
   timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
+  subjects                                              subjects?                 @relation(fields: [snapshot_subject_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employee_profiles                                     employee_profiles?        @relation(fields: [snapshot_employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([campus_id, class_id, section_id, teaching_group_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
   @@index([session_date, campus_id])
@@ -1626,21 +1632,25 @@ model attendance_roll_sessions {
 }
 
 model attendance_staff_daily {
-  id                Int                   @id @default(autoincrement())
-  employee_id       Int
-  campus_id         Int
-  date              DateTime              @db.Date
-  status            StaffAttendanceStatus
-  notes             String?               @db.VarChar(500)
-  marked_by         String?
-  created_at        DateTime              @default(now()) @db.Timestamp(6)
-  updated_at        DateTime              @updatedAt @db.Timestamp(6)
-  check_in_at       DateTime?             @db.Timestamp(6)
-  check_out_at      DateTime?             @db.Timestamp(6)
-  last_scan_at      DateTime?             @db.Timestamp(6)
-  source            AttendanceSource      @default(MANUAL)
-  campuses          campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
-  employee_profiles employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  id                              Int                   @id @default(autoincrement())
+  employee_id                     Int
+  campus_id                       Int
+  date                            DateTime              @db.Date
+  status                          StaffAttendanceStatus
+  notes                           String?               @db.VarChar(500)
+  marked_by                       String?
+  created_at                      DateTime              @default(now()) @db.Timestamp(6)
+  updated_at                      DateTime              @updatedAt @db.Timestamp(6)
+  check_in_at                     DateTime?             @db.Timestamp(6)
+  check_out_at                    DateTime?             @db.Timestamp(6)
+  last_scan_at                    DateTime?             @db.Timestamp(6)
+  source                          AttendanceSource      @default(MANUAL)
+  expected_check_in_snapshot      DateTime?             @db.Timestamp(6)
+  expected_check_out_snapshot     DateTime?             @db.Timestamp(6)
+  expected_grace_minutes_snapshot Int?
+  expected_time_source_snapshot   ExpectedTimeSource?
+  campuses                        campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
+  employee_profiles               employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@unique([employee_id, date])
   @@index([date, campus_id])
@@ -2277,6 +2287,14 @@ enum PostdatedChequeStatus {
 enum CheckInSource {
   FIXED
   TIMETABLE
+}
+
+enum ExpectedTimeSource {
+  OVERRIDE
+  TIMETABLE
+  FIXED
+  POLICY
+  NONE
 }
 
 enum EmployeeStatus {

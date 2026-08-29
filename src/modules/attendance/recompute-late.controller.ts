@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, IsISO8601 } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, IsISO8601 } from 'class-validator';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -33,6 +33,17 @@ export class RecomputeLateStatusDto {
   @Type(() => Number)
   @IsInt()
   class_id?: number;
+
+  /**
+   * Deliberate override: recompute staff expected check-in/out from the
+   * CURRENT timetable/policy state, overwriting any existing snapshot.
+   * Omit (default false) for routine reprocessing — that path reuses each
+   * day's already-snapshotted expected times so a timetable edit made since
+   * can't silently change historical late/absent status.
+   */
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }
 
 @ApiTags('Attendance Recompute')
@@ -168,7 +179,7 @@ export class RecomputeLateController {
           null,
           task.date,
         );
-        await this.processor.upsertStaffDaily(task.employeeId, task.date, seg);
+        await this.processor.upsertStaffDaily(task.employeeId, task.date, seg, dto.force ?? false);
         staffRecomputed++;
       }
     }
