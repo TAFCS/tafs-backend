@@ -87,8 +87,11 @@ export class EnrollmentController {
 
   @Get(':cc/admission-order')
   @ApiOperation({ summary: 'Get student data for admission order PDF' })
-  async getAdmissionOrder(@Param('cc', ParseIntPipe) cc: number) {
-    const data = await this.enrollmentService.getAdmissionOrderData(cc);
+  async getAdmissionOrder(
+    @Param('cc', ParseIntPipe) cc: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.enrollmentService.getAdmissionOrderData(cc, user.username);
     return createApiResponse(
       data,
       HttpStatus.OK,
@@ -98,12 +101,26 @@ export class EnrollmentController {
 
   @Get(':cc/leaving-certificate')
   @ApiOperation({ summary: 'Get student data for leaving certificate (SLC) PDF' })
-  async getLeavingCertificate(@Param('cc', ParseIntPipe) cc: number) {
-    const data = await this.enrollmentService.getLeavingCertificateData(cc);
+  async getLeavingCertificate(
+    @Param('cc', ParseIntPipe) cc: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.enrollmentService.getLeavingCertificateData(cc, user.username);
     return createApiResponse(
       data,
       HttpStatus.OK,
       'Leaving certificate data retrieved successfully'
+    );
+  }
+
+  @Get(':cc/certificate-history')
+  @ApiOperation({ summary: 'Get history of generated certificates and documents' })
+  async getCertificateHistory(@Param('cc', ParseIntPipe) cc: number) {
+    const data = await this.enrollmentService.getCertificateHistory(cc);
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Certificate history retrieved successfully',
     );
   }
 }

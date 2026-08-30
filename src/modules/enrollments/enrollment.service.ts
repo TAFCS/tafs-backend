@@ -278,7 +278,27 @@ export class EnrollmentService {
     return minGrStr;
   }
 
-  async getAdmissionOrderData(cc: number) {
+  async getCertificateHistory(cc: number) {
+    const logs = await this.prisma.audit_logs.findMany({
+      where: {
+        student_id: cc,
+        section: 'CERTIFICATES',
+      },
+      orderBy: { changed_at: 'desc' },
+      take: 50,
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      document_type: log.action,
+      ref_number: log.old_value || null,
+      notes: log.note || null,
+      generated_by: log.changed_by,
+      generated_at: log.changed_at,
+    }));
+  }
+
+  async getAdmissionOrderData(cc: number, username = 'STAFF') {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -312,6 +332,17 @@ export class EnrollmentService {
     if (!student) {
       throw new NotFoundException(`Student with CC #${cc} not found`);
     }
+
+    this.auditLogs.log({
+      entity_type: 'CERTIFICATE',
+      entity_id: String(cc),
+      action: 'Admission Order',
+      section: 'CERTIFICATES',
+      old_value: student.gr_number ? `GR ${student.gr_number}` : `CC #${cc}`,
+      changed_by: username,
+      student_id: cc,
+      note: `Generated Admission Order for ${student.full_name}`,
+    });
 
     const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
     const motherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'mother');
@@ -809,7 +840,7 @@ export class EnrollmentService {
     });
   }
 
-  async getLeavingCertificateData(cc: number) {
+  async getLeavingCertificateData(cc: number, username = 'STAFF') {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -844,6 +875,17 @@ export class EnrollmentService {
     }
 
     const slcNumber = await this.allocateSlcNumber(cc);
+
+    this.auditLogs.log({
+      entity_type: 'CERTIFICATE',
+      entity_id: String(cc),
+      action: 'Leaving Certificate (SLC)',
+      section: 'CERTIFICATES',
+      old_value: `SLC #${slcNumber}`,
+      changed_by: username,
+      student_id: cc,
+      note: `Generated Leaving Certificate #${slcNumber} for ${student.full_name}`,
+    });
 
     const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
     const fatherFullName = fatherLink?.guardians?.full_name || '';
