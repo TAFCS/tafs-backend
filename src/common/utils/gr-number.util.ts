@@ -20,7 +20,7 @@ export function checkIsALevel(
   const sys = (academicSystem || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const gr = (requestedGrade || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  if (sys.includes('alevel') || sys.includes('cambridge')) return true;
+  if (sys.includes('alevel')) return true;
 
   const aLevelGradeKeys = ['a1', 'a2', 'as', 'alevel', 'alevels', 'xia', 'xiia'];
   if (
