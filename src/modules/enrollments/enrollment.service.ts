@@ -837,6 +837,12 @@ export class EnrollmentService {
       throw new NotFoundException(`Student with CC #${cc} not found`);
     }
 
+    if (student.status !== student_status.LEFT) {
+      throw new BadRequestException(
+        `Leaving Certificate (SLC) can only be generated for students whose status is 'LEFT'. Current status is '${student.status}'.`,
+      );
+    }
+
     const slcNumber = await this.allocateSlcNumber(cc);
 
     const fatherLink = student.student_guardians.find(g => g.relationship?.toLowerCase() === 'father');
