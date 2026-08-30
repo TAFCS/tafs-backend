@@ -5,7 +5,7 @@ import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ProgressionHistoryService } from '../students/progression-history.service';
-import { computeNextGrNumber } from '../../common/utils/gr-number.util';
+import { computeNextGrNumber, checkIsALevel } from '../../common/utils/gr-number.util';
 
 @Injectable()
 export class EnrollmentService {
@@ -122,7 +122,11 @@ export class EnrollmentService {
     }
 
     const admission = student.student_admissions?.[0];
-    const isALevel = admission?.academic_system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+    const isALevel = checkIsALevel(
+      admission?.academic_system,
+      admission?.requested_grade,
+      Boolean(student.student_alevel_details),
+    );
 
     const targetSectionId = sectionId ?? student.section_id ?? undefined;
     const [suggested_gr, houseDetails, balanced_section, min_gr] = await Promise.all([

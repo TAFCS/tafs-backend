@@ -7,6 +7,38 @@ function getPrefixByCampusName(name: string, campusId: number): string {
   return '';
 }
 
+/**
+ * Helper to determine whether an academic system or grade string corresponds to A-Levels.
+ */
+export function checkIsALevel(
+  academicSystem?: string | null,
+  requestedGrade?: string | null,
+  hasALevelDetails?: boolean,
+): boolean {
+  if (hasALevelDetails) return true;
+
+  const sys = (academicSystem || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const gr = (requestedGrade || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (sys.includes('alevel') || sys.includes('cambridge')) return true;
+
+  const aLevelGradeKeys = ['a1', 'a2', 'as', 'alevel', 'alevels', 'xia', 'xiia'];
+  if (
+    aLevelGradeKeys.some(
+      (key) =>
+        gr === key ||
+        gr.startsWith('a1') ||
+        gr.startsWith('a2') ||
+        gr.startsWith('as') ||
+        gr.includes('alevel'),
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 /** Non-A-Level or A-Level GR prefix for a campus (KF-A / A-N / A- / '' for Johar). */
 export async function resolveCampusGrPrefix(
   prisma: any,
@@ -29,6 +61,10 @@ export async function resolveCampusGrPrefix(
  *   - "1234" -> "KF-A1234"
  *   - "kf-a1234" -> "KF-A1234"
  *   - "KF-A1234" -> "KF-A1234"
+ * e.g., for A-Levels (prefix "A-"):
+ *   - "1234" -> "A-1234"
+ *   - "a1234" -> "A-1234"
+ *   - "A-1234" -> "A-1234"
  */
 export async function formatGrNumberWithPrefix(
   prisma: any,
@@ -43,10 +79,26 @@ export async function formatGrNumberWithPrefix(
   const prefix = await resolveCampusGrPrefix(prisma, campusId, isALevel);
   if (!prefix) return trimmed;
 
-  if (trimmed.toUpperCase().startsWith(prefix.toUpperCase())) {
-    return prefix + trimmed.slice(prefix.length);
+  const cleanPrefix = prefix.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const cleanTrimmed = trimmed.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+
+  // Handle A-Level GRs (e.g. A-1234, A1234, a1234, a-1234)
+  if (isALevel) {
+    const aMatch = trimmed.match(/^(?:a-?)?(\d+)$/i);
+    if (aMatch) {
+      return `A-${aMatch[1]}`;
+    }
   }
 
+  // If already starts with the prefix (with or without hyphens/spaces)
+  if (cleanTrimmed.startsWith(cleanPrefix)) {
+    const digits = cleanTrimmed.slice(cleanPrefix.length);
+    if (/^\d+$/.test(digits)) {
+      return `${prefix}${digits}`;
+    }
+  }
+
+  // If input is purely numeric digits (e.g. "1234"), prepend campus/level prefix
   if (/^\d+$/.test(trimmed)) {
     return `${prefix}${trimmed}`;
   }

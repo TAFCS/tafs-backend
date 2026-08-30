@@ -10,7 +10,7 @@ import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 import { CcAllocatorService } from './cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { formatGrNumberWithPrefix } from '../../common/utils/gr-number.util';
+import { formatGrNumberWithPrefix, checkIsALevel } from '../../common/utils/gr-number.util';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -74,9 +74,11 @@ export class IdentityService {
           );
         }
 
-        const isALevel =
-          dto.admission?.requested_grade?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel' ||
-          dto.admission?.academic_system?.toString().toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+        const isALevel = checkIsALevel(
+          dto.admission?.academic_system,
+          dto.admission?.requested_grade,
+          Boolean(dto.alevel_details),
+        );
 
         legacyGr = await formatGrNumberWithPrefix(
           tx,

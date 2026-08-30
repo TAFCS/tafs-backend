@@ -18,7 +18,7 @@ import {
 import { ReturnStudentDto } from './dto/return-student.dto';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { allocateSequentialGrNumbers, resolveCampusGrPrefix } from '../../common/utils/gr-number.util';
+import { allocateSequentialGrNumbers, resolveCampusGrPrefix, checkIsALevel } from '../../common/utils/gr-number.util';
 import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 
 type PromotionStatus = 'promoted' | 'graduated' | 'expelled' | 'left' | 'skipped' | 'failed';
@@ -3121,8 +3121,8 @@ export class StudentsService {
     }
   }
 
-  private isALevelAcademicSystem(system?: string | null): boolean {
-    return system?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+  private isALevelAcademicSystem(system?: string | null, grade?: string | null): boolean {
+    return checkIsALevel(system, grade);
   }
 
   private async resolveClassSelector(
