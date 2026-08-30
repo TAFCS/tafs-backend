@@ -32,6 +32,7 @@
     "seed:notification-templates": "ts-node scripts/seed-notification-templates.ts",
     "seed:payroll-statutory-rules": "ts-node scripts/seed-payroll-statutory-rules.ts",
     "backfill:progression-periods": "ts-node scripts/backfill-progression-periods.ts",
+    "backfill:certificate-history": "ts-node scripts/backfill-certificate-history.ts",
     "migrate:tafs-usernames": "ts-node scripts/rename-tafs-usernames.ts"
   },
   "dependencies": {

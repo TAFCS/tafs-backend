@@ -305,7 +305,7 @@ export class EnrollmentService {
   }
 
   async getCertificateHistory(cc: number) {
-    const logs = await this.prisma.audit_logs.findMany({
+    const explicitLogs = await this.prisma.audit_logs.findMany({
       where: {
         student_id: cc,
         section: 'CERTIFICATES',
@@ -314,7 +314,7 @@ export class EnrollmentService {
       take: 50,
     });
 
-    return logs.map((log) => ({
+    const explicitItems = explicitLogs.map((log) => ({
       id: log.id,
       document_type: log.action,
       ref_number: log.old_value || null,
@@ -322,6 +322,88 @@ export class EnrollmentService {
       generated_by: log.changed_by,
       generated_at: log.changed_at,
     }));
+
+    // Fetch student & related historical records to synthesize missing historical entries
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: {
+        cc: true,
+        full_name: true,
+        gr_number: true,
+        slc_number: true,
+        status: true,
+        created_at: true,
+        student_admissions: {
+          orderBy: { application_date: 'asc' },
+          take: 1,
+          select: { application_date: true },
+        },
+        student_academic_history: {
+          where: { change_type: 'TRANSFER' },
+          select: { id: true, change_type: true, changed_by: true, changed_at: true },
+        },
+      },
+    });
+
+    if (!student) return explicitItems;
+
+    const synthesizedItems: Array<{
+      id: number;
+      document_type: string;
+      ref_number: string | null;
+      notes: string | null;
+      generated_by: string;
+      generated_at: Date;
+    }> = [];
+
+    const hasExplicitSlc = explicitItems.some((i) =>
+      i.document_type.toLowerCase().includes('leaving') || i.document_type.toLowerCase().includes('slc')
+    );
+    if (!hasExplicitSlc && student.slc_number) {
+      synthesizedItems.push({
+        id: -1,
+        document_type: 'Leaving Certificate (SLC)',
+        ref_number: `SLC #${student.slc_number}`,
+        notes: `Historical Leaving Certificate #${student.slc_number} for ${student.full_name}`,
+        generated_by: 'SYSTEM (Historical)',
+        generated_at: student.created_at || new Date(),
+      });
+    }
+
+    const hasExplicitAdmissionOrder = explicitItems.some((i) =>
+      i.document_type.toLowerCase().includes('admission order')
+    );
+    if (!hasExplicitAdmissionOrder) {
+      const admDate = student.student_admissions[0]?.application_date || student.created_at || new Date();
+      synthesizedItems.push({
+        id: -2,
+        document_type: 'Admission Order',
+        ref_number: student.gr_number ? `GR ${student.gr_number}` : `CC #${student.cc}`,
+        notes: `Historical Admission Order for ${student.full_name}`,
+        generated_by: 'SYSTEM (Historical)',
+        generated_at: admDate,
+      });
+    }
+
+    const hasExplicitTransfer = explicitItems.some((i) =>
+      i.document_type.toLowerCase().includes('transfer')
+    );
+    if (!hasExplicitTransfer && student.student_academic_history.length > 0) {
+      student.student_academic_history.forEach((th, idx) => {
+        synthesizedItems.push({
+          id: -10 - idx,
+          document_type: 'Transfer Order',
+          ref_number: student.gr_number ? `GR ${student.gr_number}` : `CC #${student.cc}`,
+          notes: `Historical Transfer Order for ${student.full_name}`,
+          generated_by: th.changed_by || 'SYSTEM (Historical)',
+          generated_at: th.changed_at || new Date(),
+        });
+      });
+    }
+
+    const combined = [...explicitItems, ...synthesizedItems];
+    combined.sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime());
+    return combined;
   }
 
   async getAdmissionOrderData(cc: number) {
