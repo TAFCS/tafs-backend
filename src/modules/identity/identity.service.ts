@@ -10,6 +10,7 @@ import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 import { CcAllocatorService } from './cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { formatGrNumberWithPrefix } from '../../common/utils/gr-number.util';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -44,8 +45,12 @@ export class IdentityService {
 
       const parsedLegacyCc =
         dto.legacy_cc == null ? NaN : Number(dto.legacy_cc);
+      if (dto.legacy_cc != null && (isNaN(parsedLegacyCc) || parsedLegacyCc > 2147483647 || parsedLegacyCc < 1)) {
+        throw new BadRequestException('legacy_cc must be an integer between 1 and 2,147,483,647');
+      }
+
       const isLegacy = Number.isInteger(parsedLegacyCc) && parsedLegacyCc >= 1;
-      const legacyGr = dto.gr_number?.trim() || undefined;
+      let legacyGr = dto.gr_number?.trim() || undefined;
 
       if (isLegacy && dto.existing_cc) {
         throw new BadRequestException(
@@ -68,6 +73,17 @@ export class IdentityService {
             'campus_id is required when registering a legacy student',
           );
         }
+
+        const isALevel =
+          dto.admission?.requested_grade?.toLowerCase().replace(/[^a-z]/g, '') === 'alevel' ||
+          dto.admission?.academic_system?.toString().toLowerCase().replace(/[^a-z]/g, '') === 'alevel';
+
+        legacyGr = await formatGrNumberWithPrefix(
+          tx,
+          dto.admission.campus_id,
+          legacyGr,
+          isALevel,
+        );
 
         const existingLegacy = await tx.students.findUnique({
           where: { cc: parsedLegacyCc },

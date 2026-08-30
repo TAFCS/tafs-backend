@@ -7,18 +7,51 @@ function getPrefixByCampusName(name: string, campusId: number): string {
   return '';
 }
 
-/** Non-A-Level GR prefix for a campus (KF-A / A-N / '' for Johar). */
+/** Non-A-Level or A-Level GR prefix for a campus (KF-A / A-N / A- / '' for Johar). */
 export async function resolveCampusGrPrefix(
-  prisma: PrismaService,
+  prisma: any,
   campusId: number | null,
+  isALevel = false,
 ): Promise<string> {
   if (!campusId) return '';
+  if (isALevel) return 'A-';
   const campus = await prisma.campuses.findUnique({
     where: { id: campusId },
     select: { campus_name: true, campus_prefix: true },
   });
   if (!campus) return '';
   return campus.campus_prefix || getPrefixByCampusName(campus.campus_name, campusId);
+}
+
+/**
+ * Format a raw G.R. number string with the appropriate campus prefix.
+ * e.g., for Kaneez Fatima (prefix "KF-A"):
+ *   - "1234" -> "KF-A1234"
+ *   - "kf-a1234" -> "KF-A1234"
+ *   - "KF-A1234" -> "KF-A1234"
+ */
+export async function formatGrNumberWithPrefix(
+  prisma: any,
+  campusId: number | null,
+  rawGr: string | null | undefined,
+  isALevel = false,
+): Promise<string> {
+  const trimmed = rawGr?.trim();
+  if (!trimmed) return '';
+  if (!campusId) return trimmed;
+
+  const prefix = await resolveCampusGrPrefix(prisma, campusId, isALevel);
+  if (!prefix) return trimmed;
+
+  if (trimmed.toUpperCase().startsWith(prefix.toUpperCase())) {
+    return prefix + trimmed.slice(prefix.length);
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return `${prefix}${trimmed}`;
+  }
+
+  return trimmed;
 }
 
 function resolveDefaultPrefix(

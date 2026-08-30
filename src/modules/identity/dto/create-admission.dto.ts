@@ -9,6 +9,7 @@ import {
   ValidateNested,
   IsInt,
   Min,
+  Max,
   IsEmail,
   MaxLength,
   ValidateIf,
@@ -310,6 +311,7 @@ export class CreateAdmissionDto {
   // ── allocating a brand-new CC. Must currently be in QUICK_ADMISSION status. ──
   @IsInt()
   @Min(1)
+  @Max(2147483647, { message: 'existing_cc must not exceed 2147483647' })
   @IsOptional()
   @Type(() => Number)
   existing_cc?: number;
@@ -318,6 +320,7 @@ export class CreateAdmissionDto {
   // ── existing_cc. When set, gr_number is required and the student is enrolled. ──
   @IsInt()
   @Min(1)
+  @Max(2147483647, { message: 'legacy_cc must not exceed 2147483647' })
   @IsOptional()
   @Type(() => Number)
   legacy_cc?: number;
