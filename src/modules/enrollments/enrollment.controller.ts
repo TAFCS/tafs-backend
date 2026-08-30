@@ -89,9 +89,8 @@ export class EnrollmentController {
   @ApiOperation({ summary: 'Get student data for admission order PDF' })
   async getAdmissionOrder(
     @Param('cc', ParseIntPipe) cc: number,
-    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.enrollmentService.getAdmissionOrderData(cc, user.username);
+    const data = await this.enrollmentService.getAdmissionOrderData(cc);
     return createApiResponse(
       data,
       HttpStatus.OK,
@@ -103,13 +102,33 @@ export class EnrollmentController {
   @ApiOperation({ summary: 'Get student data for leaving certificate (SLC) PDF' })
   async getLeavingCertificate(
     @Param('cc', ParseIntPipe) cc: number,
-    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.enrollmentService.getLeavingCertificateData(cc, user.username);
+    const data = await this.enrollmentService.getLeavingCertificateData(cc);
     return createApiResponse(
       data,
       HttpStatus.OK,
       'Leaving certificate data retrieved successfully'
+    );
+  }
+
+  @Post(':cc/log-certificate-generation')
+  @ApiOperation({ summary: 'Log certificate issuance/download event' })
+  async logCertificateGeneration(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Body() body: { document_type: string; ref_number?: string; note?: string },
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.enrollmentService.logCertificateGeneration(
+      cc,
+      body.document_type,
+      body.ref_number,
+      body.note,
+      user?.username || 'STAFF',
+    );
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      'Certificate generation logged successfully',
     );
   }
 
