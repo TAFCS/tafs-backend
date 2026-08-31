@@ -265,6 +265,77 @@ export class VouchersService {
         }
     }
 
+    /**
+     * Plan which of a student's existing vouchers a newly generated voucher for
+     * `feeDate` supersedes.
+     *
+     * Rule (blunt, by fee date): any not-fully-paid voucher — status UNPAID /
+     * OVERDUE / EXPIRED / PARTIALLY_PAID — whose fee_date is on or before
+     * `feeDate`. Nothing about head overlap; the new voucher is simply the
+     * current bill for its period and everything before it.
+     *
+     * Returns:
+     *  - voidVoucherIds: to flip to VOID after the new voucher exists.
+     *  - absorbFeeIds:  every still-outstanding (outstanding > 0), non-discount
+     *    head fee id on those vouchers, to fold into the new voucher so nothing
+     *    is orphaned and delete-time reactivation stays exact. For a
+     *    PARTIALLY_PAID predecessor this is the unpaid remainder only
+     *    (amount - amount_paid); the paid portion stays recorded against the
+     *    now-VOID voucher via its deposit_allocations.
+     *
+     *  - meta: id / number / prior status, for audit lines.
+     *
+     * PAID vouchers are never touched.
+     */
+    private async _planFeeDateSupersession(
+        tx: Prisma.TransactionClient,
+        studentId: number,
+        feeDate: Date,
+    ): Promise<{
+        voidVoucherIds: number[];
+        absorbFeeIds: number[];
+        meta: { id: number; voucher_number: string | null; status: string | null }[];
+    }> {
+        const meta = await tx.vouchers.findMany({
+            where: {
+                student_id: studentId,
+                fee_date: { lte: feeDate },
+                status: { in: ['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'] },
+            },
+            select: { id: true, voucher_number: true, status: true },
+        });
+        const voidVoucherIds = meta.map((v) => v.id);
+        if (voidVoucherIds.length === 0) return { voidVoucherIds, absorbFeeIds: [], meta };
+
+        const heads = await tx.voucher_heads.findMany({
+            where: { voucher_id: { in: voidVoucherIds } },
+            select: {
+                student_fee_id: true,
+                student_fees: {
+                    select: {
+                        is_discount: true,
+                        status: true,
+                        amount: true,
+                        amount_paid: true,
+                        amount_before_discount: true,
+                    },
+                },
+            },
+        });
+        const absorb = new Set<number>();
+        for (const h of heads) {
+            if (h.student_fee_id == null) continue;
+            const sf = h.student_fees;
+            if (!sf || sf.is_discount) continue;
+            if (sf.status === 'PAID' || sf.status === 'DISCOUNT') continue;
+            const outstanding =
+                Number(sf.amount ?? sf.amount_before_discount ?? 0) - Number(sf.amount_paid ?? 0);
+            if (outstanding <= 0) continue;
+            absorb.add(h.student_fee_id);
+        }
+        return { voidVoucherIds, absorbFeeIds: [...absorb], meta };
+    }
+
     async create(
         dto: CreateVoucherDto,
         pdfBuffer?: Buffer,
@@ -296,11 +367,43 @@ export class VouchersService {
             let finalOrderedFeeIds = [...(dto.orderedFeeIds ?? [])];
             let surchargeGroups: Array<{ date: Date; target_month: number; academic_year: string }> = [];
 
-            if (dto.pre_computed_surcharge_groups) {
+            // Server-authoritative arrears: never trust the client payload to decide
+            // which older heads ride on this voucher. Re-derive every unpaid
+            // non-discount head dated strictly before this voucher's fee_date and
+            // fold them in. Without this, a thin client payload silently orphans an
+            // arrear when its prior voucher is voided by supersession (step 6).
+            let serverArrearFeeIds: number[] = [];
+            if (feeDate) {
+                if (dto.pre_computed_arrear_fee_ids) {
+                    serverArrearFeeIds = dto.pre_computed_arrear_fee_ids;
+                    surchargeGroups = dto.pre_computed_surcharge_groups
+                        ?? (await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx)).surcharge_groups;
+                } else {
+                    const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx);
+                    serverArrearFeeIds = arrearsInfo.arrear_fee_ids;
+                    surchargeGroups = dto.pre_computed_surcharge_groups ?? arrearsInfo.surcharge_groups;
+                }
+            } else if (dto.pre_computed_surcharge_groups) {
                 surchargeGroups = dto.pre_computed_surcharge_groups;
-            } else if (feeDate) {
-                const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx);
-                surchargeGroups = arrearsInfo.surcharge_groups;
+            }
+
+            for (const fid of serverArrearFeeIds) {
+                if (!finalOrderedFeeIds.includes(fid)) finalOrderedFeeIds.push(fid);
+            }
+
+            // 1.a.ii Plan supersession — every not-fully-paid voucher (UNPAID /
+            // OVERDUE / EXPIRED / PARTIALLY_PAID) for this student whose fee_date
+            // is on/before this one's. Fold their still-outstanding heads in now
+            // so the new voucher physically carries everything it is about to void
+            // (no orphaned heads; keeps delete-time reactivation exact). PAID
+            // vouchers are left alone. For a PARTIALLY_PAID predecessor only the
+            // unpaid remainder is absorbed; the paid portion stays recorded
+            // against the voided voucher via its deposit_allocations.
+            const supersession = feeDate
+                ? await this._planFeeDateSupersession(tx, dto.student_id, feeDate)
+                : { voidVoucherIds: [] as number[], absorbFeeIds: [] as number[], meta: [] as { id: number; voucher_number: string | null; status: string | null }[] };
+            for (const fid of supersession.absorbFeeIds) {
+                if (!finalOrderedFeeIds.includes(fid)) finalOrderedFeeIds.push(fid);
             }
 
             // 1.b Fetch the fees to be included in the voucher
@@ -590,105 +693,43 @@ export class VouchersService {
                 } as any);
             }
 
-            // 6. Void only COMPLETELY superseded vouchers — vouchers whose EVERY fee head
-            //    is contained in the new voucher's fee IDs.
-            //
-            //    Why "every head" and not "any head":
-            //    If an October voucher has Aug+Sep as arrears alongside Oct, and a standalone
-            //    August voucher is now generated, the October voucher shares SF_AUG but is NOT
-            //    superseded — it still covers Sep and Oct. Both must stay active.
-            //    A voucher is only superseded when ALL of its heads are absorbed (e.g. an old
-            //    Aug-only voucher when a new Aug+Sep+Oct consolidated one is created).
-            const feeIdsInNewVoucher = dto.orderedFeeIds ?? [];
-            if (feeIdsInNewVoucher.length > 0) {
-                const feeIdSet = new Set(feeIdsInNewVoucher);
-
-                // Find candidates — any voucher that shares at least one fee head.
-                const overlappingHeads = await tx.voucher_heads.findMany({
-                    where: {
-                        student_fee_id: { in: feeIdsInNewVoucher },
-                        voucher_id: { not: newVoucher.id },
-                    },
-                    select: { voucher_id: true },
+            // 6. Supersession by fee date. Every not-fully-paid voucher for this
+            //    student whose fee_date is on/before this new voucher's is now
+            //    stale — this voucher is the current bill for that period and
+            //    everything before it, and (step 1.a.ii) already carries all of
+            //    their still-unpaid heads. Flip them to VOID. PAID vouchers are
+            //    never in this set. A voided PARTIALLY_PAID voucher keeps its
+            //    deposit_allocations (the cash already received stays recorded);
+            //    only its unpaid remainder moved onto this voucher.
+            const voidIds = supersession.voidVoucherIds.filter(id => id !== newVoucher.id);
+            if (voidIds.length > 0) {
+                await tx.vouchers.updateMany({
+                    where: { id: { in: voidIds }, status: { notIn: ['PAID', 'VOID'] } },
+                    data: { status: 'VOID' },
                 });
-                const candidateIds = Array.from(new Set(overlappingHeads.map(h => h.voucher_id)));
-
-                if (candidateIds.length > 0) {
-                    // Fetch every head of every candidate in one query.
-                    const allCandidateHeads = await tx.voucher_heads.findMany({
-                        where: { voucher_id: { in: candidateIds } },
-                        select: {
-                            voucher_id: true,
-                            student_fee_id: true,
-                            student_fees: { select: { is_discount: true } },
-                        },
+                this.logger.log(
+                    `[Voucher ${newVoucher.id}] Superseded ${voidIds.length} voucher(s) with fee_date <= ` +
+                    `${feeDate!.toISOString().slice(0, 10)}: [${voidIds.join(', ')}]`,
+                );
+                for (const v of supersession.meta) {
+                    if (v.id === newVoucher.id) continue;
+                    sideEffectEvents.push({
+                        entity_type: 'VOUCHER',
+                        entity_id: String(v.id),
+                        action: 'UPDATED',
+                        field: 'status',
+                        old_value: v.status ?? null,
+                        new_value: 'VOID',
+                        student_id: dto.student_id,
+                        note: `Voucher #${v.id} (no. ${v.voucher_number || 'N/A'}) voided — superseded by newly created Voucher #${newVoucher.id} whose fee date (${feeDate!.toISOString().slice(0, 10)}) is on or after it.`,
                     });
-
-                    // Discount/scholarship heads are excluded from "every head" completeness:
-                    // their student_fees row stays in status DISCOUNT forever (see step 4 above)
-                    // and computeArrears() deliberately never carries DISCOUNT/is_discount rows
-                    // forward as arrears, so they could never re-appear in a later voucher's
-                    // orderedFeeIds. Counting them here would make any voucher with a discount
-                    // head permanently un-supersedable (e.g. an EXPIRED voucher with a
-                    // scholarship line would never be voidable by a subsequent voucher).
-                    const headsByVoucher = new Map<number, number[]>();
-                    for (const h of allCandidateHeads) {
-                        if (h.student_fee_id === null) continue;
-                        if (h.student_fees?.is_discount) continue;
-                        if (!headsByVoucher.has(h.voucher_id)) headsByVoucher.set(h.voucher_id, []);
-                        headsByVoucher.get(h.voucher_id)!.push(h.student_fee_id);
-                    }
-
-                    const completelySupersededIds: number[] = [];
-                    for (const candidateId of candidateIds) {
-                        const candidateFeeIds = headsByVoucher.get(candidateId) ?? [];
-                        if (candidateFeeIds.length > 0 && candidateFeeIds.every(fid => feeIdSet.has(fid))) {
-                            completelySupersededIds.push(candidateId);
-                        }
-                    }
-
-                    if (completelySupersededIds.length > 0) {
-                        // Capture the vouchers that will actually transition (the updateMany's
-                        // status filter excludes already PAID/VOID ones) so each can be audited.
-                        const toVoid = await tx.vouchers.findMany({
-                            where: {
-                                id: { in: completelySupersededIds },
-                                student_id: dto.student_id,
-                                status: { notIn: ['PAID', 'VOID'] },
-                            },
-                            select: { id: true, voucher_number: true, status: true },
-                        });
-
-                        await tx.vouchers.updateMany({
-                            where: {
-                                id: { in: completelySupersededIds },
-                                student_id: dto.student_id,
-                                status: { notIn: ['PAID', 'VOID'] },
-                            },
-                            data: { status: 'VOID' },
-                        });
-                        this.logger.log(
-                            `[Voucher ${newVoucher.id}] Voided ${completelySupersededIds.length} completely superseded voucher(s): [${completelySupersededIds.join(', ')}]`,
-                        );
-
-                        for (const v of toVoid) {
-                            sideEffectEvents.push({
-                                entity_type: 'VOUCHER',
-                                entity_id: String(v.id),
-                                action: 'UPDATED',
-                                field: 'status',
-                                old_value: v.status ?? null,
-                                new_value: 'VOID',
-                                student_id: dto.student_id,
-                                note: `Voucher #${v.id} (no. ${v.voucher_number || 'N/A'}) voided — every one of its fee heads was absorbed into newly created Voucher #${newVoucher.id}.`,
-                            });
-                        }
-                    }
                 }
             }
 
             return updatedVoucher;
-        }, { timeout: 15000 });
+            // Headroom bumped from 15s: fee-date supersession can absorb the heads
+            // of many stale vouchers for a long-overdue student in one pass.
+        }, { timeout: 20000 });
 
         let finalVoucher = voucher;
 
