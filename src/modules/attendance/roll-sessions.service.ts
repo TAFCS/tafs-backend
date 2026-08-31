@@ -1,10 +1,12 @@
 import {
   BadRequestException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, RollSessionStatus, student_status } from '@prisma/client';
+import { Prisma, RollSessionKind, RollSessionStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
@@ -21,6 +23,7 @@ import {
 } from '../hr/calendar/calendar-day-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
+import { ClassSessionReschedulesService } from './class-session-reschedules.service';
 
 /** Fallback IDs used only when no class_attendance_modes rows exist yet. */
 const DEFAULT_ROLL_CALL_CLASS_IDS = [21, 22];
@@ -33,6 +36,8 @@ export class RollSessionsService {
     private readonly announcements: RollCallAnnouncementsService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly auditLogs: AuditLogsService,
+    @Inject(forwardRef(() => ClassSessionReschedulesService))
+    private readonly reschedules: ClassSessionReschedulesService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -128,6 +133,23 @@ export class RollSessionsService {
       // teaching_groups join for those.
       subjects:          { select: { id: true, name: true, code: true } },
       employee_profiles: { select: { id: true, full_name: true } },
+      class_session_reschedules: {
+        select: {
+          id: true,
+          status: true,
+          source_date: true,
+          makeup_date: true,
+          source_timetable_slot: { select: { day_of_week: true, block_number: true } },
+        },
+      },
+      reschedule_as_source: {
+        select: {
+          id: true,
+          status: true,
+          source_date: true,
+          makeup_date: true,
+        },
+      },
       users_attendance_roll_sessions_created_by_idTousers:   { select: { id: true, full_name: true } },
       users_attendance_roll_sessions_submitted_by_idTousers: { select: { id: true, full_name: true } },
       attendance_roll_records: {
@@ -279,6 +301,30 @@ export class RollSessionsService {
   }
 
   async create(dto: CreateRollSessionDto, user: IJwtStaffPayload) {
+    return this.createSession(dto, user, { sessionKind: RollSessionKind.REGULAR });
+  }
+
+  /** Opens a MAKEUP roll session linked to a pending class reschedule. */
+  async createMakeupSession(
+    dto: CreateRollSessionDto & { reschedule_id?: number },
+    user: IJwtStaffPayload,
+  ) {
+    return this.createSession(dto, user, {
+      sessionKind: RollSessionKind.MAKEUP,
+      rescheduleId: dto.reschedule_id,
+      skipWeekdayValidation: true,
+    });
+  }
+
+  private async createSession(
+    dto: CreateRollSessionDto,
+    user: IJwtStaffPayload,
+    opts: {
+      sessionKind: RollSessionKind;
+      rescheduleId?: number;
+      skipWeekdayValidation?: boolean;
+    },
+  ) {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
     await this.assertRollCallClass(dto.class_id);
@@ -340,7 +386,7 @@ export class RollSessionsService {
           'Timetable slot does not match campus/class/section (or teaching group)',
         );
       }
-      if (slot.day_of_week !== sessionDate.getUTCDay()) {
+      if (!opts.skipWeekdayValidation && slot.day_of_week !== sessionDate.getUTCDay()) {
         throw new BadRequestException(
           'Timetable slot is not scheduled for this weekday',
         );
@@ -418,6 +464,8 @@ export class RollSessionsService {
         timetable_slot_id: timetableSlotId,
         snapshot_subject_id: snapshotSubjectId,
         snapshot_employee_id: snapshotEmployeeId,
+        session_kind: opts.sessionKind,
+        reschedule_id: opts.rescheduleId ?? null,
         created_by_id: user.sub,
       },
       include: this.sessionInclude(),
@@ -580,6 +628,12 @@ export class RollSessionsService {
         .catch((e) =>
           console.error(`Roll session #${id}: announceSessionTaken failed`, e),
         );
+
+      if (session.session_kind === RollSessionKind.MAKEUP) {
+        const completion = await this.reschedules.completeOnMakeupSubmit(id, user);
+        const result = await this.findOne(id, user);
+        return { ...result, reschedule_completion: completion };
+      }
     }
 
     return this.findOne(id, user);
@@ -654,6 +708,10 @@ export class RollSessionsService {
       });
 
       for (const session of draftSessions) {
+        if (await this.reschedules.hasPendingRescheduleForSession(session)) {
+          continue;
+        }
+
         const dayResolved = await this.calendarResolver.resolveStudentDay(
           campus.id,
           session.class_id,

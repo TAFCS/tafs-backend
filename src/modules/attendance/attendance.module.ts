@@ -11,6 +11,8 @@ import { RollSessionsController } from './roll-sessions.controller';
 import { RollSessionsService } from './roll-sessions.service';
 import { RollCallAnnouncementsService } from './roll-call-announcements.service';
 import { RollSessionsSchedulerService } from './roll-sessions-scheduler.service';
+import { ClassSessionReschedulesController } from './class-session-reschedules.controller';
+import { ClassSessionReschedulesService } from './class-session-reschedules.service';
 import { StaffAttendanceController } from './staff-attendance.controller';
 import { StaffAttendanceService } from './staff-attendance.service';
 import { AttendanceObjectionsController } from './attendance-objections.controller';
@@ -42,6 +44,7 @@ import { Coral9SchedulerService } from './coral9-scheduler.service';
   ],
   controllers: [
     RollSessionsController,
+    ClassSessionReschedulesController,
     StaffAttendanceController,
     AttendanceObjectionsController,
     StudentAttendanceController,
@@ -55,6 +58,7 @@ import { Coral9SchedulerService } from './coral9-scheduler.service';
   ],
   providers: [
     RollSessionsService,
+    ClassSessionReschedulesService,
     RollCallAnnouncementsService,
     RollSessionsSchedulerService,
     StaffAttendanceService,
@@ -72,6 +76,7 @@ import { Coral9SchedulerService } from './coral9-scheduler.service';
   ],
   exports: [
     RollSessionsService,
+    ClassSessionReschedulesService,
     StaffAttendanceService,
     StudentAttendanceService,
     AttendancePolicyResolverService,
