@@ -1001,10 +1001,6 @@ export class VouchersService {
                 ...(validIds !== undefined ? { id: { in: validIds } } : {}),
             };
 
-            // Stats groupBy uses the same where but without the status filter,
-            // so the cards always show a full breakdown across all statuses.
-            const { status: _omit, ...statsWhere } = where as any;
-
             // Fetch all IDs matching the filter for custom sorting in JS
             const allMatching = await this.prisma.vouchers.findMany({
                 where,
@@ -1036,15 +1032,10 @@ export class VouchersService {
             const total = allMatching.length;
             const paginatedIds = allMatching.slice(skip, skip + take).map(v => v.id);
 
-            const [unsortedVouchers, stats, classTerms] = await Promise.all([
+            const [unsortedVouchers, classTerms] = await Promise.all([
                 this.prisma.vouchers.findMany({
                     where: { id: { in: paginatedIds } },
                     include: VOUCHER_INCLUDE,
-                }),
-                this.prisma.vouchers.groupBy({
-                    by: ['status'],
-                    where: statsWhere,
-                    _count: { _all: true }
                 }),
                 getClassTermMap(this.prisma),
             ]);
@@ -1052,6 +1043,10 @@ export class VouchersService {
             // Restore sorted order
             const vouchers = unsortedVouchers.sort((a, b) => paginatedIds.indexOf(a.id) - paginatedIds.indexOf(b.id));
 
+            // Status breakdown is derived from the SAME rows the list is built from
+            // (allMatching == every voucher matching `where`, status filter included),
+            // so the cards always reconcile with Total and with the filtered list.
+            // PARTIALLY_PAID and any null status fall into `unpaid`.
             const statusStats = {
                 paid: 0,
                 unpaid: 0,
@@ -1060,13 +1055,12 @@ export class VouchersService {
                 expired: 0
             };
 
-            stats.forEach(s => {
-                const count = s._count._all;
-                if (s.status === 'PAID') statusStats.paid += count;
-                else if (s.status === 'VOID') statusStats.void += count;
-                else if (s.status === 'EXPIRED') statusStats.expired += count;
-                else if (s.status === 'OVERDUE') statusStats.overdue += count;
-                else statusStats.unpaid += count;
+            allMatching.forEach(v => {
+                if (v.status === 'PAID') statusStats.paid += 1;
+                else if (v.status === 'VOID') statusStats.void += 1;
+                else if (v.status === 'EXPIRED') statusStats.expired += 1;
+                else if (v.status === 'OVERDUE') statusStats.overdue += 1;
+                else statusStats.unpaid += 1;
             });
 
             return {
