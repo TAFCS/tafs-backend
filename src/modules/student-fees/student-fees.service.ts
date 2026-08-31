@@ -862,10 +862,18 @@ export class StudentFeesService {
                         const beforeDateStr = before?.fee_date ? before.fee_date.toISOString().split('T')[0] : null;
                         const afterDateStr = feeDate ? feeDate.toISOString().split('T')[0] : null;
                         const dateChanged = before && beforeDateStr !== afterDateStr;
-                        if (before && (amountChanged || dateChanged || scholarshipChanged)) {
+                        // The grid lets the user re-point a NOT_ISSUED row at a different
+                        // fee type. Pass A matches this row by its id and so takes this
+                        // update path (never the composite-key fallback that used to
+                        // delete + recreate), which means the write below is the only
+                        // place the new fee_type_id can land — omit it and the change
+                        // silently reverts on the post-save refetch.
+                        const feeTypeChanged = before && before.fee_type_id !== item.fee_type_id;
+                        if (before && (amountChanged || dateChanged || scholarshipChanged || feeTypeChanged)) {
                             updatedLabels.push(
                                 `${feeTypeLabel(item.fee_type_id)} (${this.periodLabel(targetMonth, item.academic_year, feeDate)}): ` +
                                 [
+                                    feeTypeChanged ? `fee type ${feeTypeLabel(before.fee_type_id)} → ${feeTypeLabel(item.fee_type_id)}` : null,
                                     amountChanged ? `amount ${this.fmtMoney(before.amount)} → ${this.fmtMoney(finalAmount)}` : null,
                                     scholarshipChanged ? `scholarship ${before.scholarship_percentage ?? 0}% → ${item.scholarship_percentage ?? 0}%` : null,
                                     dateChanged ? `date ${this.fmtDate(before.fee_date)} → ${this.fmtDate(feeDate)}` : null,
@@ -875,6 +883,7 @@ export class StudentFeesService {
                         return tx.student_fees.update({
                             where: { id: existingId },
                             data: {
+                                fee_type_id: item.fee_type_id,
                                 month: item.month,
                                 amount: finalAmount,
                                 amount_before_discount: item.amount_before_discount,
