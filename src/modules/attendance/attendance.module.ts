@@ -29,6 +29,7 @@ import { ClassCheckInScheduleService } from './class-check-in-schedule.service';
 import { ClassCheckInScheduleController } from './class-check-in-schedule.controller';
 import { RecomputeLateController } from './recompute-late.controller';
 import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
+import { Coral9SchedulerService } from './coral9-scheduler.service';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { Coral9AttendanceWriterService } from './coral9-attendance-writer.servic
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
     Coral9AttendanceWriterService,
+    Coral9SchedulerService,
   ],
   exports: [
     RollSessionsService,

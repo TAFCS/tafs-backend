@@ -39,6 +39,17 @@ services:
       - MEEZAN_COMPANY_CODE=${MEEZAN_COMPANY_CODE}
       # Firebase Service Account for FCM/notifications
       - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
+      # Coral9 integration. This box is Coral9's scheduler — it runs on Vercel,
+      # where hourly cron isn't available to them, and we are already always-on
+      # and already writing their attendance punches.
+      #   CORAL9_DATABASE_URL  scoped coral9_attendance_writer role (punch writes)
+      #   CORAL9_FLUSH_SECRET  optional; mails a punch immediately instead of
+      #                        waiting for the 10-minute sweep
+      #   CORAL9_CRON_SECRET   must equal CRON_SECRET on Coral9; drives the
+      #                        client board digests and the attendance-mail sweep
+      - CORAL9_DATABASE_URL=${CORAL9_DATABASE_URL}
+      - CORAL9_FLUSH_SECRET=${CORAL9_FLUSH_SECRET}
+      - CORAL9_CRON_SECRET=${CORAL9_CRON_SECRET}
     depends_on:
       - db
       - redis
