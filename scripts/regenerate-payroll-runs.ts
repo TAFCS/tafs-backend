@@ -35,6 +35,17 @@ async function main() {
   const payroll = app.get(PayrollService);
   const prisma = app.get(PrismaService);
 
+  // This script's process has much higher round-trip latency to the DB than
+  // the deployed backend does, so Prisma's default 5s interactive-transaction
+  // timeout was tripping mid-regenerate even with pacing between calls.
+  // Widen it for this one-off run only — the running server's own PrismaClient
+  // (and its default timeout) is untouched.
+  const originalTransaction = prisma.$transaction.bind(prisma);
+  (prisma as any).$transaction = (arg: any, options?: any) =>
+    Array.isArray(arg)
+      ? originalTransaction(arg, { timeout: 30000, ...options })
+      : originalTransaction(arg, { timeout: 30000, maxWait: 10000, ...options });
+
   const adminUserRow = await prisma.users.findFirst({ where: { is_active: true }, select: { id: true, username: true } });
   if (!adminUserRow) throw new Error('No active user found to act as the regenerating admin.');
   const user: IJwtStaffPayload = {
@@ -56,21 +67,28 @@ async function main() {
     console.log(`Run ${runId}: ${lines.length} line(s)`);
 
     let ok = 0, skipped = 0, failed = 0;
+    const failedIds: number[] = [];
     for (const { employee_id } of lines) {
       try {
         await payroll.regenerateLine(runId, employee_id, user);
         ok++;
       } catch (err: any) {
-        const msg = err?.message ?? String(err);
+        const msg = (err?.message ?? String(err)).split('\n')[0];
         if (msg.includes('finalized') || msg.includes('excluded')) {
           skipped++;
         } else {
           failed++;
+          failedIds.push(employee_id);
           console.log(`  employee=${employee_id} FAILED: ${msg}`);
         }
       }
+      // Small pause between employees — remote DB latency was causing the
+      // 5s interactive-transaction timeout to trip under back-to-back load.
+      await new Promise((r) => setTimeout(r, 400));
     }
-    console.log(`  regenerated=${ok} skipped=${skipped} failed=${failed}\n`);
+    console.log(`  regenerated=${ok} skipped=${skipped} failed=${failed}`);
+    if (failedIds.length > 0) console.log(`  failed ids: ${failedIds.join(', ')}`);
+    console.log('');
   }
 
   await app.close();

@@ -616,6 +616,7 @@ export class BulkVoucherJobsService {
             orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
             pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
+            pre_computed_arrear_fee_ids: arrearFeeIds,
         }, undefined, createdBy, auditParentId, jobId);
 
         const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);

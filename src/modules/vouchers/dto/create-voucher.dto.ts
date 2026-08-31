@@ -176,4 +176,20 @@ export class CreateVoucherDto {
     @IsOptional()
     @IsArray()
     pre_computed_surcharge_groups?: Array<{ date: Date; target_month: number; academic_year: string }>;
+
+    /** Pre-computed arrear student_fee ids from an outer computeArrears() call, so
+     *  create() can fold every outstanding pre-fee_date head into this voucher
+     *  without a second DB round-trip. When omitted, create() re-derives them. */
+    @Transform(({ value }) => {
+        if (value === undefined || value === null) return undefined;
+        const arr = Array.isArray(value)
+            ? value
+            : typeof value === 'string'
+                ? (value.includes(',') ? value.split(',') : [value])
+                : [value];
+        return arr.map(v => parseInt(String(v).trim(), 10)).filter(v => !isNaN(v));
+    })
+    @IsInt({ each: true })
+    @IsOptional()
+    pre_computed_arrear_fee_ids?: number[];
 }
