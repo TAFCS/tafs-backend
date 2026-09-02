@@ -23,6 +23,7 @@ import {
   ListStaffLessonReschedulesQueryDto,
   ListStaffLessonTeachersQueryDto,
   StaffLessonSourceDateStatusQueryDto,
+  TeacherHoldStatusQueryDto,
   TeacherSlotsQueryDto,
 } from './dto/staff-lesson-reschedules.dto';
 
@@ -41,6 +42,17 @@ export class StaffLessonReschedulesController {
   ) {
     const data = await this.service.listTeachers(query, user);
     return createApiResponse(data, HttpStatus.OK, 'O-Level timetable teachers retrieved');
+  }
+
+  @Get('teachers/:employeeId/hold-status')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  async teacherHoldStatus(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Query() query: TeacherHoldStatusQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.service.getTeacherHoldStatus(employeeId, query, user);
+    return createApiResponse(data, HttpStatus.OK, 'Teacher slot hold status retrieved');
   }
 
   @Get('teachers/:employeeId/slots')

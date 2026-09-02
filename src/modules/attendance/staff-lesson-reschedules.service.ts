@@ -18,15 +18,39 @@ import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { ClassPeriodsService } from '../timetables/class-periods.service';
 import { StaffLessonExcuseService } from './staff-lesson-excuse.service';
 import {
+  CalendarDayResolverService,
+  ResolvedCalendarDay,
+} from '../hr/calendar/calendar-day-resolver.service';
+import {
   CreateStaffLessonRescheduleDto,
   ListStaffLessonReschedulesQueryDto,
   ListStaffLessonTeachersQueryDto,
   StaffLessonSourceDateStatusQueryDto,
+  TeacherHoldStatusQueryDto,
   TeacherSlotsQueryDto,
 } from './dto/staff-lesson-reschedules.dto';
 
 export const O_LEVEL_CLASS_IDS = [12, 13, 14] as const;
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+export type TeacherSlotHoldStatus =
+  | 'held'
+  | 'missed'
+  | 'off_day'
+  | 'upcoming';
+
+export type TeacherSlotHoldRow = {
+  slot_id: number;
+  hold_status: TeacherSlotHoldStatus;
+  held: boolean;
+};
+
+export type TeacherHoldStatusRow = {
+  date: string;
+  hold_status: TeacherSlotHoldStatus;
+  held: boolean;
+  by_slot?: TeacherSlotHoldRow[];
+};
 
 @Injectable()
 export class StaffLessonReschedulesService {
@@ -35,7 +59,20 @@ export class StaffLessonReschedulesService {
     private readonly classPeriods: ClassPeriodsService,
     private readonly staffExcuse: StaffLessonExcuseService,
     private readonly auditLogs: AuditLogsService,
+    private readonly calendarResolver: CalendarDayResolverService,
   ) {}
+
+  private isWorkingDay(
+    dayResolved: ResolvedCalendarDay,
+    sessionDate: Date,
+  ): boolean {
+    if (dayResolved.isWorkingDay) return true;
+    return (
+      dayResolved.source === 'DEFAULT' &&
+      dayResolved.dayType === 'WEEKEND' &&
+      sessionDate.getUTCDay() === 6
+    );
+  }
 
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.role === 'SUPER_ADMIN') return;
@@ -337,6 +374,222 @@ export class StaffLessonReschedulesService {
     };
   }
 
+  async getTeacherHoldStatus(
+    employeeId: number,
+    query: TeacherHoldStatusQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<{ dates: TeacherHoldStatusRow[] }> {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { id: true, campus_id: true, check_in_source: true },
+    });
+    if (!employee) throw new NotFoundException('Employee not found');
+    if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+    if (employee.check_in_source !== CheckInSource.TIMETABLE) {
+      throw new BadRequestException('Employee is not on timetable payroll');
+    }
+
+    const slotIds = [
+      ...new Set(
+        query.source_timetable_slot_ids
+          .split(',')
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      ),
+    ];
+    const dateStrings = query.dates
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (slotIds.length === 0 || dateStrings.length === 0) {
+      return { dates: [] };
+    }
+
+    const slots = await this.prisma.timetable_slots.findMany({
+      where: {
+        id: { in: slotIds },
+        employee_id: employeeId,
+        timetables: {
+          is_active: true,
+          ...(query.academic_year ? { academic_year: query.academic_year } : {}),
+          class_id: { in: [...O_LEVEL_CLASS_IDS] },
+          section_id: { not: null },
+          teaching_group_id: null,
+        },
+      },
+      select: {
+        id: true,
+        day_of_week: true,
+        block_number: true,
+        timetables: {
+          select: {
+            campus_id: true,
+            class_id: true,
+            section_id: true,
+            effective_from: true,
+            academic_year: true,
+          },
+        },
+      },
+    });
+    const validSlotIds = slots.map((s) => s.id);
+    if (validSlotIds.length === 0) {
+      return { dates: [] };
+    }
+
+    const slotById = new Map(slots.map((s) => [s.id, s]));
+    const parsedDates = dateStrings.map((d) => this.parseDate(d));
+    const minDate = new Date(Math.min(...parsedDates.map((d) => d.getTime())));
+    const maxDate = new Date(Math.max(...parsedDates.map((d) => d.getTime())));
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const reschedules = await this.prisma.staff_lesson_reschedules.findMany({
+      where: {
+        employee_id: employeeId,
+        status: { in: ['SCHEDULED', 'COMPLETED'] },
+        OR: [
+          {
+            source_timetable_slot_id: { in: validSlotIds },
+            source_date: { gte: minDate, lte: maxDate },
+          },
+          {
+            makeup_date: { gte: minDate, lte: maxDate },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        source_timetable_slot_id: true,
+        source_date: true,
+        makeup_date: true,
+        makeup_timetable_slot_id: true,
+        makeup_period: true,
+        status: true,
+      },
+    });
+
+    const sourceRescheduleByKey = new Map<string, (typeof reschedules)[number]>();
+    for (const row of reschedules) {
+      const key = `${row.source_timetable_slot_id}|${row.source_date.toISOString().slice(0, 10)}`;
+      sourceRescheduleByKey.set(key, row);
+    }
+
+    const staffRows = await this.prisma.attendance_staff_daily.findMany({
+      where: {
+        employee_id: employeeId,
+        date: { gte: minDate, lte: maxDate },
+      },
+      select: { date: true, status: true, source: true, notes: true },
+    });
+    const staffByDate = new Map(
+      staffRows.map((r) => [r.date.toISOString().slice(0, 10), r]),
+    );
+
+    this.calendarResolver.beginBatch();
+    try {
+      const dates: TeacherHoldStatusRow[] = [];
+
+      for (const dateStr of dateStrings) {
+        const date = this.parseDate(dateStr);
+        const iso = date.toISOString().slice(0, 10);
+        const staffRow = staffByDate.get(iso);
+
+        const bySlot: TeacherSlotHoldRow[] = [];
+        for (const slotId of validSlotIds) {
+          const slot = slotById.get(slotId);
+          if (!slot || slot.day_of_week !== date.getUTCDay()) {
+            bySlot.push({ slot_id: slotId, hold_status: 'off_day', held: false });
+            continue;
+          }
+
+          const effectiveFrom = slot.timetables.effective_from;
+          const scheduleStart = new Date(
+            Math.max(
+              this.academicYearStartDate(slot.timetables.academic_year).getTime(),
+              effectiveFrom.getTime(),
+            ),
+          );
+          if (date.getTime() < scheduleStart.getTime()) {
+            bySlot.push({ slot_id: slotId, hold_status: 'off_day', held: false });
+            continue;
+          }
+
+          if (date.getTime() > today.getTime()) {
+            bySlot.push({ slot_id: slotId, hold_status: 'upcoming', held: false });
+            continue;
+          }
+
+          const dayResolved = await this.calendarResolver.resolveStudentDay(
+            slot.timetables.campus_id,
+            slot.timetables.class_id,
+            slot.timetables.section_id,
+            date,
+          );
+          if (!this.isWorkingDay(dayResolved, date)) {
+            bySlot.push({ slot_id: slotId, hold_status: 'off_day', held: false });
+            continue;
+          }
+
+          const sourceKey = `${slotId}|${iso}`;
+          const linked = sourceRescheduleByKey.get(sourceKey);
+          if (linked?.status === 'COMPLETED') {
+            bySlot.push({ slot_id: slotId, hold_status: 'held', held: true });
+            continue;
+          }
+          if (linked?.status === 'SCHEDULED') {
+            bySlot.push({ slot_id: slotId, hold_status: 'missed', held: false });
+            continue;
+          }
+
+          if (
+            staffRow?.status === StaffAttendanceStatus.PRESENT ||
+            staffRow?.status === StaffAttendanceStatus.LATE ||
+            staffRow?.status === StaffAttendanceStatus.HALF_DAY
+          ) {
+            bySlot.push({ slot_id: slotId, hold_status: 'held', held: true });
+            continue;
+          }
+
+          if (
+            staffRow?.status === StaffAttendanceStatus.EXCUSED &&
+            (staffRow.source === AttendanceSource.SYSTEM ||
+              staffRow.notes?.includes('Makeup class held'))
+          ) {
+            bySlot.push({ slot_id: slotId, hold_status: 'held', held: true });
+            continue;
+          }
+
+          bySlot.push({ slot_id: slotId, hold_status: 'missed', held: false });
+        }
+
+        const aggregate: TeacherSlotHoldStatus =
+          bySlot.every((s) => s.hold_status === 'held')
+            ? 'held'
+            : bySlot.every((s) => s.hold_status === 'off_day')
+              ? 'off_day'
+              : bySlot.every((s) => s.hold_status === 'upcoming')
+                ? 'upcoming'
+                : bySlot.some((s) => s.hold_status === 'missed')
+                  ? 'missed'
+                  : 'held';
+
+        dates.push({
+          date: iso,
+          hold_status: aggregate,
+          held: aggregate === 'held',
+          by_slot: bySlot,
+        });
+      }
+
+      return { dates };
+    } finally {
+      this.calendarResolver.endBatch();
+    }
+  }
+
   async findAll(query: ListStaffLessonReschedulesQueryDto, user: IJwtStaffPayload) {
     const where: Record<string, unknown> = {};
     if (query.campus_id) {
@@ -417,7 +670,21 @@ export class StaffLessonReschedulesService {
       if (!makeupSlot || makeupSlot.employee_id !== dto.employee_id) {
         throw new BadRequestException('Makeup slot does not belong to this teacher');
       }
+    } else if (dto.makeup_period == null) {
+      throw new BadRequestException(
+        'Provide makeup_timetable_slot_id or makeup_period for the makeup class',
+      );
     }
+
+    const makeupPeriod =
+      dto.makeup_period ??
+      (
+        await this.prisma.timetable_slots.findUnique({
+          where: { id: dto.makeup_timetable_slot_id! },
+          select: { block_number: true },
+        })
+      )?.block_number ??
+      slot.block_number;
 
     const existing = await this.prisma.staff_lesson_reschedules.findUnique({
       where: {
@@ -437,6 +704,7 @@ export class StaffLessonReschedulesService {
           data: {
             makeup_date: makeupDate,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id ?? null,
+            makeup_period: makeupPeriod,
             status: ClassSessionRescheduleStatus.SCHEDULED,
             notes: dto.notes ?? null,
             created_by_id: user.sub,
@@ -453,6 +721,7 @@ export class StaffLessonReschedulesService {
             source_date: sourceDate,
             makeup_date: makeupDate,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id ?? null,
+            makeup_period: makeupPeriod,
             status: ClassSessionRescheduleStatus.SCHEDULED,
             notes: dto.notes ?? null,
             created_by_id: user.sub,
@@ -555,7 +824,7 @@ export class StaffLessonReschedulesService {
 
       await tx.staff_lesson_reschedules.update({
         where: { id },
-        data: { status: ClassSessionRescheduleStatus.CANCELLED },
+        data: { status: ClassSessionRescheduleStatus.SCHEDULED },
       });
     });
 
@@ -565,9 +834,9 @@ export class StaffLessonReschedulesService {
       action: 'UPDATED',
       field: 'status',
       old_value: 'COMPLETED',
-      new_value: 'CANCELLED',
+      new_value: 'SCHEDULED',
       changed_by: auditActorLabel(user),
-      note: `Staff lesson reschedule #${id} reversed.`,
+      note: `Staff lesson reschedule #${id} reversed to scheduled.`,
     });
 
     return this.findOne(id, user);

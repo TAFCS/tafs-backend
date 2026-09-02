@@ -1687,6 +1687,7 @@ model staff_lesson_reschedules {
   source_date              DateTime                     @db.Date
   makeup_date              DateTime                     @db.Date
   makeup_timetable_slot_id Int?
+  makeup_period            Int?
   status                   ClassSessionRescheduleStatus @default(SCHEDULED)
   created_by_id            String?
   notes                    String?                      @db.VarChar(500)

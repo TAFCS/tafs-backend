@@ -29,6 +29,18 @@ export class TeacherSlotsQueryDto {
   academic_year?: string;
 }
 
+export class TeacherHoldStatusQueryDto {
+  @IsString()
+  source_timetable_slot_ids!: string;
+
+  @IsString()
+  dates!: string;
+
+  @IsOptional()
+  @IsString()
+  academic_year?: string;
+}
+
 export class ListStaffLessonReschedulesQueryDto {
   @IsOptional()
   @Type(() => Number)
@@ -84,6 +96,12 @@ export class CreateStaffLessonRescheduleDto {
   @Type(() => Number)
   @IsInt()
   makeup_timetable_slot_id?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  makeup_period?: number;
 
   @IsOptional()
   @IsString()
