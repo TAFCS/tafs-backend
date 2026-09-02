@@ -87,4 +87,14 @@ export class RollSessionsController {
     const data = await this.rollSessionsService.skip(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Roll session marked as skipped');
   }
+
+  @Post(':id/revert')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
+  async revert(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.rollSessionsService.revert(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Roll session reverted to draft');
+  }
 }

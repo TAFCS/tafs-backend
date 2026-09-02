@@ -639,6 +639,59 @@ export class RollSessionsService {
     return this.findOne(id, user);
   }
 
+  /** Undo a submitted roll call so attendance can be corrected or the calendar status restored. */
+  async revert(id: number, user: IJwtStaffPayload) {
+    const session = await this.prisma.attendance_roll_sessions.findUnique({
+      where: { id },
+    });
+    if (!session) {
+      throw new NotFoundException(`Roll session ${id} not found`);
+    }
+    this.assertCampusAccess(user, session.campus_id);
+    assertClassInScope(user, session.class_id);
+
+    if (session.status !== RollSessionStatus.SUBMITTED) {
+      throw new BadRequestException('Only submitted roll sessions can be reverted');
+    }
+
+    const completedReschedules = await this.prisma.class_session_reschedules.findMany({
+      where: {
+        status: 'COMPLETED',
+        OR: [{ makeup_roll_session_id: id }, { source_roll_session_id: id }],
+      },
+      select: { id: true },
+    });
+
+    for (const row of completedReschedules) {
+      await this.reschedules.reverse(row.id, user);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.attendance_roll_records.deleteMany({ where: { session_id: id } });
+      await tx.attendance_roll_sessions.update({
+        where: { id },
+        data: {
+          status: RollSessionStatus.DRAFT,
+          submitted_by_id: null,
+          submitted_at: null,
+        },
+      });
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'ROLL_SESSION',
+      entity_id: String(id),
+      action: 'UPDATED',
+      field: 'status',
+      old_value: 'SUBMITTED',
+      new_value: 'DRAFT',
+      changed_by: auditActorLabel(user),
+      note: `Roll session #${id} reverted to draft.`,
+    });
+
+    return this.findOne(id, user);
+  }
+
   async skip(id: number, dto: SkipRollSessionDto, user: IJwtStaffPayload) {
     const session = await this.prisma.attendance_roll_sessions.findUnique({
       where: { id },

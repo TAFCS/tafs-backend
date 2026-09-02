@@ -44,11 +44,15 @@ export class CalendarDayResolverService {
   }
 
   private async memo(key: string, load: () => Promise<ResolvedCalendarDay>): Promise<ResolvedCalendarDay> {
-    if (!this.batchCache) return load();
-    const hit = this.batchCache.get(key);
+    const cache = this.batchCache;
+    if (!cache) return load();
+    const hit = cache.get(key);
     if (hit) return hit;
     const val = await load();
-    this.batchCache.set(key, val);
+    // Another concurrent request may have called endBatch(); only write if our cache is still active.
+    if (this.batchCache === cache) {
+      cache.set(key, val);
+    }
     return val;
   }
 

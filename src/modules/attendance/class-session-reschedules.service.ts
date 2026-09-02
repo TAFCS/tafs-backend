@@ -55,11 +55,19 @@ export type SourceDatePresentBySlot = {
   students: SourceDatePresentStudent[];
 };
 
+export type SourceDateSlotHoldStatus = {
+  slot_id: number;
+  hold_status: SourceDateHoldStatus;
+  held: boolean;
+};
+
 export type SourceDateHoldStatusRow = {
   date: string;
   hold_status: SourceDateHoldStatus;
   held: boolean;
   present_by_slot?: SourceDatePresentBySlot[];
+  /** Per-slot status when multiple timetable slots are queried at once. */
+  by_slot?: SourceDateSlotHoldStatus[];
 };
 
 export type RescheduleCompletionResult = {
@@ -228,33 +236,132 @@ export class ClassSessionReschedulesService {
       ),
     );
 
-    return {
-      timetable_effective_from: timetable.effective_from.toISOString().slice(0, 10),
-      slots: slots.map((slot) => {
-        const period = periodByBlock.get(slot.block_number);
-        let defaultSource = ClassSessionReschedulesService.defaultSourceDate(
-          makeupDate,
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+
+    if (yesterday.getTime() < scheduleStart.getTime() || slots.length === 0) {
+      return {
+        timetable_effective_from: timetable.effective_from.toISOString().slice(0, 10),
+        slots: [],
+      };
+    }
+
+    const slotIds = slots.map((slot) => slot.id);
+    const blockNumbers = [...new Set(slots.map((slot) => slot.block_number))];
+    const sectionId = timetable.section_id ?? null;
+
+    const sessions = await this.prisma.attendance_roll_sessions.findMany({
+      where: {
+        teaching_group_id: group.id,
+        session_date: { gte: scheduleStart, lte: yesterday },
+        OR: [
+          { timetable_slot_id: { in: slotIds } },
+          { timetable_slot_id: null, period: { in: blockNumbers } },
+        ],
+      },
+      select: {
+        session_date: true,
+        status: true,
+        timetable_slot_id: true,
+        period: true,
+        session_kind: true,
+      },
+    });
+
+    const existingReschedules = await this.prisma.class_session_reschedules.findMany({
+      where: {
+        teaching_group_id: group.id,
+        status: { in: ['PENDING', 'COMPLETED'] },
+        source_date: { gte: scheduleStart, lte: yesterday },
+      },
+      select: { source_timetable_slot_id: true, source_date: true },
+    });
+    const rescheduledKeys = new Set(
+      existingReschedules.map(
+        (row) =>
+          `${row.source_timetable_slot_id}|${row.source_date.toISOString().slice(0, 10)}`,
+      ),
+    );
+
+    const findRegularSubmitted = (
+      iso: string,
+      slotId: number,
+      blockNumber: number,
+    ) => {
+      const onDate = sessions.filter(
+        (session) =>
+          session.session_date.toISOString().slice(0, 10) === iso &&
+          session.status === 'SUBMITTED' &&
+          session.session_kind !== RollSessionKind.MAKEUP,
+      );
+      return (
+        onDate.find((session) => session.timetable_slot_id === slotId) ??
+        onDate.find(
+          (session) =>
+            session.timetable_slot_id == null && session.period === blockNumber,
+        )
+      );
+    };
+
+    const eligible: Array<{
+      slot: (typeof slots)[number];
+      missed_dates: string[];
+    }> = [];
+
+    this.calendarResolver.beginBatch();
+    try {
+      for (const slot of slots) {
+        const missedDates: string[] = [];
+        let cursor = ClassSessionReschedulesService.firstWeekdayOnOrAfter(
+          scheduleStart,
           slot.day_of_week,
         );
-        if (defaultSource.getTime() < scheduleStart.getTime()) {
-          defaultSource = ClassSessionReschedulesService.firstWeekdayOnOrAfter(
-            scheduleStart,
-            slot.day_of_week,
-          );
+
+        while (cursor.getTime() <= yesterday.getTime()) {
+          const iso = cursor.toISOString().slice(0, 10);
+          const key = `${slot.id}|${iso}`;
+
+          if (!rescheduledKeys.has(key)) {
+            const dayResolved = await this.calendarResolver.resolveStudentDay(
+              group.campus_id,
+              group.class_id,
+              sectionId,
+              cursor,
+            );
+            if (
+              this.isRollCallWorkingDay(dayResolved, cursor) &&
+              !findRegularSubmitted(iso, slot.id, slot.block_number)
+            ) {
+              missedDates.push(iso);
+            }
+          }
+
+          cursor = new Date(cursor);
+          cursor.setUTCDate(cursor.getUTCDate() + 7);
         }
-        if (defaultSource.getTime() >= makeupDate.getTime()) {
-          defaultSource = ClassSessionReschedulesService.defaultSourceDate(
-            makeupDate,
-            slot.day_of_week,
-          );
+
+        if (missedDates.length > 0) {
+          eligible.push({ slot, missed_dates: missedDates });
         }
+      }
+    } finally {
+      this.calendarResolver.endBatch();
+    }
+
+    return {
+      timetable_effective_from: timetable.effective_from.toISOString().slice(0, 10),
+      slots: eligible.map(({ slot, missed_dates }) => {
+        const period = periodByBlock.get(slot.block_number);
         return {
           id: slot.id,
           day_of_week: slot.day_of_week,
           day_label: WEEKDAY_NAMES[slot.day_of_week],
           block_number: slot.block_number,
           subject: slot.subjects,
-          default_source_date: defaultSource.toISOString().slice(0, 10),
+          default_source_date: missed_dates[missed_dates.length - 1],
+          missed_dates,
           time_label: period?.label ?? `Period ${slot.block_number}`,
           start_time: period?.start_time ?? null,
           end_time: period?.end_time ?? null,
@@ -348,7 +455,32 @@ export class ClassSessionReschedulesService {
       },
     });
 
-    const findSubmittedSession = (
+    const reschedulesForRange = await this.prisma.class_session_reschedules.findMany({
+      where: {
+        teaching_group_id: query.teaching_group_id,
+        status: { in: ['PENDING', 'COMPLETED'] },
+        source_timetable_slot_id: { in: validSlotIds },
+        source_date: { gte: minDate, lte: maxDate },
+      },
+      select: {
+        source_timetable_slot_id: true,
+        source_date: true,
+        status: true,
+        makeup_roll_session: { select: { id: true, status: true } },
+        source_roll_session: { select: { id: true, status: true } },
+      },
+    });
+
+    const rescheduleBySourceKey = new Map<
+      string,
+      (typeof reschedulesForRange)[number]
+    >();
+    for (const row of reschedulesForRange) {
+      const key = `${row.source_timetable_slot_id}|${row.source_date.toISOString().slice(0, 10)}`;
+      rescheduleBySourceKey.set(key, row);
+    }
+
+    const findHeldSession = (
       iso: string,
       slotId: number,
       blockNumber: number,
@@ -356,12 +488,25 @@ export class ClassSessionReschedulesService {
       const onDate = sessions.filter(
         (session) =>
           session.session_date.toISOString().slice(0, 10) === iso &&
-          session.status === 'SUBMITTED' &&
-          session.session_kind !== RollSessionKind.MAKEUP,
+          session.status === 'SUBMITTED',
+      );
+      const regular = onDate.filter(
+        (session) => session.session_kind !== RollSessionKind.MAKEUP,
+      );
+      const regularMatch =
+        regular.find((session) => session.timetable_slot_id === slotId) ??
+        regular.find(
+          (session) =>
+            session.timetable_slot_id == null && session.period === blockNumber,
+        );
+      if (regularMatch) return regularMatch;
+
+      const makeup = onDate.filter(
+        (session) => session.session_kind === RollSessionKind.MAKEUP,
       );
       return (
-        onDate.find((session) => session.timetable_slot_id === slotId) ??
-        onDate.find(
+        makeup.find((session) => session.timetable_slot_id === slotId) ??
+        makeup.find(
           (session) =>
             session.timetable_slot_id == null && session.period === blockNumber,
         )
@@ -379,80 +524,144 @@ export class ClassSessionReschedulesService {
         session_id: number;
       }> = [];
 
-      const dates: SourceDateHoldStatusRow[] = await Promise.all<SourceDateHoldStatusRow>(
-        dateStrings.map(async (dateStr): Promise<SourceDateHoldStatusRow> => {
-          const date = this.parseDate(dateStr);
-          const iso = date.toISOString().slice(0, 10);
+      const mapSlotStatuses = (iso: string): SourceDateHoldStatus[] =>
+        validSlotIds.map((slotId) => {
+          const slot = slotById.get(slotId);
+          if (!slot) return 'missed' as const;
 
-          if (date.getTime() > today.getTime()) {
-            return { date: iso, hold_status: 'upcoming' as const, held: false };
+          if (findHeldSession(iso, slotId, slot.block_number)) {
+            return 'held' as const;
           }
 
-          if (date.getTime() < scheduleStart.getTime()) {
-            return { date: iso, hold_status: 'off_day' as const, held: false };
-          }
-
-          const dayResolved = await this.calendarResolver.resolveStudentDay(
-            group.campus_id,
-            group.class_id,
-            sectionId,
-            date,
-          );
-          if (!this.isRollCallWorkingDay(dayResolved, date)) {
-            return { date: iso, hold_status: 'off_day' as const, held: false };
-          }
-
-          const slotStatuses = validSlotIds.map((slotId) => {
-            const slot = slotById.get(slotId);
-            if (!slot) return 'missed' as const;
-
-            const matching = sessions.filter((session) => {
-              if (session.session_date.toISOString().slice(0, 10) !== iso) return false;
-              if (session.timetable_slot_id === slotId) return true;
-              return session.timetable_slot_id == null && session.period === slot.block_number;
-            });
-
-            if (findSubmittedSession(iso, slotId, slot.block_number)) {
+          const linked = rescheduleBySourceKey.get(`${slotId}|${iso}`);
+          if (linked) {
+            if (
+              linked.status === 'COMPLETED' &&
+              linked.source_roll_session?.status === 'SUBMITTED'
+            ) {
               return 'held' as const;
             }
-            if (matching.some((s) => s.status === 'SKIPPED')) {
-              return 'skipped' as const;
+            if (linked.makeup_roll_session?.status === 'SUBMITTED') {
+              return 'held' as const;
             }
-            return 'missed' as const;
+          }
+
+          const matching = sessions.filter((session) => {
+            if (session.session_date.toISOString().slice(0, 10) !== iso) return false;
+            if (session.timetable_slot_id === slotId) return true;
+            return session.timetable_slot_id == null && session.period === slot.block_number;
           });
-
-          let holdStatus: SourceDateHoldStatus;
-          if (slotStatuses.every((s) => s === 'held')) {
-            holdStatus = 'held';
-          } else if (slotStatuses.every((s) => s === 'skipped')) {
-            holdStatus = 'skipped';
-          } else {
-            holdStatus = 'missed';
+          if (matching.some((s) => s.status === 'SKIPPED')) {
+            return 'skipped' as const;
           }
+          return 'missed' as const;
+        });
 
-          if (holdStatus === 'held') {
-            for (const slotId of validSlotIds) {
-              const slot = slotById.get(slotId);
-              if (!slot) continue;
-              const session = findSubmittedSession(iso, slotId, slot.block_number);
-              if (session) {
-                heldMeta.push({
-                  dateIso: iso,
-                  slot_id: slotId,
-                  period: slot.block_number,
-                  session_id: session.id,
-                });
-              }
+      const toBySlot = (statuses: SourceDateHoldStatus[]): SourceDateSlotHoldStatus[] =>
+        validSlotIds.map((slotId, index) => {
+          const hold = statuses[index] ?? 'missed';
+          return {
+            slot_id: slotId,
+            hold_status: hold,
+            held: hold === 'held',
+          };
+        });
+
+      const aggregateHoldStatus = (statuses: SourceDateHoldStatus[]): SourceDateHoldStatus => {
+        if (statuses.every((s) => s === 'held')) return 'held';
+        if (statuses.every((s) => s === 'skipped')) return 'skipped';
+        if (statuses.every((s) => s === 'upcoming')) return 'upcoming';
+        if (statuses.every((s) => s === 'off_day')) return 'off_day';
+        return 'missed';
+      };
+
+      const dates: SourceDateHoldStatusRow[] = [];
+      for (const dateStr of dateStrings) {
+        const date = this.parseDate(dateStr);
+        const iso = date.toISOString().slice(0, 10);
+
+        if (date.getTime() > today.getTime()) {
+          const upcoming = validSlotIds.map(() => 'upcoming' as const);
+          dates.push({
+            date: iso,
+            hold_status: 'upcoming',
+            held: false,
+            by_slot: toBySlot(upcoming),
+          });
+          continue;
+        }
+
+        if (date.getTime() < scheduleStart.getTime()) {
+          const offDay = validSlotIds.map(() => 'off_day' as const);
+          dates.push({
+            date: iso,
+            hold_status: 'off_day',
+            held: false,
+            by_slot: toBySlot(offDay),
+          });
+          continue;
+        }
+
+        const dayResolved = await this.calendarResolver.resolveStudentDay(
+          group.campus_id,
+          group.class_id,
+          sectionId,
+          date,
+        );
+        if (!this.isRollCallWorkingDay(dayResolved, date)) {
+          const offDay = validSlotIds.map(() => 'off_day' as const);
+          dates.push({
+            date: iso,
+            hold_status: 'off_day',
+            held: false,
+            by_slot: toBySlot(offDay),
+          });
+          continue;
+        }
+
+        const slotStatuses = mapSlotStatuses(iso);
+        const holdStatus = aggregateHoldStatus(slotStatuses);
+
+        for (const slotId of validSlotIds) {
+          const slot = slotById.get(slotId);
+          if (!slot) continue;
+          let session = findHeldSession(iso, slotId, slot.block_number);
+          if (!session) {
+            const linked = rescheduleBySourceKey.get(`${slotId}|${iso}`);
+            const linkedSessionId =
+              linked?.source_roll_session?.status === 'SUBMITTED'
+                ? linked.source_roll_session.id
+                : linked?.makeup_roll_session?.status === 'SUBMITTED'
+                  ? linked.makeup_roll_session.id
+                  : null;
+            if (linkedSessionId) {
+              session = sessions.find((s) => s.id === linkedSessionId) ?? {
+                id: linkedSessionId,
+                session_date: date,
+                status: 'SUBMITTED' as const,
+                timetable_slot_id: slotId,
+                period: slot.block_number,
+                session_kind: RollSessionKind.REGULAR,
+              };
             }
           }
+          if (session) {
+            heldMeta.push({
+              dateIso: iso,
+              slot_id: slotId,
+              period: slot.block_number,
+              session_id: session.id,
+            });
+          }
+        }
 
-          return {
-            date: iso,
-            hold_status: holdStatus,
-            held: holdStatus === 'held',
-          };
-        }),
-      );
+        dates.push({
+          date: iso,
+          hold_status: holdStatus,
+          held: holdStatus === 'held',
+          by_slot: toBySlot(slotStatuses),
+        });
+      }
 
       const heldSessionIds = [...new Set(heldMeta.map((m) => m.session_id))];
 
@@ -586,6 +795,8 @@ export class ClassSessionReschedulesService {
     }
 
     const makeupDate = this.parseDate(dto.makeup_date);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
 
     const group = await this.prisma.teaching_groups.findUnique({
       where: { id: dto.teaching_group_id },
@@ -641,6 +852,39 @@ export class ClassSessionReschedulesService {
       if (sourceDate.getTime() < scheduleStart.getTime()) {
         throw new BadRequestException(
           `Source date ${item.source_date} is before this timetable started (${this.formatDateLabel(scheduleStart)})`,
+        );
+      }
+
+      if (sourceDate.getTime() >= today.getTime()) {
+        throw new BadRequestException(
+          `Source date ${item.source_date} must be a past missed lesson`,
+        );
+      }
+
+      if (sourceDate.getTime() >= makeupDate.getTime()) {
+        throw new BadRequestException(
+          `Source date ${item.source_date} must be before the makeup date (${this.formatDateLabel(makeupDate)})`,
+        );
+      }
+
+      const existingSession = await this.prisma.attendance_roll_sessions.findFirst({
+        where: {
+          teaching_group_id: dto.teaching_group_id,
+          session_date: sourceDate,
+          status: 'SUBMITTED',
+          session_kind: { not: RollSessionKind.MAKEUP },
+          OR: [
+            { timetable_slot_id: item.source_timetable_slot_id },
+            {
+              timetable_slot_id: null,
+              period: sourceSlot.block_number,
+            },
+          ],
+        },
+      });
+      if (existingSession) {
+        throw new BadRequestException(
+          `Roll call was already submitted for slot ${item.source_timetable_slot_id} on ${this.formatDateLabel(sourceDate)}`,
         );
       }
 

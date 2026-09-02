@@ -210,6 +210,87 @@ describe('ClassSessionReschedulesService', () => {
     });
   });
 
+  describe('create', () => {
+    it('rejects future source dates', async () => {
+      const tomorrow = new Date();
+      tomorrow.setUTCHours(0, 0, 0, 0);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      const tomorrowIso = tomorrow.toISOString().slice(0, 10);
+
+      const { service, prisma } = makeService();
+      prisma.teaching_groups = {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 7,
+          campus_id: 1,
+          class_id: 20,
+          academic_year: '2026-2027',
+        }),
+      } as any;
+      prisma.timetable_slots = {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 12,
+          block_number: 2,
+          day_of_week: tomorrow.getUTCDay(),
+          timetables: {
+            teaching_group_id: 7,
+            effective_from: new Date('2026-08-01T00:00:00.000Z'),
+          },
+        }),
+      } as any;
+
+      await expect(
+        service.create(
+          {
+            campus_id: 1,
+            class_id: 20,
+            teaching_group_id: 7,
+            sources: [{ source_timetable_slot_id: 12, source_date: tomorrowIso }],
+            makeup_date: '2026-09-10',
+            makeup_period: 2,
+          },
+          { campusId: 1, classIds: [20], sub: 'u1' } as any,
+        ),
+      ).rejects.toThrow('Source date');
+    });
+
+    it('rejects source dates on or after the makeup date', async () => {
+      const { service, prisma } = makeService();
+      prisma.teaching_groups = {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 7,
+          campus_id: 1,
+          class_id: 20,
+          academic_year: '2026-2027',
+        }),
+      } as any;
+      prisma.timetable_slots = {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 12,
+          block_number: 2,
+          day_of_week: 6,
+          timetables: {
+            teaching_group_id: 7,
+            effective_from: new Date('2026-08-01T00:00:00.000Z'),
+          },
+        }),
+      } as any;
+
+      await expect(
+        service.create(
+          {
+            campus_id: 1,
+            class_id: 20,
+            teaching_group_id: 7,
+            sources: [{ source_timetable_slot_id: 12, source_date: '2026-08-15' }],
+            makeup_date: '2026-08-10',
+            makeup_period: 7,
+          },
+          { campusId: 1, classIds: [20], sub: 'u1' } as any,
+        ),
+      ).rejects.toThrow('before the makeup date');
+    });
+  });
+
   describe('cancel', () => {
     it('rejects cancelling a completed reschedule', async () => {
       const { service, prisma } = makeService();
