@@ -166,15 +166,18 @@ describe('VouchersService unpaid PDF freeze', () => {
     const pdfService: any = {
       generateVoucherPdf: jest.fn().mockResolvedValue(Buffer.from('rendered')),
     };
+    const voucherNotificationService: any = {
+      sendVoucherIssuedNotification: jest.fn().mockResolvedValue(null),
+    };
     const service = new VouchersService(
       prisma,
       storage,
       pdfService,
       {} as any,
       {} as any,
-      {} as any,
+      voucherNotificationService,
     );
-    return { service, prisma, storage, pdfService };
+    return { service, prisma, storage, pdfService, voucherNotificationService };
   };
 
   it('generatePdf with pdf_url set and no force returns stored URL without render/upload/update', async () => {
@@ -215,6 +218,61 @@ describe('VouchersService unpaid PDF freeze', () => {
       where: { id: 20 },
       data: { pdf_url: 'https://cdn/uploaded.pdf' },
     });
+  });
+
+  it('regenerate with requires_release holds the voucher and does not notify', async () => {
+    const { service, prisma, pdfService, voucherNotificationService } = build(unpaidRow);
+    jest.spyOn(service as any, 'prepareVoucherPdfData').mockResolvedValue({
+      voucherData: {},
+      key: 'vouchers/5/GR123_2026-01-01_20.pdf',
+      filename: 'GR123_2026-01-01_20.pdf',
+    });
+    jest.spyOn(service as any, 'ensureVoucherGenerationMeta').mockResolvedValue(undefined);
+
+    await service.generatePdf(20, true, false, 'Someone', {
+      force: true,
+      requires_release: true,
+      send_notification: true,
+    });
+
+    expect(pdfService.generateVoucherPdf).toHaveBeenCalled();
+    expect(prisma.vouchers.update).toHaveBeenCalledWith({
+      where: { id: 20 },
+      data: {
+        pdf_url: 'https://cdn/uploaded.pdf',
+        released_to_parent_at: null,
+        released_by: null,
+      },
+    });
+    expect(voucherNotificationService.sendVoucherIssuedNotification).not.toHaveBeenCalled();
+  });
+
+  it('regenerate with release + notify sends the issued notification', async () => {
+    const { service, prisma, voucherNotificationService } = build(unpaidRow);
+    jest.spyOn(service as any, 'prepareVoucherPdfData').mockResolvedValue({
+      voucherData: {},
+      key: 'vouchers/5/GR123_2026-01-01_20.pdf',
+      filename: 'GR123_2026-01-01_20.pdf',
+    });
+    jest.spyOn(service as any, 'ensureVoucherGenerationMeta').mockResolvedValue(undefined);
+
+    await service.generatePdf(20, true, false, 'Someone', {
+      force: true,
+      requires_release: false,
+      send_notification: true,
+      releasedBy: 'admin',
+    });
+
+    expect(prisma.vouchers.update).toHaveBeenCalledWith({
+      where: { id: 20 },
+      data: expect.objectContaining({
+        pdf_url: 'https://cdn/uploaded.pdf',
+        released_by: 'admin',
+      }),
+    });
+    const patch = prisma.vouchers.update.mock.calls[0][0].data;
+    expect(patch.released_to_parent_at).toBeInstanceOf(Date);
+    expect(voucherNotificationService.sendVoucherIssuedNotification).toHaveBeenCalledWith(20);
   });
 
   it('generatePdf with pdf_url null renders', async () => {

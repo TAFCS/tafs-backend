@@ -251,7 +251,12 @@ export class VouchersController {
             dto.show_discount ?? true,
             dto.paid_stamp ?? false,
             generatedByName,
-            { force: dto.regenerate === true },
+            {
+                force: dto.regenerate === true,
+                send_notification: dto.send_notification,
+                requires_release: dto.requires_release,
+                releasedBy: req?.user?.username || req?.user?.id || generatedByName,
+            },
         );
         return {
             success: true,

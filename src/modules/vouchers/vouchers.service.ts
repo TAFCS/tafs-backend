@@ -3900,7 +3900,12 @@ export class VouchersService {
         showDiscount = true,
         paidStamp = false,
         generatedByName?: string,
-        opts?: { force?: boolean },
+        opts?: {
+            force?: boolean;
+            send_notification?: boolean;
+            requires_release?: boolean;
+            releasedBy?: string;
+        },
     ) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
@@ -3957,14 +3962,65 @@ export class VouchersService {
 
         const pdfBuffer = await this.pdfService.generateVoucherPdf(voucherData);
         const pdfUrl = await this.storage.upload(key, pdfBuffer);
-        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: pdfUrl } });
+
+        const releasePatch = this.regenerateReleasePatch(opts);
+        await this.prisma.vouchers.update({
+            where: { id: voucherId },
+            data: { pdf_url: pdfUrl, ...releasePatch },
+        });
 
         if (finalPaidStamp) {
             const frozen = await this.freezePaidPdf(voucherId, pdfUrl, filename);
             return { pdf_url: frozen.pdf_url, filename: frozen.filename, frozen: false };
         }
 
+        if (opts?.force) {
+            this.notifyAfterRegenerate(voucherId, opts);
+        }
+
         return { pdf_url: pdfUrl, filename, frozen: false };
+    }
+
+    /** Hold/release writes that apply only on an explicit regenerate. */
+    private regenerateReleasePatch(opts?: {
+        force?: boolean;
+        requires_release?: boolean;
+        releasedBy?: string;
+    }): { released_to_parent_at: Date | null; released_by: string | null } | Record<string, never> {
+        if (!opts?.force || opts.requires_release === undefined) return {};
+        if (opts.requires_release) {
+            return { released_to_parent_at: null, released_by: null };
+        }
+        return {
+            released_to_parent_at: new Date(),
+            released_by: opts.releasedBy ?? null,
+        };
+    }
+
+    private notifyAfterRegenerate(
+        voucherId: number,
+        opts: { requires_release?: boolean; send_notification?: boolean },
+    ) {
+        if (opts.requires_release) {
+            this.logger.log(
+                `[Voucher ${voucherId}] Regenerated and held — issued notification deferred until release.`,
+            );
+            return;
+        }
+        if (opts.send_notification === false) {
+            this.logger.log(
+                `[Voucher ${voucherId}] Regenerated; instant issued notification suppressed.`,
+            );
+            return;
+        }
+        if (opts.send_notification !== true) return;
+        this.voucherNotificationService
+            .sendVoucherIssuedNotification(voucherId)
+            .catch((err) =>
+                this.logger.error(
+                    `[Voucher ${voucherId}] Issued notification after regenerate failed: ${(err as Error).message}`,
+                ),
+            );
     }
 
     /**

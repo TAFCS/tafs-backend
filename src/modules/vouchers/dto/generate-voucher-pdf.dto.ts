@@ -16,4 +16,14 @@ export class GenerateVoucherPdfDto {
     @IsBoolean()
     @Transform(({ value }) => value === 'true' || value === true)
     regenerate?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    @Transform(({ value }) => value === 'true' || value === true)
+    send_notification?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    @Transform(({ value }) => value === 'true' || value === true)
+    requires_release?: boolean;
 }
