@@ -1,199 +1,58 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { renderToBuffer } from '@react-pdf/renderer';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PDFDocument } from 'pdf-lib';
-import * as React from 'react';
-import { FeeChallanPDF } from './FeeChallanPDF';
+import Piscina from 'piscina';
+import {
+    resolveVoucherPdfWorkerFilename,
+    voucherPdfWorkerCount,
+} from './voucher-pdf.pool';
+import type { VoucherPdfData } from './voucher-pdf.types';
 
-// Renders "DD-MM-YYYY hh:mm AM/PM" in Pakistan Standard Time, independent of
-// the host machine's system timezone (which may be UTC in production).
-function formatPktTimestamp(date: Date): string {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Karachi',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-    }).formatToParts(date);
-
-    const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
-    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
-}
-
-export interface VoucherPdfData {
-    voucherNumber: string;
-    student: {
-        cc: number;
-        classId: number;
-        fullName: string;
-        fatherName: string;
-        gender: string;
-        grNumber: string;
-        className: string;
-        sectionName: string;
-    };
-    siblings?: Array<{
-        cc: number;
-        fullName: string;
-        grNumber: string;
-        className: string;
-        sectionName: string;
-    }>;
-    campusName: string;
-    academicYear: string;
-    month: string;
-    issueDate: string;
-    dueDate: string;
-    validityDate: string;
-    bank: {
-        name: string;
-        title: string;
-        account: string;
-        iban: string;
-        address: string;
-    };
-    feeHeads: Array<{
-        description: string;
-        amount: number;
-        discount?: number;
-        amountAfterDiscount?: number;
-        scholarship?: number;
-        scholarshipPercentage?: number | null;
-        netAmount: number;
-        discountLabel?: string;
-        isArrear?: boolean;
-        feeDate?: string;
-    }>;
-    totalAmount: number;
-    lateFeeAmount: number;
-    reprintFeeAmount: number;
-    generatedByName?: string;
-    /** Stamp recorded when the voucher was first generated — used for the PDF footer. */
-    generatedAt?: Date | string;
-    /** When true, overlay a PAID stamp on all three challan copies */
-    paidStamp?: boolean;
-    /** When false, hide the discount column. Default: true */
-    showDiscount?: boolean;
-    /** Portal URL to encode in QR code on each challan copy */
-    qrUrl?: string;
-    /** Rows shown in the ARREAR'S HISTORY sidebar column */
-    arrearsHistory?: Array<{
-        date: string;
-        head: string;
-        amount: string;
-        totalAmount: string;
-        target_month?: number;
-        academic_year?: string;
-        /**
-         * Rendered month+year, e.g. "JUN 26". Resolved server-side because only
-         * prepareVoucherPdfData knows the term each head was written under; the
-         * PDF components can see the student's current class at best. Null when
-         * the row carries no month — the components fall back to `date`.
-         */
-        monthLabel?: string | null;
-    }>;
-    surchargeWaived?: boolean;
-    totalSurcharge?: number;
-    /** Consolidated month-range label, e.g. "ARREARS (AUG 25 – OCT 25)" */
-    arrearsLabel?: string;
-    installmentsHistory?: Array<{ head: string; month: string; amount: number; status: string }>;
-    paymentHistory?: Array<{ date: string; head: string; amount: string; totalAmount: string; payment_method?: string | null }>;
-}
+export type { VoucherPdfData } from './voucher-pdf.types';
 
 @Injectable()
-export class VoucherPdfService {
+export class VoucherPdfService implements OnModuleDestroy {
     private readonly logger = new Logger(VoucherPdfService.name);
+    private readonly pool: Piscina<VoucherPdfData, Uint8Array> | null;
+
+    constructor() {
+        const filename = resolveVoucherPdfWorkerFilename(__dirname);
+        if (!filename) {
+            this.pool = null;
+            this.logger.warn(
+                'Voucher PDF worker file not found — rendering on the main thread. ' +
+                    'This is expected under jest; production must run the compiled dist/ worker.',
+            );
+            return;
+        }
+
+        const maxThreads = voucherPdfWorkerCount();
+        this.pool = new Piscina<VoucherPdfData, Uint8Array>({
+            filename,
+            maxThreads,
+            minThreads: Math.min(2, maxThreads),
+            concurrentTasksPerWorker: 1,
+        });
+        this.logger.log(
+            `Voucher PDF worker pool ready (${this.pool.minThreads}–${this.pool.maxThreads} threads)`,
+        );
+    }
 
     /**
      * Generates a 3-copy (Bank, School, Student) Landscape A4 PDF with a Siblings Info sidebar,
      * utilizing the exact same React Component used on the frontend to ensure 100% visual parity.
+     *
+     * renderToBuffer is CPU-bound and runs in the Piscina pool so the Nest event
+     * loop stays free for other requests. Frozen-PDF downloads never reach here.
      */
     async generateVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
         this.logger.debug(`Generating React-PDF for voucher ${data.voucherNumber} (CC: ${data.student.cc})`);
-
-        // Map the backend DTO into the exact shape expected by the React Component
-        const props = {
-            student: {
-                cc: data.student.cc,
-                student_full_name: data.student.fullName,
-                gr_number: data.student.grNumber,
-                campus: data.campusName,
-                class_id: data.student.classId,
-                className: data.student.className,
-                sectionName: data.student.sectionName,
-                grade_and_section: `${data.student.className} - ${data.student.sectionName}`,
-                gender: data.student.gender,
-                father_name: data.student.fatherName,
-            },
-            details: {
-                month: data.month,
-                academicYear: data.academicYear,
-                issueDate: data.issueDate,
-                dueDate: data.dueDate,
-                validityDate: data.validityDate,
-                applyLateFee: data.lateFeeAmount > 0,
-                lateFeeAmount: data.lateFeeAmount,
-                applyReprintFee: data.reprintFeeAmount > 0,
-                reprintFeeAmount: data.reprintFeeAmount,
-                voucherNumber: data.voucherNumber,
-                generatedBy: {
-                    fullName: data.generatedByName || 'TAFSync System',
-                    // Prefer the persisted generation timestamp; fall back to
-                    // issue date for legacy vouchers that predate the columns.
-                    // Never use "now" — regenerations must not rewrite the stamp.
-                    timestampStr: formatPktTimestamp(
-                        data.generatedAt
-                            ? new Date(data.generatedAt)
-                            : data.issueDate
-                              ? new Date(data.issueDate)
-                              : new Date(0),
-                    ),
-                },
-                bank: {
-                    name: data.bank.name,
-                    title: data.bank.title,
-                    account: data.bank.account,
-                    branch: '',
-                    address: data.bank.address,
-                    iban: data.bank.iban,
-                },
-                surchargeWaived: data.surchargeWaived,
-                totalSurcharge: data.totalSurcharge,
-                arrearsLabel: data.arrearsLabel,
-            },
-            fees: data.feeHeads.map(f => ({
-                description: f.description,
-                amount: f.amount,
-                netAmount: f.netAmount,
-                discount: f.discount,
-                amountAfterDiscount: f.amountAfterDiscount,
-                scholarship: f.scholarship,
-                scholarshipPercentage: f.scholarshipPercentage,
-                discountLabel: f.discountLabel,
-                isArrear: f.isArrear,
-                feeDate: f.feeDate,
-            })),
-            totalAmount: data.totalAmount,
-            showDiscount: data.showDiscount ?? true,
-            paidStamp: data.paidStamp ?? false,
-            siblings: data.siblings?.filter(s => s.cc !== data.student.cc).map(s => ({
-                full_name: s.fullName,
-                cc: s.cc,
-                gr_number: s.grNumber,
-                className: s.className,
-                sectionName: s.sectionName,
-            })),
-            qrUrl: data.qrUrl,
-            arrearsHistory: data.arrearsHistory,
-            installmentsHistory: data.installmentsHistory,
-            paymentHistory: data.paymentHistory,
-        };
-
         try {
-            const reactElement = React.createElement(FeeChallanPDF, props) as any;
-            const pdfBuffer = await renderToBuffer(reactElement);
-            return Buffer.from(pdfBuffer);
+            if (this.pool) {
+                const bytes = await this.pool.run(data);
+                return Buffer.from(bytes);
+            }
+            const { renderVoucherPdf } = await import('./render-voucher-pdf.js');
+            return renderVoucherPdf(data);
         } catch (error) {
             this.logger.error(`Failed to generate React-PDF for ${data.voucherNumber}`, error);
             throw error;
@@ -211,5 +70,10 @@ export class VoucherPdfService {
 
         const mergedPdfBytes = await mergedPdf.save();
         return Buffer.from(mergedPdfBytes);
+    }
+
+    async onModuleDestroy() {
+        if (!this.pool) return;
+        await this.pool.destroy();
     }
 }

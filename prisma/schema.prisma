@@ -122,12 +122,12 @@ model campuses {
   employee_profiles             employee_profiles[]
   hr_policy_sets                hr_policy_sets[]
   payroll_runs                  payroll_runs[]
+  staff_lesson_reschedules      staff_lesson_reschedules[]
   student_academic_history      student_academic_history[]
   student_progression_periods   student_progression_periods[]
   students                      students[]
   teaching_groups               teaching_groups[]
   timetables                    timetables[]
-  staff_lesson_reschedules      staff_lesson_reschedules[]
   unconfirmed_admissions        unconfirmed_admissions[]
   users                         users[]
   vouchers                      vouchers[]
@@ -164,13 +164,13 @@ model classes {
   class_timetable_periods            class_timetable_periods[]
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
   employee_class_section_assignments employee_class_section_assignments[]
+  staff_lesson_reschedules           staff_lesson_reschedules[]
   student_academic_history           student_academic_history[]
   student_progression_periods        student_progression_periods[]
   students                           students[]
   graduated_students                 students[]                           @relation("GraduatedFromClass")
   teaching_groups                    teaching_groups[]
   timetables                         timetables[]
-  staff_lesson_reschedules           staff_lesson_reschedules[]
   vouchers                           vouchers[]
 }
 
@@ -350,11 +350,11 @@ model sections {
   attendance_roll_sessions           attendance_roll_sessions[]
   campus_sections                    campus_sections[]
   employee_class_section_assignments employee_class_section_assignments[]
+  staff_lesson_reschedules           staff_lesson_reschedules[]
   student_academic_history           student_academic_history[]
   student_progression_periods        student_progression_periods[]
   students                           students[]
   timetables                         timetables[]
-  staff_lesson_reschedules           staff_lesson_reschedules[]
   vouchers                           vouchers[]
 }
 
@@ -383,8 +383,8 @@ model teaching_groups {
   created_at                  DateTime                      @default(now()) @db.Timestamp(6)
   updated_at                  DateTime                      @updatedAt @db.Timestamp(6)
   attendance_roll_sessions    attendance_roll_sessions[]
-  student_subject_enrollments student_subject_enrollments[]
   class_session_reschedules   class_session_reschedules[]
+  student_subject_enrollments student_subject_enrollments[]
   campuses                    campuses                      @relation(fields: [campus_id], references: [id], onDelete: Cascade)
   classes                     classes                       @relation(fields: [class_id], references: [id], onDelete: Cascade)
   employee_profiles           employee_profiles             @relation(fields: [employee_id], references: [id], onDelete: Cascade)
@@ -432,24 +432,24 @@ model timetables {
 }
 
 model timetable_slots {
-  id                       Int                        @id @default(autoincrement())
-  timetable_id             Int
-  day_of_week              Int
-  block_number             Int
-  slot_order               Int                        @default(1)
-  subject_id               Int
-  employee_id              Int
-  room                     String?                    @db.VarChar(50)
-  created_at               DateTime                   @default(now()) @db.Timestamp(6)
-  updated_at               DateTime                   @updatedAt @db.Timestamp(6)
-  attendance_roll_sessions attendance_roll_sessions[]
-  reschedule_as_source_slot class_session_reschedules[] @relation("RescheduleSourceSlot")
-  reschedule_as_makeup_slot class_session_reschedules[] @relation("RescheduleMakeupSlot")
-  staff_lesson_as_source_slot staff_lesson_reschedules[] @relation("StaffLessonSourceSlot")
-  staff_lesson_as_makeup_slot staff_lesson_reschedules[] @relation("StaffLessonMakeupSlot")
-  employee_profiles        employee_profiles          @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  subjects                 subjects                   @relation(fields: [subject_id], references: [id])
-  timetables               timetables                 @relation(fields: [timetable_id], references: [id], onDelete: Cascade)
+  id                          Int                         @id @default(autoincrement())
+  timetable_id                Int
+  day_of_week                 Int
+  block_number                Int
+  slot_order                  Int                         @default(1)
+  subject_id                  Int
+  employee_id                 Int
+  room                        String?                     @db.VarChar(50)
+  created_at                  DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at                  DateTime                    @updatedAt @db.Timestamp(6)
+  attendance_roll_sessions    attendance_roll_sessions[]
+  reschedule_as_makeup_slot   class_session_reschedules[] @relation("RescheduleMakeupSlot")
+  reschedule_as_source_slot   class_session_reschedules[] @relation("RescheduleSourceSlot")
+  staff_lesson_as_makeup_slot staff_lesson_reschedules[]  @relation("StaffLessonMakeupSlot")
+  staff_lesson_as_source_slot staff_lesson_reschedules[]  @relation("StaffLessonSourceSlot")
+  employee_profiles           employee_profiles           @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  subjects                    subjects                    @relation(fields: [subject_id], references: [id])
+  timetables                  timetables                  @relation(fields: [timetable_id], references: [id], onDelete: Cascade)
 
   @@unique([timetable_id, day_of_week, block_number, slot_order], map: "timetable_slots_cell_key")
   @@index([employee_id, day_of_week])
@@ -859,7 +859,6 @@ model users {
   attendance_roll_sessions_attendance_roll_sessions_created_by_idTousers   attendance_roll_sessions[]   @relation("attendance_roll_sessions_created_by_idTousers")
   attendance_roll_sessions_attendance_roll_sessions_submitted_by_idTousers attendance_roll_sessions[]   @relation("attendance_roll_sessions_submitted_by_idTousers")
   class_session_reschedules_created                                        class_session_reschedules[]
-  staff_lesson_reschedules_created                                         staff_lesson_reschedules[]
   employee_notice_post_reads                                               employee_notice_post_reads[]
   employee_notice_posts                                                    employee_notice_posts[]
   employee_profile                                                         employee_profiles?
@@ -874,6 +873,7 @@ model users {
   payroll_settlements_settled                                              payroll_settlements[]        @relation("PayrollSettlementSettledBy")
   postdated_cheques_cashed                                                 postdated_cheques[]          @relation("ChequeCashedBy")
   postdated_cheques_received                                               postdated_cheques[]          @relation("ChequeReceivedBy")
+  staff_lesson_reschedules_created                                         staff_lesson_reschedules[]
   tickets_closed                                                           support_tickets[]            @relation("TicketClosedByUser")
   tickets_assigned                                                         support_tickets[]            @relation("TicketCurrentAssignee")
   teacher_saturday_schedules_marked                                        teacher_saturday_schedules[] @relation("SaturdayScheduleMarkedBy")
@@ -1233,10 +1233,10 @@ model employee_profiles {
   payroll_flags                      payroll_flags[]
   payroll_run_exclusions             payroll_run_exclusions[]
   payroll_run_lines                  payroll_run_lines[]
+  staff_lesson_reschedules           staff_lesson_reschedules[]
   teacher_saturday_schedules         teacher_saturday_schedules[]
   teaching_groups                    teaching_groups[]
   timetable_slots                    timetable_slots[]
-  staff_lesson_reschedules           staff_lesson_reschedules[]
   zk_attendance_scans                zk_attendance_scans[]
 
   @@index([employment_status])
@@ -1608,38 +1608,38 @@ model attendance_roll_records {
 }
 
 model attendance_roll_sessions {
-  id                                                    Int                       @id @default(autoincrement())
+  id                                                    Int                         @id @default(autoincrement())
   campus_id                                             Int
   class_id                                              Int
   section_id                                            Int?
-  session_date                                          DateTime                  @db.Date
-  period                                                Int                       @default(1)
-  status                                                RollSessionStatus         @default(DRAFT)
-  skip_reason                                           String?                   @db.VarChar(500)
+  session_date                                          DateTime                    @db.Date
+  period                                                Int                         @default(1)
+  status                                                RollSessionStatus           @default(DRAFT)
+  skip_reason                                           String?                     @db.VarChar(500)
   created_by_id                                         String?
   submitted_by_id                                       String?
-  submitted_at                                          DateTime?                 @db.Timestamp(6)
-  created_at                                            DateTime                  @default(now()) @db.Timestamp(6)
-  updated_at                                            DateTime                  @updatedAt @db.Timestamp(6)
+  submitted_at                                          DateTime?                   @db.Timestamp(6)
+  created_at                                            DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at                                            DateTime                    @updatedAt @db.Timestamp(6)
   timetable_slot_id                                     Int?
   teaching_group_id                                     Int?
-  snapshot_subject_id                                   Int?
   snapshot_employee_id                                  Int?
-  session_kind                                          RollSessionKind           @default(REGULAR)
+  snapshot_subject_id                                   Int?
+  session_kind                                          RollSessionKind             @default(REGULAR)
   reschedule_id                                         Int?
   attendance_roll_records                               attendance_roll_records[]
-  campuses                                              campuses                  @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                                               classes                   @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_attendance_roll_sessions_created_by_idTousers   users?                    @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                                              sections?                 @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_attendance_roll_sessions_submitted_by_idTousers users?                    @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  teaching_groups                                       teaching_groups?          @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
-  timetable_slots                                       timetable_slots?          @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
-  subjects                                              subjects?                 @relation(fields: [snapshot_subject_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  employee_profiles                                     employee_profiles?        @relation(fields: [snapshot_employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  class_session_reschedules                             class_session_reschedules? @relation(fields: [reschedule_id], references: [id], onUpdate: NoAction)
-  reschedule_as_makeup                                  class_session_reschedules[]  @relation("RescheduleMakeupSession")
-  reschedule_as_source                                  class_session_reschedules? @relation("RescheduleSourceSession")
+  campuses                                              campuses                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                                               classes                     @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_created_by_idTousers   users?                      @relation("attendance_roll_sessions_created_by_idTousers", fields: [created_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  class_session_reschedules                             class_session_reschedules?  @relation(fields: [reschedule_id], references: [id])
+  sections                                              sections?                   @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employee_profiles                                     employee_profiles?          @relation(fields: [snapshot_employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subjects                                              subjects?                   @relation(fields: [snapshot_subject_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_attendance_roll_sessions_submitted_by_idTousers users?                      @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  teaching_groups                                       teaching_groups?            @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
+  timetable_slots                                       timetable_slots?            @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
+  reschedule_as_makeup                                  class_session_reschedules[] @relation("RescheduleMakeupSession")
+  reschedule_as_source                                  class_session_reschedules?  @relation("RescheduleSourceSession")
 
   @@unique([campus_id, class_id, section_id, teaching_group_id, session_date, period, timetable_slot_id], map: "attendance_roll_sessions_scope_period_slot_key")
   @@index([session_date, campus_id])
@@ -1663,13 +1663,13 @@ model class_session_reschedules {
   notes                    String?                      @db.VarChar(500)
   created_at               DateTime                     @default(now()) @db.Timestamp(6)
   updated_at               DateTime                     @updatedAt @db.Timestamp(6)
-  teaching_groups          teaching_groups              @relation(fields: [teaching_group_id], references: [id], onDelete: Cascade)
-  source_timetable_slot    timetable_slots              @relation("RescheduleSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: NoAction)
-  makeup_timetable_slot    timetable_slots?             @relation("RescheduleMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
-  makeup_roll_session      attendance_roll_sessions?    @relation("RescheduleMakeupSession", fields: [makeup_roll_session_id], references: [id], onDelete: SetNull)
-  source_roll_session      attendance_roll_sessions?    @relation("RescheduleSourceSession", fields: [source_roll_session_id], references: [id], onDelete: SetNull)
-  users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
   attendance_roll_sessions attendance_roll_sessions[]
+  users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
+  makeup_roll_session      attendance_roll_sessions?    @relation("RescheduleMakeupSession", fields: [makeup_roll_session_id], references: [id])
+  makeup_timetable_slot    timetable_slots?             @relation("RescheduleMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
+  source_roll_session      attendance_roll_sessions?    @relation("RescheduleSourceSession", fields: [source_roll_session_id], references: [id])
+  source_timetable_slot    timetable_slots              @relation("RescheduleSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: NoAction)
+  teaching_groups          teaching_groups              @relation(fields: [teaching_group_id], references: [id], onDelete: Cascade)
 
   @@unique([teaching_group_id, source_date, source_timetable_slot_id], map: "class_session_reschedules_source_key")
   @@index([makeup_date, teaching_group_id])
@@ -1692,13 +1692,13 @@ model staff_lesson_reschedules {
   notes                    String?                      @db.VarChar(500)
   created_at               DateTime                     @default(now()) @db.Timestamp(6)
   updated_at               DateTime                     @updatedAt @db.Timestamp(6)
-  employee_profiles        employee_profiles              @relation(fields: [employee_id], references: [id], onDelete: Cascade)
   campuses                 campuses                     @relation(fields: [campus_id], references: [id], onDelete: NoAction)
   classes                  classes                      @relation(fields: [class_id], references: [id], onDelete: NoAction)
+  users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
+  employee_profiles        employee_profiles            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  makeup_timetable_slot    timetable_slots?             @relation("StaffLessonMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
   sections                 sections                     @relation(fields: [section_id], references: [id], onDelete: NoAction)
   source_timetable_slot    timetable_slots              @relation("StaffLessonSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: NoAction)
-  makeup_timetable_slot    timetable_slots?             @relation("StaffLessonMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
-  users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
 
   @@unique([source_timetable_slot_id, source_date], map: "staff_lesson_reschedules_source_key")
   @@index([employee_id])
