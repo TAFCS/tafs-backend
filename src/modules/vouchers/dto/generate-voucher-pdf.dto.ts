@@ -11,4 +11,9 @@ export class GenerateVoucherPdfDto {
     @IsBoolean()
     @Transform(({ value }) => value === 'true' || value === true)
     paid_stamp?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    @Transform(({ value }) => value === 'true' || value === true)
+    regenerate?: boolean;
 }

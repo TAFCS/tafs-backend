@@ -13,6 +13,7 @@ import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { ProgressionHistoryService } from '../students/progression-history.service';
+import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/invalidate-unpaid-pdfs';
 
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
@@ -383,6 +384,12 @@ export class StaffEditingService {
         }
         studentDisplayName = existing.full_name;
 
+        let shouldInvalidateUnpaidPdfs =
+          (studentData.full_name !== undefined &&
+            String(studentData.full_name ?? '') !== String(existing.full_name ?? '')) ||
+          (studentData.gr_number !== undefined &&
+            String(studentData.gr_number ?? '') !== String(existing.gr_number ?? ''));
+
         if (
           studentData.gr_number !== undefined &&
           studentData.gr_number !== existing.gr_number &&
@@ -637,6 +644,7 @@ export class StaffEditingService {
             const existingFather = await tx.guardians.findUnique({ where: { id: fatherLink.guardian_id } });
             if (existingFather) {
               if (father_name !== undefined && String(existingFather.full_name ?? '') !== String(father_name)) {
+                shouldInvalidateUnpaidPdfs = true;
                 fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingFather.id),
@@ -692,6 +700,7 @@ export class StaffEditingService {
               student_id: cc,
               note: `Created/linked Father guardian for student #${cc}`,
             });
+            if (father_name !== undefined) shouldInvalidateUnpaidPdfs = true;
           }
         }
 
@@ -765,6 +774,10 @@ export class StaffEditingService {
               note: `Created/linked Mother guardian for student #${cc}`,
             });
           }
+        }
+
+        if (shouldInvalidateUnpaidPdfs) {
+          await invalidateUnpaidVoucherPdfs(tx, [cc]);
         }
       });
 
@@ -1157,7 +1170,7 @@ export class StaffEditingService {
 
     const links = await this.prisma.student_guardians.findMany({
       where: { guardian_id: id },
-      select: { student_id: true }
+      select: { student_id: true, relationship: true },
     });
 
     for (const field of TRACKED_GUARDIAN_FIELDS) {
@@ -1225,6 +1238,19 @@ export class StaffEditingService {
         where: { id },
         data: data as any,
       });
+
+      const nameChanged =
+        dto.full_name !== undefined &&
+        String(existing.full_name ?? '') !== String(dto.full_name ?? '');
+      if (nameChanged) {
+        await invalidateUnpaidVoucherPdfs(
+          this.prisma,
+          links
+            .filter((l) => isFatherRelationship(l.relationship))
+            .map((l) => l.student_id),
+        );
+      }
+
       return {
         ...guardian,
         dob: this.formatDateToFrontend(guardian.dob),

@@ -13,6 +13,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { NoticeBoardService } from '../notice-board/notice-board.service';
 import { Prisma } from '@prisma/client';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
+import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/invalidate-unpaid-pdfs';
 
 export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
@@ -408,6 +409,9 @@ export class ParentChangeRequestsService {
         where: { cc: studentCc },
         data: changes,
       });
+      if (changes.full_name !== undefined) {
+        await invalidateUnpaidVoucherPdfs(tx, [studentCc]);
+      }
       return;
     }
 
@@ -492,6 +496,19 @@ export class ParentChangeRequestsService {
       where: { id: request.guardian_id },
       data: dataToUpdate as Prisma.InputJsonValue,
     });
+
+    if (dataToUpdate.full_name !== undefined) {
+      const fatherLinks = await tx.student_guardians.findMany({
+        where: { guardian_id: request.guardian_id },
+        select: { student_id: true, relationship: true },
+      });
+      await invalidateUnpaidVoucherPdfs(
+        tx,
+        fatherLinks
+          .filter((l) => isFatherRelationship(l.relationship))
+          .map((l) => l.student_id),
+      );
+    }
 
     if (dataToUpdate.mailing_address) {
       await tx.families.update({
