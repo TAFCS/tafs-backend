@@ -1170,23 +1170,20 @@ export class ClassSessionReschedulesService {
       throw new BadRequestException('Only completed reschedules can be reversed');
     }
 
-    const makeupNote = `Makeup held ${this.formatDateLabel(row.makeup_date)}`;
-
     await this.prisma.$transaction(async (tx) => {
       if (row.source_roll_session_id) {
-        const excusedRecords = await tx.attendance_roll_records.findMany({
-          where: {
-            session_id: row.source_roll_session_id,
-            status: RollRecordStatus.EXCUSED,
-            notes: { contains: makeupNote },
+        // Undo the auto-submitted source session created when makeup was completed.
+        await tx.attendance_roll_records.deleteMany({
+          where: { session_id: row.source_roll_session_id },
+        });
+        await tx.attendance_roll_sessions.update({
+          where: { id: row.source_roll_session_id },
+          data: {
+            status: 'DRAFT',
+            submitted_by_id: null,
+            submitted_at: null,
           },
         });
-        for (const rec of excusedRecords) {
-          await tx.attendance_roll_records.update({
-            where: { id: rec.id },
-            data: { status: RollRecordStatus.ABSENT, notes: null },
-          });
-        }
       }
 
       const employeeId = row.teaching_groups.employee_profiles?.id;
@@ -1210,7 +1207,7 @@ export class ClassSessionReschedulesService {
       await tx.class_session_reschedules.update({
         where: { id },
         data: {
-          status: 'CANCELLED',
+          status: 'SCHEDULED',
           source_roll_session_id: null,
         },
       });
@@ -1222,9 +1219,9 @@ export class ClassSessionReschedulesService {
       action: 'UPDATED',
       field: 'status',
       old_value: 'COMPLETED',
-      new_value: 'CANCELLED',
+      new_value: 'SCHEDULED',
       changed_by: auditActorLabel(user),
-      note: `Reschedule #${id} reversed.`,
+      note: `Reschedule #${id} reversed to scheduled (makeup attendance reverted).`,
     });
 
     return this.findOne(id, user);

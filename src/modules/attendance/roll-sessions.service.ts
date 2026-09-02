@@ -217,7 +217,48 @@ export class RollSessionsService {
     }
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
-    return this.enrichWithRoster(session);
+    const reopened = await this.reopenSkippedMakeupSession(session);
+    return this.enrichWithRoster(reopened);
+  }
+
+  /** Reopens auto-skipped makeup sessions so attendance can be taken. */
+  private async reopenSkippedMakeupSession(
+    session: Prisma.attendance_roll_sessionsGetPayload<{
+      include: ReturnType<RollSessionsService['sessionInclude']>;
+    }>,
+    opts?: { sessionKind?: RollSessionKind; rescheduleId?: number },
+  ) {
+    if (session.status !== 'SKIPPED') {
+      return session;
+    }
+
+    const isMakeup =
+      session.session_kind === RollSessionKind.MAKEUP ||
+      opts?.sessionKind === RollSessionKind.MAKEUP ||
+      (await this.prisma.class_session_reschedules.findFirst({
+        where: {
+          makeup_roll_session_id: session.id,
+          status: { in: ['SCHEDULED', 'COMPLETED'] },
+        },
+        select: { id: true },
+      })) != null;
+
+    if (!isMakeup) {
+      return session;
+    }
+
+    return this.prisma.attendance_roll_sessions.update({
+      where: { id: session.id },
+      data: {
+        status: 'DRAFT',
+        skip_reason: null,
+        session_kind: RollSessionKind.MAKEUP,
+        reschedule_id: opts?.rescheduleId ?? session.reschedule_id,
+        submitted_by_id: null,
+        submitted_at: null,
+      },
+      include: this.sessionInclude(),
+    });
   }
 
   private async getRosterStudents(
@@ -418,10 +459,16 @@ export class RollSessionsService {
     });
 
     if (existing) {
-      return this.enrichWithRoster(existing);
+      const reopened = await this.reopenSkippedMakeupSession(existing, opts);
+      return this.enrichWithRoster(reopened);
     }
 
-    if (!this.isRollCallWorkingDay(dayResolved, sessionDate)) {
+    // Makeup sessions are deliberately placed on specific dates (including
+    // one-off days); never auto-skip them based on the calendar.
+    if (
+      opts.sessionKind !== RollSessionKind.MAKEUP &&
+      !this.isRollCallWorkingDay(dayResolved, sessionDate)
+    ) {
       const skipReason = `Holiday: ${dayResolved.description ?? dayResolved.dayType ?? 'Day off'}`;
       const session = await this.prisma.attendance_roll_sessions.create({
         data: {
@@ -513,6 +560,7 @@ export class RollSessionsService {
       session.session_date,
     );
     if (
+      session.session_kind !== RollSessionKind.MAKEUP &&
       !this.isRollCallWorkingDay(dayResolved, session.session_date) &&
       dto.records?.length
     ) {

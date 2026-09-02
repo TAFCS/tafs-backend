@@ -30,6 +30,7 @@ describe('ClassSessionReschedulesService', () => {
         upsert: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn(),
+        deleteMany: jest.fn(),
       },
       student_subject_enrollments: {
         findMany: jest.fn(),
@@ -304,6 +305,49 @@ describe('ClassSessionReschedulesService', () => {
         BadRequestException,
       );
       expect(prisma.class_session_reschedules.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reverse', () => {
+    it('restores a completed reschedule to scheduled and clears the source session', async () => {
+      const sourceDate = new Date('2026-08-31T00:00:00.000Z');
+      const makeupDate = new Date('2026-09-02T00:00:00.000Z');
+      const { service, prisma } = makeService();
+
+      jest.spyOn(service, 'findOne').mockResolvedValue({
+        id: 9,
+        status: 'COMPLETED',
+        source_date: sourceDate,
+        makeup_date: makeupDate,
+        source_roll_session_id: 50,
+        makeup_roll_session_id: 60,
+        teaching_groups: {
+          campus_id: 1,
+          class_id: 20,
+          employee_profiles: { id: 3 },
+        },
+      } as any);
+
+      await service.reverse(9, { campusId: 1, classIds: [20], sub: 'u1' } as any);
+
+      expect(prisma.attendance_roll_records.deleteMany).toHaveBeenCalledWith({
+        where: { session_id: 50 },
+      });
+      expect(prisma.attendance_roll_sessions.update).toHaveBeenCalledWith({
+        where: { id: 50 },
+        data: {
+          status: 'DRAFT',
+          submitted_by_id: null,
+          submitted_at: null,
+        },
+      });
+      expect(prisma.class_session_reschedules.update).toHaveBeenCalledWith({
+        where: { id: 9 },
+        data: {
+          status: 'SCHEDULED',
+          source_roll_session_id: null,
+        },
+      });
     });
   });
 });
