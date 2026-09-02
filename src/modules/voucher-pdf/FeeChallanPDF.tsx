@@ -571,6 +571,8 @@ interface FeeChallanPDFProps {
     arrearsHistory?: any[];
     installmentsHistory?: any[];
     paymentHistory?: any[];
+    /** Heading for the deposits column, e.g. "PAYMENT HISTORY (LAST 3 PAYMENTS)" */
+    paymentHistoryTitle?: string;
     /** PDF URL (DigitalOcean Spaces) to encode in the QR code in the history column */
     qrUrl?: string;
 }
@@ -863,7 +865,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, paymentHistory, qrUrl }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[PAGE_WIDTH, PAGE_HEIGHT]} style={styles.page} wrap>
             {/* Left 85% for the 3 Challan Copies.
@@ -946,9 +948,9 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 </View>
 
-                {/* PAYMENT HISTORY */}
+                {/* PAYMENT HISTORY (LAST 3 PAYMENTS) */}
                 <View style={styles.historySection} wrap={isLong(paymentHistory)}>
-                    <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
+                    <Text style={styles.historyTitle}>{paymentHistoryTitle || 'PAYMENT HISTORY'}</Text>
                     <View style={styles.historyTable}>
                         {(() => {
                             const COLS = [0.95, 1.9, 0.8, 0.75];
@@ -975,7 +977,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                                 );
                                             })}
                                             <HRow cols={[3.65, 0.75]} variant="total" cells={[
-                                                { node: 'TOTAL PAID' },
+                                                { node: 'TOTAL DEPOSITED' },
                                                 { node: paymentHistory[paymentHistory.length - 1]?.totalAmount || '0', align: 'right' },
                                             ]} />
                                         </>

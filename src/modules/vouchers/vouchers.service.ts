@@ -1728,138 +1728,14 @@ export class VouchersService {
 
         const totalAmount = Number(voucher.total_payable_before_due || 0);
 
-        const paidStudentFees = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: voucher.student_id,
-                is_discount: false,
-                amount_paid: { gt: 0 },
-            },
-            include: {
-                fee_types: true,
-                student_fee_installments: { include: { fee_types: true } },
-                deposit_allocations: { include: { deposits: true }, orderBy: { id: 'desc' }, take: 1 },
-            } as any,
-            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
-        });
-
-        // Discount rows never have amount_paid set (they reduce the total up front rather
-        // than being deposited against), so they can't be picked up by the query above.
-        // Fetch them separately and slot each one under the paid heads that share its
-        // fee_date (i.e. the same billing period), once that period has actually been paid.
-        const discountStudentFees = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: voucher.student_id,
-                is_discount: true,
-                fee_date: { not: null },
-            },
-            include: { discount_presets: true } as any,
-            orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
-        });
-
-        const feeDateKeyOf = (d: Date | string | null | undefined) =>
-            d ? new Date(d).toISOString().split('T')[0] : null;
-
-        const paymentHistoryRows = paidStudentFees
-            .filter((sf: any) => {
-                const isStandaloneInstallment = sf.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
-                return !isStandaloneInstallment;
-            })
-            .map((sf: any) => {
-                const paidAmount = Number(sf.amount_paid ?? 0);
-                if (paidAmount <= 0) return null;
-
-                const feeTypeDesc = sf?.fee_types?.description || 'Fee';
-                const prefixStr = sf.description_prefix ? `${sf.description_prefix} ` : '';
-                // This list is all-time — every paid head the student has ever had,
-                // including ones billed years ago under a different class and a
-                // different term. Resolve each head's own term; falling back to the
-                // voucher's class here is what printed "JUN 25" for a Jun-2026
-                // Cambridge head once the student moved to an Apr-Mar class.
-                const sfTerm = termOf(sf);
-                const sfEffectiveYear = sf?.academic_year ||
-                    ((resolveTermStartMonth(sfTerm) !== DEFAULT_TERM_START_MONTH && sf?.fee_date)
-                        ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), sfTerm)
-                        : '');
-                const monthSuffix = sf?.target_month != null
-                    ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, sfTerm).toUpperCase()}`
-                    : '';
-
-                const head = `${prefixStr}${feeTypeDesc}${monthSuffix}`;
-                const depositDate = (sf as any).deposit_allocations?.[0]?.deposits?.deposit_date;
-                const dateObj = depositDate
-                    ? new Date(depositDate)
-                    : (sf.fee_date ? new Date(sf.fee_date) : null);
-
-                return {
-                    dateObj,
-                    date: dateObj ? dateObj.toISOString().split('T')[0] : 'N/A',
-                    feeDateKey: feeDateKeyOf(sf.fee_date),
-                    head,
-                    amount: paidAmount,
-                    isDiscount: false,
-                    payment_method: (sf as any).deposit_allocations?.[0]?.deposits?.payment_method || null,
-                };
-            })
-            .filter((row: any) => !!row);
-
-        // Group the paid heads by billing period (fee_date). paidStudentFees was queried
-        // ordered by fee_date asc, so the order groups are first seen in is already the
-        // ascending fee_date order we want between groups.
-        const groupOrder: string[] = [];
-        const groupedRows = new Map<string, any[]>();
-        for (const row of paymentHistoryRows as any[]) {
-            const key = row.feeDateKey ?? `__nodate_${row.date}`;
-            if (!groupedRows.has(key)) {
-                groupedRows.set(key, []);
-                groupOrder.push(key);
-            }
-            groupedRows.get(key)!.push(row);
-        }
-        // Within each fee_date group, order by when it was actually deposited (ascending).
-        for (const key of groupOrder) {
-            groupedRows.get(key)!.sort((a: any, b: any) => {
-                const aTime = a.dateObj ? a.dateObj.getTime() : 0;
-                const bTime = b.dateObj ? b.dateObj.getTime() : 0;
-                return aTime - bTime;
-            });
-        }
-
-        // Only surface a discount once the heads from the same fee_date have been paid
-        // (i.e. only for fee_date groups that already exist above).
-        const discountsByFeeDate = new Map<string, any[]>();
-        for (const sf of discountStudentFees as any[]) {
-            const key = feeDateKeyOf(sf.fee_date);
-            if (!key || !groupedRows.has(key)) continue;
-            const amount = Number(sf.amount ?? 0);
-            if (amount <= 0) continue;
-            if (!discountsByFeeDate.has(key)) discountsByFeeDate.set(key, []);
-            discountsByFeeDate.get(key)!.push({
-                date: key,
-                head: sf.discount_presets?.title || 'Discount',
-                amount,
-                isDiscount: true,
-                payment_method: null,
-            });
-        }
-
-        const orderedPaymentRows: any[] = [];
-        for (const key of groupOrder) {
-            orderedPaymentRows.push(...groupedRows.get(key)!);
-            if (discountsByFeeDate.has(key)) orderedPaymentRows.push(...discountsByFeeDate.get(key)!);
-        }
-
-        let paymentRunningTotal = 0;
-        const paymentHistory = orderedPaymentRows.map((row: any) => {
-            paymentRunningTotal += row.isDiscount ? -row.amount : row.amount;
-            return {
-                date: row.date,
-                head: row.head,
-                amount: row.isDiscount ? `-${row.amount.toLocaleString()}` : row.amount.toLocaleString(),
-                totalAmount: paymentRunningTotal.toLocaleString(),
-                payment_method: row.payment_method,
-                isDiscount: row.isDiscount,
-            };
-        });
+        // "LAST 3 DEPOSITS" sidebar panel — the student's most recent actual deposits,
+        // not the per-fee-head list this used to be. See buildDepositsPanel().
+        const { paymentHistory, paymentHistoryTitle } = await this.buildDepositsPanel(
+            voucher.student_id,
+            termOf,
+            standaloneSequenceMap,
+            installmentGroups,
+        );
 
         // Main Label: Consolidate ALL heads in the voucher.
         // Shared with the parent-app payload (normalizeVoucher) so the challan
@@ -2029,10 +1905,141 @@ export class VouchersService {
                         };
                     }),
                 paymentHistory,
+                paymentHistoryTitle,
             },
             key,
             filename
         };
+    }
+
+    /**
+     * Builds the "LAST 3 DEPOSITS" sidebar panel: the student's three most recent
+     * deposits (by deposit_date, all-time, across every voucher), one row per
+     * `deposits` record with its allocations collapsed. A discount credited alongside
+     * a deposit is a separate `type='DISCOUNT'` allocation sharing the deposit id with
+     * the cash (written by applyDiscountCreditInTx); it is surfaced as an informational
+     * green sub-row and is NOT added into the deposited running total — a DISCOUNT
+     * allocation is a non-cash credit, the same treatment cash-total code uses
+     * elsewhere.
+     *
+     * `totalAmount` on the last row is what the PDF prints as "TOTAL DEPOSITED".
+     */
+    private async buildDepositsPanel(
+        studentId: number,
+        termOf: (sf: any) => TermContext,
+        standaloneSequenceMap: Map<number, number>,
+        installmentGroups: Map<number, any[]>,
+    ): Promise<{ paymentHistory: any[]; paymentHistoryTitle: string }> {
+        const recentDeposits = await this.prisma.deposits.findMany({
+            where: { student_id: studentId },
+            orderBy: { deposit_date: 'desc' },
+            take: 3,
+            include: {
+                deposit_allocations: {
+                    include: {
+                        student_fees: {
+                            include: { fee_types: true, student_fee_installments: true },
+                        },
+                    },
+                },
+            },
+        });
+        const orderedDeposits = [...recentDeposits].reverse(); // chronological for display
+
+        // Same head-label shape the old per-fee-head list used: resolve each head's own
+        // term rather than the voucher's, so a head billed under a different class/term
+        // still prints its correct "MON 'YY".
+        const headLabelForFee = (sf: any): string => {
+            const feeTypeDesc = sf?.fee_types?.description || 'Fee';
+            const prefixStr = sf?.description_prefix ? `${sf.description_prefix} ` : '';
+            const sfTerm = termOf(sf);
+            const sfEffectiveYear = sf?.academic_year ||
+                ((resolveTermStartMonth(sfTerm) !== DEFAULT_TERM_START_MONTH && sf?.fee_date)
+                    ? deriveAcademicYear(new Date(sf.fee_date).toISOString(), sfTerm)
+                    : '');
+            const monthSuffix = sf?.target_month != null
+                ? ` ${getMonthYearLabel(sf.target_month, sfEffectiveYear, sfTerm).toUpperCase()}`
+                : '';
+
+            // A standalone installment head (its fee_type_id matches the plan's) reads
+            // like a full head otherwise — tag it with its position in the plan. The
+            // sequence map is keyed by student_fees.id; a "PARTIAL PAYMENT OF" split
+            // fragment isn't in it, so fall back to its balance sibling (split_pair_id),
+            // which holds the slot.
+            const isStandaloneInstallment =
+                sf?.installment_id && sf.fee_type_id === sf.student_fee_installments?.fee_type_id;
+            if (isStandaloneInstallment) {
+                const seqNum =
+                    standaloneSequenceMap.get(sf.id) ??
+                    (sf.split_pair_id != null ? standaloneSequenceMap.get(sf.split_pair_id) : undefined);
+                const total =
+                    Number(sf.student_fee_installments?.installment_count) ||
+                    installmentGroups.get(sf.installment_id)?.length ||
+                    0;
+                if (seqNum && total) {
+                    return `${prefixStr}${feeTypeDesc}${monthSuffix} (INSTALLMENT ${seqNum}/${total})`;
+                }
+            }
+
+            return `${prefixStr}${feeTypeDesc}${monthSuffix}`;
+        };
+
+        const NON_FEE_HEAD_LABEL: Record<string, string> = {
+            LATE_FEE: 'LATE FEE',
+            SURCHARGE: 'ARREAR SURCHARGE',
+        };
+
+        let paymentRunningTotal = 0;
+        const paymentHistory: any[] = [];
+        for (const dep of orderedDeposits as any[]) {
+            const cash = Number(dep.total_amount ?? 0);
+            paymentRunningTotal += cash;
+
+            const headParts = new Set<string>();
+            let discountApplied = 0;
+            for (const alloc of (dep.deposit_allocations ?? [])) {
+                if (alloc.type === 'DISCOUNT') {
+                    discountApplied += Number(alloc.amount ?? 0);
+                    continue; // shown as its own sub-row, not in the head list
+                }
+                const fixedLabel = NON_FEE_HEAD_LABEL[alloc.type];
+                if (fixedLabel) {
+                    headParts.add(fixedLabel);
+                    continue;
+                }
+                if (alloc.student_fees) headParts.add(headLabelForFee(alloc.student_fees));
+            }
+
+            const dateStr = dep.deposit_date
+                ? new Date(dep.deposit_date).toISOString().split('T')[0]
+                : 'N/A';
+
+            paymentHistory.push({
+                date: dateStr,
+                head: [...headParts].join(', ') || '-',
+                amount: cash.toLocaleString(),
+                totalAmount: paymentRunningTotal.toLocaleString(),
+                payment_method: dep.payment_method || null,
+                isDiscount: false,
+            });
+
+            if (discountApplied > 0) {
+                paymentHistory.push({
+                    date: dateStr,
+                    head: 'DISCOUNT APPLIED',
+                    amount: `-${discountApplied.toLocaleString()}`,
+                    totalAmount: paymentRunningTotal.toLocaleString(), // unchanged — discount is not cash
+                    payment_method: null,
+                    isDiscount: true,
+                });
+            }
+        }
+
+        const paymentHistoryTitle = orderedDeposits.length === 0
+            ? 'PAYMENT HISTORY'
+            : `PAYMENT HISTORY (LAST ${orderedDeposits.length} PAYMENT${orderedDeposits.length === 1 ? '' : 'S'})`;
+
+        return { paymentHistory, paymentHistoryTitle };
     }
 
     async findOne(id: number) {
