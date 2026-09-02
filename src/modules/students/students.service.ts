@@ -3057,6 +3057,13 @@ export class StudentsService {
               },
             });
 
+            if (
+              resolvedGrOverride != null &&
+              resolvedGrOverride !== (student.gr_number ?? '')
+            ) {
+              await invalidateUnpaidVoucherPdfs(tx, [student.cc]);
+            }
+
             // Promotions are academic progression events — do not create a
             // student_admissions row (that would show up as a fake "application"
             // in Application History). Progression history is the source of truth.

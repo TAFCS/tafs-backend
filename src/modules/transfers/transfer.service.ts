@@ -9,6 +9,7 @@ import { StudentAllocationService } from '../student-allocation/student-allocati
 import { StudentStatus } from '../../constants/student-status.constant';
 import { ProgressionHistoryService } from '../students/progression-history.service';
 import { resolveCampusGrPrefix, computeNextGrNumber } from '../../common/utils/gr-number.util';
+import { invalidateUnpaidVoucherPdfs } from '../vouchers/invalidate-unpaid-pdfs';
 
 @Injectable()
 export class TransferService {
@@ -323,6 +324,12 @@ export class TransferService {
           ...(newGrNumber ? { gr_number: newGrNumber } : {}),
         },
       });
+      if (
+        newGrNumber &&
+        String(student.gr_number ?? '') !== String(newGrNumber)
+      ) {
+        await invalidateUnpaidVoucherPdfs(tx, [cc]);
+      }
       await tx.student_admissions.create({
         data: {
           student_id: cc,
