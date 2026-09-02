@@ -206,13 +206,12 @@ const DEFAULTER_STUDENT_SELECT = {
   sections: { select: { description: true } },
 } satisfies Prisma.studentsSelect;
 
-/** MATRIX_HEAD_SELECT plus the three columns the arrear predicate needs. */
+/** MATRIX_HEAD_SELECT plus the columns the strip's cell state needs. */
 const DEFAULTER_HEAD_SELECT = {
   ...MATRIX_HEAD_SELECT,
   fee_date: true,
   amount_paid: true,
   amount_before_discount: true,
-  is_arrear_surcharge: true,
 } satisfies Prisma.student_feesSelect;
 
 type DefaulterStudent = Prisma.studentsGetPayload<{
@@ -222,33 +221,55 @@ type DefaulterHead = Prisma.student_feesGetPayload<{
   select: typeof DEFAULTER_HEAD_SELECT;
 }>;
 
-/** Raw shape off $queryRaw, before ::int/::float8 values are normalised. */
-type DefaulterAggregateRaw = {
+type DefaulterCategory = 'ARREARS' | 'EXPIRING';
+
+/**
+ * Per-student result of loadDefaulterEligibility — whether they belong on the
+ * report at all, and if so why. See defaulter-severity.ts for the two
+ * qualifying situations.
+ */
+type DefaulterEligibility = {
   student_id: number;
+  category: DefaulterCategory;
+  /** COUNT(DISTINCT arrear_year, arrear_month) across active vouchers' surcharge rows. 0 for EXPIRING. */
   months_behind: number;
-  months_behind_billed: number;
-  months_behind_unbilled: number;
+  /** "<arrear_year>_<arrear_month>" keys, for the strip's red-cell cross-reference and the oldest-arrear label. */
+  arrear_group_keys: string[];
+  lps_charged: number;
+  lps_paid: number;
+  lps_outstanding: number;
+  lps_waived: number;
+  unreleased_voucher_count: number;
+};
+
+/** Raw shape off the money-only $queryRaw, before ::int/::float8 values are normalised. */
+type DefaulterMoneyRaw = {
+  student_id: number;
   arrears_outstanding: number | null;
   arrear_head_count: number;
   oldest_arrear_fee_date: Date | null;
   newest_arrear_fee_date: Date | null;
 };
 
-type DefaulterAggregate = {
-  student_id: number;
-  months_behind: number;
-  months_behind_billed: number;
-  months_behind_unbilled: number;
+type DefaulterMoney = {
   arrears_outstanding: number;
   arrear_head_count: number;
   oldest_arrear_fee_date: Date | null;
   newest_arrear_fee_date: Date | null;
 };
 
-type DefaulterRow = DefaulterAggregate & {
-  severity: SeverityBand;
-  student: DefaulterStudent;
+const EMPTY_MONEY: DefaulterMoney = {
+  arrears_outstanding: 0,
+  arrear_head_count: 0,
+  oldest_arrear_fee_date: null,
+  newest_arrear_fee_date: null,
 };
+
+type DefaulterRow = DefaulterEligibility &
+  DefaulterMoney & {
+    severity: SeverityBand;
+    student: DefaulterStudent;
+  };
 
 type StripCellState = 'not_billed' | 'unpaid' | 'partial' | 'paid';
 
@@ -256,25 +277,13 @@ type StripCell = {
   year: number;
   month: number;
   state: StripCellState;
-  /** Counted toward months_behind — this, not `state`, is what gets tinted red. */
+  /** In the student's ledger arrear_group_keys — this, not `state`, is what gets tinted red. */
   is_arrear: boolean;
   amount: number;
   outstanding: number;
   head_count: number;
-  /** (academic_year, target_month) keys in this cell; >1 when a term change straddles it. */
+  /** (academic_year, target_month) keys resolving into this cell; >1 when a term change straddles it. */
   group_keys: string[];
-};
-
-type LpsTotals = {
-  charged: number;
-  paid: number;
-  outstanding: number;
-  waived: number;
-};
-
-type LpsPerStudent = LpsTotals & {
-  distinct_months: number;
-  unreleased_voucher_count: number;
 };
 
 type PaymentBehaviour = {
@@ -283,15 +292,6 @@ type PaymentBehaviour = {
   paid_last_6m: number;
   payments_last_12m: number;
   paid_last_12m: number;
-};
-
-const EMPTY_LPS: LpsPerStudent = {
-  charged: 0,
-  paid: 0,
-  outstanding: 0,
-  waived: 0,
-  distinct_months: 0,
-  unreleased_voucher_count: 0,
 };
 
 const EMPTY_PAYMENTS: PaymentBehaviour = {
@@ -1383,6 +1383,37 @@ export class FinancialReportsService {
    * never billed the family, so they are also reported separately as
    * months_behind_unbilled rather than being silently folded into severity.
    */
+  /**
+   * Defaulters — students whose current voucher situation says they owe more
+   * than the bill in front of them.
+   *
+   * A student appears here ONLY if one of two things is true of their active
+   * (status not VOID, not PAID) vouchers — see defaulter-severity.ts for the
+   * full rationale:
+   *
+   *   ARREARS  — an active voucher already carries voucher_arrear_surcharges
+   *              rows, i.e. VouchersService.computeArrears found genuine
+   *              earlier-fee_date arrears when that voucher was generated.
+   *              months_behind = COUNT(DISTINCT arrear_year, arrear_month)
+   *              across those rows — the exact count that determined the
+   *              Rs 1000-per-month surcharge already charged on it.
+   *   EXPIRING — an active voucher has a single fee_date (nothing bundled
+   *              into it) and its own status is EXPIRED: the window to pay
+   *              THIS bill lapsed, so it becomes an arrear the moment the
+   *              next voucher rolls it forward. months_behind = 0 — this
+   *              category is an early warning, not a severity level.
+   *
+   * This is deliberately NOT "any unpaid student_fees row dated before
+   * as_of_date". That definition (the report's first version) double-counted
+   * whole-year advance billing: a voucher that bills 12 months of tuition at
+   * once, all sharing one fee_date, spreads across 12 different target_month
+   * values and was being read as "12 months behind" the moment that ONE
+   * fee_date passed — even though 11 of those months hadn't arrived yet. Such
+   * a voucher is one bill, not twelve late payments, until the office
+   * actually rolls it forward as an arrear on a follow-up voucher — at which
+   * point voucher_arrear_surcharges rows get written and the ARREARS
+   * category picks it up honestly, with the real count.
+   */
   async listDefaulters(
     query: ListDefaultersQueryDto,
     user: IJwtStaffPayload,
@@ -1406,8 +1437,8 @@ export class FinancialReportsService {
 
     // Step 1 — resolve the scoped student set through the SAME path every other
     // report uses. applyStudentScope throws ForbiddenException for out-of-scope
-    // campus/class, and this is the only place that can happen: the raw query
-    // below is scoped purely by construction, seeing only ids that survive here.
+    // campus/class, and this is the only place that can happen: everything
+    // below only ever sees ids that survived this filter.
     const studentWhere: Prisma.studentsWhereInput = {
       ...this.buildStudentWhere(query, user),
       ...(query.cc != null && { cc: query.cc }),
@@ -1417,10 +1448,9 @@ export class FinancialReportsService {
       select: DEFAULTER_STUDENT_SELECT,
       take: SCOPE_ROW_CAP + 1,
     });
-    // Throw rather than truncate. Unlike the matrix's STATS_ROW_CAP — where a
-    // clipped tail only degrades a sidebar statistic — a clipped student set
-    // here corrupts months_behind ranking, pagination, and every rollup
-    // denominator, silently and invisibly.
+    // Throw rather than truncate — see loadDefaulterEligibility: a clipped
+    // scoped set would silently drop eligible students and corrupt pagination
+    // and every rollup denominator.
     if (scoped.length > SCOPE_ROW_CAP) {
       throw new BadRequestException(
         `This report is limited to ${SCOPE_ROW_CAP.toLocaleString()} students. Narrow the campus, class, or status filters.`,
@@ -1430,35 +1460,49 @@ export class FinancialReportsService {
       return this.emptyDefaultersResponse(asOfDate, stripMonths, view, columns, page, limit);
     }
 
-    // Step 2 — one pass in Postgres. See loadDefaulterAggregates.
-    const [aggregates, classTerms] = await Promise.all([
-      this.loadDefaulterAggregates(
-        scoped.map((s) => s.cc),
-        asOfDate,
-        minMonthsBehind,
-      ),
+    // Step 2 — the eligibility test: which of the scoped students have a
+    // qualifying voucher, and why. This also produces months_behind and LPS
+    // for every eligible student (not just the page) — there is no cheaper
+    // way to know who belongs on the report than reading every scoped
+    // student's active vouchers.
+    const [eligibility, classTerms] = await Promise.all([
+      this.loadDefaulterEligibility(scoped.map((s) => s.cc)),
       this.loadClassTerms(),
     ]);
 
-    // Step 3 — join metadata, band, apply the severity filter. Everything from
-    // here to the page slice runs over the WHOLE filtered set, so totals and
-    // rollups never describe just the rows on screen.
+    // Step 3 — money (arrears_outstanding, arrear_head_count, oldest/newest
+    // arrear fee_date), only for students who passed step 2. Independent of
+    // months_behind: an ARREARS student's outstanding is every unpaid head
+    // dated before as_of; an EXPIRING student's outstanding is simply their
+    // one expired voucher's own unpaid heads.
+    const eligibleIds = [...eligibility.keys()];
+    const money = await this.loadDefaulterMoney(eligibleIds, asOfDate);
+
     const studentByCc = new Map(scoped.map((s) => [s.cc, s]));
     let rows: DefaulterRow[] = [];
-    for (const agg of aggregates) {
-      const student = studentByCc.get(agg.student_id);
-      const severity = bandForMonthsBehind(agg.months_behind);
-      if (!student || !severity) continue;
-      rows.push({ ...agg, severity, student });
+    for (const elig of eligibility.values()) {
+      const student = studentByCc.get(elig.student_id);
+      if (!student) continue;
+      const moneyRow = money.get(elig.student_id) ?? EMPTY_MONEY;
+      rows.push({
+        ...elig,
+        ...moneyRow,
+        severity: bandForMonthsBehind(elig.months_behind, elig.category),
+        student,
+      });
+    }
+
+    // min_months_behind narrows ARREARS rows only. EXPIRING rows are
+    // months_behind = 0 by construction — filtering them out by the same
+    // threshold under the DEFAULT value of 1 would hide the exact
+    // early-warning case that category exists to surface.
+    if (minMonthsBehind > 1) {
+      rows = rows.filter((r) => r.category === 'EXPIRING' || r.months_behind >= minMonthsBehind);
     }
     if (query.severity?.length) {
       const wanted = new Set(query.severity);
       rows = rows.filter((r) => wanted.has(r.severity));
     }
-
-    const lpsTotals = await this.loadDefaulterLpsTotals(
-      rows.map((r) => r.student_id),
-    );
 
     const shared = {
       as_of_date: asOfDate,
@@ -1469,7 +1513,7 @@ export class FinancialReportsService {
         month: c.month,
         label: this.formatColumnLabel(c),
       })),
-      totals: this.buildDefaulterTotals(rows, scoped.length, lpsTotals),
+      totals: this.buildDefaulterTotals(rows, scoped.length),
       severity_distribution: this.buildSeverityDistribution(rows),
       truncated: false,
     };
@@ -1492,16 +1536,11 @@ export class FinancialReportsService {
       };
     }
 
-    // students view — sort the whole set, then hydrate only the page slice with
-    // the strip, LPS, and payment-behaviour figures.
+    // students view — sort the whole set, then hydrate only the page slice
+    // with the strip and payment-behaviour figures.
     const sorted = this.sortDefaulterRows(rows, query.sort_by, query.sort_dir);
     const pageRows = sorted.slice((page - 1) * limit, page * limit);
-    const items = await this.buildDefaulterStudentRows(
-      pageRows,
-      columns,
-      classTerms,
-      asOfDate,
-    );
+    const items = await this.buildDefaulterStudentRows(pageRows, columns, classTerms, asOfDate);
 
     return {
       ...shared,
@@ -1511,115 +1550,150 @@ export class FinancialReportsService {
   }
 
   /**
-   * One pass in Postgres: for every scoped student, the unpaid heads before the
-   * as-of date, grouped into distinct arrear months.
+   * The eligibility test and its by-products (months_behind, LPS) for the
+   * whole scoped set. See the listDefaulters docstring for what "eligible"
+   * means and why it isn't just "some fee_date is in the past".
    *
-   * Raw SQL rather than Prisma because months_behind is a COUNT of DISTINCT
-   * (academic_year, target_month) pairs, which Prisma cannot express — and it is
-   * the sort key AND the pagination key, so it cannot be approximated by
-   * fetching a capped set of heads and aggregating in JS the way listFeeMatrix
-   * does. The candidate set is also unbounded in time (no lower fee_date bound,
-   * NOT_ISSUED included), i.e. the entire unpaid tail of student_fees.
+   * A student who does not qualify is simply absent from the returned map —
+   * there is no "0 months, not eligible" entry.
    *
-   * Every predicate below mirrors computeArrears (vouchers.service.ts:5222):
-   *  - COALESCE(amount, amount_before_discount, 0) is `fee.amount ??
-   *    fee.amount_before_discount ?? 0` — amount is nullable, and dropping the
-   *    fallback loses real dues from both the filter and the money total.
-   *  - The `> 0` outstanding filter is the `outstanding.lte(0) continue` guard.
-   *    Status alone is NOT sufficient: an ISSUED head can be fully covered by
-   *    allocations without its status having flipped.
-   *  - fee_date IS NOT NULL is stated rather than left to SQL's three-valued
-   *    logic, so the exclusion is a choice. Undated heads genuinely cannot be
-   *    arrears (computeArrears:5253 asserts fee_date non-null downstream).
-   *  - fee_date < as_of is STRICTLY less than: a head dated exactly as_of_date
-   *    is not an arrear.
-   *  - Scalar `<> 'PAID'` rather than NOT IN so the query still matches if a
-   *    partial index is ever justified outside Prisma (see the migration note).
-   *    Caveat: status is nullable, and `NULL <> 'PAID'` is NULL, so NULL-status
-   *    rows drop — identical to Prisma's notIn, which the engine uses.
+   * status <> 'VOID' AND status <> 'PAID' ("active") is the same voucher set
+   * throughout: VOID vouchers were superseded and their surcharge rows are
+   * stale re-charges of the same arrear month (never cascade-deleted on
+   * void, only on hard delete); PAID vouchers are resolved, their arrears
+   * are no longer current.
    */
-  private async loadDefaulterAggregates(
+  private async loadDefaulterEligibility(
+    ids: number[],
+  ): Promise<Map<number, DefaulterEligibility>> {
+    const result = new Map<number, DefaulterEligibility>();
+    if (ids.length === 0) return result;
+
+    const vouchers = await this.prisma.vouchers.findMany({
+      where: { student_id: { in: ids }, status: { notIn: ['VOID', 'PAID'] } },
+      select: {
+        student_id: true,
+        status: true,
+        released_to_parent_at: true,
+        voucher_arrear_surcharges: {
+          select: {
+            arrear_year: true,
+            arrear_month: true,
+            amount: true,
+            amount_paid: true,
+            waived: true,
+          },
+        },
+      },
+    });
+
+    type Acc = {
+      groups: Map<string, true>;
+      hasExpiringSingleVoucher: boolean;
+      lpsCharged: number;
+      lpsPaid: number;
+      lpsWaived: number;
+      unreleasedVoucherCount: number;
+    };
+    const byStudent = new Map<number, Acc>();
+
+    for (const voucher of vouchers) {
+      const acc = byStudent.get(voucher.student_id) ?? {
+        groups: new Map<string, true>(),
+        hasExpiringSingleVoucher: false,
+        lpsCharged: 0,
+        lpsPaid: 0,
+        lpsWaived: 0,
+        unreleasedVoucherCount: 0,
+      };
+      byStudent.set(voucher.student_id, acc);
+
+      if (voucher.released_to_parent_at == null) {
+        // Billed but never shown to the parent. Still counts toward
+        // eligibility and LPS (it IS charged) — surfaced separately so staff
+        // can see whose arrears are the office's fault, not the family's.
+        acc.unreleasedVoucherCount += 1;
+      }
+
+      if (voucher.voucher_arrear_surcharges.length === 0) {
+        // A single-fee_date voucher: nothing was rolled forward into it.
+        // Only EXPIRED means "expired" literally — OVERDUE (due date passed,
+        // still inside the validity window) is not the same thing yet.
+        if (voucher.status === 'EXPIRED') acc.hasExpiringSingleVoucher = true;
+        continue;
+      }
+      for (const s of voucher.voucher_arrear_surcharges) {
+        acc.groups.set(`${s.arrear_year}_${s.arrear_month}`, true);
+        if (s.waived) {
+          acc.lpsWaived = this.roundMoney(acc.lpsWaived + this.toMoney(s.amount));
+        } else {
+          acc.lpsCharged = this.roundMoney(acc.lpsCharged + this.toMoney(s.amount));
+          acc.lpsPaid = this.roundMoney(acc.lpsPaid + this.toMoney(s.amount_paid));
+        }
+      }
+    }
+
+    for (const [studentId, acc] of byStudent) {
+      const monthsBehind = acc.groups.size;
+      const category: DefaulterCategory | null =
+        monthsBehind > 0 ? 'ARREARS' : acc.hasExpiringSingleVoucher ? 'EXPIRING' : null;
+      if (!category) continue;
+      result.set(studentId, {
+        student_id: studentId,
+        category,
+        months_behind: monthsBehind,
+        arrear_group_keys: [...acc.groups.keys()],
+        lps_charged: acc.lpsCharged,
+        lps_paid: acc.lpsPaid,
+        lps_outstanding: this.roundMoney(Math.max(0, acc.lpsCharged - acc.lpsPaid)),
+        lps_waived: acc.lpsWaived,
+        unreleased_voucher_count: acc.unreleasedVoucherCount,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Money for a set of already-eligible students: every unpaid, non-discount
+   * head dated before as_of. Independent of months_behind —
+   * loadDefaulterEligibility answers "does this student belong on the report
+   * and how many months"; this answers "how much".
+   */
+  private async loadDefaulterMoney(
     ids: number[],
     asOfDate: string,
-    minMonthsBehind: number,
-  ): Promise<DefaulterAggregate[]> {
-    // Prisma.join([]) emits invalid SQL.
-    if (ids.length === 0) return [];
+  ): Promise<Map<number, DefaulterMoney>> {
+    const result = new Map<number, DefaulterMoney>();
+    if (ids.length === 0) return result;
 
-    const rows = await this.prisma.$queryRaw<DefaulterAggregateRaw[]>(Prisma.sql`
-      WITH candidates AS (
-          SELECT sf.student_id,
-                 NULLIF(btrim(sf.academic_year), '') AS academic_year,
-                 sf.target_month,
-                 sf.fee_date,
-                 sf.status,
-                 COALESCE(sf.amount, sf.amount_before_discount, 0)
-                   - COALESCE(sf.amount_paid, 0) AS outstanding
-          FROM public.student_fees sf
-          WHERE sf.student_id IN (${Prisma.join(ids)})
-            AND sf.fee_date IS NOT NULL
-            AND sf.fee_date < ${asOfDate}::date
-            AND sf.is_arrear_surcharge = false
-            AND sf.is_discount = false
-            AND sf.status <> 'PAID'
-            AND sf.status <> 'DISCOUNT'
-            AND COALESCE(sf.amount, sf.amount_before_discount, 0)
-                  - COALESCE(sf.amount_paid, 0) > 0
-      ),
-      -- Money counts EVERY candidate, matching computeArrears' total_arrears.
-      money AS (
-          SELECT student_id,
-                 SUM(outstanding)::float8 AS arrears_outstanding,
-                 COUNT(*)::int            AS arrear_head_count,
-                 MIN(fee_date)            AS oldest_arrear_fee_date,
-                 MAX(fee_date)            AS newest_arrear_fee_date
-          FROM candidates
-          GROUP BY student_id
-      ),
-      -- Months count only rows with a usable year+month, matching the
-      -- "fee.academic_year && fee.target_month != null" guard at :5254.
-      -- NULLIF(btrim(...), '') above reproduces that JS truthiness on ''.
-      groups AS (
-          SELECT student_id, academic_year, target_month,
-                 bool_or(status <> 'NOT_ISSUED') AS was_billed
-          FROM candidates
-          WHERE academic_year IS NOT NULL AND target_month IS NOT NULL
-          GROUP BY student_id, academic_year, target_month
-      ),
-      per_student AS (
-          SELECT student_id,
-                 COUNT(*)::int                               AS months_behind,
-                 COUNT(*) FILTER (WHERE was_billed)::int     AS months_behind_billed,
-                 COUNT(*) FILTER (WHERE NOT was_billed)::int AS months_behind_unbilled
-          FROM groups
-          GROUP BY student_id
-      )
-      SELECT m.student_id,
-             COALESCE(p.months_behind, 0)          AS months_behind,
-             COALESCE(p.months_behind_billed, 0)   AS months_behind_billed,
-             COALESCE(p.months_behind_unbilled, 0) AS months_behind_unbilled,
-             m.arrears_outstanding,
-             m.arrear_head_count,
-             m.oldest_arrear_fee_date,
-             m.newest_arrear_fee_date
-      FROM money m
-      LEFT JOIN per_student p ON p.student_id = m.student_id
-      WHERE COALESCE(p.months_behind, 0) >= ${minMonthsBehind}
+    const rows = await this.prisma.$queryRaw<DefaulterMoneyRaw[]>(Prisma.sql`
+      SELECT sf.student_id,
+             SUM(COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8
+               AS arrears_outstanding,
+             COUNT(*)::int AS arrear_head_count,
+             MIN(sf.fee_date) AS oldest_arrear_fee_date,
+             MAX(sf.fee_date) AS newest_arrear_fee_date
+      FROM public.student_fees sf
+      WHERE sf.student_id IN (${Prisma.join(ids)})
+        AND sf.fee_date IS NOT NULL
+        AND sf.fee_date < ${asOfDate}::date
+        AND sf.is_arrear_surcharge = false
+        AND sf.is_discount = false
+        AND sf.status <> 'PAID'
+        AND sf.status <> 'DISCOUNT'
+        AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
+      GROUP BY sf.student_id
     `);
 
-    // COUNT returns bigint, cast ::int above so these arrive as JS numbers
-    // rather than BigInt (which JSON.stringify refuses). SUM is cast ::float8
-    // and re-rounded here so the file's money contract still holds.
-    return rows.map((r) => ({
-      student_id: Number(r.student_id),
-      months_behind: Number(r.months_behind),
-      months_behind_billed: Number(r.months_behind_billed),
-      months_behind_unbilled: Number(r.months_behind_unbilled),
-      arrears_outstanding: this.roundMoney(Number(r.arrears_outstanding ?? 0)),
-      arrear_head_count: Number(r.arrear_head_count),
-      oldest_arrear_fee_date: r.oldest_arrear_fee_date,
-      newest_arrear_fee_date: r.newest_arrear_fee_date,
-    }));
+    for (const r of rows) {
+      result.set(Number(r.student_id), {
+        arrears_outstanding: this.roundMoney(Number(r.arrears_outstanding ?? 0)),
+        arrear_head_count: Number(r.arrear_head_count),
+        oldest_arrear_fee_date: r.oldest_arrear_fee_date,
+        newest_arrear_fee_date: r.newest_arrear_fee_date,
+      });
+    }
+    return result;
   }
 
   /** The strip_months calendar months ending at (and including) the as-of month. */
@@ -1637,32 +1711,6 @@ export class FinancialReportsService {
     return this.matrixMonthColumns({ year, month }, asOf);
   }
 
-  /**
-   * Is this head one of the arrear candidates counted by months_behind?
-   *
-   * Deliberately the same predicate as the CTE in loadDefaulterAggregates, so a
-   * red cell in the strip can never disagree with the headline number.
-   */
-  private isArrearCandidate(
-    head: {
-      fee_date: Date | null;
-      status: fee_status_enum | null;
-      is_discount: boolean;
-      is_arrear_surcharge: boolean;
-      amount: Prisma.Decimal | null;
-      amount_before_discount: Prisma.Decimal | null;
-      amount_paid: Prisma.Decimal | null;
-    },
-    asOfExclusive: Date,
-  ): boolean {
-    if (!head.fee_date || head.fee_date >= asOfExclusive) return false;
-    if (head.is_discount || head.is_arrear_surcharge) return false;
-    if (head.status === fee_status_enum.PAID || head.status === fee_status_enum.DISCOUNT) {
-      return false;
-    }
-    return this.headOutstanding(head) > 0;
-  }
-
   /** amount ?? amount_before_discount ?? 0, minus amount_paid — the engine's formula. */
   private headOutstanding(head: {
     amount: Prisma.Decimal | null;
@@ -1674,11 +1722,8 @@ export class FinancialReportsService {
   }
 
   /**
-   * Hydrate the page slice: the month strip, LPS, and payment behaviour.
-   *
-   * Only the page is hydrated. Sorting already happened over the whole set on
-   * fields the CTE supplies, which is exactly why sort_by excludes
-   * lps_outstanding and last_payment — see ListDefaultersQueryDto.
+   * Hydrate the page slice: the month strip and payment behaviour. LPS is
+   * already on each row from loadDefaulterEligibility — no separate fetch.
    */
   private async buildDefaulterStudentRows(
     pageRows: DefaulterRow[],
@@ -1689,12 +1734,11 @@ export class FinancialReportsService {
     const ccs = pageRows.map((r) => r.student_id);
     if (ccs.length === 0) return [];
 
-    // The strip resolves heads by term-aware (target_month, academic_year), not
-    // by fee_date — see buildStripCells. That means the calendar month cannot be
-    // filtered in SQL, so over-fetch by candidate academic years and narrow in
-    // JS, exactly as listFeeMatrix does.
+    // The strip resolves heads by term-aware (target_month, academic_year),
+    // which cannot be filtered in SQL, so over-fetch by candidate academic
+    // years and narrow in JS, exactly as listFeeMatrix does.
     const candidateYears = this.matrixCandidateAcademicYears(columns);
-    const [heads, lpsByStudent, payments] = await Promise.all([
+    const [heads, payments] = await Promise.all([
       columns.length
         ? this.prisma.student_fees.findMany({
             where: {
@@ -1706,23 +1750,21 @@ export class FinancialReportsService {
             orderBy: [{ fee_date: 'asc' }, { id: 'asc' }],
           })
         : Promise.resolve([]),
-      this.loadDefaulterLpsByStudent(ccs),
       this.loadDefaulterPaymentBehaviour(ccs, asOfDate),
     ]);
 
     const headsByStudent = this.groupHeadsByStudent(heads);
-    const asOfExclusive = this.parseDateOnlyUtc(asOfDate);
     const asOfMs = this.parseLocalDayStart(asOfDate).getTime();
 
     return pageRows.map((row) => {
       const student = row.student;
-      const lps = lpsByStudent.get(row.student_id) ?? EMPTY_LPS;
       const pay = payments.get(row.student_id) ?? EMPTY_PAYMENTS;
-      const { cells: strip, arrearGroupsInWindow } = this.buildStripCells(
+      const ledgerGroups = new Set(row.arrear_group_keys);
+      const { cells: strip, ledgerGroupsPlaced } = this.buildStripCells(
         headsByStudent.get(row.student_id) ?? [],
         columns,
         classTerms,
-        asOfExclusive,
+        ledgerGroups,
       );
       const lastPaymentDate = pay.last_payment_date;
 
@@ -1737,29 +1779,25 @@ export class FinancialReportsService {
         is_fee_endowment: student.is_fee_endowment,
         is_complementary: student.is_complementary,
 
+        category: row.category,
         months_behind: row.months_behind,
-        months_behind_billed: row.months_behind_billed,
-        months_behind_unbilled: row.months_behind_unbilled,
         severity: row.severity,
 
         arrears_outstanding: row.arrears_outstanding,
         arrear_head_count: row.arrear_head_count,
         oldest_arrear_fee_date: this.formatDateOnly(row.oldest_arrear_fee_date),
         oldest_arrear_month_label: this.oldestArrearMonthLabel(
-          headsByStudent.get(row.student_id) ?? [],
+          row.arrear_group_keys,
+          this.effectiveClassId(student),
           classTerms,
-          asOfExclusive,
         ),
 
-        lps_charged: lps.charged,
-        lps_paid: lps.paid,
-        lps_outstanding: lps.outstanding,
-        lps_waived: lps.waived,
-        lps_charged_distinct_months: lps.distinct_months,
-        lps_projected_next_voucher: this.roundMoney(
-          row.months_behind * LPS_PER_ARREAR_MONTH,
-        ),
-        unreleased_voucher_count: lps.unreleased_voucher_count,
+        lps_charged: row.lps_charged,
+        lps_paid: row.lps_paid,
+        lps_outstanding: row.lps_outstanding,
+        lps_waived: row.lps_waived,
+        lps_projected_next_voucher: this.roundMoney(row.months_behind * LPS_PER_ARREAR_MONTH),
+        unreleased_voucher_count: row.unreleased_voucher_count,
 
         last_payment_date: this.formatDateTimeOrNull(lastPaymentDate),
         days_since_last_payment: lastPaymentDate
@@ -1772,19 +1810,17 @@ export class FinancialReportsService {
 
         strip,
         /**
-         * The strip window is backward-looking from as_of_date, but a fee head's
-         * target_month can be AHEAD of the date it was billed on — a whole
-         * year written at once with fee_date 1 Aug carries target months
-         * Aug..Jul, and every one of them is already an arrear the moment that
-         * fee_date passes. Those months land outside the window, so the strip
-         * cannot show them. Report the shortfall rather than letting the strip
-         * quietly understate the worst-off students.
+         * The strip window is backward-looking from as_of_date, but an arrear
+         * group's target_month can fall outside it — a whole year billed on
+         * one fee_date carries target months across the year, and once that
+         * fee_date rolls into a follow-up voucher as an arrear (ARREARS
+         * category), all of those months are "behind" even though most of
+         * them are older than a 12-month strip. Report the shortfall rather
+         * than letting the strip quietly show fewer red cells than
+         * months_behind without explanation.
          */
-        arrear_months_in_window: arrearGroupsInWindow,
-        arrear_months_outside_window: Math.max(
-          0,
-          row.months_behind - arrearGroupsInWindow,
-        ),
+        arrear_months_in_window: ledgerGroupsPlaced,
+        arrear_months_outside_window: Math.max(0, row.months_behind - ledgerGroupsPlaced),
       };
     });
   }
@@ -1792,28 +1828,24 @@ export class FinancialReportsService {
   /**
    * One cell per calendar column, from the heads that resolve into it.
    *
-   * Anchored on term-aware (target_month, academic_year) via
-   * resolveHeadCalendarMonth, NOT on raw fee_date. The arrear unit IS that
-   * pair, so fee_date columns would let a cell hold heads belonging to a
-   * different arrear group than its own label, and the count of red cells would
-   * stop matching months_behind — a strip that contradicts its own headline
-   * number is worse than no strip. (A head for August written late can carry a
-   * September fee_date; the engine still groups it under August.)
-   *
-   * is_arrear, not "unpaid", drives the red tint: an unpaid head whose fee_date
-   * is on or after as_of_date is billed-but-not-yet-due, and tinting it would
-   * make every student look one month worse than they are.
+   * is_arrear is driven by the student's ledger arrear_group_keys (real
+   * voucher_arrear_surcharges rows, from loadDefaulterEligibility) — NOT by
+   * "this head's fee_date is in the past and unpaid". That decoupling is the
+   * whole point: a head can be unpaid and dated before as_of yet never have
+   * been rolled into a voucher as an arrear (e.g. one month of a 12-month
+   * advance bill that hasn't been superseded yet) — that cell renders
+   * unpaid/grey, not red, matching the eligibility rule exactly.
    *
    * Discounts are excluded from cell state — their amount is stored POSITIVE
-   * with inverted meaning and only signedAmount flips it; this path does not go
-   * through signedAmount, and a discount is never an arrear.
+   * with inverted meaning and only signedAmount flips it; this path does not
+   * go through signedAmount, and a discount is never an arrear.
    */
   private buildStripCells(
     heads: DefaulterHead[],
     columns: Array<{ year: number; month: number }>,
     classTerms: ReadonlyMap<number, number>,
-    asOfExclusive: Date,
-  ): { cells: StripCell[]; arrearGroupsInWindow: number } {
+    ledgerGroups: ReadonlySet<string>,
+  ): { cells: StripCell[]; ledgerGroupsPlaced: number } {
     const position = new Map<string, number>(
       columns.map((c, i) => [this.matrixMonthKey(c), i]),
     );
@@ -1828,6 +1860,7 @@ export class FinancialReportsService {
       group_keys: [],
     }));
     const anyPaid = new Array(columns.length).fill(false) as boolean[];
+    const placed = new Set<string>();
 
     for (const head of heads) {
       if (head.is_discount) continue;
@@ -1844,13 +1877,11 @@ export class FinancialReportsService {
       cell.outstanding = this.roundMoney(cell.outstanding + Math.max(0, outstanding));
       if (this.toMoney(head.amount_paid) > 0) anyPaid[index] = true;
 
-      // A student who crossed term systems can have two academic_year values
-      // resolve into one calendar month, i.e. two arrear groups in one cell.
-      // Keep both keys so is_arrear and the tooltip stay honest.
-      if (this.isArrearCandidate(head, asOfExclusive)) {
+      const key = `${head.academic_year}_${head.target_month}`;
+      if (!cell.group_keys.includes(key)) cell.group_keys.push(key);
+      if (ledgerGroups.has(key)) {
         cell.is_arrear = true;
-        const key = `${head.academic_year}_${head.target_month}`;
-        if (!cell.group_keys.includes(key)) cell.group_keys.push(key);
+        placed.add(key);
       }
     }
 
@@ -1861,143 +1892,34 @@ export class FinancialReportsService {
       else if (anyPaid[i]) cell.state = 'partial';
       else cell.state = 'unpaid';
     }
-
-    const placed = new Set<string>();
-    for (const cell of cells) for (const key of cell.group_keys) placed.add(key);
-    return { cells, arrearGroupsInWindow: placed.size };
+    return { cells, ledgerGroupsPlaced: placed.size };
   }
 
   /**
-   * Term-aware label for the earliest arrear month, e.g. "Aug 25".
-   *
-   * (target_month, academic_year) alone cannot fix a calendar year — "June of
-   * 2025-2026" is Jun 2026 on an Aug-Jul term and Jun 2025 on an Apr-Mar one —
-   * so this goes through termOfHead/getMonthYearLabel. Null when no arrear head
-   * falls inside the fetched strip window; oldest_arrear_fee_date (straight
-   * from SQL, unambiguous) always covers that case.
+   * Term-aware label for the earliest arrear month, e.g. "Aug 25" — derived
+   * straight from the ledger's arrear_group_keys ("<academic_year>_<month>"
+   * strings), not by scanning heads. The ledger is the authority on which
+   * months are arrears; a head-scan could disagree with it.
    */
   private oldestArrearMonthLabel(
-    heads: DefaulterHead[],
+    arrearGroupKeys: string[],
+    classId: number | null,
     classTerms: ReadonlyMap<number, number>,
-    asOfExclusive: Date,
   ): string | null {
-    let best: { head: DefaulterHead; index: number } | null = null;
-    for (const head of heads) {
-      if (!this.isArrearCandidate(head, asOfExclusive)) continue;
-      const classId = this.effectiveClassId(head.students);
-      const term = termOfHead(head, { classId, classTerms });
-      const index = monthAbsoluteIndex(head.target_month, head.academic_year, term);
+    const term = termOfHead(null, { classId, classTerms });
+    let best: { academicYear: string; month: number; index: number } | null = null;
+    for (const key of arrearGroupKeys) {
+      const sep = key.lastIndexOf('_');
+      if (sep <= 0) continue;
+      const academicYear = key.slice(0, sep);
+      const month = Number(key.slice(sep + 1));
+      if (!Number.isFinite(month)) continue;
+      const index = monthAbsoluteIndex(month, academicYear, term);
       if (index == null) continue;
-      if (!best || index < best.index) best = { head, index };
+      if (!best || index < best.index) best = { academicYear, month, index };
     }
     if (!best) return null;
-    const classId = this.effectiveClassId(best.head.students);
-    return getMonthYearLabel(
-      best.head.target_month,
-      best.head.academic_year,
-      termOfHead(best.head, { classId, classTerms }),
-    );
-  }
-
-  /**
-   * Late payment surcharge totals across the whole filtered set.
-   *
-   * Surcharges have no student column — the only path is
-   * voucher_arrear_surcharges.voucher_id -> vouchers.student_id — and Prisma
-   * cannot groupBy a relation field, so totals come from aggregates through the
-   * relation filter and per-student figures from a separate fetch.
-   *
-   * status <> 'VOID' IS NOT OPTIONAL. Supersede sets the old voucher VOID
-   * (vouchers.service.ts:650) but surcharge rows are only removed by cascade on
-   * DELETE, never on void, and the consolidated voucher re-charges the same
-   * arrear month. Without this filter every superseded student's LPS is
-   * inflated by a full re-charge cycle.
-   */
-  private async loadDefaulterLpsTotals(ids: number[]): Promise<LpsTotals> {
-    if (ids.length === 0) {
-      return { charged: 0, paid: 0, outstanding: 0, waived: 0 };
-    }
-    const voucherFilter: Prisma.vouchersWhereInput = {
-      student_id: { in: ids },
-      status: { not: 'VOID' },
-    };
-    const [active, waived] = await Promise.all([
-      this.prisma.voucher_arrear_surcharges.aggregate({
-        where: { waived: false, vouchers: voucherFilter },
-        _sum: { amount: true, amount_paid: true },
-      }),
-      this.prisma.voucher_arrear_surcharges.aggregate({
-        where: { waived: true, vouchers: voucherFilter },
-        _sum: { amount: true },
-      }),
-    ]);
-    const charged = this.toMoney(active._sum.amount);
-    const paid = this.toMoney(active._sum.amount_paid);
-    return {
-      charged,
-      paid,
-      outstanding: this.roundMoney(Math.max(0, charged - paid)),
-      waived: this.toMoney(waived._sum.amount),
-    };
-  }
-
-  /** Per-student LPS for the page slice. Same VOID rule as loadDefaulterLpsTotals. */
-  private async loadDefaulterLpsByStudent(
-    ids: number[],
-  ): Promise<Map<number, LpsPerStudent>> {
-    const result = new Map<number, LpsPerStudent>();
-    if (ids.length === 0) return result;
-
-    const vouchers = await this.prisma.vouchers.findMany({
-      where: { student_id: { in: ids }, status: { not: 'VOID' } },
-      select: {
-        student_id: true,
-        released_to_parent_at: true,
-        voucher_arrear_surcharges: {
-          select: {
-            amount: true,
-            amount_paid: true,
-            waived: true,
-            arrear_month: true,
-            arrear_year: true,
-          },
-        },
-      },
-    });
-
-    const distinctMonths = new Map<number, Set<string>>();
-    for (const voucher of vouchers) {
-      const entry = result.get(voucher.student_id) ?? { ...EMPTY_LPS };
-      // Billed but never shown to the parent. Counted in charged (it IS
-      // charged), surfaced separately so staff can see whose arrears are the
-      // office's fault rather than the family's.
-      if (voucher.released_to_parent_at == null) {
-        entry.unreleased_voucher_count += 1;
-      }
-      for (const surcharge of voucher.voucher_arrear_surcharges) {
-        if (surcharge.waived) {
-          entry.waived = this.roundMoney(entry.waived + this.toMoney(surcharge.amount));
-          continue;
-        }
-        entry.charged = this.roundMoney(entry.charged + this.toMoney(surcharge.amount));
-        entry.paid = this.roundMoney(entry.paid + this.toMoney(surcharge.amount_paid));
-        // Supersede voids only COMPLETELY superseded vouchers
-        // (vouchers.service.ts:596), so two live vouchers can each legitimately
-        // carry a surcharge for the same arrear month. `charged` as a plain sum
-        // is still "what was billed" and can exceed months_behind x 1000; this
-        // distinct count is how you see that, rather than silently deduping.
-        const months = distinctMonths.get(voucher.student_id) ?? new Set<string>();
-        months.add(`${surcharge.arrear_year}_${surcharge.arrear_month}`);
-        distinctMonths.set(voucher.student_id, months);
-      }
-      result.set(voucher.student_id, entry);
-    }
-
-    for (const [cc, entry] of result) {
-      entry.outstanding = this.roundMoney(Math.max(0, entry.charged - entry.paid));
-      entry.distinct_months = distinctMonths.get(cc)?.size ?? 0;
-    }
-    return result;
+    return getMonthYearLabel(best.month, best.academicYear, term);
   }
 
   /**
@@ -2112,58 +2034,52 @@ export class FinancialReportsService {
   }
 
   /**
-   * Every figure here is computed over the WHOLE filtered set, never the page —
-   * same contract as the matrix's statistics block.
+   * Every figure here is computed over the WHOLE filtered set, never the page.
    *
    * in_scope_students is the full scoped student count from step 1, NOT the
    * defaulter count, so defaulter_rate answers "what share of these students
-   * are behind".
+   * are behind (or about to be)".
    *
-   * LPS totals come from the two relation aggregates while per-row LPS comes
-   * from the page fetch; they use the same filter at different scope, so they
-   * agree by construction.
+   * months_behind_avg/max and months_behind_distribution run over ARREARS
+   * rows only — folding in EXPIRING's guaranteed zeros would describe a
+   * different question ("how far behind is the average defaulter" vs. "how
+   * far behind is the average row on this page, most of which are 0").
    */
-  private buildDefaulterTotals(
-    rows: DefaulterRow[],
-    inScopeStudents: number,
-    lps: LpsTotals,
-  ) {
-    const monthsBehind = rows.map((r) => r.months_behind);
+  private buildDefaulterTotals(rows: DefaulterRow[], inScopeStudents: number) {
+    const arrearsRows = rows.filter((r) => r.category === 'ARREARS');
+    const monthsBehind = arrearsRows.map((r) => r.months_behind);
     const arrears = rows.map((r) => r.arrears_outstanding);
     const monthsTotal = monthsBehind.reduce((a, b) => a + b, 0);
     const counts = this.countBySeverity(rows);
+    const sum = (f: (r: DefaulterRow) => number) =>
+      this.roundMoney(rows.reduce((a, r) => a + f(r), 0));
 
     return {
       in_scope_students: inScopeStudents,
       defaulter_count: rows.length,
       defaulter_rate: this.percentage(rows.length, inScopeStudents),
 
+      expiring_count: counts.EXPIRING,
       watch_count: counts.WATCH,
       defaulter_band_count: counts.DEFAULTER,
       severe_count: counts.SEVERE,
       critical_count: counts.CRITICAL,
 
-      arrears_outstanding: this.roundMoney(arrears.reduce((a, b) => a + b, 0)),
+      arrears_outstanding: sum((r) => r.arrears_outstanding),
       arrear_head_count: rows.reduce((a, r) => a + r.arrear_head_count, 0),
 
       months_behind_total: monthsTotal,
-      months_behind_avg: rows.length
-        ? Math.round((monthsTotal / rows.length) * 10) / 10
+      months_behind_avg: arrearsRows.length
+        ? Math.round((monthsTotal / arrearsRows.length) * 10) / 10
         : 0,
       months_behind_max: monthsBehind.length ? Math.max(...monthsBehind) : 0,
-      months_behind_unbilled_total: rows.reduce(
-        (a, r) => a + r.months_behind_unbilled,
-        0,
-      ),
 
-      lps_charged: lps.charged,
-      lps_paid: lps.paid,
-      lps_outstanding: lps.outstanding,
-      lps_waived: lps.waived,
+      lps_charged: sum((r) => r.lps_charged),
+      lps_paid: sum((r) => r.lps_paid),
+      lps_outstanding: sum((r) => r.lps_outstanding),
+      lps_waived: sum((r) => r.lps_waived),
       lps_projected_next_voucher: this.roundMoney(monthsTotal * LPS_PER_ARREAR_MONTH),
 
-      // The MODE of months_behind is the useful one here: "most defaulters are
-      // exactly two months behind" is directly actionable.
       arrears_distribution: this.describeDistribution(arrears),
       months_behind_distribution: this.describeDistribution(monthsBehind),
     };
@@ -2185,7 +2101,7 @@ export class FinancialReportsService {
     });
   }
 
-  /** All four bands are always emitted — a zero row is information. */
+  /** All five bands are always emitted (EXPIRING included) — a zero row is information. */
   private buildAgingRows(rows: DefaulterRow[], inScopeStudents: number) {
     return SEVERITY_BANDS.map((band) => {
       const inBand = rows.filter((r) => r.severity === band.id);
@@ -2249,6 +2165,7 @@ export class FinancialReportsService {
       .map((g) => {
         const months = g.rows.map((r) => r.months_behind);
         const monthsTotal = months.reduce((a, b) => a + b, 0);
+        const arrearsRowCount = g.rows.filter((r) => r.category === 'ARREARS').length;
         const arrears = this.roundMoney(
           g.rows.reduce((a, r) => a + r.arrears_outstanding, 0),
         );
@@ -2262,8 +2179,10 @@ export class FinancialReportsService {
           defaulter_rate: this.percentage(g.rows.length, g.inScope),
           band_counts: counts,
           months_behind_total: monthsTotal,
-          months_behind_avg: Math.round((monthsTotal / g.rows.length) * 10) / 10,
-          months_behind_max: Math.max(...months),
+          months_behind_avg: arrearsRowCount
+            ? Math.round((monthsTotal / arrearsRowCount) * 10) / 10
+            : 0,
+          months_behind_max: months.length ? Math.max(...months) : 0,
           arrears_outstanding: arrears,
           arrears_avg: this.roundMoney(arrears / g.rows.length),
           lps_projected: this.roundMoney(monthsTotal * LPS_PER_ARREAR_MONTH),
@@ -2273,7 +2192,13 @@ export class FinancialReportsService {
   }
 
   private countBySeverity(rows: DefaulterRow[]): Record<SeverityBand, number> {
-    const counts = { WATCH: 0, DEFAULTER: 0, SEVERE: 0, CRITICAL: 0 };
+    const counts: Record<SeverityBand, number> = {
+      EXPIRING: 0,
+      WATCH: 0,
+      DEFAULTER: 0,
+      SEVERE: 0,
+      CRITICAL: 0,
+    };
     for (const row of rows) counts[row.severity] += 1;
     return counts;
   }
@@ -2292,7 +2217,6 @@ export class FinancialReportsService {
     page: number,
     limit: number,
   ) {
-    const empty = { charged: 0, paid: 0, outstanding: 0, waived: 0 };
     return {
       as_of_date: asOfDate,
       strip_months: stripMonths,
@@ -2304,7 +2228,7 @@ export class FinancialReportsService {
       })),
       items: view === 'aging' ? this.buildAgingRows([], 0) : [],
       pagination: createPaginationMeta(page, limit, 0),
-      totals: this.buildDefaulterTotals([], 0, empty),
+      totals: this.buildDefaulterTotals([], 0),
       severity_distribution: this.buildSeverityDistribution([]),
       truncated: false,
     };
@@ -2340,7 +2264,7 @@ export class FinancialReportsService {
     const data = await this.listDefaulters(
       {
         ...query,
-        // Aging always returns exactly four rows; the others page.
+        // Aging always returns exactly five rows; the others page.
         page: 1,
         limit: view === 'aging' ? 50 : EXPORT_ROW_CAP + 1,
         // The strip costs a full head fetch per row and is not exported.
@@ -2394,6 +2318,7 @@ export class FinancialReportsService {
           { header: 'Students In Scope', key: 'in_scope', width: 18 },
           { header: 'Defaulters', key: 'defaulters', width: 12 },
           { header: 'Defaulter Rate %', key: 'rate', width: 16 },
+          { header: 'Expiring', key: 'expiring', width: 12 },
           { header: 'Watch (1m)', key: 'watch', width: 12 },
           { header: 'Defaulter (2m)', key: 'defaulter', width: 14 },
           { header: 'Severe (3m)', key: 'severe', width: 12 },
@@ -2411,6 +2336,7 @@ export class FinancialReportsService {
             in_scope: Number(r.in_scope_students),
             defaulters: Number(r.defaulter_count),
             rate: Number(r.defaulter_rate),
+            expiring: bands.EXPIRING,
             watch: bands.WATCH,
             defaulter: bands.DEFAULTER,
             severe: bands.SEVERE,
@@ -2437,10 +2363,9 @@ export class FinancialReportsService {
         { header: 'Class', key: 'class', width: 16 },
         { header: 'Section', key: 'section', width: 12 },
         { header: 'Status', key: 'status', width: 14 },
+        { header: 'Category', key: 'category', width: 12 },
         { header: 'Severity', key: 'severity', width: 12 },
         { header: 'Months Behind', key: 'months', width: 14 },
-        { header: 'Months Billed', key: 'months_billed', width: 14 },
-        { header: 'Months Never Billed', key: 'months_unbilled', width: 18 },
         { header: 'Oldest Arrear', key: 'oldest', width: 14 },
         { header: 'Arrear Heads', key: 'heads', width: 13 },
         { header: 'Arrears Outstanding', key: 'arrears', width: 20 },
@@ -2463,10 +2388,9 @@ export class FinancialReportsService {
         class: String(r.class_name ?? ''),
         section: String(r.section ?? ''),
         status: String(r.student_status ?? ''),
+        category: String(r.category ?? ''),
         severity: String(r.severity),
         months: Number(r.months_behind),
-        months_billed: Number(r.months_behind_billed),
-        months_unbilled: Number(r.months_behind_unbilled),
         oldest: String(r.oldest_arrear_fee_date ?? ''),
         heads: Number(r.arrear_head_count),
         arrears: Number(r.arrears_outstanding),
@@ -2488,6 +2412,7 @@ export class FinancialReportsService {
       query.format,
     );
   }
+
 
   async listFilterOptions() {
     const segments = await this.prisma.segments.findMany({
