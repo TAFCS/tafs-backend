@@ -90,6 +90,41 @@ export class StaffLessonReschedulesService {
     return d;
   }
 
+  /** UTC calendar date key — avoids timezone drift on @db.Date fields. */
+  private dateKey(d: Date): string {
+    return d.toISOString().slice(0, 10);
+  }
+
+  private teacherWasPresent(
+    staffRow:
+      | {
+          status: StaffAttendanceStatus;
+          check_in_at: Date | null;
+          source: AttendanceSource;
+          notes: string | null;
+        }
+      | undefined,
+    hasScans: boolean,
+  ): boolean {
+    if (
+      staffRow?.status === StaffAttendanceStatus.PRESENT ||
+      staffRow?.status === StaffAttendanceStatus.LATE ||
+      staffRow?.status === StaffAttendanceStatus.HALF_DAY
+    ) {
+      return true;
+    }
+    if (staffRow?.check_in_at != null) return true;
+    if (hasScans) return true;
+    if (
+      staffRow?.status === StaffAttendanceStatus.EXCUSED &&
+      (staffRow.source === AttendanceSource.SYSTEM ||
+        staffRow.notes?.includes('Makeup class held'))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   private academicYearStartDate(academicYear: string): Date {
     const [startYear] = academicYear.split('-').map(Number);
     return new Date(Date.UTC(startYear, 7, 1));
@@ -477,16 +512,32 @@ export class StaffLessonReschedulesService {
       sourceRescheduleByKey.set(key, row);
     }
 
-    const staffRows = await this.prisma.attendance_staff_daily.findMany({
-      where: {
-        employee_id: employeeId,
-        date: { gte: minDate, lte: maxDate },
-      },
-      select: { date: true, status: true, source: true, notes: true },
-    });
-    const staffByDate = new Map(
-      staffRows.map((r) => [r.date.toISOString().slice(0, 10), r]),
-    );
+    const [staffRows, scans] = await Promise.all([
+      this.prisma.attendance_staff_daily.findMany({
+        where: {
+          employee_id: employeeId,
+          date: { gte: minDate, lte: maxDate },
+        },
+        select: {
+          date: true,
+          status: true,
+          check_in_at: true,
+          source: true,
+          notes: true,
+        },
+      }),
+      this.prisma.zk_attendance_scans.findMany({
+        where: {
+          employee_id: employeeId,
+          person_type: 'STAFF',
+          is_duplicate: false,
+          attendance_date: { gte: minDate, lte: maxDate },
+        },
+        select: { attendance_date: true },
+      }),
+    ]);
+    const staffByDate = new Map(staffRows.map((r) => [this.dateKey(r.date), r]));
+    const scanDates = new Set(scans.map((s) => this.dateKey(s.attendance_date)));
 
     this.calendarResolver.beginBatch();
     try {
@@ -494,8 +545,12 @@ export class StaffLessonReschedulesService {
 
       for (const dateStr of dateStrings) {
         const date = this.parseDate(dateStr);
-        const iso = date.toISOString().slice(0, 10);
+        const iso = this.dateKey(date);
         const staffRow = staffByDate.get(iso);
+        const teacherPresent = this.teacherWasPresent(
+          staffRow,
+          scanDates.has(iso),
+        );
 
         const bySlot: TeacherSlotHoldRow[] = [];
         for (const slotId of validSlotIds) {
@@ -544,20 +599,7 @@ export class StaffLessonReschedulesService {
             continue;
           }
 
-          if (
-            staffRow?.status === StaffAttendanceStatus.PRESENT ||
-            staffRow?.status === StaffAttendanceStatus.LATE ||
-            staffRow?.status === StaffAttendanceStatus.HALF_DAY
-          ) {
-            bySlot.push({ slot_id: slotId, hold_status: 'held', held: true });
-            continue;
-          }
-
-          if (
-            staffRow?.status === StaffAttendanceStatus.EXCUSED &&
-            (staffRow.source === AttendanceSource.SYSTEM ||
-              staffRow.notes?.includes('Makeup class held'))
-          ) {
+          if (teacherPresent) {
             bySlot.push({ slot_id: slotId, hold_status: 'held', held: true });
             continue;
           }

@@ -198,3 +198,129 @@ describe('StaffLessonReschedulesService.defaultSourceDate', () => {
     expect(source.toISOString().slice(0, 10)).toBe('2026-08-31');
   });
 });
+
+describe('StaffLessonReschedulesService.getTeacherHoldStatus', () => {
+  const makeHoldStatusService = (opts: {
+    staffRows?: Array<{
+      date: Date;
+      status: string;
+      check_in_at?: Date | null;
+      source?: string;
+      notes?: string | null;
+    }>;
+    scans?: Array<{ attendance_date: Date }>;
+    slots?: Array<{
+      id: number;
+      day_of_week: number;
+      block_number: number;
+      timetables: {
+        campus_id: number;
+        class_id: number;
+        section_id: number;
+        effective_from: Date;
+        academic_year: string;
+      };
+    }>;
+  }) => {
+    const calendarResolver = {
+      beginBatch: jest.fn(),
+      endBatch: jest.fn(),
+      resolveStudentDay: jest.fn().mockResolvedValue({
+        isWorkingDay: true,
+        source: 'DEFAULT',
+        dayType: null,
+      }),
+    };
+    const prisma = {
+      employee_profiles: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 10,
+          campus_id: 1,
+          check_in_source: 'TIMETABLE',
+        }),
+      },
+      timetable_slots: {
+        findMany: jest.fn().mockResolvedValue(
+          opts.slots ?? [
+            {
+              id: 100,
+              day_of_week: 5,
+              block_number: 1,
+              timetables: {
+                campus_id: 1,
+                class_id: 12,
+                section_id: 1,
+                effective_from: new Date('2026-08-01T00:00:00.000Z'),
+                academic_year: '2026-2027',
+              },
+            },
+          ],
+        ),
+      },
+      staff_lesson_reschedules: { findMany: jest.fn().mockResolvedValue([]) },
+      attendance_staff_daily: {
+        findMany: jest.fn().mockResolvedValue(opts.staffRows ?? []),
+      },
+      zk_attendance_scans: {
+        findMany: jest.fn().mockResolvedValue(opts.scans ?? []),
+      },
+    };
+    const service = new StaffLessonReschedulesService(
+      prisma as any,
+      { list: jest.fn() } as any,
+      {} as any,
+      { log: jest.fn() } as any,
+      calendarResolver as any,
+    );
+    return { service, prisma, calendarResolver };
+  };
+
+  it('marks slot held when staff register shows LATE', async () => {
+    const { service } = makeHoldStatusService({
+      staffRows: [
+        {
+          date: new Date('2026-08-28T00:00:00.000Z'),
+          status: 'LATE',
+          check_in_at: new Date('2026-08-28T04:19:00.000Z'),
+          source: 'DEVICE',
+          notes: null,
+        },
+      ],
+    });
+
+    const result = await service.getTeacherHoldStatus(
+      10,
+      {
+        source_timetable_slot_ids: '100',
+        dates: '2026-08-28',
+        academic_year: '2026-2027',
+      },
+      { sub: 'u1', role: 'SUPER_ADMIN' } as any,
+    );
+
+    expect(result.dates).toHaveLength(1);
+    expect(result.dates[0]?.by_slot?.[0]).toMatchObject({
+      slot_id: 100,
+      hold_status: 'held',
+      held: true,
+    });
+  });
+
+  it('marks slot held from biometric scans when daily row is missing', async () => {
+    const { service } = makeHoldStatusService({
+      scans: [{ attendance_date: new Date('2026-08-28T00:00:00.000Z') }],
+    });
+
+    const result = await service.getTeacherHoldStatus(
+      10,
+      {
+        source_timetable_slot_ids: '100',
+        dates: '2026-08-28',
+        academic_year: '2026-2027',
+      },
+      { sub: 'u1', role: 'SUPER_ADMIN' } as any,
+    );
+
+    expect(result.dates[0]?.by_slot?.[0]?.hold_status).toBe('held');
+  });
+});
