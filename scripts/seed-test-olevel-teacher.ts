@@ -1,27 +1,25 @@
 /**
- * Creates a test A-Level teacher named TEST with timetable slots on
- * Saturday and Sunday, period 1 (8:00–9:00).
+ * Creates TEST (O-Level) — timetable-payroll teacher with section timetable slots.
  *
- * Usage: npx ts-node scripts/seed-test-alevel-teacher.ts
+ * Usage: npx ts-node scripts/seed-test-olevel-teacher.ts
  */
-import { PrismaClient } from '@prisma/client';
+import { CheckInSource, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 const CAMPUS_ID = 1;
+const SECTION_ID = 1;
 const ACADEMIC_YEAR = '2026-2027';
-const EMPLOYEE_CODE = 'TEST-ALEVEL';
-const FULL_NAME = 'TEST';
-const CLASS_CODE = 'AS';
+const EMPLOYEE_CODE = 'TEST-OLEVEL';
+const FULL_NAME = 'TEST (O-Level)';
+const CLASS_CODE = 'OI';
 const SUBJECT_NAME = 'MATHEMATICS';
-const SUBJECT_SYSTEM = 'A-Level';
-const TEST_STUDENT_CC = 44;
-const TEST_STUDENT_SECTION_ID = 1;
+const SUBJECT_SYSTEM = 'O-Level';
 
-/** JS UTC day-of-week: 0 = Sunday, 6 = Saturday */
+/** Monday + Saturday period 1 */
 const SLOTS: Array<{ day_of_week: number; block_number: number }> = [
+  { day_of_week: 1, block_number: 1 },
   { day_of_week: 6, block_number: 1 },
-  { day_of_week: 0, block_number: 1 },
 ];
 
 function timeOfDay(hh: number, mm: number): Date {
@@ -29,7 +27,7 @@ function timeOfDay(hh: number, mm: number): Date {
 }
 
 async function main() {
-  console.log('Seeding test A-Level teacher TEST (Sat + Sun, period 1)...');
+  console.log('Seeding test O-Level teacher TEST-OLEVEL (Mon + Sat, period 1)...');
 
   const classRow = await prisma.classes.findFirst({
     where: { class_code: CLASS_CODE },
@@ -58,9 +56,10 @@ async function main() {
         employee_code: EMPLOYEE_CODE,
         full_name: FULL_NAME,
         campus_id: CAMPUS_ID,
-        job_title: 'A-Level Test Teacher',
+        job_title: 'O-Level Test Teacher',
         employment_status: 'ACTIVE',
-        notes: 'Seeded by scripts/seed-test-alevel-teacher.ts — safe to delete.',
+        check_in_source: CheckInSource.TIMETABLE,
+        notes: 'Seeded by scripts/seed-test-olevel-teacher.ts — safe to delete.',
       },
     });
     console.log(`Updated employee #${employee.id} (${FULL_NAME})`);
@@ -70,9 +69,10 @@ async function main() {
         employee_code: EMPLOYEE_CODE,
         full_name: FULL_NAME,
         campus_id: CAMPUS_ID,
-        job_title: 'A-Level Test Teacher',
+        job_title: 'O-Level Test Teacher',
         employment_status: 'ACTIVE',
-        notes: 'Seeded by scripts/seed-test-alevel-teacher.ts — safe to delete.',
+        check_in_source: CheckInSource.TIMETABLE,
+        notes: 'Seeded by scripts/seed-test-olevel-teacher.ts — safe to delete.',
       },
     });
     console.log(`Created employee #${employee.id} (${FULL_NAME})`);
@@ -86,28 +86,17 @@ async function main() {
     create: { campus_id: CAMPUS_ID, class_id: classRow.id },
   });
 
-  const teachingGroup = await prisma.teaching_groups.upsert({
+  await prisma.campus_sections.upsert({
     where: {
-      campus_id_class_id_subject_id_employee_id_academic_year: {
+      campus_id_class_id_section_id: {
         campus_id: CAMPUS_ID,
         class_id: classRow.id,
-        subject_id: subject.id,
-        employee_id: employee.id,
-        academic_year: ACADEMIC_YEAR,
+        section_id: SECTION_ID,
       },
     },
-    update: { is_active: true, label: 'TEST — AS Mathematics' },
-    create: {
-      campus_id: CAMPUS_ID,
-      class_id: classRow.id,
-      subject_id: subject.id,
-      employee_id: employee.id,
-      academic_year: ACADEMIC_YEAR,
-      label: 'TEST — AS Mathematics',
-      is_active: true,
-    },
+    update: {},
+    create: { campus_id: CAMPUS_ID, class_id: classRow.id, section_id: SECTION_ID },
   });
-  console.log(`Teaching group #${teachingGroup.id} (${CLASS_CODE} ${SUBJECT_NAME})`);
 
   await prisma.class_timetable_periods.upsert({
     where: {
@@ -133,21 +122,21 @@ async function main() {
       is_break: false,
     },
   });
-  console.log('Period 1 timing: 8:00–9:00');
 
   const timetable = await prisma.timetables.upsert({
     where: {
-      campus_id_teaching_group_id_academic_year: {
+      campus_id_class_id_section_id_academic_year: {
         campus_id: CAMPUS_ID,
-        teaching_group_id: teachingGroup.id,
+        class_id: classRow.id,
+        section_id: SECTION_ID,
         academic_year: ACADEMIC_YEAR,
       },
     },
-    update: { is_active: true },
+    update: { is_active: true, effective_from: new Date('2026-08-01') },
     create: {
       campus_id: CAMPUS_ID,
       class_id: classRow.id,
-      teaching_group_id: teachingGroup.id,
+      section_id: SECTION_ID,
       academic_year: ACADEMIC_YEAR,
       effective_from: new Date('2026-08-01'),
       is_active: true,
@@ -184,45 +173,10 @@ async function main() {
     );
   }
 
-  const student = await prisma.students.findUnique({
-    where: { cc: TEST_STUDENT_CC },
-    select: { cc: true, full_name: true },
-  });
-  if (!student) {
-    console.warn(`  Student CC ${TEST_STUDENT_CC} not found — skip enrollment.`);
-  } else {
-    await prisma.students.update({
-      where: { cc: TEST_STUDENT_CC },
-      data: {
-        class_id: classRow.id,
-        campus_id: CAMPUS_ID,
-        section_id: TEST_STUDENT_SECTION_ID,
-        status: 'ENROLLED',
-      },
-    });
-    await prisma.student_subject_enrollments.upsert({
-      where: {
-        student_id_teaching_group_id_academic_year: {
-          student_id: TEST_STUDENT_CC,
-          teaching_group_id: teachingGroup.id,
-          academic_year: ACADEMIC_YEAR,
-        },
-      },
-      update: {},
-      create: {
-        student_id: TEST_STUDENT_CC,
-        teaching_group_id: teachingGroup.id,
-        academic_year: ACADEMIC_YEAR,
-      },
-    });
-    console.log(`  Student: ${student.full_name} (CC ${TEST_STUDENT_CC}) → group #${teachingGroup.id}`);
-  }
-
   console.log('\nDone.');
   console.log(`  Teacher: ${FULL_NAME} (employee #${employee.id}, code ${EMPLOYEE_CODE})`);
-  console.log(`  Teaching group: #${teachingGroup.id}`);
-  console.log(`  Timetable: #${timetable.id}`);
-  console.log('  Use Roll Call → AS → TEST — AS Mathematics to test makeup flow.');
+  console.log(`  Timetable: #${timetable.id} — ${CLASS_CODE} section A`);
+  console.log('  Use Staff Lesson Reschedules → pick TEST (O-Level) to test staff excuse.');
 }
 
 main()

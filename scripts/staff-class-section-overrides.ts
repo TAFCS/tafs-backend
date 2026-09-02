@@ -12,11 +12,31 @@ export interface ClassSectionAssignment {
 
 /** Reviewed overrides keyed by employee_code (case-insensitive lookup via normCode). */
 export const MANUAL_CLASS_SECTION_OVERRIDES: Record<string, ClassSectionAssignment[]> = {
-  // Pre-existing overrides (Johar seniors / pre-primary)
+  // Johar Pre-Primary (Aug 2026)
+  '02-001485': [{ classId: 1, sectionIds: [1] }],
+  '02-001508': [{ classId: 1, sectionIds: [2] }],
+  '02-001511': [{ classId: 1, sectionIds: [1, 2] }],
+  '02-001264': [{ classId: 2, sectionIds: [1] }],
+  '02-001417': [{ classId: 2, sectionIds: [1] }],
+  '02-001476': [{ classId: 2, sectionIds: [2] }],
+  '02-001470': [{ classId: 2, sectionIds: [2] }],
+  '02-001509': [{ classId: 2, sectionIds: [1, 2, 3] }],
+  '02-001166': [{ classId: 3, sectionIds: [1] }],
+  '02-001488': [{ classId: 3, sectionIds: [2] }],
+  '02-001404': [{ classId: 3, sectionIds: [3] }],
+  '02-001192': [{ classId: 3, sectionIds: [1, 2, 3] }],
   '02-0861': [
-    { classId: 1, sectionIds: [1, 2, 3] },
+    { classId: 1, sectionIds: [1, 2] },
+    { classId: 2, sectionIds: [1, 2, 3] },
     { classId: 3, sectionIds: [1, 2, 3] },
   ],
+  '02-001493': [
+    { classId: 1, sectionIds: [1, 2] },
+    { classId: 2, sectionIds: [1, 2, 3] },
+    { classId: 3, sectionIds: [1, 2, 3] },
+  ],
+
+  // Pre-existing overrides (Johar seniors)
   '02-001273': [
     { classId: 9, sectionIds: [1, 2, 3] },
     { classId: 10, sectionIds: [2] },

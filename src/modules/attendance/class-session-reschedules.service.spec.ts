@@ -53,14 +53,24 @@ describe('ClassSessionReschedulesService', () => {
       createMakeupSession: jest.fn(),
     };
 
+    const staffLessonExcuse = {
+      excuseTeacherForMissedLesson: jest.fn().mockResolvedValue({
+        staffExcused: true,
+        staffExcuseWarning: null,
+      }),
+      formatDateLabel: (d: Date) => d.toISOString().slice(0, 10),
+    };
+
     const service = new ClassSessionReschedulesService(
       prisma as any,
       rollSessions as any,
       { list: jest.fn().mockResolvedValue([]) } as any,
       { log: jest.fn() } as any,
+      { resolveStudentDay: jest.fn() } as any,
+      staffLessonExcuse as any,
     );
 
-    return { service, prisma, rollSessions };
+    return { service, prisma, rollSessions, staffLessonExcuse };
   };
 
   describe('completeOnMakeupSubmit', () => {
@@ -146,7 +156,13 @@ describe('ClassSessionReschedulesService', () => {
     });
 
     it('warns when teacher has other slots on the source day', async () => {
-      const { service, prisma } = makeService();
+      const { service, prisma, staffLessonExcuse } = makeService();
+
+      staffLessonExcuse.excuseTeacherForMissedLesson.mockResolvedValue({
+        staffExcused: false,
+        staffExcuseWarning:
+          'Teacher has other timetable slots on the source day — staff register was not auto-updated. Mark manually in Staff Register.',
+      });
 
       prisma.class_session_reschedules.findMany = jest.fn().mockResolvedValue([
         {
@@ -190,7 +206,7 @@ describe('ClassSessionReschedulesService', () => {
 
       expect(result.staffExcusedDays).toBe(0);
       expect(result.staffExcuseWarnings[0]).toMatch(/other timetable slots/);
-      expect(prisma.attendance_staff_daily.upsert).not.toHaveBeenCalled();
+      expect(staffLessonExcuse.excuseTeacherForMissedLesson).toHaveBeenCalled();
     });
   });
 

@@ -31,6 +31,7 @@ import {
   CalendarDayResolverService,
   ResolvedCalendarDay,
 } from '../hr/calendar/calendar-day-resolver.service';
+import { StaffLessonExcuseService } from './staff-lesson-excuse.service';
 
 const ENROLLED: student_status = 'ENROLLED';
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -78,6 +79,7 @@ export class ClassSessionReschedulesService {
     private readonly classPeriods: ClassPeriodsService,
     private readonly auditLogs: AuditLogsService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly staffLessonExcuse: StaffLessonExcuseService,
   ) {}
 
   /** Same Saturday exception as roll-sessions.service — A-Level roll call runs Sat. */
@@ -1088,6 +1090,7 @@ export class ClassSessionReschedulesService {
       const { staffExcused, staffExcuseWarning } = await this.tryExcuseTeacher(
         reschedule,
         employeeId,
+        reschedules[0].teaching_groups.campus_id,
       );
       if (staffExcused) staffExcusedDays++;
       if (staffExcuseWarning) staffExcuseWarnings.push(staffExcuseWarning);
@@ -1185,56 +1188,23 @@ export class ClassSessionReschedulesService {
   private async tryExcuseTeacher(
     reschedule: { source_date: Date; makeup_date: Date; source_timetable_slot_id: number },
     employeeId: number,
+    campusId?: number,
   ): Promise<{ staffExcused: boolean; staffExcuseWarning: string | null }> {
-    const sourceDow = reschedule.source_date.getUTCDay();
-    const otherSlots = await this.prisma.timetable_slots.count({
-      where: {
-        employee_id: employeeId,
-        day_of_week: sourceDow,
-        id: { not: reschedule.source_timetable_slot_id },
-        timetables: { is_active: true },
-      },
-    });
-
-    if (otherSlots > 0) {
-      return {
-        staffExcused: false,
-        staffExcuseWarning:
-          'Teacher has other timetable slots on the source day — staff register was not auto-updated. Mark manually in Staff Register.',
-      };
+    let resolvedCampus = campusId;
+    if (!resolvedCampus) {
+      const group = await this.prisma.teaching_groups.findFirst({
+        where: { employee_id: employeeId },
+        select: { campus_id: true },
+      });
+      resolvedCampus = group?.campus_id;
     }
-
-    const group = await this.prisma.teaching_groups.findFirst({
-      where: { employee_id: employeeId },
-      select: { campus_id: true },
+    return this.staffLessonExcuse.excuseTeacherForMissedLesson({
+      employeeId,
+      sourceDate: reschedule.source_date,
+      makeupDate: reschedule.makeup_date,
+      sourceSlotId: reschedule.source_timetable_slot_id,
+      campusId: resolvedCampus,
     });
-    const campusId = group?.campus_id;
-    if (!campusId) {
-      return { staffExcused: false, staffExcuseWarning: 'Could not resolve teacher campus.' };
-    }
-
-    const note = `Makeup class held ${this.formatDateLabel(reschedule.makeup_date)} (rescheduled from ${this.formatDateLabel(reschedule.source_date)})`;
-
-    await this.prisma.attendance_staff_daily.upsert({
-      where: {
-        employee_id_date: { employee_id: employeeId, date: reschedule.source_date },
-      },
-      create: {
-        employee_id: employeeId,
-        campus_id: campusId,
-        date: reschedule.source_date,
-        status: StaffAttendanceStatus.EXCUSED,
-        source: AttendanceSource.SYSTEM,
-        notes: note,
-      },
-      update: {
-        status: StaffAttendanceStatus.EXCUSED,
-        source: AttendanceSource.SYSTEM,
-        notes: note,
-      },
-    });
-
-    return { staffExcused: true, staffExcuseWarning: null };
   }
 
   /** True when a pending reschedule covers this draft source session — skip auto-skip. */
