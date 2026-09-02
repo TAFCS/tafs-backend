@@ -54,7 +54,7 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
                 fullName: data.generatedByName || 'TAFSync System',
                 // Prefer the persisted generation timestamp; fall back to
                 // issue date for legacy vouchers that predate the columns.
-                // Never use "now" — regenerations must not rewrite the stamp.
+                // Never use "now" ï¿½ regenerations must not rewrite the stamp.
                 timestampStr: formatPktTimestamp(
                     data.generatedAt
                         ? new Date(data.generatedAt)
@@ -103,6 +103,7 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
         arrearsHistory: data.arrearsHistory,
         installmentsHistory: data.installmentsHistory,
         paymentHistory: data.paymentHistory,
+        paymentHistoryTitle: data.paymentHistoryTitle,
     };
 
     const reactElement = React.createElement(FeeChallanPDF, props) as any;

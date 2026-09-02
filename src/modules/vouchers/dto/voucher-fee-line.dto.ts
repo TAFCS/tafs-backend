@@ -13,8 +13,18 @@ export class VoucherFeeLineDto {
     @IsInt()
     student_fee_id: number;
 
-    /** Discount to apply (0 if none) */
-    @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)))
+    /**
+     * Discount to apply (0 if none). Rounded to 2dp on the way in — callers derive
+     * this as `amount_before_discount − amount`, a float subtraction that routinely
+     * leaves sub-cent noise (e.g. 16975.00 − 5658.33 = 11316.669999999998) which
+     * would otherwise fail the maxDecimalPlaces check. A non-numeric value stays
+     * NaN so @IsNumber still rejects it.
+     */
+    @Transform(({ value }) => {
+        if (value === undefined || value === null || value === '') return undefined;
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.round(n * 100) / 100 : n;
+    })
     @IsNumber({ maxDecimalPlaces: 2 })
     @IsOptional()
     discount_amount?: number;

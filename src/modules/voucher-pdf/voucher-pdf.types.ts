@@ -46,7 +46,7 @@ export interface VoucherPdfData {
     lateFeeAmount: number;
     reprintFeeAmount: number;
     generatedByName?: string;
-    /** Stamp recorded when the voucher was first generated — used for the PDF footer. */
+    /** Stamp recorded when the voucher was first generated ï¿½ used for the PDF footer. */
     generatedAt?: Date | string;
     /** When true, overlay a PAID stamp on all three challan copies */
     paidStamp?: boolean;
@@ -66,14 +66,21 @@ export interface VoucherPdfData {
          * Rendered month+year, e.g. "JUN 26". Resolved server-side because only
          * prepareVoucherPdfData knows the term each head was written under; the
          * PDF components can see the student's current class at best. Null when
-         * the row carries no month — the components fall back to `date`.
+         * the row carries no month ï¿½ the components fall back to `date`.
          */
         monthLabel?: string | null;
     }>;
     surchargeWaived?: boolean;
     totalSurcharge?: number;
-    /** Consolidated month-range label, e.g. "ARREARS (AUG 25 – OCT 25)" */
+    /** Consolidated month-range label, e.g. "ARREARS (AUG 25 ï¿½ OCT 25)" */
     arrearsLabel?: string;
     installmentsHistory?: Array<{ head: string; month: string; amount: number; status: string }>;
-    paymentHistory?: Array<{ date: string; head: string; amount: string; totalAmount: string; payment_method?: string | null }>;
+    /**
+     * Rows for the "PAYMENT HISTORY (LAST 3 PAYMENTS)" sidebar column â€” one row per
+     * deposit, plus an optional `isDiscount` green sub-row beneath a deposit that had
+     * a discount credited alongside it. `totalAmount` on the last row is the total.
+     */
+    paymentHistory?: Array<{ date: string; head: string; amount: string; totalAmount: string; payment_method?: string | null; isDiscount?: boolean }>;
+    /** Heading for that column, e.g. "PAYMENT HISTORY (LAST 3 PAYMENTS)" (fewer when < 3). */
+    paymentHistoryTitle?: string;
 }
