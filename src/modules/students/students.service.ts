@@ -71,6 +71,7 @@ import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation.types';
 import { ProgressionHistoryService, type PrismaTx } from './progression-history.service';
+import { invalidateUnpaidVoucherPdfs } from '../vouchers/invalidate-unpaid-pdfs';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
@@ -1821,6 +1822,13 @@ export class StudentsService {
         include: this.assignmentInclude,
       });
 
+      if (
+        isReadmission &&
+        String(student.gr_number ?? '') !== String(updated.gr_number ?? '')
+      ) {
+        await invalidateUnpaidVoucherPdfs(tx, [id]);
+      }
+
       // Closes the departure period at `now` and opens the return period.
       await this.progressionHistory.recordProgressionChange(tx, {
         studentCc: id,
@@ -3048,6 +3056,13 @@ export class StudentsService {
                 ...(resolvedGrOverride ? { gr_number: resolvedGrOverride } : {}),
               },
             });
+
+            if (
+              resolvedGrOverride != null &&
+              resolvedGrOverride !== (student.gr_number ?? '')
+            ) {
+              await invalidateUnpaidVoucherPdfs(tx, [student.cc]);
+            }
 
             // Promotions are academic progression events — do not create a
             // student_admissions row (that would show up as a fake "application"

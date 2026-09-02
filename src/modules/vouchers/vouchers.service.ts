@@ -27,6 +27,7 @@ import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
+import type { Response } from 'express';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
 const SF_PREFIX_MAX = 50;
@@ -107,6 +108,29 @@ const VOUCHER_INCLUDE = {
         },
         orderBy: [{ id: 'asc' as const }],
     },
+};
+
+/** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
+const PDF_FREEZE_SELECT = {
+    id: true,
+    student_id: true,
+    status: true,
+    pdf_url: true,
+    paid_pdf_url: true,
+    paid_pdf_filename: true,
+    fee_date: true,
+    students: { select: { gr_number: true } },
+};
+
+type PdfFreezeRow = {
+    id: number;
+    student_id: number;
+    status: string | null;
+    pdf_url: string | null;
+    paid_pdf_url: string | null;
+    paid_pdf_filename: string | null;
+    fee_date: Date | string | null;
+    students: { gr_number: string | null } | null;
 };
 
 // An audit-log entry queued during a transaction and flushed after it commits.
@@ -3735,16 +3759,152 @@ export class VouchersService {
         voucherData.generatedAt = at;
     }
 
+    private rebuildFilename(voucher: {
+        id: number;
+        student_id: number;
+        fee_date: Date | string | null;
+        students?: { gr_number?: string | null } | null;
+    }): string {
+        return buildVoucherFilename({
+            grNumber: voucher.students?.gr_number ?? `CC${voucher.student_id}`,
+            feeDate: voucher.fee_date,
+            voucherId: voucher.id,
+        });
+    }
+
+    /** Paid receipts use paid_pdf_url; everything else uses pdf_url. Never mix the two. */
+    private storedPdfUrl(voucher: PdfFreezeRow): string | null {
+        return voucher.status === 'PAID' ? voucher.paid_pdf_url : voucher.pdf_url;
+    }
+
+    private uniquifyZipName(name: string, used: Set<string>): string {
+        if (!used.has(name)) {
+            used.add(name);
+            return name;
+        }
+        const base = name.replace(/\.pdf$/i, '');
+        let n = 2;
+        let candidate = `${base}-${n}.pdf`;
+        while (used.has(candidate)) {
+            n += 1;
+            candidate = `${base}-${n}.pdf`;
+        }
+        used.add(candidate);
+        return candidate;
+    }
+
+    private async tryFetchStoredPdf(
+        voucher: PdfFreezeRow,
+    ): Promise<{ buffer: Buffer; url: string; filename: string } | null> {
+        const url = this.storedPdfUrl(voucher);
+        if (!url) return null;
+        try {
+            const { buffer } = await this.storage.getFile(this.storage.extractKeyFromUrl(url));
+            return {
+                buffer,
+                url,
+                filename: voucher.paid_pdf_filename ?? this.rebuildFilename(voucher),
+            };
+        } catch (err: any) {
+            this.logger.warn(
+                `Stored PDF unreadable for voucher #${voucher.id}; re-rendering. ${err?.message}`,
+            );
+            return null;
+        }
+    }
+
+    private async renderAndStorePdfBuffer(
+        voucherId: number,
+        generatedByName?: string,
+    ): Promise<{ buffer: Buffer; url: string; filename: string }> {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: VOUCHER_INCLUDE,
+        });
+        if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
+
+        const finalPaidStamp = voucher.status === 'PAID';
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
+        const buffer = await this.pdfService.generateVoucherPdf(voucherData);
+        const url = await this.storage.upload(key, buffer);
+        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
+
+        if (finalPaidStamp) {
+            const frozen = await this.freezePaidPdf(voucherId, url, filename);
+            return { buffer, url: frozen.pdf_url, filename: frozen.filename };
+        }
+        return { buffer, url, filename };
+    }
+
+    /**
+     * Load freeze metadata for a batch in one query, then fetch stored bytes
+     * (I/O) in parallel and render stragglers with a tighter cap.
+     */
+    private async buffersForIdBatch(
+        batch: number[],
+        byId: Map<number, PdfFreezeRow>,
+        generatedByName: string | undefined,
+    ): Promise<Array<{ buffer: Buffer; url: string; filename: string } | null>> {
+        const slot: Array<{ buffer: Buffer; url: string; filename: string } | null | undefined> =
+            Array(batch.length);
+
+        await Promise.all(batch.map(async (id, index) => {
+            const row = byId.get(id);
+            if (!row) {
+                slot[index] = null;
+                return;
+            }
+            const stored = await this.tryFetchStoredPdf(row);
+            if (stored) slot[index] = stored;
+        }));
+
+        const needRender: { index: number; id: number }[] = [];
+        for (let index = 0; index < batch.length; index++) {
+            if (slot[index] === undefined) needRender.push({ index, id: batch[index] });
+        }
+
+        const RENDER_CONCURRENCY = 5;
+        for (let j = 0; j < needRender.length; j += RENDER_CONCURRENCY) {
+            const slice = needRender.slice(j, j + RENDER_CONCURRENCY);
+            await Promise.all(slice.map(async ({ index, id }) => {
+                try {
+                    slot[index] = await this.renderAndStorePdfBuffer(id, generatedByName);
+                } catch (err: any) {
+                    this.logger.error(`Failed to generate PDF for voucher ${id}: ${err.message}`);
+                    slot[index] = null;
+                }
+            }));
+        }
+
+        return slot.map((result) => result ?? null);
+    }
+
+    private async loadFreezeRows(voucherIds: number[]): Promise<Map<number, PdfFreezeRow>> {
+        const rows = await this.prisma.vouchers.findMany({
+            where: { id: { in: voucherIds } },
+            select: PDF_FREEZE_SELECT,
+        });
+        return new Map(rows.map((r) => [r.id, r as PdfFreezeRow]));
+    }
+
     /**
      * Generate a voucher PDF server-side, upload it, persist pdf_url, and return the URL.
      * Used by both the single-voucher challan flow and the PAID-stamp download on the vouchers list.
      *
      * The PAID render is generated at most once — see the frozen-receipt block below.
+     * Unpaid `pdf_url` is a cache: served as-is unless `opts.force` (Regenerate) or it is null.
      */
-    async generatePdf(voucherId: number, showDiscount = true, paidStamp = false, generatedByName?: string) {
+    async generatePdf(
+        voucherId: number,
+        showDiscount = true,
+        paidStamp = false,
+        generatedByName?: string,
+        opts?: { force?: boolean },
+    ) {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
-            include: VOUCHER_INCLUDE,
+            select: PDF_FREEZE_SELECT,
         });
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
@@ -3766,6 +3926,7 @@ export class VouchersService {
         // key, the frozen key is by construction the key baked into the PDF.
         //
         // Cleared only by a genuine payment reversal — see clearDeposit().
+        // `opts.force` does not apply — a wrong paid receipt is fixed via reversal.
         if (finalPaidStamp && voucher.paid_pdf_url) {
             return {
                 pdf_url: voucher.paid_pdf_url,
@@ -3774,11 +3935,25 @@ export class VouchersService {
             };
         }
 
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        if (!opts?.force && !finalPaidStamp && voucher.pdf_url) {
+            return {
+                pdf_url: voucher.pdf_url,
+                filename: this.rebuildFilename(voucher),
+                frozen: true,
+            };
+        }
+
+        const full = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: VOUCHER_INCLUDE,
+        });
+        if (!full) throw new NotFoundException(`Voucher ${voucherId} not found`);
+
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp);
         voucherData.showDiscount = showDiscount;
         // Prefer persisted stamp; if missing and a name was passed (first generate),
         // write it once so regenerations stay stable.
-        await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
+        await this.ensureVoucherGenerationMeta(voucherId, full, generatedByName, voucherData);
 
         const pdfBuffer = await this.pdfService.generateVoucherPdf(voucherData);
         const pdfUrl = await this.storage.upload(key, pdfBuffer);
@@ -3922,105 +4097,60 @@ export class VouchersService {
      * Like generatePdf() but returns the raw buffer alongside the URL.
      * Used by bulk-voucher jobs to collect individual buffers for merging.
      */
-    async generatePdfBuffer(voucherId: number, paidStamp = false, generatedByName?: string): Promise<{ buffer: Buffer; url: string }> {
+    async generatePdfBuffer(
+        voucherId: number,
+        paidStamp = false,
+        generatedByName?: string,
+    ): Promise<{ buffer: Buffer; url: string; filename: string }> {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
-            include: VOUCHER_INCLUDE,
+            select: PDF_FREEZE_SELECT,
         });
 
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const finalPaidStamp = voucher.status === 'PAID';
+        const stored = await this.tryFetchStoredPdf(voucher as PdfFreezeRow);
+        if (stored) return stored;
 
-        // Frozen paid receipt (see generatePdf): honouring "never re-render"
-        // means fetching the stored bytes rather than rendering them again.
-        if (finalPaidStamp && voucher.paid_pdf_url) {
-            try {
-                const { buffer } = await this.storage.getFile(
-                    this.storage.extractKeyFromUrl(voucher.paid_pdf_url),
-                );
-                return { buffer, url: voucher.paid_pdf_url };
-            } catch (err: any) {
-                // Object missing, or storage unconfigured in dev. Fall through and
-                // re-render so a bulk export never 500s — but deliberately do NOT
-                // re-freeze under a new key; the frozen name stays authoritative.
-                this.logger.warn(
-                    `Frozen paid PDF unreadable for voucher #${voucherId}; re-rendering. ${err?.message}`,
-                );
-            }
-        }
-
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
-        await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
-        const buffer = await this.pdfService.generateVoucherPdf(voucherData);
-        const url = await this.storage.upload(key, buffer);
-        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
-
-        if (finalPaidStamp) {
-            const frozen = await this.freezePaidPdf(voucherId, url, filename);
-            return { buffer, url: frozen.pdf_url };
-        }
-
-        return { buffer, url };
+        return this.renderAndStorePdfBuffer(voucherId, generatedByName);
     }
 
-    async batchExport(voucherIds: number[], generatedByName?: string): Promise<Buffer> {
-        const archive = archiver('zip', { zlib: { level: 9 } });
-        const chunks: any[] = [];
-
-        return new Promise(async (resolve, reject) => {
-            archive.on('data', (chunk: any) => chunks.push(chunk));
-            archive.on('end', () => resolve(Buffer.concat(chunks)));
-            archive.on('error', (err: any) => reject(err));
-
-            const BATCH_SIZE = 5;
-            for (let i = 0; i < voucherIds.length; i += BATCH_SIZE) {
-                const batch = voucherIds.slice(i, i + BATCH_SIZE);
-                await Promise.all(batch.map(async (id) => {
-                    try {
-                        const { buffer } = await this.generatePdfBuffer(id, false, generatedByName);
-                        const voucher = await this.prisma.vouchers.findUnique({
-                            where: { id },
-                            select: { student_id: true, academic_year: true, month: true, fee_date: true, paid_pdf_filename: true, students: { select: { gr_number: true } } }
-                        });
-                        // A frozen paid receipt keeps the name it was issued
-                        // under; only unfrozen vouchers get a name rebuilt from
-                        // the live gr_number.
-                        const filename = voucher?.paid_pdf_filename ?? buildVoucherFilename({
-                            grNumber: voucher?.students?.gr_number,
-                            studentId: voucher?.student_id,
-                            feeDate: voucher?.fee_date,
-                            voucherId: id,
-                        });
-                        archive.append(buffer, { name: filename });
-                    } catch (err) {
-                        this.logger.error(`Failed to add voucher ${id} to zip: ${err.message}`);
-                    }
-                }));
-            }
-            archive.finalize();
+    async batchExport(voucherIds: number[], generatedByName: string | undefined, res: Response): Promise<void> {
+        const archive = archiver('zip', { store: true });
+        const done = new Promise<void>((resolve, reject) => {
+            archive.on('end', () => resolve());
+            archive.on('error', (err: Error) => reject(err));
+            res.on('error', (err: Error) => reject(err));
         });
+        archive.pipe(res);
+
+        const FETCH_CONCURRENCY = 10;
+        const byId = await this.loadFreezeRows(voucherIds);
+        const usedNames = new Set<string>();
+        for (let i = 0; i < voucherIds.length; i += FETCH_CONCURRENCY) {
+            const batch = voucherIds.slice(i, i + FETCH_CONCURRENCY);
+            const results = await this.buffersForIdBatch(batch, byId, generatedByName);
+            for (const result of results) {
+                if (!result) continue;
+                archive.append(result.buffer, { name: this.uniquifyZipName(result.filename, usedNames) });
+            }
+        }
+
+        await archive.finalize();
+        await done;
     }
 
     async batchMerge(voucherIds: number[], generatedByName?: string): Promise<Buffer> {
         const mergedPdf = await PDFDocument.create();
+        const FETCH_CONCURRENCY = 10;
+        const byId = await this.loadFreezeRows(voucherIds);
 
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < voucherIds.length; i += BATCH_SIZE) {
-            const batch = voucherIds.slice(i, i + BATCH_SIZE);
-            const results = await Promise.all(batch.map(async (id) => {
-                try {
-                    const { buffer } = await this.generatePdfBuffer(id, false, generatedByName);
-                    return buffer;
-                } catch (err) {
-                    this.logger.error(`Failed to generate PDF for voucher ${id}: ${err.message}`);
-                    return null;
-                }
-            }));
-
-            for (const buffer of results) {
-                if (!buffer) continue;
-                const pdf = await PDFDocument.load(buffer);
+        for (let i = 0; i < voucherIds.length; i += FETCH_CONCURRENCY) {
+            const batch = voucherIds.slice(i, i + FETCH_CONCURRENCY);
+            const results = await this.buffersForIdBatch(batch, byId, generatedByName);
+            for (const result of results) {
+                if (!result) continue;
+                const pdf = await PDFDocument.load(result.buffer);
                 const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
                 copiedPages.forEach((page: any) => mergedPdf.addPage(page));
             }

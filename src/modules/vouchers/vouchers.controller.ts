@@ -251,6 +251,7 @@ export class VouchersController {
             dto.show_discount ?? true,
             dto.paid_stamp ?? false,
             generatedByName,
+            { force: dto.regenerate === true },
         );
         return {
             success: true,
@@ -481,13 +482,11 @@ export class VouchersController {
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
     async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any) {
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
-        const buffer = await this.vouchersService.batchExport(dto.ids, generatedByName);
         res.set({
             'Content-Type': 'application/zip',
             'Content-Disposition': 'attachment; filename=vouchers_batch.zip',
-            'Content-Length': buffer.length,
         });
-        res.send(buffer);
+        await this.vouchersService.batchExport(dto.ids, generatedByName, res);
     }
 
     @Post('batch-merge')
