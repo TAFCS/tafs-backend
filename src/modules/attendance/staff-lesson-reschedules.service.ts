@@ -437,7 +437,7 @@ export class StaffLessonReschedulesService {
           data: {
             makeup_date: makeupDate,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id ?? null,
-            status: ClassSessionRescheduleStatus.PENDING,
+            status: ClassSessionRescheduleStatus.SCHEDULED,
             notes: dto.notes ?? null,
             created_by_id: user.sub,
           },
@@ -453,7 +453,7 @@ export class StaffLessonReschedulesService {
             source_date: sourceDate,
             makeup_date: makeupDate,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id ?? null,
-            status: ClassSessionRescheduleStatus.PENDING,
+            status: ClassSessionRescheduleStatus.SCHEDULED,
             notes: dto.notes ?? null,
             created_by_id: user.sub,
           },
@@ -473,8 +473,8 @@ export class StaffLessonReschedulesService {
 
   async complete(id: number, user: IJwtStaffPayload) {
     const row = await this.findOne(id, user);
-    if (row.status !== ClassSessionRescheduleStatus.PENDING) {
-      throw new BadRequestException('Only pending reschedules can be completed');
+    if (row.status !== ClassSessionRescheduleStatus.SCHEDULED) {
+      throw new BadRequestException('Only scheduled reschedules can be completed');
     }
 
     const { staffExcused, staffExcuseWarning } =
@@ -497,7 +497,7 @@ export class StaffLessonReschedulesService {
       entity_id: String(id),
       action: 'UPDATED',
       field: 'status',
-      old_value: 'PENDING',
+      old_value: 'SCHEDULED',
       new_value: 'COMPLETED',
       changed_by: auditActorLabel(user),
       note: staffExcused
@@ -510,8 +510,8 @@ export class StaffLessonReschedulesService {
 
   async cancel(id: number, user: IJwtStaffPayload) {
     const row = await this.findOne(id, user);
-    if (row.status !== ClassSessionRescheduleStatus.PENDING) {
-      throw new BadRequestException('Only pending reschedules can be cancelled');
+    if (row.status !== ClassSessionRescheduleStatus.SCHEDULED) {
+      throw new BadRequestException('Only scheduled reschedules can be cancelled');
     }
 
     const updated = await this.prisma.staff_lesson_reschedules.update({
@@ -525,7 +525,7 @@ export class StaffLessonReschedulesService {
       entity_id: String(id),
       action: 'UPDATED',
       field: 'status',
-      old_value: 'PENDING',
+      old_value: 'SCHEDULED',
       new_value: 'CANCELLED',
       changed_by: auditActorLabel(user),
     });

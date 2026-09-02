@@ -48,7 +48,7 @@ describe('StaffLessonReschedulesService', () => {
       staff_lesson_reschedules: {
         findUnique: jest.fn().mockResolvedValue({
           id: 1,
-          status: 'PENDING',
+          status: 'SCHEDULED',
           employee_id: 10,
           campus_id: 1,
           class_id: 12,

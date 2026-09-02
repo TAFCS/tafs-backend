@@ -42,7 +42,7 @@ export class ListStaffLessonReschedulesQueryDto {
 
   @IsOptional()
   @IsString()
-  status?: 'PENDING' | 'COMPLETED' | 'CANCELLED';
+  status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
 
   @IsOptional()
   @IsDateString()

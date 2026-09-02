@@ -1658,7 +1658,7 @@ model class_session_reschedules {
   makeup_timetable_slot_id Int?
   makeup_roll_session_id   Int?
   source_roll_session_id   Int?                         @unique
-  status                   ClassSessionRescheduleStatus @default(PENDING)
+  status                   ClassSessionRescheduleStatus @default(SCHEDULED)
   created_by_id            String?
   notes                    String?                      @db.VarChar(500)
   created_at               DateTime                     @default(now()) @db.Timestamp(6)
@@ -1687,7 +1687,7 @@ model staff_lesson_reschedules {
   source_date              DateTime                     @db.Date
   makeup_date              DateTime                     @db.Date
   makeup_timetable_slot_id Int?
-  status                   ClassSessionRescheduleStatus @default(PENDING)
+  status                   ClassSessionRescheduleStatus @default(SCHEDULED)
   created_by_id            String?
   notes                    String?                      @db.VarChar(500)
   created_at               DateTime                     @default(now()) @db.Timestamp(6)
@@ -2280,7 +2280,7 @@ enum RollSessionKind {
 }
 
 enum ClassSessionRescheduleStatus {
-  PENDING
+  SCHEDULED
   COMPLETED
   CANCELLED
 }

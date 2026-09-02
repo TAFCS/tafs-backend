@@ -304,7 +304,7 @@ export class RollSessionsService {
     return this.createSession(dto, user, { sessionKind: RollSessionKind.REGULAR });
   }
 
-  /** Opens a MAKEUP roll session linked to a pending class reschedule. */
+  /** Opens a MAKEUP roll session linked to a scheduled class reschedule. */
   async createMakeupSession(
     dto: CreateRollSessionDto & { reschedule_id?: number },
     user: IJwtStaffPayload,
@@ -761,7 +761,7 @@ export class RollSessionsService {
       });
 
       for (const session of draftSessions) {
-        if (await this.reschedules.hasPendingRescheduleForSession(session)) {
+        if (await this.reschedules.hasScheduledRescheduleForSession(session)) {
           continue;
         }
 

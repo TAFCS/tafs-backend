@@ -84,7 +84,7 @@ describe('ClassSessionReschedulesService', () => {
       prisma.class_session_reschedules.findMany = jest.fn().mockResolvedValue([
         {
           id: 1,
-          status: 'PENDING',
+          status: 'SCHEDULED',
           source_date: sourceDate,
           makeup_date: makeupDate,
           teaching_group_id: 7,
@@ -109,7 +109,7 @@ describe('ClassSessionReschedulesService', () => {
 
       prisma.class_session_reschedules.findUnique.mockResolvedValue({
         id: 1,
-        status: 'PENDING',
+        status: 'SCHEDULED',
         source_date: sourceDate,
         makeup_date: makeupDate,
         teaching_group_id: 7,
@@ -167,7 +167,7 @@ describe('ClassSessionReschedulesService', () => {
       prisma.class_session_reschedules.findMany = jest.fn().mockResolvedValue([
         {
           id: 1,
-          status: 'PENDING',
+          status: 'SCHEDULED',
           source_date: new Date('2026-08-31T00:00:00.000Z'),
           makeup_date: new Date('2026-09-06T00:00:00.000Z'),
           teaching_group_id: 7,
@@ -188,7 +188,7 @@ describe('ClassSessionReschedulesService', () => {
 
       prisma.class_session_reschedules.findUnique.mockResolvedValue({
         id: 1,
-        status: 'PENDING',
+        status: 'SCHEDULED',
         source_date: new Date('2026-08-31T00:00:00.000Z'),
         makeup_date: new Date('2026-09-06T00:00:00.000Z'),
         teaching_group_id: 7,

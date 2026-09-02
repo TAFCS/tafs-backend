@@ -121,7 +121,7 @@ export class ClassSessionReschedulesService {
   private async cleanupOrphanMakeupSession(makeupSessionId: number | null | undefined) {
     if (!makeupSessionId) return;
     const remaining = await this.prisma.class_session_reschedules.count({
-      where: { makeup_roll_session_id: makeupSessionId, status: 'PENDING' },
+      where: { makeup_roll_session_id: makeupSessionId, status: 'SCHEDULED' },
     });
     if (remaining > 0) return;
 
@@ -139,7 +139,7 @@ export class ClassSessionReschedulesService {
     await this.prisma.attendance_roll_sessions.delete({ where: { id: makeupSessionId } });
   }
 
-  private async reattachPendingSourceRow(
+  private async reattachScheduledSourceRow(
     existing: {
       id: number;
       makeup_roll_session_id: number | null;
@@ -273,7 +273,7 @@ export class ClassSessionReschedulesService {
     const existingReschedules = await this.prisma.class_session_reschedules.findMany({
       where: {
         teaching_group_id: group.id,
-        status: { in: ['PENDING', 'COMPLETED'] },
+        status: { in: ['SCHEDULED', 'COMPLETED'] },
         source_date: { gte: scheduleStart, lte: yesterday },
       },
       select: { source_timetable_slot_id: true, source_date: true },
@@ -458,7 +458,7 @@ export class ClassSessionReschedulesService {
     const reschedulesForRange = await this.prisma.class_session_reschedules.findMany({
       where: {
         teaching_group_id: query.teaching_group_id,
-        status: { in: ['PENDING', 'COMPLETED'] },
+        status: { in: ['SCHEDULED', 'COMPLETED'] },
         source_timetable_slot_id: { in: validSlotIds },
         source_date: { gte: minDate, lte: maxDate },
       },
@@ -898,7 +898,7 @@ export class ClassSessionReschedulesService {
       where: {
         teaching_group_id: dto.teaching_group_id,
         makeup_date: makeupDate,
-        status: 'PENDING',
+        status: 'SCHEDULED',
         makeup_roll_session_id: { not: null },
       },
       orderBy: { id: 'asc' },
@@ -937,13 +937,13 @@ export class ClassSessionReschedulesService {
         );
       }
 
-      if (existing?.status === 'PENDING') {
+      if (existing?.status === 'SCHEDULED') {
         if (existing.makeup_roll_session_id === makeupSession.id) {
           createdRows.push(existing);
           continue;
         }
         createdRows.push(
-          await this.reattachPendingSourceRow(existing, makeupSession.id, {
+          await this.reattachScheduledSourceRow(existing, makeupSession.id, {
             makeup_date: makeupDate,
             makeup_period: dto.makeup_period,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id,
@@ -966,6 +966,7 @@ export class ClassSessionReschedulesService {
             makeup_period: dto.makeup_period,
             makeup_timetable_slot_id: dto.makeup_timetable_slot_id ?? null,
             makeup_roll_session_id: makeupSession.id,
+            status: 'SCHEDULED',
             created_by_id: user.sub,
             notes: dto.notes,
           },
@@ -981,13 +982,13 @@ export class ClassSessionReschedulesService {
             source_timetable_slot_id: item.source_timetable_slot_id,
           },
         });
-        if (raced?.status === 'PENDING') {
+        if (raced?.status === 'SCHEDULED') {
           if (raced.makeup_roll_session_id === makeupSession.id) {
             createdRows.push(raced);
             continue;
           }
           createdRows.push(
-            await this.reattachPendingSourceRow(raced, makeupSession.id, {
+            await this.reattachScheduledSourceRow(raced, makeupSession.id, {
               makeup_date: makeupDate,
               makeup_period: dto.makeup_period,
               makeup_timetable_slot_id: dto.makeup_timetable_slot_id,
@@ -1002,7 +1003,7 @@ export class ClassSessionReschedulesService {
     }
 
     const bundleReschedules = await this.prisma.class_session_reschedules.findMany({
-      where: { makeup_roll_session_id: makeupSession.id, status: 'PENDING' },
+      where: { makeup_roll_session_id: makeupSession.id, status: 'SCHEDULED' },
       select: { id: true },
     });
 
@@ -1055,8 +1056,8 @@ export class ClassSessionReschedulesService {
 
   async cancel(id: number, user: IJwtStaffPayload) {
     const row = await this.findOne(id, user);
-    if (row.status !== 'PENDING') {
-      throw new BadRequestException('Only pending reschedules can be cancelled');
+    if (row.status !== 'SCHEDULED') {
+      throw new BadRequestException('Only scheduled reschedules can be cancelled');
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -1068,7 +1069,7 @@ export class ClassSessionReschedulesService {
 
       if (makeupSessionId) {
         const remaining = await tx.class_session_reschedules.count({
-          where: { makeup_roll_session_id: makeupSessionId, status: 'PENDING' },
+          where: { makeup_roll_session_id: makeupSessionId, status: 'SCHEDULED' },
         });
         if (remaining === 0) {
           const session = await tx.attendance_roll_sessions.findUnique({
@@ -1089,8 +1090,8 @@ export class ClassSessionReschedulesService {
 
   async updateMakeupDate(id: number, makeupDateStr: string, user: IJwtStaffPayload) {
     const row = await this.findOne(id, user);
-    if (row.status !== 'PENDING') {
-      throw new BadRequestException('Only pending reschedules can be updated');
+    if (row.status !== 'SCHEDULED') {
+      throw new BadRequestException('Only scheduled reschedules can be updated');
     }
 
     const makeupDate = this.parseDate(makeupDateStr);
@@ -1100,7 +1101,7 @@ export class ClassSessionReschedulesService {
       where: {
         teaching_group_id: row.teaching_group_id,
         makeup_date: makeupDate,
-        status: 'PENDING',
+        status: 'SCHEDULED',
         makeup_roll_session_id: { not: null },
         id: { not: id },
       },
@@ -1134,7 +1135,7 @@ export class ClassSessionReschedulesService {
     });
 
     const bundleReschedules = await this.prisma.class_session_reschedules.findMany({
-      where: { makeup_roll_session_id: makeupSessionId, status: 'PENDING' },
+      where: { makeup_roll_session_id: makeupSessionId, status: 'SCHEDULED' },
       select: { id: true },
       orderBy: { id: 'asc' },
     });
@@ -1148,7 +1149,7 @@ export class ClassSessionReschedulesService {
     if (previousSessionId && previousSessionId !== makeupSessionId) {
       await this.cleanupOrphanMakeupSession(previousSessionId);
       const remainingOnOld = await this.prisma.class_session_reschedules.findMany({
-        where: { makeup_roll_session_id: previousSessionId, status: 'PENDING' },
+        where: { makeup_roll_session_id: previousSessionId, status: 'SCHEDULED' },
         select: { id: true },
         orderBy: { id: 'asc' },
       });
@@ -1249,7 +1250,7 @@ export class ClassSessionReschedulesService {
     }
 
     const reschedules = await this.prisma.class_session_reschedules.findMany({
-      where: { makeup_roll_session_id: makeupSessionId, status: 'PENDING' },
+      where: { makeup_roll_session_id: makeupSessionId, status: 'SCHEDULED' },
       include: {
         source_timetable_slot: true,
         teaching_groups: true,
@@ -1352,7 +1353,7 @@ export class ClassSessionReschedulesService {
         entity_id: String(reschedule.id),
         action: 'UPDATED',
         field: 'status',
-        old_value: 'PENDING',
+        old_value: 'SCHEDULED',
         new_value: 'COMPLETED',
         changed_by: auditActorLabel(user),
         note: `Reschedule #${reschedule.id} completed via makeup session #${makeupSessionId}.`,
@@ -1451,37 +1452,37 @@ export class ClassSessionReschedulesService {
     });
   }
 
-  /** True when a pending reschedule covers this draft source session — skip auto-skip. */
-  async hasPendingRescheduleForSession(session: {
+  /** True when a scheduled reschedule covers this draft source session — skip auto-skip. */
+  async hasScheduledRescheduleForSession(session: {
     teaching_group_id: number | null;
     session_date: Date;
     timetable_slot_id: number | null;
   }): Promise<boolean> {
     if (!session.teaching_group_id || !session.timetable_slot_id) return false;
-    const pending = await this.prisma.class_session_reschedules.findFirst({
+    const scheduled = await this.prisma.class_session_reschedules.findFirst({
       where: {
         teaching_group_id: session.teaching_group_id,
         source_date: session.session_date,
         source_timetable_slot_id: session.timetable_slot_id,
-        status: 'PENDING',
+        status: 'SCHEDULED',
       },
     });
-    return pending != null;
+    return scheduled != null;
   }
 
-  async hasPendingRescheduleForSource(
+  async hasScheduledRescheduleForSource(
     teachingGroupId: number,
     sourceDate: Date,
     sourceSlotId: number,
   ): Promise<boolean> {
-    const pending = await this.prisma.class_session_reschedules.findFirst({
+    const scheduled = await this.prisma.class_session_reschedules.findFirst({
       where: {
         teaching_group_id: teachingGroupId,
         source_date: sourceDate,
         source_timetable_slot_id: sourceSlotId,
-        status: 'PENDING',
+        status: 'SCHEDULED',
       },
     });
-    return pending != null;
+    return scheduled != null;
   }
 }
