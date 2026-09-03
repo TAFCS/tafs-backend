@@ -99,7 +99,10 @@ describe('StudentFeesService bulkSave row identity', () => {
                 }),
             },
             fee_types: {
-                findMany: jest.fn().mockResolvedValue([{ id: 1, description: 'MONTHLY TUITION FEE' }]),
+                findMany: jest.fn().mockResolvedValue([
+                    { id: 1, description: 'MONTHLY TUITION FEE' },
+                    { id: 4, description: 'ANNUAL FEE' },
+                ]),
             },
             student_fee_bundles: { findMany: jest.fn().mockResolvedValue([]) },
         };
@@ -212,6 +215,26 @@ describe('StudentFeesService bulkSave row identity', () => {
         expect(updates).toHaveLength(2);
         expect(creates).toEqual([]);
         expect(deletes).toEqual([]);
+    });
+
+    it('persists a fee-type change on an id-matched row instead of reverting it', async () => {
+        // BALANCE is a free (non-voucher) MONTHLY TUITION FEE row. The grid lets
+        // the user re-point it at a different fee type; the payload keeps the row
+        // id, so Pass A matches by id and takes the update path — which must
+        // carry the new fee_type_id through or the change silently reverts to
+        // MTF on the post-save refetch.
+        const { service, updates, creates, deletes } = build([BALANCE]);
+
+        await service.bulkSave({
+            student_id: 4051,
+            academic_year: YEAR,
+            items: [item(BALANCE, { fee_type_id: 4 })],
+        } as any);
+
+        expect(creates).toEqual([]);
+        expect(deletes).toEqual([]);
+        const changed = updates.find((u) => u.id === BALANCE.id);
+        expect(changed.fee_type_id).toBe(4);
     });
 
     it('falls back to key matching for a payload that carries no ids', async () => {
