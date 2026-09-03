@@ -20,6 +20,11 @@ import {
   isTemplateDisabled,
 } from '../../../utils/notification-templates.util';
 
+// Max mandatory Saturdays that can be assigned to one employee in one payroll
+// month. Employees already at this count are skipped (and reported back in
+// skipped_cap) rather than failing the whole batch.
+const MONTHLY_SATURDAY_CAP = 5;
+
 const scheduleInclude = {
   employee_profiles: {
     select: {
@@ -117,7 +122,7 @@ export class SaturdaySchedulesService {
     // Running per-employee-per-month counts (seeded from the DB, incremented as
     // rows are created below) and a set of dates each employee is already on —
     // both scoped by month so a request spanning two payroll months enforces the
-    // 2/month cap independently per month rather than across the whole batch.
+    // monthly cap independently per month rather than across the whole batch.
     const monthCountMap = new Map<string, number>();
     const alreadyScheduled = new Set<string>();
     for (const row of existingRows) {
@@ -145,7 +150,7 @@ export class SaturdaySchedulesService {
 
         const countKey = `${employee.id}:${monthKey}`;
         const count = monthCountMap.get(countKey) ?? 0;
-        if (count >= 2) {
+        if (count >= MONTHLY_SATURDAY_CAP) {
           cappedEmployeeIds.add(employee.id);
           skippedCap.push({
             employee_id: employee.id,
