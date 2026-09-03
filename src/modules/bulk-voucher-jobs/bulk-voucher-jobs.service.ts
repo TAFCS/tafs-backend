@@ -348,9 +348,8 @@ export class BulkVoucherJobsService {
         let skipCountTotal = 0;
 
         try {
-            const feeDateFrom = new Date(dto.fee_date_from);
-            const feeDateTo = new Date(dto.fee_date_to);
-            const PDF_BATCH_SIZE = 10;
+            // Students are processed concurrently; one student's own months are NOT.
+            const STUDENT_BATCH_SIZE = 10;
 
 
             const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);
@@ -400,43 +399,106 @@ export class BulkVoucherJobsService {
                 `[Job #${jobId}] ${workItems.length} items to process, ${skipCountTotal} skipped upfront.`,
             );
 
-            // ── PHASE 3: PARALLEL PDF BATCHES ────────────────────────────────────
+            // ── PHASE 3: PER-STUDENT SEQUENTIAL ISSUANCE ─────────────────────────
+            // A student's months MUST be issued one at a time, ascending by fee
+            // date, so fee-date supersession collapses each month into the next —
+            // exactly as it would if an operator issued them singly. Issuing a
+            // student's months in parallel raced supersession (no transaction saw
+            // the siblings' uncommitted vouchers), leaving a separate voucher per
+            // month each carrying its own stacked late-payment surcharge. Different
+            // students are still processed concurrently.
+            const itemsByStudent = new Map<number, any[]>();
+            for (const item of workItems) {
+                if (!itemsByStudent.has(item.cc)) itemsByStudent.set(item.cc, []);
+                itemsByStudent.get(item.cc)!.push(item);
+            }
+            // expectedFeeDates is ascending and resolveWorkItems emits items in that
+            // order, so each student's list is already ascending by fee_date.
+            const studentGroups = [...itemsByStudent.values()];
+
             const pdfBuffers: Buffer[] = [];
 
-            for (let i = 0; i < workItems.length; i += PDF_BATCH_SIZE) {
-                const chunk = workItems.slice(i, i + PDF_BATCH_SIZE);
+            for (let i = 0; i < studentGroups.length; i += STUDENT_BATCH_SIZE) {
+                const groupChunk = studentGroups.slice(i, i + STUDENT_BATCH_SIZE);
 
-                const results = await Promise.allSettled(
-                    chunk.map((item) =>
-                        this.processWorkItem(item, dto, createdBy, generatedByName, auditParentId, jobId),
-                    ),
+                const chunkOutcomes = await Promise.all(
+                    groupChunk.map(async (studentItems) => {
+                        const perItem: Array<{
+                            workItem: any;
+                            outcome: 'SUCCESS' | 'SKIPPED' | 'FAILED';
+                            value?: { buffer: Buffer; url: string; voucher_id: number };
+                            error?: string;
+                        }> = [];
+
+                        for (const workItem of studentItems) {
+                            try {
+                                const value = await this.processWorkItem(
+                                    workItem, dto, createdBy, generatedByName, auditParentId, jobId,
+                                );
+                                perItem.push({ workItem, outcome: 'SUCCESS', value });
+                            } catch (err) {
+                                const errorMsg = String((err as any)?.message ?? err);
+                                if (
+                                    errorMsg.includes('already fully paid') ||
+                                    errorMsg.includes('No voucher needed')
+                                ) {
+                                    perItem.push({ workItem, outcome: 'SKIPPED', error: errorMsg });
+                                } else {
+                                    this.logger.error(
+                                        `[Job #${jobId}] Work item failed (cc ${workItem.cc}, ${workItem.dateStr}): ${errorMsg}`,
+                                    );
+                                    perItem.push({ workItem, outcome: 'FAILED', error: errorMsg });
+                                }
+                            }
+                        }
+                        return perItem;
+                    }),
                 );
 
                 let chunkSuccess = 0;
                 let chunkFail = 0;
                 let chunkSkip = 0;
 
-                for (let j = 0; j < results.length; j++) {
-                    const result = results[j];
-                    const workItem = chunk[j];
-                    if (result.status === 'fulfilled') {
-                        pdfBuffers.push(result.value.buffer);
-                        chunkSuccess++;
-                        successCount++;
-                        
-                        jobReport.push({
-                            cc: workItem.cc,
-                            student_name: workItem.student.full_name,
-                            pdf_url: result.value.url,
-                            voucher_id: result.value.voucher_id,
-                            status: 'SUCCESS',
-                            ...(workItem.splitFromPartiallyPaid
-                                ? { reason: 'Split from a partially-paid period — new voucher created for the remaining unpaid fee heads only.', split_from_partially_paid: true }
-                                : {}),
-                        });
-                    } else {
-                        const errorMsg = String(result.reason);
-                        if (errorMsg.includes('already fully paid') || errorMsg.includes('No voucher needed')) {
+                for (const perItem of chunkOutcomes) {
+                    // Within one student's ascending run every earlier voucher is
+                    // superseded (VOID) by the next month's, which already carries
+                    // its heads and surcharges. Only the LAST success survives — it
+                    // is the one whose PDF belongs in the merged file.
+                    const successes = perItem.filter((r) => r.outcome === 'SUCCESS');
+                    const survivor = successes.length > 0 ? successes[successes.length - 1] : null;
+
+                    for (const r of perItem) {
+                        const { workItem } = r;
+                        if (r.outcome === 'SUCCESS' && r === survivor) {
+                            pdfBuffers.push(r.value!.buffer);
+                            chunkSuccess++;
+                            successCount++;
+                            jobReport.push({
+                                cc: workItem.cc,
+                                student_name: workItem.student.full_name,
+                                pdf_url: r.value!.url,
+                                voucher_id: r.value!.voucher_id,
+                                status: 'SUCCESS',
+                                ...(successes.length > 1
+                                    ? { reason: `Single voucher covering ${successes.length} month(s) in range — earlier months folded in and superseded.` }
+                                    : {}),
+                                ...(workItem.splitFromPartiallyPaid
+                                    ? { reason: 'Split from a partially-paid period — new voucher created for the remaining unpaid fee heads only.', split_from_partially_paid: true }
+                                    : {}),
+                            });
+                        } else if (r.outcome === 'SUCCESS') {
+                            // Intermediate month: a voucher was created then immediately
+                            // superseded by a later month in the same range.
+                            chunkSkip++;
+                            skipCountTotal++;
+                            jobReport.push({
+                                cc: workItem.cc,
+                                student_name: workItem.student.full_name,
+                                voucher_id: r.value!.voucher_id,
+                                status: 'SKIPPED',
+                                reason: `Folded into voucher #${survivor!.value!.voucher_id} for ${survivor!.workItem.dateStr} (later month in the same range).`,
+                            });
+                        } else if (r.outcome === 'SKIPPED') {
                             chunkSkip++;
                             skipCountTotal++;
                             jobReport.push({
@@ -446,15 +508,13 @@ export class BulkVoucherJobsService {
                                 reason: 'All fee heads for this period are already fully paid',
                             });
                         } else {
-                            this.logger.error(`[Job #${jobId}] Work item failed: ${errorMsg}`);
                             chunkFail++;
                             failCountTotal++;
-
                             jobReport.push({
                                 cc: workItem.cc,
                                 student_name: workItem.student.full_name,
                                 status: 'FAILED',
-                                error: errorMsg,
+                                error: r.error,
                             });
                         }
                     }
@@ -470,7 +530,7 @@ export class BulkVoucherJobsService {
                 });
 
                 this.logger.log(
-                    `[Job #${jobId}] Batch ${Math.floor(i / PDF_BATCH_SIZE) + 1}/${Math.ceil(workItems.length / PDF_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped`,
+                    `[Job #${jobId}] Student batch ${Math.floor(i / STUDENT_BATCH_SIZE) + 1}/${Math.ceil(studentGroups.length / STUDENT_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped/folded`,
                 );
             }
 
@@ -607,16 +667,21 @@ export class BulkVoucherJobsService {
             late_fee_charge: dto.apply_late_fee ?? true,
             late_fee_amount: dto.late_fee_amount ?? 1000,
             waive_surcharge: dto.waive_surcharge ?? false,
-            waived_by: createdBy,
+            // Only stamp a waiver author when a waiver is actually being applied —
+            // otherwise a charged bulk voucher looks "waived by <operator>" in audit.
+            waived_by: (dto.waive_surcharge ?? false) ? createdBy : undefined,
             send_notification: dto.send_notification ?? true,
             requires_release: dto.hold_for_release ?? false,
             academic_year: item.academicYear,
+            month: Number(dateStr.slice(5, 7)),
             fee_date: dateStr,
             precedence: 1,
+            // arrears + surcharge months are re-derived authoritatively inside
+            // create()'s transaction; we only hand it this month's own heads.
+            // arrearFeeIds are still prepended so ordering stays arrears-first when
+            // create() folds them back in.
             orderedFeeIds: [...arrearFeeIds, ...feesForThisVoucher.map((f: any) => f.id)],
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
-            pre_computed_surcharge_groups: arrearsResult.surcharge_groups,
-            pre_computed_arrear_fee_ids: arrearFeeIds,
         }, undefined, createdBy, auditParentId, jobId);
 
         const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
