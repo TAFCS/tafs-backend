@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CheckInSource } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { isWeekendDate } from './student-calendar-day.util';
 
@@ -194,6 +195,35 @@ export class CalendarDayResolverService {
     );
   }
 
+  private async isTimetableDayWorking(employeeId: number, dayOfWeek: number, date: Date): Promise<boolean> {
+    const slotCount = await this.prisma.timetable_slots.count({
+      where: {
+        employee_id: employeeId,
+        day_of_week: dayOfWeek,
+        timetables: { is_active: true },
+      },
+    });
+    if (slotCount > 0) return true;
+
+    const rescheduleCount = await this.prisma.staff_lesson_reschedules.count({
+      where: {
+        employee_id: employeeId,
+        makeup_date: date,
+        status: { in: ['SCHEDULED', 'COMPLETED'] },
+      },
+    });
+    if (rescheduleCount > 0) return true;
+
+    const override = await this.prisma.employee_shift_overrides.findUnique({
+      where: { employee_id_date: { employee_id: employeeId, date } },
+    });
+    if (override && (override.override_start_time != null || override.override_end_time != null)) {
+      return true;
+    }
+
+    return false;
+  }
+
   private async resolveStaffDayUncached(employeeId: number, campusId: number, date: Date): Promise<ResolvedCalendarDay> {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
@@ -203,13 +233,16 @@ export class CalendarDayResolverService {
         staff_categories: { select: { code: true } },
         days_per_week: true,
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+        check_in_source: true,
       },
     });
 
     const dayOfWeek = date.getUTCDay();
     let scheduleWorking: boolean;
 
-    if (employee?.employee_work_schedules.length) {
+    if (employee?.check_in_source === CheckInSource.TIMETABLE) {
+      scheduleWorking = await this.isTimetableDayWorking(employeeId, dayOfWeek, date);
+    } else if (employee?.employee_work_schedules.length) {
       const row = employee.employee_work_schedules.find((s) => s.day_of_week === dayOfWeek);
       scheduleWorking = row?.is_working ?? false;
     } else {
@@ -249,7 +282,12 @@ export class CalendarDayResolverService {
       resolved = {
         isWorkingDay: false,
         dayType: isWeekendDate(date) ? 'WEEKEND' : 'HOLIDAY',
-        description: isWeekendDate(date) ? 'Weekend' : 'Scheduled day off',
+        description:
+          employee?.check_in_source === CheckInSource.TIMETABLE
+            ? 'Scheduled day off (No timetable slots)'
+            : isWeekendDate(date)
+              ? 'Weekend'
+              : 'Scheduled day off',
         source: 'SCHEDULE',
       };
     } else {
@@ -344,6 +382,49 @@ export class CalendarDayResolverService {
     return map;
   }
 
+  async loadStaffTimetableActiveDays(employeeId: number): Promise<Set<number>> {
+    const slots = await this.prisma.timetable_slots.findMany({
+      where: {
+        employee_id: employeeId,
+        timetables: { is_active: true },
+      },
+      select: { day_of_week: true },
+    });
+    return new Set(slots.map((s) => s.day_of_week));
+  }
+
+  async loadStaffMakeupRescheduleDates(
+    employeeId: number,
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<Set<string>> {
+    const rows = await this.prisma.staff_lesson_reschedules.findMany({
+      where: {
+        employee_id: employeeId,
+        makeup_date: { gte: dateFrom, lte: dateTo },
+        status: { in: ['SCHEDULED', 'COMPLETED'] },
+      },
+      select: { makeup_date: true },
+    });
+    return new Set(rows.map((r) => r.makeup_date.toISOString().slice(0, 10)));
+  }
+
+  async loadStaffShiftOverrideDates(
+    employeeId: number,
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<Set<string>> {
+    const rows = await this.prisma.employee_shift_overrides.findMany({
+      where: {
+        employee_id: employeeId,
+        date: { gte: dateFrom, lte: dateTo },
+        OR: [{ override_start_time: { not: null } }, { override_end_time: { not: null } }],
+      },
+      select: { date: true },
+    });
+    return new Set(rows.map((r) => r.date.toISOString().slice(0, 10)));
+  }
+
   /**
    * Batched equivalent of resolveStaffDay() for running it over many
    * employees x many days (e.g. payroll generation) without one DB round
@@ -361,11 +442,25 @@ export class CalendarDayResolverService {
     daysPerWeek: number | null,
     workSchedules: { day_of_week: number; is_working: boolean }[],
     mandatorySaturdayDates?: Set<string>,
+    checkInSource?: string | null,
+    timetableActiveDays?: Set<number>,
+    makeupRescheduleDates?: Set<string>,
+    shiftOverrideDates?: Set<string>,
   ): ResolvedCalendarDay {
     const dayOfWeek = date.getUTCDay();
-    const scheduleWorking = workSchedules.length
-      ? workSchedules.find((s) => s.day_of_week === dayOfWeek)?.is_working ?? false
-      : this.isWorkingDayFromSchedule(dayOfWeek, daysPerWeek ?? 5);
+    const dateKey = date.toISOString().slice(0, 10);
+    let scheduleWorking: boolean;
+
+    if (checkInSource === CheckInSource.TIMETABLE) {
+      const hasSlot = timetableActiveDays?.has(dayOfWeek) ?? false;
+      const hasMakeup = makeupRescheduleDates?.has(dateKey) ?? false;
+      const hasOverride = shiftOverrideDates?.has(dateKey) ?? false;
+      scheduleWorking = hasSlot || hasMakeup || hasOverride;
+    } else if (workSchedules.length) {
+      scheduleWorking = workSchedules.find((s) => s.day_of_week === dayOfWeek)?.is_working ?? false;
+    } else {
+      scheduleWorking = this.isWorkingDayFromSchedule(dayOfWeek, daysPerWeek ?? 5);
+    }
 
     const matching = rows.filter(
       (row) =>
@@ -380,7 +475,12 @@ export class CalendarDayResolverService {
       resolved = {
         isWorkingDay: false,
         dayType: isWeekendDate(date) ? 'WEEKEND' : 'HOLIDAY',
-        description: isWeekendDate(date) ? 'Weekend' : 'Scheduled day off',
+        description:
+          checkInSource === CheckInSource.TIMETABLE
+            ? 'Scheduled day off (No timetable slots)'
+            : isWeekendDate(date)
+              ? 'Weekend'
+              : 'Scheduled day off',
         source: 'SCHEDULE',
       };
     } else {

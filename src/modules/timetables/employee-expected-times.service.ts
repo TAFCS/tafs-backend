@@ -105,7 +105,13 @@ export class EmployeeExpectedTimesService {
           source: 'TIMETABLE',
         };
       }
-      // No slots that weekday → fall through to FIXED/policy chain
+      // No slots that weekday → return NONE
+      return {
+        expectedCheckIn: null,
+        expectedCheckOut: null,
+        graceMinutes: 0,
+        source: 'NONE',
+      };
     }
 
     return this.resolveFixedOrPolicy(employee, effectiveCampusId, date);

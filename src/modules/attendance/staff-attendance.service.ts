@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { attendance_staff_daily, AttendanceSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
+import { attendance_staff_daily, AttendanceSource, CheckInSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -496,6 +496,7 @@ export class StaffAttendanceService {
           staff_categories: { select: { code: true } },
           days_per_week: true,
           employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+          check_in_source: true,
         },
       }),
       campusId
@@ -505,6 +506,15 @@ export class StaffAttendanceService {
         ? this.calendarResolver.loadMandatorySaturdayDates(employee.id, periodStart, periodEnd)
         : Promise.resolve(new Set<string>()),
     ]);
+
+    const [timetableActiveDays, makeupRescheduleDates, shiftOverrideDates] =
+      scheduleCtx?.check_in_source === CheckInSource.TIMETABLE
+        ? await Promise.all([
+            this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
+            this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
+            this.calendarResolver.loadStaffShiftOverrideDates(employee.id, periodStart, periodEnd),
+          ])
+        : [undefined, undefined, undefined];
 
     const scansByDate = new Map<string, typeof scans>();
     for (const scan of scans) {
@@ -554,6 +564,10 @@ export class StaffAttendanceService {
             scheduleCtx?.days_per_week ?? null,
             scheduleCtx?.employee_work_schedules ?? [],
             mandatorySaturdayDates,
+            scheduleCtx?.check_in_source,
+            timetableActiveDays,
+            makeupRescheduleDates,
+            shiftOverrideDates,
           )
         : { isWorkingDay: true, dayType: null, description: null, source: 'DEFAULT' as const };
 

@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import { AttendanceSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, CheckInSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
@@ -36,6 +36,7 @@ interface EmployeeLineInput {
   staff_categories: { code: string } | null;
   days_per_week: number | null;
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
+  check_in_source?: CheckInSource | null;
 }
 
 type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'SICK_LEAVE' | 'CASUAL_LEAVE' | 'ANNUAL_LEAVE' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
@@ -158,6 +159,7 @@ export class PayrollService {
     staff_categories: { select: { code: true } },
     days_per_week: true,
     employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+    check_in_source: true,
   } as const;
 
   constructor(
@@ -341,6 +343,15 @@ export class PayrollService {
       });
     }
 
+    const [timetableActiveDays, makeupRescheduleDates, shiftOverrideDates] =
+      employee.check_in_source === CheckInSource.TIMETABLE
+        ? await Promise.all([
+            this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
+            this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
+            this.calendarResolver.loadStaffShiftOverrideDates(employee.id, periodStart, periodEnd),
+          ])
+        : [undefined, undefined, undefined];
+
     // Walk every calendar day in the period once and classify it — this array
     // is the single source of truth; every aggregate below is derived from it
     // so the per-day detail shown in the UI can never drift from the totals.
@@ -367,6 +378,10 @@ export class PayrollService {
         employee.days_per_week,
         employee.employee_work_schedules,
         mandatorySaturdayDates,
+        employee.check_in_source,
+        timetableActiveDays,
+        makeupRescheduleDates,
+        shiftOverrideDates,
       );
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
@@ -1355,6 +1370,7 @@ export class PayrollService {
           staff_categories: { select: { code: true } },
           days_per_week: true,
           employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+          check_in_source: true,
         },
       }),
     ]);
