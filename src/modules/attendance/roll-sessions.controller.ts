@@ -70,9 +70,12 @@ export class RollSessionsController {
     @Body() dto: UpdateRollSessionDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    // Correcting a submitted roll call is treated as part of taking roll
+    // call, not a privileged override — anyone who can mark it can fix it.
     const canEditLocked =
       user.role === 'SUPER_ADMIN' ||
-      (user.permissions ?? []).includes('attendance.student.edit_locked');
+      (user.permissions ?? []).includes('attendance.student.edit_locked') ||
+      (user.permissions ?? []).includes('attendance.student.rollcall.mark');
     const data = await this.rollSessionsService.update(id, dto, user, canEditLocked);
     return createApiResponse(data, HttpStatus.OK, 'Roll session updated successfully');
   }

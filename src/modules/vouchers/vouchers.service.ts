@@ -391,24 +391,21 @@ export class VouchersService {
             let finalOrderedFeeIds = [...(dto.orderedFeeIds ?? [])];
             let surchargeGroups: Array<{ date: Date; target_month: number; academic_year: string }> = [];
 
-            // Server-authoritative arrears: never trust the client payload to decide
-            // which older heads ride on this voucher. Re-derive every unpaid
-            // non-discount head dated strictly before this voucher's fee_date and
-            // fold them in. Without this, a thin client payload silently orphans an
-            // arrear when its prior voucher is voided by supersession (step 6).
+            // Server-authoritative arrears — the ONLY source of truth for which older
+            // heads ride on this voucher and how many late-payment surcharge months
+            // apply. Always re-derived here, inside the transaction, from live data.
+            // Callers (single voucher issuance AND the bulk pipeline) never get to
+            // pre-supply the arrear ids or the surcharge groups: a pre-computed
+            // payload went stale the moment a sibling voucher in the same bulk run
+            // committed, which stacked a duplicate surcharge on every later month and
+            // orphaned arrears when a prior voucher was voided by supersession (step 6).
             let serverArrearFeeIds: number[] = [];
             if (feeDate) {
-                if (dto.pre_computed_arrear_fee_ids) {
-                    serverArrearFeeIds = dto.pre_computed_arrear_fee_ids;
-                    surchargeGroups = dto.pre_computed_surcharge_groups
-                        ?? (await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx)).surcharge_groups;
-                } else {
-                    const arrearsInfo = await this.computeArrears(dto.student_id, feeDate, dto.waive_surcharge, tx);
-                    serverArrearFeeIds = arrearsInfo.arrear_fee_ids;
-                    surchargeGroups = dto.pre_computed_surcharge_groups ?? arrearsInfo.surcharge_groups;
-                }
-            } else if (dto.pre_computed_surcharge_groups) {
-                surchargeGroups = dto.pre_computed_surcharge_groups;
+                const arrearsInfo = await this.computeArrears(
+                    dto.student_id, feeDate, dto.waive_surcharge, tx,
+                );
+                serverArrearFeeIds = arrearsInfo.arrear_fee_ids;
+                surchargeGroups = arrearsInfo.surcharge_groups;
             }
 
             for (const fid of serverArrearFeeIds) {
