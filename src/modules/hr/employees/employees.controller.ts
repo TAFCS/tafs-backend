@@ -137,6 +137,13 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employee username changed successfully');
   }
 
+  @Get(':id/progression')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async getProgression(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.employeesService.getProgressionPeriods(id);
+    return createApiResponse(data, HttpStatus.OK, 'Employee progression retrieved successfully');
+  }
+
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   async findOne(@Param('id', ParseIntPipe) id: number) {

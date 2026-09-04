@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
 import { CheckInSource, EmployeeStatus, Prisma, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -313,7 +314,42 @@ export class EmployeesService {
     private readonly auditLogs: AuditLogsService,
     private readonly caslAbilityFactory: CaslAbilityFactory,
     private readonly accessService: AccessService,
+    private readonly employeeProgression: EmployeeProgressionService,
   ) {}
+
+  /** Snapshot the tracked employment state of an employee_profiles row (with relations loaded). */
+  private progressionSnapshotFrom(row: any): EmployeeProgressionSnapshot {
+    return {
+      campusId: row.campus_id ?? null,
+      segmentId: row.segment_id ?? null,
+      departmentId: row.department_id ?? null,
+      staffCategoryId: row.staff_category_id ?? null,
+      reportingManagerId: row.reporting_manager_id ?? null,
+      jobTitle: row.job_title ?? null,
+      employmentType: row.employment_type ?? null,
+      employmentStatus: row.employment_status,
+      monthlyPay: row.monthly_pay ?? null,
+      payrollEnabled: row.payroll_enabled ?? true,
+      classSections: (row.employee_class_section_assignments ?? []).map((a: any) => ({
+        class_id: a.class_id,
+        section_id: a.section_id ?? null,
+      })),
+    };
+  }
+
+  /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
+  async getProgressionPeriods(id: number) {
+    return this.prisma.employee_progression_periods.findMany({
+      where: { employee_id: id },
+      orderBy: { valid_from: 'asc' },
+      include: {
+        campuses: { select: { campus_name: true } },
+        segments: { select: { name: true, code: true } },
+        departments: { select: { name: true } },
+        staff_categories: { select: { name: true, code: true } },
+      },
+    });
+  }
 
   async exportMasterExcel(): Promise<Buffer> {
     const employees = await this.prisma.employee_profiles.findMany({
@@ -490,7 +526,7 @@ export class EmployeesService {
           ? (await tx.users.create({ data: account.data, select: { id: true } })).id
           : rest.user_id || null;
 
-        return tx.employee_profiles.create({
+        const created = await tx.employee_profiles.create({
           data: {
             user_id: userId,
             cnic: rest.cnic || null,
@@ -548,6 +584,16 @@ export class EmployeesService {
           },
           include: includeRelations,
         });
+
+        await this.employeeProgression.recordProgressionChange(tx, {
+          employeeId: created.id,
+          ...this.progressionSnapshotFrom(created),
+          changeType: 'ONBOARDED',
+          changedBy: changedBy ?? null,
+          at: created.join_date ?? undefined,
+        });
+
+        return created;
       });
     } catch (err) {
       const conflict = this.conflictFromUniqueViolation(err);
@@ -741,7 +787,7 @@ export class EmployeesService {
           ? rest.user_id
           : undefined;
 
-      return tx.employee_profiles.update({
+      const updated = await tx.employee_profiles.update({
         where: { id },
         data: {
           user_id: userId,
@@ -796,6 +842,21 @@ export class EmployeesService {
         },
         include: includeRelations
       });
+
+      const priorSnapshot = this.progressionSnapshotFrom(existing);
+      const nextSnapshot = this.progressionSnapshotFrom(updated);
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId: id,
+        ...nextSnapshot,
+        changeType: this.employeeProgression.resolveChangeType({
+          prior: priorSnapshot,
+          next: nextSnapshot,
+          defaultType: 'REASSIGNED',
+        }),
+        changedBy: changedBy ?? null,
+      });
+
+      return updated;
       });
     } catch (err) {
       const conflict = this.conflictFromUniqueViolation(err);
@@ -1081,7 +1142,7 @@ export class EmployeesService {
         });
       }
 
-      return tx.employee_profiles.update({
+      const row = await tx.employee_profiles.update({
         where: { id },
         data: {
           employment_status: nextStatus,
@@ -1089,6 +1150,15 @@ export class EmployeesService {
         },
         include: includeRelations,
       });
+
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId: id,
+        ...this.progressionSnapshotFrom(row),
+        changeType: 'STATUS_CHANGED',
+        changedBy: caller.username || caller.sub || 'system',
+      });
+
+      return row;
     });
 
     this.auditLogs.log({

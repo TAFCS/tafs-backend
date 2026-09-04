@@ -120,6 +120,7 @@ model campuses {
   class_fee_schedule            class_fee_schedule[]
   class_timetable_periods       class_timetable_periods[]
   employee_profiles             employee_profiles[]
+  employee_progression_periods  employee_progression_periods[]
   hr_policy_sets                hr_policy_sets[]
   payroll_runs                  payroll_runs[]
   staff_lesson_reschedules      staff_lesson_reschedules[]
@@ -175,12 +176,13 @@ model classes {
 }
 
 model segments {
-  id                Int                 @id @default(autoincrement())
-  code              String              @unique @db.VarChar(30)
-  name              String              @db.VarChar(50)
-  display_order     Int                 @default(0)
-  classes           classes[]
-  employee_profiles employee_profiles[]
+  id                           Int                            @id @default(autoincrement())
+  code                         String                         @unique @db.VarChar(30)
+  name                         String                         @db.VarChar(50)
+  display_order                Int                            @default(0)
+  classes                      classes[]
+  employee_profiles            employee_profiles[]
+  employee_progression_periods employee_progression_periods[]
 }
 
 model deposit_allocations {
@@ -1146,12 +1148,13 @@ model complaints {
 }
 
 model departments {
-  id                     Int                      @id @default(autoincrement())
-  name                   String                   @db.VarChar(100)
-  description            String?                  @db.VarChar(255)
-  academic_calendar_days academic_calendar_days[]
-  employee_profiles      employee_profiles[]
-  staff_categories       staff_categories[]
+  id                           Int                            @id @default(autoincrement())
+  name                         String                         @db.VarChar(100)
+  description                  String?                        @db.VarChar(255)
+  academic_calendar_days       academic_calendar_days[]
+  employee_profiles            employee_profiles[]
+  employee_progression_periods employee_progression_periods[]
+  staff_categories             staff_categories[]
 }
 
 model staff_categories {
@@ -1163,6 +1166,7 @@ model staff_categories {
   employee_code_dep      String?                  @db.VarChar(2)
   academic_calendar_days academic_calendar_days[]
   employee_profiles      employee_profiles[]
+  employee_progression_periods employee_progression_periods[]
   departments            departments              @relation(fields: [department_id], references: [id])
 
   @@unique([department_id, code])
@@ -1225,6 +1229,7 @@ model employee_profiles {
   employee_class_section_assignments employee_class_section_assignments[]
   employee_loans                     employee_loans[]
   employee_notice_posts              employee_notice_posts[]
+  employee_progression_periods       employee_progression_periods[]
   campuses                           campuses?                            @relation(fields: [campus_id], references: [id])
   departments                        departments?                         @relation(fields: [department_id], references: [id])
   reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
@@ -1259,6 +1264,35 @@ model employee_class_section_assignments {
   sections          sections          @relation(fields: [section_id], references: [id], onDelete: Cascade)
 
   @@unique([employee_id, class_id, section_id], map: "employee_class_section_assignments_employee_id_class_id_se_key")
+}
+
+model employee_progression_periods {
+  id                  Int       @id @default(autoincrement())
+  employee_id         Int
+  campus_id           Int?
+  segment_id          Int?
+  department_id       Int?
+  staff_category_id   Int?
+  reporting_manager_id Int?
+  job_title           String?   @db.VarChar(100)
+  employment_type     String?   @db.VarChar(50)
+  employment_status   String    @db.VarChar(30)
+  monthly_pay         Decimal?  @db.Decimal(12, 2)
+  payroll_enabled     Boolean   @default(true)
+  class_sections      Json?
+  change_type         String    @db.VarChar(30)
+  changed_by          String?   @db.VarChar(255)
+  notes               String?   @db.VarChar(255)
+  valid_from          DateTime  @default(now()) @db.Timestamp(6)
+  valid_to            DateTime? @db.Timestamp(6)
+
+  employee_profiles employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  campuses          campuses?         @relation(fields: [campus_id], references: [id])
+  segments          segments?         @relation(fields: [segment_id], references: [id])
+  departments       departments?      @relation(fields: [department_id], references: [id])
+  staff_categories  staff_categories? @relation(fields: [staff_category_id], references: [id])
+
+  @@index([employee_id, valid_from])
 }
 
 model academic_calendar_days {

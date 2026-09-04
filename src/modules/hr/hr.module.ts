@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { EmployeesController } from './employees/employees.controller';
 import { EmployeesSelfController } from './employees/employees-self.controller';
 import { EmployeesService } from './employees/employees.service';
+import { EmployeeProgressionService } from './employees/employee-progression.service';
 import { DepartmentsController } from './departments/departments.controller';
 import { DepartmentsService } from './departments/departments.service';
 import { SegmentsController } from './segments/segments.controller';
@@ -74,6 +75,7 @@ import { AccessModule } from '../access/access.module';
   ],
   providers: [
     EmployeesService,
+    EmployeeProgressionService,
     DepartmentsService,
     SegmentsService,
     PoliciesService,
