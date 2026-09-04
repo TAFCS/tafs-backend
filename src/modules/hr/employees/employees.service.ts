@@ -16,6 +16,8 @@ import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credent
 import { CaslAbilityFactory } from '../../auth/casl/casl-ability.factory';
 import { Action } from '../../auth/casl/actions';
 import { v4 as uuidv4 } from 'uuid';
+import { AccessService } from '../../access/access.service';
+import { TileGrantDto } from '../../access/dto/access.dto';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -139,6 +141,9 @@ export class CreateEmployeeDto {
   @IsOptional() @IsNumber()
   monthly_pay?: number;
 
+  @IsOptional() @IsBoolean()
+  payroll_enabled?: boolean;
+
   @IsOptional() @IsInt()
   campus_id?: number;
 
@@ -189,6 +194,17 @@ export class CreateEmployeeDto {
   @ValidateNested({ each: true })
   @Type(() => ClassSectionAssignmentDto)
   class_section_assignments?: ClassSectionAssignmentDto[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  packIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TileGrantDto)
+  tileGrants?: TileGrantDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
@@ -296,6 +312,7 @@ export class EmployeesService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly caslAbilityFactory: CaslAbilityFactory,
+    private readonly accessService: AccessService,
   ) {}
 
   async exportMasterExcel(): Promise<Buffer> {
@@ -423,9 +440,19 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    const { class_section_assignments, employment_status, portal_account, ...rest } = dto;
+    const {
+      class_section_assignments,
+      employment_status,
+      portal_account,
+      packIds,
+      tileGrants,
+      payroll_enabled,
+      ...rest
+    } = dto;
 
-    const effectiveCheckInSource = rest.check_in_source ?? CheckInSource.FIXED;
+    const timesOmitted = !rest.reporting_time || !rest.leaving_time;
+    const effectiveCheckInSource =
+      rest.check_in_source ?? (timesOmitted ? CheckInSource.TIMETABLE : CheckInSource.FIXED);
     if (effectiveCheckInSource === CheckInSource.FIXED && (!rest.reporting_time || !rest.leaving_time)) {
       throw new BadRequestException('Expected check-in and check-out times are required when payroll uses fixed times.');
     }
@@ -491,9 +518,10 @@ export class EmployeesService {
             notes: rest.notes || null,
             reporting_time: toTime(rest.reporting_time),
             leaving_time: toTime(rest.leaving_time),
-            check_in_source: rest.check_in_source ?? CheckInSource.FIXED,
+            check_in_source: effectiveCheckInSource,
             late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
             monthly_pay: rest.monthly_pay ?? null,
+            payroll_enabled: payroll_enabled ?? rest.monthly_pay != null,
             campus_id: rest.campus_id || null,
             days_per_week: rest.days_per_week ?? null,
             photo_url: rest.photo_url || null,
@@ -549,6 +577,19 @@ export class EmployeesService {
       new_value: record.full_name ?? record.employee_code ?? undefined,
       changed_by: changedBy ?? 'system',
     });
+
+    if (record.user_id && ((packIds && packIds.length > 0) || (tileGrants && tileGrants.length > 0))) {
+      if (!caller?.sub) {
+        throw new BadRequestException('Cannot assign access packs without an authenticated actor');
+      }
+      await this.accessService.setUserAccess(
+        record.user_id,
+        { packIds: packIds ?? [], tileGrants: tileGrants ?? [] },
+        caller.sub,
+        caller.username || changedBy,
+      );
+    }
+
     return record;
   }
 
@@ -618,13 +659,24 @@ export class EmployeesService {
     };
   }
 
-  async update(id: number, dto: UpdateEmployeeDto, changedBy?: string) {
+  async update(id: number, dto: UpdateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
     const existing = await this.findOne(id);
 
-    const { class_section_assignments, employment_status: _ignoredStatus, ...rest } = dto;
+    const {
+      class_section_assignments,
+      employment_status: _ignoredStatus,
+      packIds: _packIds,
+      tileGrants: _tileGrants,
+      portal_account,
+      ...rest
+    } = dto;
     if (_ignoredStatus !== undefined) {
       throw new BadRequestException('Use PATCH /hr/employees/:id/status to change employment status');
     }
+    if (portal_account && existing.user_id) {
+      throw new BadRequestException('This employee already has a portal account.');
+    }
+    const account = await this.preparePortalAccount(portal_account, rest, caller);
 
     const nextCheckInSource = rest.check_in_source !== undefined ? rest.check_in_source : (existing as any).check_in_source;
     if (nextCheckInSource === CheckInSource.FIXED) {
@@ -667,7 +719,9 @@ export class EmployeesService {
       rest.staff_category_id !== undefined ? rest.staff_category_id : existing.staff_category_id;
     await this.assertCategoryMatchesDepartment(nextDepartmentId, nextCategoryId);
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
       if (class_section_assignments !== undefined) {
         await tx.employee_class_section_assignments.deleteMany({ where: { employee_id: id } });
         if (class_section_assignments.length) {
@@ -681,10 +735,16 @@ export class EmployeesService {
         }
       }
 
+      const userId = account
+        ? (await tx.users.create({ data: account.data, select: { id: true } })).id
+        : rest.user_id !== undefined
+          ? rest.user_id
+          : undefined;
+
       return tx.employee_profiles.update({
         where: { id },
         data: {
-          user_id: rest.user_id !== undefined ? rest.user_id : undefined,
+          user_id: userId,
           cnic: rest.cnic !== undefined ? rest.cnic : undefined,
           join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
           employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
@@ -716,6 +776,7 @@ export class EmployeesService {
           check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
+          payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
           campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
           days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
           photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
@@ -735,7 +796,27 @@ export class EmployeesService {
         },
         include: includeRelations
       });
-    });
+      });
+    } catch (err) {
+      const conflict = this.conflictFromUniqueViolation(err);
+      if (conflict) throw conflict;
+      throw err;
+    }
+
+    if (account) {
+      this.auditLogs.log({
+        entity_type: 'USER',
+        entity_id: result.user_id,
+        action: 'CREATED',
+        section: 'system',
+        new_value: `${account.data.username} (${account.data.role})`,
+        changed_by: caller?.sub || changedBy || 'system',
+        note: `Created user ${account.data.username} (#${result.user_id}) with role ${account.data.role}` +
+          (account.data.campus_id ? `, campus #${account.data.campus_id}` : '') +
+          (account.data.full_name ? `, name "${account.data.full_name}"` : '') +
+          ` and linked it to employee #${id}.`,
+      });
+    }
 
     const trackedFields: Array<{ key: keyof typeof rest | 'employee_code_dep' | 'employee_code_number'; label: string; oldKey?: string }> = [
       { key: 'full_name', label: 'Full Name' },
@@ -751,6 +832,7 @@ export class EmployeesService {
       { key: 'secondary_phone', label: 'Secondary Phone' },
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
+      { key: 'payroll_enabled', label: 'On Payroll' },
     ];
 
     const changes: string[] = [];

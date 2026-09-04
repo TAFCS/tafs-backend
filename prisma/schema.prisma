@@ -809,12 +809,13 @@ model user_refresh_tokens {
 }
 
 model permissions {
-  id               Int                @id @default(autoincrement())
-  key              String             @unique @db.VarChar(100)
-  module           String             @db.VarChar(50)
-  description      String             @db.VarChar(255)
-  role_permissions role_permissions[]
-  user_permissions user_permissions[]
+  id                       Int                        @id @default(autoincrement())
+  key                      String                     @unique @db.VarChar(100)
+  module                   String                     @db.VarChar(50)
+  description              String                     @db.VarChar(255)
+  access_tile_capabilities access_tile_capabilities[]
+  role_permissions         role_permissions[]
+  user_permissions         user_permissions[]
 }
 
 model role_permissions {
@@ -882,9 +883,13 @@ model users {
   ticket_events_to                                                         ticket_events[]              @relation("TicketEventToUser")
   ticket_messages_reviewed                                                 ticket_messages[]            @relation("TicketMessageReviewer")
   ticket_messages_sent                                                     ticket_messages[]            @relation("TicketMessageSenderUser")
+  user_access_packs                                                        user_access_packs[]          @relation("user_access_packs_user_idTousers")
+  assigned_access_packs                                                    user_access_packs[]          @relation("user_access_packs_assigned_byTousers")
   granted_overrides                                                        user_permissions[]           @relation("granted_by_rel")
   user_permissions                                                         user_permissions[]           @relation("user_permissions_link")
   user_refresh_tokens                                                      user_refresh_tokens[]
+  user_tile_grants                                                         user_tile_grants[]           @relation("user_tile_grants_user_idTousers")
+  granted_tile_grants                                                      user_tile_grants[]           @relation("user_tile_grants_granted_byTousers")
   campuses                                                                 campuses?                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -1211,6 +1216,7 @@ model employee_profiles {
   employment_status                  EmployeeStatus                       @default(ACTIVE)
   segment_id                         Int?
   secondary_phone                    String?                              @db.VarChar(60)
+  payroll_enabled                    Boolean                              @default(true)
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_roll_sessions           attendance_roll_sessions[]
@@ -1687,12 +1693,12 @@ model staff_lesson_reschedules {
   source_date              DateTime                     @db.Date
   makeup_date              DateTime                     @db.Date
   makeup_timetable_slot_id Int?
-  makeup_period            Int?
   status                   ClassSessionRescheduleStatus @default(SCHEDULED)
   created_by_id            String?
   notes                    String?                      @db.VarChar(500)
   created_at               DateTime                     @default(now()) @db.Timestamp(6)
   updated_at               DateTime                     @updatedAt @db.Timestamp(6)
+  makeup_period            Int?
   campuses                 campuses                     @relation(fields: [campus_id], references: [id], onDelete: NoAction)
   classes                  classes                      @relation(fields: [class_id], references: [id], onDelete: NoAction)
   users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
@@ -2166,6 +2172,78 @@ model employee_loan_transactions {
 
   @@index([payroll_run_line_id])
   @@index([loan_id, created_at])
+}
+
+model access_pack_tiles {
+  pack_id String
+  tile_id String       @db.VarChar(80)
+  pack    access_packs @relation(fields: [pack_id], references: [id], onDelete: Cascade)
+  tile    access_tiles @relation(fields: [tile_id], references: [id], onDelete: Cascade)
+
+  @@id([pack_id, tile_id])
+  @@index([tile_id])
+}
+
+model access_packs {
+  id          String              @id @default(uuid())
+  name        String              @unique @db.VarChar(100)
+  description String?             @db.VarChar(255)
+  is_system   Boolean             @default(false)
+  created_at  DateTime            @default(now()) @db.Timestamp(6)
+  tiles       access_pack_tiles[]
+  user_packs  user_access_packs[]
+}
+
+model access_tile_capabilities {
+  tile_id       String       @db.VarChar(80)
+  permission_id Int
+  permission    permissions  @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+  tile          access_tiles @relation(fields: [tile_id], references: [id], onDelete: Cascade)
+
+  @@id([tile_id, permission_id])
+  @@index([permission_id])
+}
+
+model access_tiles {
+  id           String                     @id @db.VarChar(80)
+  module       String                     @db.VarChar(50)
+  label        String                     @db.VarChar(100)
+  description  String                     @db.VarChar(255)
+  href         String                     @db.VarChar(255)
+  group        String?                    @db.VarChar(50)
+  sort_order   Int                        @default(0)
+  is_active    Boolean                    @default(true)
+  pack_tiles   access_pack_tiles[]
+  capabilities access_tile_capabilities[]
+  user_grants  user_tile_grants[]
+}
+
+model user_access_packs {
+  user_id          String
+  pack_id          String
+  assigned_by      String
+  assigned_at      DateTime     @default(now()) @db.Timestamp(6)
+  assigned_by_user users        @relation("user_access_packs_assigned_byTousers", fields: [assigned_by], references: [id])
+  pack             access_packs @relation(fields: [pack_id], references: [id], onDelete: Cascade)
+  user             users        @relation("user_access_packs_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, pack_id])
+  @@index([pack_id])
+}
+
+model user_tile_grants {
+  user_id         String
+  tile_id         String       @db.VarChar(80)
+  allow           Boolean
+  granted_by      String
+  granted_at      DateTime     @default(now()) @db.Timestamp(6)
+  note            String?      @db.VarChar(255)
+  granted_by_user users        @relation("user_tile_grants_granted_byTousers", fields: [granted_by], references: [id])
+  tile            access_tiles @relation(fields: [tile_id], references: [id], onDelete: Cascade)
+  user            users        @relation("user_tile_grants_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, tile_id])
+  @@index([tile_id])
 }
 
 enum BulkJobStatus {

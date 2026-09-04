@@ -154,9 +154,9 @@ export class EmployeesController {
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeDto, @CurrentUser() user: any) {
+  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeDto, @CurrentUser() user: IJwtStaffPayload) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.update(id, dto, changedBy);
+    const data = await this.employeesService.update(id, dto, changedBy, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee updated successfully');
   }
 

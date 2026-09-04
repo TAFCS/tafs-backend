@@ -40,6 +40,7 @@ import { ShiftOverridesModule } from './shift-overrides/shift-overrides.module';
 import { TimetablesModule } from '../timetables/timetables.module';
 import { StorageModule } from '../../common/storage/storage.module';
 import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-notice-board.module';
+import { AccessModule } from '../access/access.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
     TimetablesModule,
     StorageModule,
     EmployeeNoticeBoardModule,
+    AccessModule,
   ],
   controllers: [
     EmployeesSelfController,

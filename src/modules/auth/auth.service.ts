@@ -50,45 +50,7 @@ export class AuthService {
     const isMatch = await bcrypt.compare(dto.password, user.password_hash);
     if (!isMatch) throw new UnauthorizedException('Invalid credentials');
 
-    const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
-
-    const allowedClassIds = user.allowed_class_ids ?? [];
-
-    const employeeProfile = await this.prisma.employee_profiles.findUnique({
-      where: { user_id: user.id },
-      select: { id: true },
-    });
-
-    const payload: IJwtStaffPayload = {
-      sub: user.id,
-      username: user.username,
-      fullName: user.full_name,
-      role: user.role,
-      campusId: user.campus_id,
-      allowedClassIds,
-      userType: 'STAFF',
-      permissions,
-    };
-
-    const { accessToken, refreshToken } =
-      await this.generateTokenPair(payload);
-    await this.storeStaffRefreshToken(user.id, refreshToken);
-
-    return {
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        role: user.role,
-        campusId: user.campus_id,
-        campusName: user.campuses?.campus_name ?? null,
-        allowedClassIds,
-        permissions,
-        hasEmployeeProfile: !!employeeProfile,
-      },
-    };
+    return this.issueStaffSession(user);
   }
 
   /**
@@ -119,13 +81,26 @@ export class AuthService {
       throw new UnauthorizedException('Account is inactive');
     }
 
-    const permissions = await this.permissionsService.getEffectivePermissions(user.id, user.role);
+    return this.issueStaffSession(user);
+  }
+
+  private async issueStaffSession(user: {
+    id: string;
+    username: string;
+    full_name: string;
+    role: IJwtStaffPayload['role'];
+    campus_id: number | null;
+    allowed_class_ids: number[] | null;
+    campuses?: { campus_name: string } | null;
+  }) {
+    const { capabilityKeys: permissions, tileIds: effectiveTileIds } =
+      await this.permissionsService.getEffectiveAccess(user.id, user.role);
 
     const allowedClassIds = user.allowed_class_ids ?? [];
 
     const employeeProfile = await this.prisma.employee_profiles.findUnique({
       where: { user_id: user.id },
-      select: { id: true },
+      select: { id: true, payroll_enabled: true },
     });
 
     const payload: IJwtStaffPayload = {
@@ -155,6 +130,8 @@ export class AuthService {
         campusName: user.campuses?.campus_name ?? null,
         allowedClassIds,
         permissions,
+        effectiveTileIds,
+        payrollEnabled: employeeProfile?.payroll_enabled ?? true,
         hasEmployeeProfile: !!employeeProfile,
       },
     };

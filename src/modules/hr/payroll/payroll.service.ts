@@ -1178,6 +1178,7 @@ export class PayrollService {
           where: {
             campus_id: dto.campus_id,
             monthly_pay: { not: null },
+            payroll_enabled: true,
             employment_status: { in: ['ACTIVE', 'PERMANENT'] },
           },
           select: this.employeeLineSelect,

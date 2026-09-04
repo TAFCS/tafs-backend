@@ -53,6 +53,7 @@ const permissionsList = [
     { key: 'system.analytics.view', module: 'System Administration', description: 'View dashboard analytics' },
     { key: 'system.analytics.view_amounts', module: 'System Administration', description: 'View financial amounts in analytics' },
     { key: 'system.analytics.finalize', module: 'System Administration', description: 'Finalize financial report snapshots' },
+    { key: 'system.backups.view', module: 'System Administration', description: 'View database backups' },
 
     // HR & Attendance
     { key: 'hr.employees.view', module: 'HR & Attendance', description: 'View employee directory' },
@@ -80,6 +81,7 @@ const permissionsList = [
     { key: 'communication.send_announcements', module: 'Communication', description: 'Send announcements and notice board posts' },
     { key: 'communication.support_tickets.view', module: 'Communication', description: 'View and respond to support tickets' },
     { key: 'communication.support_tickets.approve', module: 'Communication', description: 'Approve staff ticket replies before delivery to parents' },
+    { key: 'communication.send_employee_announcements', module: 'Communication', description: 'Send announcements to staff by role' },
 ];
 
 async function main() {
@@ -100,8 +102,8 @@ async function main() {
 
     const roleMappings: Record<StaffRole, string[]> = {
         SUPER_ADMIN: allPerms.map(p => p.key),
-        CAMPUS_ADMIN: allPerms.map(p => p.key).filter(k => 
-            !['system.permissions.manage', 'system.users.edit'].includes(k)
+        CAMPUS_ADMIN: allPerms.map(p => p.key).filter(k =>
+            !['system.permissions.manage', 'system.users.edit', 'system.backups.view', 'communication.send_employee_announcements'].includes(k)
         ),
         PRINCIPAL: [
             'academic.campuses.view', 'academic.classes.view', 'academic.sections.view', 'academic.transfers.view',

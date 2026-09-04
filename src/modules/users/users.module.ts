@@ -3,9 +3,10 @@ import { UsersService } from './users.service';
 import { PermissionsService } from './permissions.service';
 import { UsersController } from './users.controller';
 import { AuthModule } from '../auth/auth.module';
+import { AccessModule } from '../access/access.module';
 
 @Module({
-  imports: [forwardRef(() => AuthModule)],
+  imports: [forwardRef(() => AuthModule), forwardRef(() => AccessModule)],
   controllers: [UsersController],
   providers: [UsersService, PermissionsService],
   exports: [UsersService, PermissionsService],
