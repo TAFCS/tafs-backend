@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TILES_MANIFEST } from './tiles.manifest';
 
+/**
+ * Projects TILES_MANIFEST into access_tiles so pack/grant FKs resolve.
+ * The live catalog is served from memory — this is not a read path.
+ */
 @Injectable()
 export class AccessSyncService implements OnModuleInit {
   private readonly logger = new Logger(AccessSyncService.name);
@@ -15,8 +19,6 @@ export class AccessSyncService implements OnModuleInit {
 
   async sync() {
     const started = Date.now();
-    this.logger.log(`Syncing ${TILES_MANIFEST.length} access tiles…`);
-
     const keys = [...new Set(TILES_MANIFEST.flatMap((t) => t.capabilities))];
     const permissions = await this.prisma.permissions.findMany({
       where: { key: { in: keys } },
@@ -72,7 +74,7 @@ export class AccessSyncService implements OnModuleInit {
     });
 
     this.logger.log(
-      `Synced ${TILES_MANIFEST.length} access tiles in ${Date.now() - started}ms` +
+      `Projected ${TILES_MANIFEST.length} access tiles for FKs in ${Date.now() - started}ms` +
         (deactivated.count ? `, deactivated ${deactivated.count} stale` : ''),
     );
   }

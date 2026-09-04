@@ -6,8 +6,13 @@ import {
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
+import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
+import {
+  catalogFromManifest,
+  MANIFEST_EFFECTIVE_TILES,
+  MANIFEST_TILE_IDS,
+} from './tiles.manifest';
 
 @Injectable()
 export class AccessService {
@@ -17,44 +22,12 @@ export class AccessService {
   ) {}
 
   async getCatalog() {
-    const tiles = await this.prisma.access_tiles.findMany({
-      where: { is_active: true },
-      orderBy: [{ module: 'asc' }, { sort_order: 'asc' }],
-      include: {
-        capabilities: {
-          include: { permission: { select: { key: true } } },
-        },
-      },
-    });
-
-    const byModule = new Map<string, typeof tiles>();
-    for (const tile of tiles) {
-      const list = byModule.get(tile.module) ?? [];
-      list.push(tile);
-      byModule.set(tile.module, list);
-    }
-
-    return {
-      modules: [...byModule.entries()].map(([id, moduleTiles]) => ({
-        id,
-        tiles: moduleTiles.map((t) => ({
-          id: t.id,
-          module: t.module,
-          label: t.label,
-          description: t.description,
-          href: t.href,
-          group: t.group,
-          sort_order: t.sort_order,
-          capabilities: t.capabilities.map((c) => c.permission.key),
-        })),
-      })),
-    };
+    return catalogFromManifest();
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
-    const [allPerms, activeTiles, rolePerms, packRows, grants, userPerms] = await Promise.all([
+    const [allPerms, rolePerms, packRows, grants, userPerms] = await Promise.all([
       this.prisma.permissions.findMany({ select: { key: true } }),
-      this.loadActiveTiles(),
       this.prisma.role_permissions.findMany({
         where: { role },
         include: { permissions: { select: { key: true } } },
@@ -76,7 +49,7 @@ export class AccessService {
     return computeEffectiveAccess({
       role,
       allPermissionKeys: allPerms.map((p) => p.key),
-      activeTiles,
+      activeTiles: MANIFEST_EFFECTIVE_TILES,
       roleKeys: rolePerms.map((rp) => rp.permissions.key),
       packTileIds: packRows.flatMap((row) => row.pack.tiles.map((t) => t.tile_id)),
       allowTileIds: grants.filter((g) => g.allow).map((g) => g.tile_id),
@@ -92,7 +65,7 @@ export class AccessService {
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
-    const [packs, assigned, grants, rolePerms, activeTiles] = await Promise.all([
+    const [packs, assigned, grants, rolePerms] = await Promise.all([
       this.prisma.access_packs.findMany({
         orderBy: { name: 'asc' },
         include: { tiles: { select: { tile_id: true } } },
@@ -109,11 +82,10 @@ export class AccessService {
         where: { role: user.role },
         include: { permissions: { select: { key: true } } },
       }),
-      this.loadActiveTiles(),
     ]);
 
     const roleKeySet = new Set(rolePerms.map((rp) => rp.permissions.key));
-    const roleTileIds = activeTiles
+    const roleTileIds = MANIFEST_EFFECTIVE_TILES
       .filter((t) => t.capabilities.every((c) => roleKeySet.has(c)))
       .map((t) => t.id);
 
@@ -160,15 +132,7 @@ export class AccessService {
         throw new BadRequestException('One or more access packs do not exist');
       }
     }
-    if (grantTileIds.length > 0) {
-      const found = await this.prisma.access_tiles.findMany({
-        where: { id: { in: grantTileIds } },
-        select: { id: true },
-      });
-      if (found.length !== grantTileIds.length) {
-        throw new BadRequestException('One or more tiles do not exist');
-      }
-    }
+    await this.assertTilesExist(grantTileIds);
 
     const existingPacks = await this.prisma.user_access_packs.findMany({
       where: { user_id: userId },
@@ -366,27 +330,9 @@ export class AccessService {
     return { deleted: true };
   }
 
-  private async loadActiveTiles(): Promise<EffectiveTile[]> {
-    const rows = await this.prisma.access_tiles.findMany({
-      where: { is_active: true },
-      orderBy: { sort_order: 'asc' },
-      include: {
-        capabilities: { include: { permission: { select: { key: true } } } },
-      },
-    });
-    return rows.map((t) => ({
-      id: t.id,
-      capabilities: t.capabilities.map((c) => c.permission.key),
-    }));
-  }
-
   private async assertTilesExist(tileIds: string[]) {
     if (tileIds.length === 0) return;
-    const found = await this.prisma.access_tiles.findMany({
-      where: { id: { in: tileIds } },
-      select: { id: true },
-    });
-    if (found.length !== tileIds.length) {
+    if (tileIds.some((id) => !MANIFEST_TILE_IDS.has(id))) {
       throw new BadRequestException('One or more tiles do not exist');
     }
   }

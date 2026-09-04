@@ -9,9 +9,11 @@ export type TileManifestEntry = {
 };
 
 /**
- * Source of truth for ERP tiles. Synced to `access_tiles` on boot.
+ * Source of truth for ERP tiles. The API catalog and effective-tile math
+ * read this array from memory. On boot, AccessSync upserts the same rows
+ * into `access_tiles` so pack/grant foreign keys have something to point at.
  * Edit this file (and seed a new capability key if needed) to split a tile
- * without a frontend deploy � the panel and nav read the catalog live.
+ * without a frontend deploy.
  */
 export const TILES_MANIFEST: TileManifestEntry[] = [
   // ?? Student & Profiling ??????????????????????????????????????????????????
@@ -89,3 +91,34 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'] },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },
 ];
+
+export const MANIFEST_TILE_IDS = new Set(TILES_MANIFEST.map((t) => t.id));
+
+export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
+  id: t.id,
+  capabilities: t.capabilities,
+}));
+
+export function catalogFromManifest() {
+  const byModule = new Map<string, Array<TileManifestEntry & { sort_order: number }>>();
+  TILES_MANIFEST.forEach((tile, sort_order) => {
+    const list = byModule.get(tile.module) ?? [];
+    list.push({ ...tile, sort_order });
+    byModule.set(tile.module, list);
+  });
+  return {
+    modules: [...byModule.entries()].map(([id, moduleTiles]) => ({
+      id,
+      tiles: moduleTiles.map((t) => ({
+        id: t.id,
+        module: t.module,
+        label: t.label,
+        description: t.description,
+        href: t.href,
+        group: t.group ?? null,
+        sort_order: t.sort_order,
+        capabilities: t.capabilities,
+      })),
+    })),
+  };
+}
