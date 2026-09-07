@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 
 /**
  * Drives Coral9's scheduled jobs from here.
@@ -41,21 +41,29 @@ export class Coral9SchedulerService {
   private readonly running = new Set<string>();
 
   /**
-   * Client board digests — the 8am briefing and 10pm wrap-up.
+   * Coral9's digests: the 8am/10pm client board briefings, and the internal
+   * team's end-of-day report.
    *
-   * HOURLY IS NOT NEGOTIABLE, and it is worth understanding why: the send time
+   * HOURLY AT MINIMUM, and it is worth understanding why: the client send time
    * is 8am and 10pm in each CLIENT'S OWN timezone. 8am in Karachi and 8am in
    * Detroit are ten hours apart, so no fixed pair of daily runs can serve both.
-   * Coral9 handles the per-client decision — every hour it asks each client
-   * "is it your 8am or your 10pm?" — so all this has to do is wake it up on
-   * the hour, every hour.
+   * Coral9 makes the per-client decision itself — each tick it asks every
+   * client "is it your 8am or your 10pm?" — so all this has to do is wake it.
    *
-   * The server's own timezone is irrelevant for the same reason: an hour
-   * boundary is an hour boundary wherever this process happens to run.
+   * THE :30 TICK IS NOT DECORATION. Coral9's internal report goes at 23:30
+   * Karachi time, and an on-the-hour schedule steps straight over it — that
+   * report would simply never send. Do not "tidy" this back to EVERY_HOUR.
+   *
+   * Ticking twice as often costs nothing: every job on the other end claims its
+   * work against a unique index before doing anything, so the second tick of an
+   * hour finds the claim taken and returns immediately.
+   *
+   * The server's own timezone is irrelevant: a half-hour boundary is the same
+   * instant wherever this process happens to run.
    */
-  @Cron(CronExpression.EVERY_HOUR, { name: 'coral9-client-digest' })
+  @Cron('0,30 * * * *', { name: 'coral9-digests' })
   async clientDigest(): Promise<void> {
-    await this.call('/api/cron/client-digest', 'client digest');
+    await this.call('/api/cron/client-digest', 'digests');
   }
 
   /**
