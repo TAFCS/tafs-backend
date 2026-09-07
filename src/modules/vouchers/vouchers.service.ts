@@ -4459,7 +4459,48 @@ export class VouchersService {
         const dueDate = new Date(dto.due_date);
         const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
-        const lateFeeVal = original.late_fee_charge ? new Prisma.Decimal(1000) : new Prisma.Decimal(0);
+        // ── Shared voucher-issuance settings for the BALANCE (unpaid) voucher ──
+        // These mirror the single-issuance form (`create()` / CreateVoucherDto).
+        // The webapp sends them from the SAME shared component that /fee-challan
+        // uses (VoucherSettingsPanel.tsx) — any change to the set of settings
+        // here must be mirrored there and in create-voucher.dto.ts. An unset
+        // field means "inherit the original voucher's value" (historical split
+        // behaviour), which is NOT necessarily the CreateVoucherDto default.
+        // NOTE: every setting below is applied to the BALANCE voucher only —
+        // the PAID receipt is a record of money already taken against the
+        // original voucher and its bank/dates/flags are never re-chosen here.
+        const disposition = dto.balance_disposition ?? 'ISSUE_AND_NOTIFY';
+        const issueBalance = disposition !== 'DO_NOT_ISSUE';
+        const holdBalance =
+            disposition === 'ISSUE_AND_HOLD' || dto.requires_release === true;
+        // Fire the instant "issued" push only for the explicit notify disposition,
+        // and never when held (the push is deferred to release time) or when the
+        // caller explicitly passed send_notification=false.
+        const notifyBalance =
+            issueBalance &&
+            !holdBalance &&
+            disposition === 'ISSUE_AND_NOTIFY' &&
+            dto.send_notification !== false;
+        // The split NEVER recomputes or drops arrear surcharges (see Step 8) —
+        // this lever just marks whatever surcharge rows land on the balance
+        // voucher as waived, mirroring CreateVoucherDto.waive_surcharge.
+        const waiveBalanceSurcharge = dto.waive_surcharge === true;
+        const surchargeWaivedBy = waiveBalanceSurcharge
+            ? (dto.waived_by ?? changedBy ?? null)
+            : null;
+
+        const balanceBankAccountId = dto.bank_account_id ?? original.bank_account_id;
+        const balanceLateFeeCharge = dto.late_fee_charge ?? original.late_fee_charge;
+        // Historical split used a hardcoded 1000; honour an explicit amount now.
+        const balanceLateFeeAmount = dto.late_fee_amount ?? 1000;
+        const balanceReprintCharge = dto.reprint_fee_charge === true;
+        const balanceReprintAmount = balanceReprintCharge
+            ? new Prisma.Decimal(dto.reprint_fee_amount ?? 100)
+            : new Prisma.Decimal(0);
+
+        const lateFeeVal = balanceLateFeeCharge
+            ? new Prisma.Decimal(balanceLateFeeAmount)
+            : new Prisma.Decimal(0);
         const paidTotal = paidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
         const unpaidTotal = unpaidHeadRows.reduce((s, r) => s.add(r.net_amount), new Prisma.Decimal(0));
 
@@ -4716,16 +4757,33 @@ export class VouchersService {
                 data: { voucher_number: toMeezanVoucherNumber(paid.id, targetFeeDate ? new Date(targetFeeDate) : new Date(original.issue_date)) } as any,
             });
 
+            // The BALANCE voucher carries the shared issuance settings resolved
+            // above (bank / late fee / reprint fee / hold-for-release). The PAID
+            // receipt above intentionally keeps `...commonFields` untouched.
             const unpaid = await tx.vouchers.create({
                 data: {
                     ...commonFields,
+                    bank_account_id: balanceBankAccountId,
+                    late_fee_charge: balanceLateFeeCharge,
                     issue_date: issueDate,
                     due_date: dueDate,
                     validity_date: validityDate,
                     status: 'UNPAID',
-                    total_payable_before_due: unpaidTotal,
-                    total_payable_after_due: unpaidTotal.add(lateFeeVal),
+                    // Reprint fee is folded into BOTH totals here (mirrors create()).
+                    // Arrear surcharges are added later in Step 8c; when they are,
+                    // that block re-adds balanceReprintAmount so it is not dropped.
+                    total_payable_before_due: unpaidTotal.add(balanceReprintAmount),
+                    total_payable_after_due: unpaidTotal.add(lateFeeVal).add(balanceReprintAmount),
                     total_arrears: unpaidArrears,
+                    reprint_fee_amount: balanceReprintCharge ? balanceReprintAmount : null,
+                    // Hold-for-release: null => invisible to parents until an admin
+                    // releases it via the Pending Release page. Otherwise inherit
+                    // the parent's visibility (a PARTIALLY_PAID parent is released),
+                    // falling back to "now" if the parent was itself still held.
+                    released_to_parent_at: holdBalance
+                        ? null
+                        : (original.released_to_parent_at ?? new Date()),
+                    released_by: holdBalance ? null : original.released_by,
                     split_parent_id: original.id,
                 } as any,
             });
@@ -4854,6 +4912,26 @@ export class VouchersService {
                 }
             }
 
+            // ── Step 8a: Waive the BALANCE voucher's arrear surcharges when the
+            //    admin asked for it at split time (dto.waive_surcharge). The split
+            //    still does NOT recompute or drop surcharge rows — this only
+            //    forgives whatever landed on the UNPAID side, mirroring
+            //    CreateVoucherDto.waive_surcharge. The zeroed accumulator below
+            //    keeps them out of the payable totals and Step 8b then flips
+            //    surcharge_waived on the balance voucher. The PAID receipt is left
+            //    alone: a surcharge already consumed there was actually collected.
+            if (waiveBalanceSurcharge) {
+                await (tx as any).voucher_arrear_surcharges.updateMany({
+                    where: { voucher_id: unpaid.id, waived: false },
+                    data: { waived: true, waived_by: surchargeWaivedBy },
+                });
+                sideSurchargeBeforeDue.unpaid = new Prisma.Decimal(0);
+                for (const f of sideSurchargeFlags.unpaid) {
+                    f.waived = true;
+                    f.waived_by = surchargeWaivedBy;
+                }
+            }
+
             // ── Step 8b: Set surcharge_waived on each new voucher from the rows it
             //    actually ended up with — not left at the schema default (false)
             //    regardless of outcome. A side is "waived" only if it has at least
@@ -4886,7 +4964,11 @@ export class VouchersService {
                 });
             }
             if (sideSurchargeBeforeDue.unpaid.gt(0)) {
-                const unpaidBeforeDue = unpaidTotal.add(sideSurchargeBeforeDue.unpaid);
+                // Re-add balanceReprintAmount: this overwrites the totals set at
+                // create() time, which already included the reprint fee.
+                const unpaidBeforeDue = unpaidTotal
+                    .add(sideSurchargeBeforeDue.unpaid)
+                    .add(balanceReprintAmount);
                 await tx.vouchers.update({
                     where: { id: unpaid.id },
                     data: {
@@ -4990,49 +5072,118 @@ export class VouchersService {
                 data: { status: 'VOID' },
             });
 
+            // ── Step 11 (DO_NOT_ISSUE): run the full split — paid receipt, fee-row
+            //    split, deposit re-link, original voided — but discard the balance
+            //    voucher itself. The split-created BALANCE student_fees rows go back
+            //    to NOT_ISSUED so a later voucher run bills them normally. Nothing
+            //    that carries live payment history is removed: the balance voucher
+            //    only ever holds zero-deposit heads / untouched surcharge rows
+            //    (all deposits were re-linked to the paid side in Step 9), which
+            //    the guard below asserts before deleting.
+            if (!issueBalance) {
+                const strayBalanceAllocs = await tx.deposit_allocations.count({
+                    where: { voucher_id: unpaid.id },
+                });
+                if (strayBalanceAllocs > 0) {
+                    throw new BadRequestException(
+                        `splitPartiallyPaid: balance voucher #${unpaid.id} unexpectedly holds ` +
+                        `${strayBalanceAllocs} deposit allocation(s); cannot discard it for ` +
+                        `DO_NOT_ISSUE without orphaning payment history — aborting.`,
+                    );
+                }
+                await tx.voucher_heads.deleteMany({ where: { voucher_id: unpaid.id } });
+                await (tx as any).voucher_arrear_surcharges.deleteMany({
+                    where: { voucher_id: unpaid.id },
+                });
+                await tx.vouchers.delete({ where: { id: unpaid.id } });
+
+                // Every non-discount student_fees row that would have landed on the
+                // balance voucher goes back to NOT_ISSUED so a later voucher run
+                // bills it. Covers BOTH the split-created balance rows (Case A,
+                // updated in-place to ISSUED above) and any Case B ISSUED rows that
+                // were routed to the unpaid side. Discount rows keep their status —
+                // they are consumed against the fee, not "issued" on their own.
+                const discountSfIds = new Set(
+                    sortedHeads
+                        .filter((h) => h.student_fees?.status === 'DISCOUNT' || (h.student_fees as any)?.is_discount === true)
+                        .map((h) => h.student_fee_id),
+                );
+                const balanceRowIds = Array.from(
+                    new Set(
+                        unpaidHeadRows
+                            .filter((r) => !discountSfIds.has(r.student_fee_id))
+                            .map((r) => {
+                                const rep = splitReplacement.get(r.student_fee_id);
+                                return rep ? rep.unpaidId : r.student_fee_id;
+                            }),
+                    ),
+                );
+                if (balanceRowIds.length > 0) {
+                    await tx.student_fees.updateMany({
+                        where: { id: { in: balanceRowIds }, status: 'ISSUED' },
+                        data: { status: 'NOT_ISSUED' },
+                    });
+                }
+
+                return { paidVoucher: paid, unpaidVoucher: null as any };
+            }
+
             return { paidVoucher: paid, unpaidVoucher: unpaid };
 
         }, { timeout: 30000 });
 
+        // When balance_disposition === 'DO_NOT_ISSUE' the transaction returns a
+        // null unpaidVoucher — the split ran, but there is no balance voucher to
+        // render, release or notify for. Everything unpaid-side below is guarded.
+        const hasBalanceVoucher = !!unpaidVoucher;
+
         // ── Generate and upload PDFs (outside transaction to avoid timeout) ────────
         const paidFull = await this.prisma.vouchers.findUnique({ where: { id: paidVoucher.id }, include: VOUCHER_INCLUDE });
-        const unpaidFull = await this.prisma.vouchers.findUnique({ where: { id: unpaidVoucher.id }, include: VOUCHER_INCLUDE });
+        const pData = await this.prepareVoucherPdfData(paidFull, true);
+        await this.ensureVoucherGenerationMeta(paidVoucher.id, paidFull!, undefined, pData.voucherData);
+        const pBuf = await this.pdfService.generateVoucherPdf(pData.voucherData);
+        const pUrl = await this.storage.upload(pData.key, pBuf);
 
-        const [pData, uData] = await Promise.all([
-            this.prepareVoucherPdfData(paidFull, true),
-            this.prepareVoucherPdfData(unpaidFull, false),
-        ]);
-        await Promise.all([
-            this.ensureVoucherGenerationMeta(paidVoucher.id, paidFull!, undefined, pData.voucherData),
-            this.ensureVoucherGenerationMeta(unpaidVoucher.id, unpaidFull!, undefined, uData.voucherData),
-        ]);
+        await this.prisma.vouchers.update({
+            where: { id: paidVoucher.id },
+            data: {
+                pdf_url: pUrl,
+                // This child is born PAID, so its receipt is final the moment
+                // it renders — freeze it here rather than waiting for someone
+                // to download it. No write-once guard needed: the row was
+                // created inside the transaction above, so these are null.
+                paid_pdf_url: pUrl,
+                paid_pdf_filename: pData.filename,
+                paid_pdf_generated_at: new Date(),
+            },
+        });
 
-        const [pBuf, uBuf] = await Promise.all([
-            this.pdfService.generateVoucherPdf(pData.voucherData),
-            this.pdfService.generateVoucherPdf(uData.voucherData),
-        ]);
+        let uUrl: string | null = null;
+        let uData: Awaited<ReturnType<typeof this.prepareVoucherPdfData>> | null = null;
+        if (hasBalanceVoucher) {
+            const unpaidFull = await this.prisma.vouchers.findUnique({ where: { id: unpaidVoucher.id }, include: VOUCHER_INCLUDE });
+            uData = await this.prepareVoucherPdfData(unpaidFull, false);
+            await this.ensureVoucherGenerationMeta(unpaidVoucher.id, unpaidFull!, undefined, uData.voucherData);
+            const uBuf = await this.pdfService.generateVoucherPdf(uData.voucherData);
+            uUrl = await this.storage.upload(uData.key, uBuf);
+            await this.prisma.vouchers.update({ where: { id: unpaidVoucher.id }, data: { pdf_url: uUrl } });
+        }
 
-        const [pUrl, uUrl] = await Promise.all([
-            this.storage.upload(pData.key, pBuf),
-            this.storage.upload(uData.key, uBuf),
-        ]);
-
-        await Promise.all([
-            this.prisma.vouchers.update({
-                where: { id: paidVoucher.id },
-                data: {
-                    pdf_url: pUrl,
-                    // This child is born PAID, so its receipt is final the moment
-                    // it renders — freeze it here rather than waiting for someone
-                    // to download it. No write-once guard needed: the row was
-                    // created inside the transaction above, so these are null.
-                    paid_pdf_url: pUrl,
-                    paid_pdf_filename: pData.filename,
-                    paid_pdf_generated_at: new Date(),
-                },
-            }),
-            this.prisma.vouchers.update({ where: { id: unpaidVoucher.id }, data: { pdf_url: uUrl } }),
-        ]);
+        // ── Instant "voucher issued" push for the balance voucher ─────────────
+        // Only for balance_disposition === 'ISSUE_AND_NOTIFY' (see notifyBalance).
+        // ISSUE_AND_HOLD defers the push to release time; ISSUE_AND_RELEASE and
+        // DO_NOT_ISSUE never fire one. Historically the split notified nobody, so
+        // an omitted disposition (defaulting to ISSUE_AND_NOTIFY) is a deliberate
+        // behaviour change requested for the shared-settings work.
+        if (hasBalanceVoucher && notifyBalance) {
+            this.voucherNotificationService
+                .sendVoucherIssuedNotification(unpaidVoucher.id)
+                .catch((err) =>
+                    this.logger.error(
+                        `[Voucher ${unpaidVoucher.id}] split balance voucher issued-notification failed: ${(err as Error).message}`,
+                    ),
+                );
+        }
 
         try {
             const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -5041,14 +5192,24 @@ export class VouchersService {
             const paidAmtStr = paidVoucher.total_payable_before_due ? `Rs. ${Number(paidVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
             const paidIssueStr = paidVoucher.issue_date ? new Date(paidVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
 
-            const unpaidAmtStr = unpaidVoucher.total_payable_before_due ? `Rs. ${Number(unpaidVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
-            const unpaidIssueStr = unpaidVoucher.issue_date ? new Date(unpaidVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
-
             const originalAmtStr = original.total_payable_before_due ? `Rs. ${Number(original.total_payable_before_due).toLocaleString()}` : 'N/A';
             const originalIssueStr = original.issue_date ? new Date(original.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
 
+            const dispositionLabel =
+                disposition === 'DO_NOT_ISSUE'
+                    ? 'balance NOT issued (left NOT_ISSUED for a later run)'
+                    : disposition === 'ISSUE_AND_HOLD'
+                        ? 'balance held for release'
+                        : disposition === 'ISSUE_AND_RELEASE'
+                            ? 'balance issued, parents not notified'
+                            : 'balance issued, parents notified';
+            const surchargeLabel = waiveBalanceSurcharge ? ' | balance arrear surcharge WAIVED' : '';
+
             const voidNote = [
-                `Voucher #${voucherId} split into PAID #${paidVoucher.id} and UNPAID #${unpaidVoucher.id} and marked VOID.`,
+                hasBalanceVoucher
+                    ? `Voucher #${voucherId} split into PAID #${paidVoucher.id} and UNPAID #${unpaidVoucher.id} and marked VOID.`
+                    : `Voucher #${voucherId} split — PAID #${paidVoucher.id} created, balance left unissued — and marked VOID.`,
+                `Disposition: ${dispositionLabel}${surchargeLabel}`,
                 `Original Amount: ${originalAmtStr}`,
                 `Original Issue Date: ${originalIssueStr}`,
                 monthLabel ? `Month: ${monthLabel}` : null,
@@ -5063,15 +5224,7 @@ export class VouchersService {
                 paidVoucher.academic_year ? `AY: ${paidVoucher.academic_year}` : null,
             ].filter(Boolean).join(' | ');
 
-            const unpaidNote = [
-                `Balance Voucher #${unpaidVoucher.id} created from split of Voucher #${voucherId}.`,
-                `Amount: ${unpaidAmtStr}`,
-                `Issue Date: ${unpaidIssueStr}`,
-                monthLabel ? `Month: ${monthLabel}` : null,
-                unpaidVoucher.academic_year ? `AY: ${unpaidVoucher.academic_year}` : null,
-            ].filter(Boolean).join(' | ');
-
-            await Promise.all([
+            const auditWrites = [
                 this.auditLogs.log({
                     entity_type: 'VOUCHER',
                     entity_id: String(voucherId),
@@ -5091,29 +5244,47 @@ export class VouchersService {
                     student_id: original.student_id,
                     note: paidNote,
                 }),
-                this.auditLogs.log({
-                    entity_type: 'VOUCHER',
-                    entity_id: String(unpaidVoucher.id),
-                    action: 'CREATED',
-                    changed_by: changedBy,
-                    student_id: original.student_id,
-                    note: unpaidNote,
-                }),
-            ]);
+            ];
+
+            if (hasBalanceVoucher) {
+                const unpaidAmtStr = unpaidVoucher.total_payable_before_due ? `Rs. ${Number(unpaidVoucher.total_payable_before_due).toLocaleString()}` : 'N/A';
+                const unpaidIssueStr = unpaidVoucher.issue_date ? new Date(unpaidVoucher.issue_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A';
+                const unpaidNote = [
+                    `Balance Voucher #${unpaidVoucher.id} created from split of Voucher #${voucherId}.`,
+                    `Amount: ${unpaidAmtStr}`,
+                    `Issue Date: ${unpaidIssueStr}`,
+                    `Disposition: ${dispositionLabel}${surchargeLabel}`,
+                    monthLabel ? `Month: ${monthLabel}` : null,
+                    unpaidVoucher.academic_year ? `AY: ${unpaidVoucher.academic_year}` : null,
+                ].filter(Boolean).join(' | ');
+                auditWrites.push(
+                    this.auditLogs.log({
+                        entity_type: 'VOUCHER',
+                        entity_id: String(unpaidVoucher.id),
+                        action: 'CREATED',
+                        changed_by: changedBy,
+                        student_id: original.student_id,
+                        note: unpaidNote,
+                    }),
+                );
+            }
+
+            await Promise.all(auditWrites);
         } catch (logErr) {
             this.logger.error(`Failed to write audit logs for split voucher: ${(logErr as Error).message}`);
         }
 
         return {
             paid_voucher_id: paidVoucher.id,
-            unpaid_voucher_id: unpaidVoucher.id,
+            unpaid_voucher_id: unpaidVoucher?.id ?? null,
             paid_pdf_url: pUrl,
             unpaid_pdf_url: uUrl,
             // Each child is keyed off its OWN fee_date, which for the balance
             // child is frequently not the original voucher's — so callers must
             // use these rather than rebuilding a name from the parent voucher.
             paid_pdf_filename: pData.filename,
-            unpaid_pdf_filename: uData.filename,
+            unpaid_pdf_filename: uData?.filename ?? null,
+            balance_disposition: disposition,
         };
     }
 
