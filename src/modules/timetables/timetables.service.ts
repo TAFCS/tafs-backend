@@ -450,17 +450,23 @@ export class TimetablesService {
     // time in a different class -- comparing raw block_number would flag
     // teachers who aren't actually double-booked (and would miss real
     // double-bookings that happen to land on different block numbers).
-    const otherSlotsThatDay = await this.prisma.timetable_slots.findMany({
-      where: {
-        employee_id: dto.employee_id,
-        day_of_week: dto.day_of_week,
-        timetables: { is_active: true },
-        NOT: {
-          AND: [{ timetable_id: timetableId }, { slot_order: dto.slot_order }],
-        },
-      },
-      include: { timetables: { select: { campus_id: true, class_id: true } } },
-    });
+    //
+    // allow_teacher_overlap skips this entirely: merged/combined sections
+    // are one lesson taught to two class groups at once, so the same
+    // teacher genuinely occupies both slots at the same time.
+    const otherSlotsThatDay = dto.allow_teacher_overlap
+      ? []
+      : await this.prisma.timetable_slots.findMany({
+          where: {
+            employee_id: dto.employee_id,
+            day_of_week: dto.day_of_week,
+            timetables: { is_active: true },
+            NOT: {
+              AND: [{ timetable_id: timetableId }, { slot_order: dto.slot_order }],
+            },
+          },
+          include: { timetables: { select: { campus_id: true, class_id: true } } },
+        });
 
     if (otherSlotsThatDay.length > 0) {
       const periods = await this.classPeriods.resolveMany([

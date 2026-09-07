@@ -215,4 +215,14 @@ export class UpsertSlotDto {
   @IsString()
   @MaxLength(50)
   room?: string;
+
+  /**
+   * Bypass the "teacher already scheduled at this time" conflict check.
+   * Set when the two classes are deliberately taught together (merged
+   * sections) so one teacher legitimately covers both at once.
+   */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === true || value === 'true')
+  allow_teacher_overlap?: boolean;
 }
