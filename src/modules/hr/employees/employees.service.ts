@@ -305,6 +305,38 @@ const includeRelations = {
   device_user_mappings: true,
 };
 
+/**
+ * Lean projection for the directory list: only the fields the employee cards and
+ * their filters/audits read. The detail panel re-fetches the full record via
+ * findOne when a card is opened, so the heavy relations (class/section
+ * assignments, work schedules, reporting-manager join, full user row) are left
+ * out of the list payload.
+ */
+const listSelect = {
+  id: true,
+  full_name: true,
+  cnic: true,
+  join_date: true,
+  monthly_pay: true,
+  photo_url: true,
+  employee_code: true,
+  employment_status: true,
+  job_title: true,
+  personal_phone: true,
+  campus_id: true,
+  department_id: true,
+  staff_category_id: true,
+  segment_id: true,
+  check_in_source: true,
+  reporting_time: true,
+  leaving_time: true,
+  users: { select: { full_name: true } },
+  campuses: { select: { id: true, campus_name: true } },
+  departments: { select: { id: true, name: true } },
+  staff_categories: { select: { id: true, name: true, code: true } },
+  device_user_mappings: { select: { device_sn: true, is_active: true } },
+};
+
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
 
 @Injectable()
@@ -429,7 +461,10 @@ export class EmployeesService {
     }
   }
 
-  async findAll() {
+  async findAll(summary = false) {
+    if (summary) {
+      return this.prisma.employee_profiles.findMany({ select: listSelect });
+    }
     return this.prisma.employee_profiles.findMany({
       include: includeRelations
     });

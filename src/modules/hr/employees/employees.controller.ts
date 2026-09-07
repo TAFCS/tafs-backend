@@ -29,8 +29,8 @@ export class EmployeesController {
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
-  async findAll() {
-    const data = await this.employeesService.findAll();
+  async findAll(@Query('view') view?: string) {
+    const data = await this.employeesService.findAll(view === 'summary');
     return createApiResponse(data, HttpStatus.OK, 'Employees retrieved successfully');
   }
 
