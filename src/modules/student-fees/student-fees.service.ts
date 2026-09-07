@@ -406,7 +406,15 @@ export class StudentFeesService {
                     take: 1,
                     include: {
                         vouchers: {
-                            select: { id: true, issue_date: true, status: true },
+                            // released_to_parent_at === null => the covering voucher is
+                            // HELD (unreleased): it exists but parents can't see it yet.
+                            // Surfaced as an "Unreleased" state on /fee-challan.
+                            select: {
+                                id: true,
+                                issue_date: true,
+                                status: true,
+                                released_to_parent_at: true,
+                            },
                         },
                     },
                 },
@@ -517,7 +525,15 @@ export class StudentFeesService {
                     include: { fee_types: true }
                 },
                 voucher_heads: {
-                    select: { id: true },
+                    select: {
+                        id: true,
+                        // released_to_parent_at === null => covering voucher is HELD
+                        // (unreleased). Surfaced as an "Unreleased" chip in
+                        // studentwise-fees so staff know the parent can't see it yet.
+                        vouchers: {
+                            select: { id: true, status: true, released_to_parent_at: true },
+                        },
+                    },
                     take: 1,
                 },
             } as any,
