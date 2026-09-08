@@ -1237,6 +1237,7 @@ model employee_profiles {
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
   employee_progression_periods       employee_progression_periods[]
+  employee_previous_employers        employee_previous_employers[]
   employee_security_deposits         employee_security_deposits[]
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
@@ -1292,6 +1293,20 @@ model employee_progression_periods {
   staff_categories     staff_categories? @relation(fields: [staff_category_id], references: [id])
 
   @@index([employee_id, valid_from])
+}
+
+model employee_previous_employers {
+  id                  Int               @id @default(autoincrement())
+  employee_id         Int
+  employer_name       String?           @db.VarChar(100)
+  location            String?           @db.VarChar(100)
+  job_title           String?           @db.VarChar(100)
+  employed_from       String?           @db.VarChar(20)
+  employed_to         String?           @db.VarChar(20)
+  reason_for_leaving  String?
+  employee_profiles   employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([employee_id])
 }
 
 model academic_calendar_days {

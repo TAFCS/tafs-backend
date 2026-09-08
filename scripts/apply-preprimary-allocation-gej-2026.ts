@@ -10,6 +10,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import type { ClassSectionAssignment } from './staff-class-section-overrides';
+import { syncEmployeeProgressionFromDb } from './lib/sync-employee-progression';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const prisma = new PrismaClient();
@@ -181,6 +182,10 @@ async function main() {
         data: pairs.map((p) => ({ employee_id: emp.id, ...p })),
       });
     }
+    await syncEmployeeProgressionFromDb(prisma, emp.id, {
+      defaultType: 'CLASS_REASSIGNED',
+      changedBy: 'apply-preprimary-allocation-gej-2026',
+    });
   }
 
   if (DRY_RUN) console.log('\nRun with DRY_RUN=false to apply.');

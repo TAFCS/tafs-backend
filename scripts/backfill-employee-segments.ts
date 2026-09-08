@@ -13,6 +13,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { syncEmployeeProgressionFromDb } from './lib/sync-employee-progression';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const ACADEMIC_YEAR = '2026-2027';
@@ -99,6 +100,10 @@ async function main() {
       await prisma.employee_profiles.update({
         where: { id: emp.id },
         data: { segment_id: segmentId },
+      });
+      await syncEmployeeProgressionFromDb(prisma, emp.id, {
+        changeType: 'SEGMENT_CHANGED',
+        changedBy: 'backfill-employee-segments',
       });
     }
     updated++;

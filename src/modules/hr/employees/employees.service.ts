@@ -236,6 +236,12 @@ export class CreateEmployeeDto {
   @ValidateNested({ each: true })
   @Type(() => TileGrantDto)
   tileGrants?: TileGrantDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PreviousEmployerDto)
+  previous_employers?: PreviousEmployerDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
@@ -243,6 +249,46 @@ export class UpdateEmployeeDto extends CreateEmployeeDto {}
 export class UpdateEmployeeStatusDto {
   @IsEnum(EmployeeStatus)
   status: EmployeeStatus;
+
+  /** Optional reason stored on the progression period (e.g. Mark as Left note). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string;
+}
+
+export class PreviousEmployerDto {
+  @IsOptional()
+  @IsInt()
+  id?: number;
+
+  @IsString()
+  @MaxLength(100)
+  employer_name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  location?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  job_title?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  employed_from?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  employed_to?: string | null;
+
+  @IsOptional()
+  @IsString()
+  reason_for_leaving?: string | null;
 }
 
 export class WorkScheduleDayDto {
@@ -333,6 +379,9 @@ const includeRelations = {
     },
   },
   device_user_mappings: true,
+  employee_previous_employers: {
+    orderBy: { id: 'desc' as const },
+  },
 };
 
 /**
@@ -429,7 +478,7 @@ export class EmployeesService {
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
   async getProgressionPeriods(id: number) {
-    return this.prisma.employee_progression_periods.findMany({
+    const periods = await this.prisma.employee_progression_periods.findMany({
       where: { employee_id: id },
       orderBy: { valid_from: 'asc' },
       include: {
@@ -439,6 +488,32 @@ export class EmployeesService {
         staff_categories: { select: { name: true, code: true } },
       },
     });
+
+    const managerIds = [
+      ...new Set(
+        periods
+          .map((p) => p.reporting_manager_id)
+          .filter((mid): mid is number => mid != null),
+      ),
+    ];
+    const managers =
+      managerIds.length === 0
+        ? []
+        : await this.prisma.employee_profiles.findMany({
+            where: { id: { in: managerIds } },
+            select: { id: true, full_name: true },
+          });
+    const managerNameById = new Map(managers.map((m) => [m.id, m.full_name]));
+
+    return periods.map((p) => ({
+      ...p,
+      reporting_manager: p.reporting_manager_id
+        ? {
+            id: p.reporting_manager_id,
+            full_name: managerNameById.get(p.reporting_manager_id) ?? null,
+          }
+        : null,
+    }));
   }
 
   async exportExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
@@ -679,6 +754,7 @@ export class EmployeesService {
       packIds,
       tileGrants,
       payroll_enabled,
+      previous_employers,
       ...rest
     } = dto;
 
@@ -779,7 +855,21 @@ export class EmployeesService {
                     section_id: a.section_id
                   }))
                 }
-              : undefined
+              : undefined,
+            employee_previous_employers: previous_employers?.length
+              ? {
+                  create: previous_employers
+                    .filter((e) => e.employer_name?.trim())
+                    .map((e) => ({
+                      employer_name: e.employer_name.trim(),
+                      location: e.location?.trim() || null,
+                      job_title: e.job_title?.trim() || null,
+                      employed_from: e.employed_from?.trim() || null,
+                      employed_to: e.employed_to?.trim() || null,
+                      reason_for_leaving: e.reason_for_leaving?.trim() || null,
+                    })),
+                }
+              : undefined,
           },
           include: includeRelations,
         });
@@ -925,6 +1015,7 @@ export class EmployeesService {
       packIds: _packIds,
       tileGrants: _tileGrants,
       portal_account,
+      previous_employers: _ignoredEmployers,
       ...rest
     } = dto;
     if (_ignoredStatus !== undefined) {
@@ -935,12 +1026,31 @@ export class EmployeesService {
     }
     const account = await this.preparePortalAccount(portal_account, rest, caller);
 
-    const nextCheckInSource = rest.check_in_source !== undefined ? rest.check_in_source : (existing as any).check_in_source;
-    if (nextCheckInSource === CheckInSource.FIXED) {
-      const nextReportingTime = rest.reporting_time !== undefined ? rest.reporting_time : (existing as any).reporting_time;
-      const nextLeavingTime = rest.leaving_time !== undefined ? rest.leaving_time : (existing as any).leaving_time;
-      if (!nextReportingTime || !nextLeavingTime) {
-        throw new BadRequestException('Expected check-in and check-out times are required when payroll uses fixed times.');
+    // Only enforce fixed-time requirements when this patch touches schedule fields.
+    // Otherwise Employment-tab saves get blocked by pre-existing incomplete schedules.
+    const touchesSchedule =
+      rest.check_in_source !== undefined ||
+      rest.reporting_time !== undefined ||
+      rest.leaving_time !== undefined;
+    if (touchesSchedule) {
+      const nextCheckInSource =
+        rest.check_in_source !== undefined
+          ? rest.check_in_source
+          : (existing as any).check_in_source;
+      if (nextCheckInSource === CheckInSource.FIXED) {
+        const nextReportingTime =
+          rest.reporting_time !== undefined
+            ? rest.reporting_time
+            : (existing as any).reporting_time;
+        const nextLeavingTime =
+          rest.leaving_time !== undefined
+            ? rest.leaving_time
+            : (existing as any).leaving_time;
+        if (!nextReportingTime || !nextLeavingTime) {
+          throw new BadRequestException(
+            'Expected check-in and check-out times are required when payroll uses fixed times.',
+          );
+        }
       }
     }
 
@@ -1141,28 +1251,99 @@ export class EmployeesService {
     return result;
   }
 
-  async remove(id: number, changedBy?: string) {
+  /**
+   * Soft-offboard by default (TERMINATED + deactivate portal + progression row).
+   * Pass `purge: true` for a hard delete (mistaken/duplicate profiles only) —
+   * that cascades progression history away.
+   */
+  async remove(
+    id: number,
+    changedBy?: string,
+    opts?: { purge?: boolean; caller?: IJwtStaffPayload },
+  ) {
     const existing = await this.findOne(id);
-    const record = await this.prisma.$transaction(async (tx) => {
+
+    if (opts?.purge) {
+      if (opts.caller?.role !== StaffRole.SUPER_ADMIN) {
+        throw new ForbiddenException('Only super admins can permanently purge employee profiles');
+      }
+      const record = await this.prisma.$transaction(async (tx) => {
+        if (existing.user_id) {
+          await tx.users.update({
+            where: { id: existing.user_id },
+            data: { is_active: false },
+          });
+        }
+        return tx.employee_profiles.delete({
+          where: { id },
+        });
+      });
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(id),
+        action: 'DELETED',
+        section: 'hr',
+        old_value: (existing as any).full_name ?? (existing as any).employee_code ?? undefined,
+        note: 'Hard purge',
+        changed_by: changedBy ?? 'system',
+      });
+      return record;
+    }
+
+    if (
+      existing.employment_status === EmployeeStatus.TERMINATED ||
+      existing.employment_status === EmployeeStatus.LEFT
+    ) {
+      // Already offboarded — just ensure portal is off and return current row.
+      if (existing.user_id && (existing as any).users?.is_active !== false) {
+        await this.prisma.users.update({
+          where: { id: existing.user_id },
+          data: { is_active: false },
+        });
+      }
+      return this.findOne(id);
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (existing.user_id) {
         await tx.users.update({
           where: { id: existing.user_id },
           data: { is_active: false },
         });
       }
-      return tx.employee_profiles.delete({
+      const row = await tx.employee_profiles.update({
         where: { id },
+        data: {
+          employment_status: EmployeeStatus.TERMINATED,
+          is_permanent_employee: false,
+        },
+        include: includeRelations,
       });
+
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId: id,
+        ...this.progressionSnapshotFrom(row),
+        changeType: EmployeeStatus.TERMINATED,
+        changedBy: changedBy ?? 'system',
+        notes: 'Soft offboard (delete action)',
+      });
+
+      return row;
     });
+
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
       entity_id: String(id),
-      action: 'DELETED',
+      action: 'UPDATED',
       section: 'hr',
-      old_value: (existing as any).full_name ?? (existing as any).employee_code ?? undefined,
+      field: 'Employment Status',
+      old_value: existing.employment_status,
+      new_value: EmployeeStatus.TERMINATED,
+      note: 'Soft offboard (delete action)',
       changed_by: changedBy ?? 'system',
     });
-    return record;
+
+    return updated;
   }
 
   async findUnlinkedUsers() {
@@ -1365,8 +1546,9 @@ export class EmployeesService {
       await this.employeeProgression.recordProgressionChange(tx, {
         employeeId: id,
         ...this.progressionSnapshotFrom(row),
-        changeType: 'STATUS_CHANGED',
+        changeType: nextStatus,
         changedBy: caller.username || caller.sub || 'system',
+        notes: dto.notes ?? null,
       });
 
       return row;
@@ -1380,6 +1562,7 @@ export class EmployeesService {
       field: 'Employment Status',
       old_value: existing.employment_status,
       new_value: nextStatus,
+      note: dto.notes ?? undefined,
       changed_by: caller.username || caller.sub || 'system',
     });
 
@@ -1637,5 +1820,79 @@ export class EmployeesService {
     });
 
     return updated;
+  }
+
+  async upsertPreviousEmployer(
+    employeeId: number,
+    dto: PreviousEmployerDto,
+    changedBy?: string,
+  ) {
+    await this.findOne(employeeId);
+    const name = dto.employer_name?.trim();
+    if (!name) {
+      throw new BadRequestException('employer_name is required');
+    }
+
+    const data = {
+      employer_name: name,
+      location: dto.location?.trim() || null,
+      job_title: dto.job_title?.trim() || null,
+      employed_from: dto.employed_from?.trim() || null,
+      employed_to: dto.employed_to?.trim() || null,
+      reason_for_leaving: dto.reason_for_leaving?.trim() || null,
+    };
+
+    let row;
+    if (dto.id) {
+      const existing = await this.prisma.employee_previous_employers.findFirst({
+        where: { id: dto.id, employee_id: employeeId },
+      });
+      if (!existing) {
+        throw new NotFoundException(`Previous employer #${dto.id} not found for this employee`);
+      }
+      row = await this.prisma.employee_previous_employers.update({
+        where: { id: dto.id },
+        data,
+      });
+    } else {
+      row = await this.prisma.employee_previous_employers.create({
+        data: { employee_id: employeeId, ...data },
+      });
+    }
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: dto.id ? 'UPDATED' : 'CREATED',
+      section: 'hr',
+      field: 'previous_employer',
+      new_value: name,
+      changed_by: changedBy ?? 'system',
+    });
+
+    return row;
+  }
+
+  async deletePreviousEmployer(id: number, changedBy?: string) {
+    const existing = await this.prisma.employee_previous_employers.findUnique({
+      where: { id },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Previous employer with ID ${id} not found`);
+    }
+
+    await this.prisma.employee_previous_employers.delete({ where: { id } });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(existing.employee_id),
+      action: 'DELETED',
+      section: 'hr',
+      field: 'previous_employer',
+      old_value: existing.employer_name ?? undefined,
+      changed_by: changedBy ?? 'system',
+    });
+
+    return { id };
   }
 }

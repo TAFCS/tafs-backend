@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -154,6 +154,29 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employee progression retrieved successfully');
   }
 
+  @Post(':id/previous-employers')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async upsertPreviousEmployer(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PreviousEmployerDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const changedBy = user?.username || user?.sub || 'system';
+    const data = await this.employeesService.upsertPreviousEmployer(id, dto, changedBy);
+    return createApiResponse(data, HttpStatus.OK, 'Previous employer saved successfully');
+  }
+
+  @Delete('previous-employers/:id')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async deletePreviousEmployer(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const changedBy = user?.username || user?.sub || 'system';
+    const data = await this.employeesService.deletePreviousEmployer(id, changedBy);
+    return createApiResponse(data, HttpStatus.OK, 'Previous employer deleted successfully');
+  }
+
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   async findOne(@Param('id', ParseIntPipe) id: number) {
@@ -179,9 +202,22 @@ export class EmployeesController {
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('purge') purge: string | undefined,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.remove(id, changedBy);
-    return createApiResponse(data, HttpStatus.OK, 'Employee deleted successfully');
+    const data = await this.employeesService.remove(id, changedBy, {
+      purge: purge === 'true' || purge === '1',
+      caller: user,
+    });
+    return createApiResponse(
+      data,
+      HttpStatus.OK,
+      purge === 'true' || purge === '1'
+        ? 'Employee purged successfully'
+        : 'Employee soft-offboarded successfully',
+    );
   }
 }
