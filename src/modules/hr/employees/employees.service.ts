@@ -46,6 +46,36 @@ export class CreateEmployeePortalAccountDto {
   campus_id?: number;
 }
 
+export class ExportEmployeesDto {
+  @IsOptional()
+  @IsString()
+  columns?: string;
+
+  @IsOptional()
+  @IsString()
+  ids?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  campus_id?: string;
+
+  @IsOptional()
+  @IsString()
+  department_id?: string;
+
+  @IsOptional()
+  @IsString()
+  staff_category_id?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
+}
+
 export class CreateEmployeeDto {
   /**
    * Create the portal login as part of this request. Preferred over creating the
@@ -383,12 +413,60 @@ export class EmployeesService {
     });
   }
 
-  async exportMasterExcel(): Promise<Buffer> {
+  async exportExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
+    const where: Prisma.employee_profilesWhereInput = {};
+
+    if (query.ids) {
+      const idList = query.ids
+        .split(',')
+        .map((id) => Number(id.trim()))
+        .filter((n) => !isNaN(n) && n > 0);
+      if (idList.length > 0) {
+        where.id = { in: idList };
+      }
+    } else {
+      if (query.campus_id) {
+        const campusIds = query.campus_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (campusIds.length > 0) where.campus_id = { in: campusIds };
+      }
+      if (query.department_id) {
+        const deptIds = query.department_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (deptIds.length > 0) where.department_id = { in: deptIds };
+      }
+      if (query.staff_category_id) {
+        const catIds = query.staff_category_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (catIds.length > 0) where.staff_category_id = { in: catIds };
+      }
+      if (query.status) {
+        const statuses = query.status.split(',').map((s) => s.trim()) as EmployeeStatus[];
+        if (statuses.length > 0) where.employment_status = { in: statuses };
+      }
+      if (query.search) {
+        const q = query.search.trim();
+        where.OR = [
+          { full_name: { contains: q, mode: 'insensitive' } },
+          { employee_code: { contains: q, mode: 'insensitive' } },
+          { cnic: { contains: q, mode: 'insensitive' } },
+          { job_title: { contains: q, mode: 'insensitive' } },
+        ];
+      }
+    }
+
     const employees = await this.prisma.employee_profiles.findMany({
+      where,
       include: includeRelations,
       orderBy: { id: 'asc' },
     });
-    return buildMasterEmployeesExcelBuffer(employees as any);
+
+    const columns = query.columns
+      ? query.columns.split(',').map((c) => c.trim()).filter(Boolean)
+      : undefined;
+
+    return buildMasterEmployeesExcelBuffer(employees as any, columns);
+  }
+
+  async exportMasterExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
+    return this.exportExcel(query);
   }
 
   /** Ensure staff category belongs to the employee's department. */
