@@ -76,11 +76,20 @@ const styles = StyleSheet.create({
         letterSpacing: 4,
         fontFamily: 'Helvetica-Bold',
     },
-    // One watermark for the whole page (not per-copy). The outer box is offset by
-    // the Page's own padding (negative top/left) so it spans the full physical
-    // page (841.89 x 595.28) regardless of that padding, then centers the
-    // rotated text via flex rather than manual position math.
+    // One watermark for the whole page (not per-copy), nested in two boxes to
+    // mirror FeeChallanPDF.tsx: the OUTER box stays inside the content area (an
+    // oversized absolute box makes react-pdf emit a spurious extra page there;
+    // this Page is wrap={false} so it can't here, but the two templates are kept
+    // in step), while the INNER box carries the negative padding offsets and the
+    // full physical page size so the mark covers the whole sheet.
     payImmediateWatermark: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: 595.28 - 6 * 2,
+    },
+    payImmediateWatermarkInner: {
         position: 'absolute',
         top: -6,
         left: -5,
@@ -780,15 +789,6 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, arrearsHistory, installmentsHistory, paymentHistory, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
-            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
-                Rendered first so every later sibling draws on top of it, same layering as
-                the per-copy PAID stamp. */}
-            {payImmediate && (
-                <View style={styles.payImmediateWatermark}>
-                    <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
-                </View>
-            )}
-
             {/* Left 85% for the 3 Challan Copies */}
             <View style={{ width: '85%', flexDirection: 'row' }}>
                 <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
@@ -970,6 +970,17 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                     </View>
                 )}
             </View>
+
+            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
+                Rendered LAST, so it paints on top of everything — react-pdf has no z-index and
+                stacks purely in document order. */}
+            {payImmediate && (
+                <View style={styles.payImmediateWatermark}>
+                    <View style={styles.payImmediateWatermarkInner}>
+                        <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                    </View>
+                </View>
+            )}
         </Page>
     </Document>
 );

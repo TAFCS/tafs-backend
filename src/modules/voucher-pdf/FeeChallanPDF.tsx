@@ -185,11 +185,21 @@ const styles = StyleSheet.create({
         letterSpacing: 4,
         fontFamily: 'Helvetica-Bold',
     },
-    // One watermark for the whole page (not per-copy). The outer box is offset by
-    // the Page's own padding (negative top/left) so it spans the full physical
-    // page (PAGE_WIDTH x PAGE_HEIGHT) regardless of that padding, then centers
-    // the rotated text via flex rather than manual position math.
+    // One watermark for the whole page (not per-copy), nested exactly like the
+    // challan block above and for the same reason: react-pdf counts an absolute
+    // box's overflow when deciding page breaks, so the OUTER box is clamped to
+    // the flow area (a full-page height here forced a spurious second page),
+    // while the INNER box carries the negative padding offsets and the full
+    // physical page size so the mark still covers the whole sheet. The inner
+    // overflow is purely visual.
     payImmediateWatermark: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: CONTENT_HEIGHT - QR_RESERVE,
+    },
+    payImmediateWatermarkInner: {
         position: 'absolute',
         top: -PAGE_PADDING_V,
         left: -5,
@@ -893,17 +903,6 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[PAGE_WIDTH, PAGE_HEIGHT]} style={styles.page} wrap>
-            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
-                Rendered first so every later sibling (challan block, history column) draws
-                on top of it, same layering as the per-copy PAID stamp. Not `fixed`, so — like
-                the challan block below — it only appears on page 1, never on the history
-                column's overflow page 2. */}
-            {payImmediate && (
-                <View style={styles.payImmediateWatermark}>
-                    <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
-                </View>
-            )}
-
             {/* Left 85% for the 3 Challan Copies.
                 Absolutely positioned so it sits outside normal flow — it renders on page 1 only
                 and never participates in pagination, leaving the history column free to overflow
@@ -1111,6 +1110,18 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View fixed style={{ position: 'absolute', top: CONTENT_HEIGHT - QR_RESERVE, height: QR_RESERVE, left: CHALLAN_WIDTH, width: COLUMN_WIDTH, paddingLeft: 8, alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
                     <QrCodeView url={qrUrl} size={52} />
                     <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
+                </View>
+            )}
+
+            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
+                Rendered LAST, so it paints on top of everything — react-pdf has no z-index and
+                stacks purely in document order. Not `fixed`: it belongs to page 1 only, so a
+                history column long enough to overflow doesn't carry the mark onto page 2. */}
+            {payImmediate && (
+                <View style={styles.payImmediateWatermark}>
+                    <View style={styles.payImmediateWatermarkInner}>
+                        <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                    </View>
                 </View>
             )}
         </Page>
