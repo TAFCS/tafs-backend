@@ -80,7 +80,7 @@ export class AttendanceObjectionsService {
       where: { employee_id: employee.id },
       include: {
         scan: { select: { id: true, scan_time: true, direction: true } },
-        reviewer: { select: { id: true, full_name: true } },
+        reviewer: { select: { id: true, full_name: true, username: true, role: true } },
       },
       orderBy: { created_at: 'desc' },
     });
@@ -109,7 +109,7 @@ export class AttendanceObjectionsService {
           select: { id: true, full_name: true, employee_code: true, campus_id: true },
         },
         scan: { select: { id: true, scan_time: true, direction: true } },
-        reviewer: { select: { id: true, full_name: true } },
+        reviewer: { select: { id: true, full_name: true, username: true, role: true } },
       },
       orderBy: { created_at: 'desc' },
     });
@@ -156,7 +156,7 @@ export class AttendanceObjectionsService {
       include: {
         employee: { select: { id: true, full_name: true, employee_code: true } },
         scan: { select: { id: true, scan_time: true, direction: true } },
-        reviewer: { select: { id: true, full_name: true } },
+        reviewer: { select: { id: true, full_name: true, username: true, role: true } },
       },
     });
 
