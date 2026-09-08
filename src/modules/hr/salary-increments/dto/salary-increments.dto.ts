@@ -25,5 +25,6 @@ export class DueSalaryIncrementsQueryDto {
 }
 
 export class UpdateEmployeeIncrementCycleDto {
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(120) increment_cycle_months?: number | null;
+  // null clears the override (fall back to the org default); a number is range-checked.
+  @IsOptional() @ValidateIf((_, value) => value !== null) @Type(() => Number) @IsInt() @Min(1) @Max(120) increment_cycle_months?: number | null;
 }
