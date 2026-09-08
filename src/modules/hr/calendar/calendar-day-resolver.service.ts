@@ -137,8 +137,8 @@ export class CalendarDayResolverService {
 
   private isWorkingDayFromSchedule(dayOfWeek: number, daysPerWeek: number | null): boolean {
     // 0=Sun, 1=Mon ... 6=Sat (UTC)
-    if (dayOfWeek === 0) return false;
-    const weekDays = daysPerWeek === 6 ? 6 : 5;
+    if (dayOfWeek === 0) return (daysPerWeek ?? 5) >= 7;
+    const weekDays = (daysPerWeek ?? 5) >= 6 ? 6 : 5;
     return dayOfWeek >= 1 && dayOfWeek <= weekDays;
   }
 

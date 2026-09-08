@@ -28,6 +28,7 @@ import {
   getManualClassSectionOverride,
   isNoClassAssignmentExpected,
 } from './staff-class-section-overrides';
+import { syncEmployeeProgressionFromDb } from './lib/sync-employee-progression';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const OUT_DIR = path.join(__dirname, '..', 'staff-data', 'cleaned');
@@ -358,6 +359,12 @@ async function main() {
         }
       }
     }
+
+    await syncEmployeeProgressionFromDb(prisma, employee.id, {
+      changeType: existing ? undefined : 'ONBOARDED',
+      defaultType: 'REASSIGNED',
+      changedBy: 'import-employee-hr-data',
+    });
 
     // --- User account (EMPLOYEE role) ---
     const username = buildUsername(fullName ?? '', employeeCode ?? '', takenUsernames);

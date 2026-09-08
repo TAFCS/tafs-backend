@@ -193,7 +193,9 @@ export class EmployeeProgressionService {
     if (changedDimensions !== 1) return defaultType;
 
     if (payChanged) return 'PAY_CHANGED';
-    if (statusChanged) return 'STATUS_CHANGED';
+    // Use the new status itself (LEFT, TERMINATED, ACTIVE, …) so UI gap bands
+    // can key off change_type the same way student progression does.
+    if (statusChanged) return next.employmentStatus || 'STATUS_CHANGED';
     if (segmentChanged) return 'SEGMENT_CHANGED';
     if (campusChanged) return 'TRANSFERRED';
     if (classesChanged) return 'CLASS_REASSIGNED';

@@ -16,6 +16,7 @@ import {
   parseEmployeeCode,
 } from '../src/modules/hr/employees/employee-code.util';
 import type { ClassSectionAssignment } from './staff-class-section-overrides';
+import { syncEmployeeProgressionFromDb } from './lib/sync-employee-progression';
 
 const DRY_RUN = process.env.DRY_RUN !== 'false';
 const prisma = new PrismaClient();
@@ -694,6 +695,12 @@ async function applyRow(
       data: pairs.map((p) => ({ employee_id: employeeId, ...p })),
     });
   }
+
+  await syncEmployeeProgressionFromDb(prisma, employeeId, {
+    changeType: action === 'create' ? 'ONBOARDED' : undefined,
+    defaultType: 'CLASS_REASSIGNED',
+    changedBy: 'apply-teacher-allocation-2026',
+  });
 
   return { action, code: employeeCode, name: fullName };
 }

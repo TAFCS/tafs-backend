@@ -6,7 +6,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
   IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail,
-  ValidateNested, Min, MinLength,
+  ValidateNested, Min, MinLength, MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -44,6 +44,36 @@ export class CreateEmployeePortalAccountDto {
 
   @IsOptional() @IsInt()
   campus_id?: number;
+}
+
+export class ExportEmployeesDto {
+  @IsOptional()
+  @IsString()
+  columns?: string;
+
+  @IsOptional()
+  @IsString()
+  ids?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  campus_id?: string;
+
+  @IsOptional()
+  @IsString()
+  department_id?: string;
+
+  @IsOptional()
+  @IsString()
+  staff_category_id?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
 }
 
 export class CreateEmployeeDto {
@@ -112,7 +142,7 @@ export class CreateEmployeeDto {
   @IsOptional() @IsString()
   personal_email?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @MaxLength(100)
   job_title?: string;
 
   @IsOptional() @IsInt()
@@ -206,6 +236,12 @@ export class CreateEmployeeDto {
   @ValidateNested({ each: true })
   @Type(() => TileGrantDto)
   tileGrants?: TileGrantDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PreviousEmployerDto)
+  previous_employers?: PreviousEmployerDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto {}
@@ -213,6 +249,46 @@ export class UpdateEmployeeDto extends CreateEmployeeDto {}
 export class UpdateEmployeeStatusDto {
   @IsEnum(EmployeeStatus)
   status: EmployeeStatus;
+
+  /** Optional reason stored on the progression period (e.g. Mark as Left note). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string;
+}
+
+export class PreviousEmployerDto {
+  @IsOptional()
+  @IsInt()
+  id?: number;
+
+  @IsString()
+  @MaxLength(100)
+  employer_name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  location?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  job_title?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  employed_from?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  employed_to?: string | null;
+
+  @IsOptional()
+  @IsString()
+  reason_for_leaving?: string | null;
 }
 
 export class WorkScheduleDayDto {
@@ -303,6 +379,9 @@ const includeRelations = {
     },
   },
   device_user_mappings: true,
+  employee_previous_employers: {
+    orderBy: { id: 'desc' as const },
+  },
 };
 
 /**
@@ -337,7 +416,35 @@ const listSelect = {
   device_user_mappings: { select: { device_sn: true, is_active: true } },
 };
 
-const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
+/** Accepts HH:MM or HH:MM:SS. Throws BadRequestException for unparseable values. */
+const TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+function toTime(value?: string | null, fieldLabel = 'time'): Date | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const match = raw.match(TIME_RE);
+  if (!match) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = match[3] != null ? Number(match[3]) : 0;
+  if (hours > 23 || minutes > 59 || seconds > 59) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+
+  const iso =
+    `1970-01-01T${String(hours).padStart(2, '0')}:` +
+    `${String(minutes).padStart(2, '0')}:` +
+    `${String(seconds).padStart(2, '0')}Z`;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+  return parsed;
+}
 
 @Injectable()
 export class EmployeesService {
@@ -371,7 +478,7 @@ export class EmployeesService {
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
   async getProgressionPeriods(id: number) {
-    return this.prisma.employee_progression_periods.findMany({
+    const periods = await this.prisma.employee_progression_periods.findMany({
       where: { employee_id: id },
       orderBy: { valid_from: 'asc' },
       include: {
@@ -381,14 +488,88 @@ export class EmployeesService {
         staff_categories: { select: { name: true, code: true } },
       },
     });
+
+    const managerIds = [
+      ...new Set(
+        periods
+          .map((p) => p.reporting_manager_id)
+          .filter((mid): mid is number => mid != null),
+      ),
+    ];
+    const managers =
+      managerIds.length === 0
+        ? []
+        : await this.prisma.employee_profiles.findMany({
+            where: { id: { in: managerIds } },
+            select: { id: true, full_name: true },
+          });
+    const managerNameById = new Map(managers.map((m) => [m.id, m.full_name]));
+
+    return periods.map((p) => ({
+      ...p,
+      reporting_manager: p.reporting_manager_id
+        ? {
+            id: p.reporting_manager_id,
+            full_name: managerNameById.get(p.reporting_manager_id) ?? null,
+          }
+        : null,
+    }));
   }
 
-  async exportMasterExcel(): Promise<Buffer> {
+  async exportExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
+    const where: Prisma.employee_profilesWhereInput = {};
+
+    if (query.ids) {
+      const idList = query.ids
+        .split(',')
+        .map((id) => Number(id.trim()))
+        .filter((n) => !isNaN(n) && n > 0);
+      if (idList.length > 0) {
+        where.id = { in: idList };
+      }
+    } else {
+      if (query.campus_id) {
+        const campusIds = query.campus_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (campusIds.length > 0) where.campus_id = { in: campusIds };
+      }
+      if (query.department_id) {
+        const deptIds = query.department_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (deptIds.length > 0) where.department_id = { in: deptIds };
+      }
+      if (query.staff_category_id) {
+        const catIds = query.staff_category_id.split(',').map((n) => Number(n.trim())).filter((n) => !isNaN(n));
+        if (catIds.length > 0) where.staff_category_id = { in: catIds };
+      }
+      if (query.status) {
+        const statuses = query.status.split(',').map((s) => s.trim()) as EmployeeStatus[];
+        if (statuses.length > 0) where.employment_status = { in: statuses };
+      }
+      if (query.search) {
+        const q = query.search.trim();
+        where.OR = [
+          { full_name: { contains: q, mode: 'insensitive' } },
+          { employee_code: { contains: q, mode: 'insensitive' } },
+          { cnic: { contains: q, mode: 'insensitive' } },
+          { job_title: { contains: q, mode: 'insensitive' } },
+        ];
+      }
+    }
+
     const employees = await this.prisma.employee_profiles.findMany({
+      where,
       include: includeRelations,
       orderBy: { id: 'asc' },
     });
-    return buildMasterEmployeesExcelBuffer(employees as any);
+
+    const columns = query.columns
+      ? query.columns.split(',').map((c) => c.trim()).filter(Boolean)
+      : undefined;
+
+    return buildMasterEmployeesExcelBuffer(employees as any, columns);
+  }
+
+  async exportMasterExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
+    return this.exportExcel(query);
   }
 
   /** Ensure staff category belongs to the employee's department. */
@@ -441,7 +622,62 @@ export class EmployeesService {
     if (hits('employee_code')) return new ConflictException('That employee code is already assigned to another employee.');
     if (hits('username')) return new ConflictException('Username already taken.');
     if (hits('user_id')) return new ConflictException('That portal account is already linked to another employee profile.');
+    if (hits('one_open_per_employee') || hits('employee_progression')) {
+      return new ConflictException(
+        'Could not record employment history for this employee (open progression period already exists). Retry or contact an admin.',
+      );
+    }
+    return new ConflictException('A conflicting employee record already exists. Refresh and try again.');
+  }
+
+  /**
+   * Maps common Prisma failures to HttpExceptions so the webapp does not show a
+   * bare "Internal server error" for fixable data/schema problems.
+   */
+  private httpExceptionFromDbError(err: unknown): Error | null {
+    const conflict = this.conflictFromUniqueViolation(err);
+    if (conflict) return conflict;
+
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      const meta = (err.meta ?? {}) as Record<string, unknown>;
+      if (err.code === 'P2000') {
+        const col = String(meta.column_name ?? meta.column ?? 'a field');
+        return new BadRequestException(`Value too long for ${col}. Shorten it and try again.`);
+      }
+      if (err.code === 'P2003') {
+        return new BadRequestException(
+          'Invalid reference (campus, department, category, segment, manager, or class assignment). Check selections and try again.',
+        );
+      }
+      if (err.code === 'P2021' || err.code === 'P2022') {
+        return new BadRequestException(
+          'Database schema is out of date (missing table or column). Ask an admin to run pending migrations, then retry.',
+        );
+      }
+    }
+
+    if (err instanceof Prisma.PrismaClientValidationError) {
+      if (/Invalid.*Date|Provided Date object is invalid/i.test(err.message)) {
+        return new BadRequestException(
+          'Invalid date or time value. Check join date, date of birth, and check-in/out times.',
+        );
+      }
+      return new BadRequestException('Invalid employee data. Check required fields and try again.');
+    }
+
     return null;
+  }
+
+  /** Prefer DB campus_prefix / campus_code; fall back to hardcoded id map. */
+  private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
+    if (campusId == null) return null;
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { campus_prefix: true, campus_code: true },
+    });
+    const fromDb = campus?.campus_prefix?.trim() || campus?.campus_code?.trim() || '';
+    if (fromDb) return fromDb.toUpperCase();
+    return campusPrefixForId(campusId);
   }
 
   /** Throws ConflictException if employee_code is already taken by another record */
@@ -518,6 +754,7 @@ export class EmployeesService {
       packIds,
       tileGrants,
       payroll_enabled,
+      previous_employers,
       ...rest
     } = dto;
 
@@ -530,7 +767,7 @@ export class EmployeesService {
 
     const codeFields = resolveEmployeeCodeFields({
       ...rest,
-      campusPrefix: campusPrefixForId(rest.campus_id ?? null),
+      campusPrefix: await this.resolveCampusPrefix(rest.campus_id ?? null),
     });
 
     if (codeFields.employee_code) {
@@ -550,6 +787,9 @@ export class EmployeesService {
     }
 
     const account = await this.preparePortalAccount(portal_account, rest, caller);
+
+    const reportingTime = toTime(rest.reporting_time, 'expected check-in time');
+    const leavingTime = toTime(rest.leaving_time, 'expected check-out time');
 
     let record: any;
     try {
@@ -587,8 +827,8 @@ export class EmployeesService {
             segment_id: rest.segment_id ?? null,
             job_description: upperOrNull(rest.job_description),
             notes: rest.notes || null,
-            reporting_time: toTime(rest.reporting_time),
-            leaving_time: toTime(rest.leaving_time),
+            reporting_time: reportingTime,
+            leaving_time: leavingTime,
             check_in_source: effectiveCheckInSource,
             late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
             monthly_pay: rest.monthly_pay ?? null,
@@ -615,7 +855,21 @@ export class EmployeesService {
                     section_id: a.section_id
                   }))
                 }
-              : undefined
+              : undefined,
+            employee_previous_employers: previous_employers?.length
+              ? {
+                  create: previous_employers
+                    .filter((e) => e.employer_name?.trim())
+                    .map((e) => ({
+                      employer_name: e.employer_name.trim(),
+                      location: e.location?.trim() || null,
+                      job_title: e.job_title?.trim() || null,
+                      employed_from: e.employed_from?.trim() || null,
+                      employed_to: e.employed_to?.trim() || null,
+                      reason_for_leaving: e.reason_for_leaving?.trim() || null,
+                    })),
+                }
+              : undefined,
           },
           include: includeRelations,
         });
@@ -631,8 +885,8 @@ export class EmployeesService {
         return created;
       });
     } catch (err) {
-      const conflict = this.conflictFromUniqueViolation(err);
-      if (conflict) throw conflict;
+      const mapped = this.httpExceptionFromDbError(err);
+      if (mapped) throw mapped;
       throw err;
     }
 
@@ -723,13 +977,25 @@ export class EmployeesService {
     }
 
     const now = new Date();
+    let password_hash: string;
+    let password_reveal: string;
+    try {
+      password_hash = await bcrypt.hash(portalAccount.password, 10);
+      password_reveal = encryptSecret(portalAccount.password);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error && /JWT_SECRET/i.test(err.message)
+          ? 'Server is missing JWT_SECRET — cannot store a recoverable portal password. Contact an admin.'
+          : 'Could not prepare portal password. Contact an admin.',
+      );
+    }
     return {
       data: {
         id: uuidv4(),
         username,
         full_name: rest.full_name?.trim() || username,
-        password_hash: await bcrypt.hash(portalAccount.password, 10),
-        password_reveal: encryptSecret(portalAccount.password),
+        password_hash,
+        password_reveal,
         role,
         campus_id: portalAccount.campus_id ?? rest.campus_id ?? null,
         allowed_class_ids: [],
@@ -749,6 +1015,7 @@ export class EmployeesService {
       packIds: _packIds,
       tileGrants: _tileGrants,
       portal_account,
+      previous_employers: _ignoredEmployers,
       ...rest
     } = dto;
     if (_ignoredStatus !== undefined) {
@@ -759,12 +1026,31 @@ export class EmployeesService {
     }
     const account = await this.preparePortalAccount(portal_account, rest, caller);
 
-    const nextCheckInSource = rest.check_in_source !== undefined ? rest.check_in_source : (existing as any).check_in_source;
-    if (nextCheckInSource === CheckInSource.FIXED) {
-      const nextReportingTime = rest.reporting_time !== undefined ? rest.reporting_time : (existing as any).reporting_time;
-      const nextLeavingTime = rest.leaving_time !== undefined ? rest.leaving_time : (existing as any).leaving_time;
-      if (!nextReportingTime || !nextLeavingTime) {
-        throw new BadRequestException('Expected check-in and check-out times are required when payroll uses fixed times.');
+    // Only enforce fixed-time requirements when this patch touches schedule fields.
+    // Otherwise Employment-tab saves get blocked by pre-existing incomplete schedules.
+    const touchesSchedule =
+      rest.check_in_source !== undefined ||
+      rest.reporting_time !== undefined ||
+      rest.leaving_time !== undefined;
+    if (touchesSchedule) {
+      const nextCheckInSource =
+        rest.check_in_source !== undefined
+          ? rest.check_in_source
+          : (existing as any).check_in_source;
+      if (nextCheckInSource === CheckInSource.FIXED) {
+        const nextReportingTime =
+          rest.reporting_time !== undefined
+            ? rest.reporting_time
+            : (existing as any).reporting_time;
+        const nextLeavingTime =
+          rest.leaving_time !== undefined
+            ? rest.leaving_time
+            : (existing as any).leaving_time;
+        if (!nextReportingTime || !nextLeavingTime) {
+          throw new BadRequestException(
+            'Expected check-in and check-out times are required when payroll uses fixed times.',
+          );
+        }
       }
     }
 
@@ -786,7 +1072,7 @@ export class EmployeesService {
           employee_code_number: hasCodeInput
             ? rest.employee_code_number
             : existing.employee_code_number,
-          campusPrefix: campusPrefixForId(nextCampusId),
+          campusPrefix: await this.resolveCampusPrefix(nextCampusId),
         })
       : null;
 
@@ -852,8 +1138,8 @@ export class EmployeesService {
           segment_id: rest.segment_id !== undefined ? rest.segment_id : undefined,
           job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
-          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
-          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined) : undefined,
+          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined, 'expected check-in time') : undefined,
+          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined, 'expected check-out time') : undefined,
           check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
@@ -894,8 +1180,8 @@ export class EmployeesService {
       return updated;
       });
     } catch (err) {
-      const conflict = this.conflictFromUniqueViolation(err);
-      if (conflict) throw conflict;
+      const mapped = this.httpExceptionFromDbError(err);
+      if (mapped) throw mapped;
       throw err;
     }
 
@@ -965,28 +1251,99 @@ export class EmployeesService {
     return result;
   }
 
-  async remove(id: number, changedBy?: string) {
+  /**
+   * Soft-offboard by default (TERMINATED + deactivate portal + progression row).
+   * Pass `purge: true` for a hard delete (mistaken/duplicate profiles only) —
+   * that cascades progression history away.
+   */
+  async remove(
+    id: number,
+    changedBy?: string,
+    opts?: { purge?: boolean; caller?: IJwtStaffPayload },
+  ) {
     const existing = await this.findOne(id);
-    const record = await this.prisma.$transaction(async (tx) => {
+
+    if (opts?.purge) {
+      if (opts.caller?.role !== StaffRole.SUPER_ADMIN) {
+        throw new ForbiddenException('Only super admins can permanently purge employee profiles');
+      }
+      const record = await this.prisma.$transaction(async (tx) => {
+        if (existing.user_id) {
+          await tx.users.update({
+            where: { id: existing.user_id },
+            data: { is_active: false },
+          });
+        }
+        return tx.employee_profiles.delete({
+          where: { id },
+        });
+      });
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(id),
+        action: 'DELETED',
+        section: 'hr',
+        old_value: (existing as any).full_name ?? (existing as any).employee_code ?? undefined,
+        note: 'Hard purge',
+        changed_by: changedBy ?? 'system',
+      });
+      return record;
+    }
+
+    if (
+      existing.employment_status === EmployeeStatus.TERMINATED ||
+      existing.employment_status === EmployeeStatus.LEFT
+    ) {
+      // Already offboarded — just ensure portal is off and return current row.
+      if (existing.user_id && (existing as any).users?.is_active !== false) {
+        await this.prisma.users.update({
+          where: { id: existing.user_id },
+          data: { is_active: false },
+        });
+      }
+      return this.findOne(id);
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (existing.user_id) {
         await tx.users.update({
           where: { id: existing.user_id },
           data: { is_active: false },
         });
       }
-      return tx.employee_profiles.delete({
+      const row = await tx.employee_profiles.update({
         where: { id },
+        data: {
+          employment_status: EmployeeStatus.TERMINATED,
+          is_permanent_employee: false,
+        },
+        include: includeRelations,
       });
+
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId: id,
+        ...this.progressionSnapshotFrom(row),
+        changeType: EmployeeStatus.TERMINATED,
+        changedBy: changedBy ?? 'system',
+        notes: 'Soft offboard (delete action)',
+      });
+
+      return row;
     });
+
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
       entity_id: String(id),
-      action: 'DELETED',
+      action: 'UPDATED',
       section: 'hr',
-      old_value: (existing as any).full_name ?? (existing as any).employee_code ?? undefined,
+      field: 'Employment Status',
+      old_value: existing.employment_status,
+      new_value: EmployeeStatus.TERMINATED,
+      note: 'Soft offboard (delete action)',
       changed_by: changedBy ?? 'system',
     });
-    return record;
+
+    return updated;
   }
 
   async findUnlinkedUsers() {
@@ -1189,8 +1546,9 @@ export class EmployeesService {
       await this.employeeProgression.recordProgressionChange(tx, {
         employeeId: id,
         ...this.progressionSnapshotFrom(row),
-        changeType: 'STATUS_CHANGED',
+        changeType: nextStatus,
         changedBy: caller.username || caller.sub || 'system',
+        notes: dto.notes ?? null,
       });
 
       return row;
@@ -1204,6 +1562,7 @@ export class EmployeesService {
       field: 'Employment Status',
       old_value: existing.employment_status,
       new_value: nextStatus,
+      note: dto.notes ?? undefined,
       changed_by: caller.username || caller.sub || 'system',
     });
 
@@ -1461,5 +1820,79 @@ export class EmployeesService {
     });
 
     return updated;
+  }
+
+  async upsertPreviousEmployer(
+    employeeId: number,
+    dto: PreviousEmployerDto,
+    changedBy?: string,
+  ) {
+    await this.findOne(employeeId);
+    const name = dto.employer_name?.trim();
+    if (!name) {
+      throw new BadRequestException('employer_name is required');
+    }
+
+    const data = {
+      employer_name: name,
+      location: dto.location?.trim() || null,
+      job_title: dto.job_title?.trim() || null,
+      employed_from: dto.employed_from?.trim() || null,
+      employed_to: dto.employed_to?.trim() || null,
+      reason_for_leaving: dto.reason_for_leaving?.trim() || null,
+    };
+
+    let row;
+    if (dto.id) {
+      const existing = await this.prisma.employee_previous_employers.findFirst({
+        where: { id: dto.id, employee_id: employeeId },
+      });
+      if (!existing) {
+        throw new NotFoundException(`Previous employer #${dto.id} not found for this employee`);
+      }
+      row = await this.prisma.employee_previous_employers.update({
+        where: { id: dto.id },
+        data,
+      });
+    } else {
+      row = await this.prisma.employee_previous_employers.create({
+        data: { employee_id: employeeId, ...data },
+      });
+    }
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: dto.id ? 'UPDATED' : 'CREATED',
+      section: 'hr',
+      field: 'previous_employer',
+      new_value: name,
+      changed_by: changedBy ?? 'system',
+    });
+
+    return row;
+  }
+
+  async deletePreviousEmployer(id: number, changedBy?: string) {
+    const existing = await this.prisma.employee_previous_employers.findUnique({
+      where: { id },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Previous employer with ID ${id} not found`);
+    }
+
+    await this.prisma.employee_previous_employers.delete({ where: { id } });
+
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(existing.employee_id),
+      action: 'DELETED',
+      section: 'hr',
+      field: 'previous_employer',
+      old_value: existing.employer_name ?? undefined,
+      changed_by: changedBy ?? 'system',
+    });
+
+    return { id };
   }
 }

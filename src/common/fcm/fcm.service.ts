@@ -45,7 +45,9 @@ export class FcmService implements OnModuleInit {
   ): Record<string, string> | undefined {
     if (!data) return { click_action: 'FLUTTER_NOTIFICATION_CLICK' };
 
-    const out: Record<string, string> = { click_action: 'FLUTTER_NOTIFICATION_CLICK' };
+    const out: Record<string, string> = {
+      click_action: data.click_action || 'FLUTTER_NOTIFICATION_CLICK',
+    };
     for (const [key, value] of Object.entries(data)) {
       out[key] = value == null ? '' : String(value);
     }
@@ -211,15 +213,29 @@ export class FcmService implements OnModuleInit {
     }
 
     const stringData = this.stringifyData(data);
+    const targetLink = data?.route || data?.click_action;
     const messages = tokens.map((t) => ({
       token: t.device_token,
       notification: { title, body },
       data: stringData,
-      apns: { payload: { aps: { sound: 'default' } } },
+      apns: {
+        payload: { aps: { sound: 'default' } },
+      },
       android: {
         priority: 'high' as const,
-        notification: { channelId: 'high_importance_channel' },
+        notification: {
+          channelId: 'high_importance_channel',
+          ...(stringData?.click_action ? { clickAction: stringData.click_action } : {}),
+        },
       },
+      ...(targetLink
+        ? {
+            webpush: {
+              fcmOptions: { link: targetLink },
+              notification: { title, body, icon: '/logo.png' },
+            },
+          }
+        : {}),
     }));
 
     try {
