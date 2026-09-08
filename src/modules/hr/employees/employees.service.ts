@@ -6,7 +6,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
   IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail,
-  ValidateNested, Min, MinLength,
+  ValidateNested, Min, MinLength, MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -142,7 +142,7 @@ export class CreateEmployeeDto {
   @IsOptional() @IsString()
   personal_email?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @MaxLength(100)
   job_title?: string;
 
   @IsOptional() @IsInt()
@@ -367,7 +367,35 @@ const listSelect = {
   device_user_mappings: { select: { device_sn: true, is_active: true } },
 };
 
-const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
+/** Accepts HH:MM or HH:MM:SS. Throws BadRequestException for unparseable values. */
+const TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+function toTime(value?: string | null, fieldLabel = 'time'): Date | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const match = raw.match(TIME_RE);
+  if (!match) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = match[3] != null ? Number(match[3]) : 0;
+  if (hours > 23 || minutes > 59 || seconds > 59) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+
+  const iso =
+    `1970-01-01T${String(hours).padStart(2, '0')}:` +
+    `${String(minutes).padStart(2, '0')}:` +
+    `${String(seconds).padStart(2, '0')}Z`;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(`Invalid ${fieldLabel} "${raw}". Use HH:MM (e.g. 07:30).`);
+  }
+  return parsed;
+}
 
 @Injectable()
 export class EmployeesService {
@@ -519,7 +547,62 @@ export class EmployeesService {
     if (hits('employee_code')) return new ConflictException('That employee code is already assigned to another employee.');
     if (hits('username')) return new ConflictException('Username already taken.');
     if (hits('user_id')) return new ConflictException('That portal account is already linked to another employee profile.');
+    if (hits('one_open_per_employee') || hits('employee_progression')) {
+      return new ConflictException(
+        'Could not record employment history for this employee (open progression period already exists). Retry or contact an admin.',
+      );
+    }
+    return new ConflictException('A conflicting employee record already exists. Refresh and try again.');
+  }
+
+  /**
+   * Maps common Prisma failures to HttpExceptions so the webapp does not show a
+   * bare "Internal server error" for fixable data/schema problems.
+   */
+  private httpExceptionFromDbError(err: unknown): Error | null {
+    const conflict = this.conflictFromUniqueViolation(err);
+    if (conflict) return conflict;
+
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      const meta = (err.meta ?? {}) as Record<string, unknown>;
+      if (err.code === 'P2000') {
+        const col = String(meta.column_name ?? meta.column ?? 'a field');
+        return new BadRequestException(`Value too long for ${col}. Shorten it and try again.`);
+      }
+      if (err.code === 'P2003') {
+        return new BadRequestException(
+          'Invalid reference (campus, department, category, segment, manager, or class assignment). Check selections and try again.',
+        );
+      }
+      if (err.code === 'P2021' || err.code === 'P2022') {
+        return new BadRequestException(
+          'Database schema is out of date (missing table or column). Ask an admin to run pending migrations, then retry.',
+        );
+      }
+    }
+
+    if (err instanceof Prisma.PrismaClientValidationError) {
+      if (/Invalid.*Date|Provided Date object is invalid/i.test(err.message)) {
+        return new BadRequestException(
+          'Invalid date or time value. Check join date, date of birth, and check-in/out times.',
+        );
+      }
+      return new BadRequestException('Invalid employee data. Check required fields and try again.');
+    }
+
     return null;
+  }
+
+  /** Prefer DB campus_prefix / campus_code; fall back to hardcoded id map. */
+  private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
+    if (campusId == null) return null;
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { campus_prefix: true, campus_code: true },
+    });
+    const fromDb = campus?.campus_prefix?.trim() || campus?.campus_code?.trim() || '';
+    if (fromDb) return fromDb.toUpperCase();
+    return campusPrefixForId(campusId);
   }
 
   /** Throws ConflictException if employee_code is already taken by another record */
@@ -608,7 +691,7 @@ export class EmployeesService {
 
     const codeFields = resolveEmployeeCodeFields({
       ...rest,
-      campusPrefix: campusPrefixForId(rest.campus_id ?? null),
+      campusPrefix: await this.resolveCampusPrefix(rest.campus_id ?? null),
     });
 
     if (codeFields.employee_code) {
@@ -628,6 +711,9 @@ export class EmployeesService {
     }
 
     const account = await this.preparePortalAccount(portal_account, rest, caller);
+
+    const reportingTime = toTime(rest.reporting_time, 'expected check-in time');
+    const leavingTime = toTime(rest.leaving_time, 'expected check-out time');
 
     let record: any;
     try {
@@ -665,8 +751,8 @@ export class EmployeesService {
             segment_id: rest.segment_id ?? null,
             job_description: upperOrNull(rest.job_description),
             notes: rest.notes || null,
-            reporting_time: toTime(rest.reporting_time),
-            leaving_time: toTime(rest.leaving_time),
+            reporting_time: reportingTime,
+            leaving_time: leavingTime,
             check_in_source: effectiveCheckInSource,
             late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
             monthly_pay: rest.monthly_pay ?? null,
@@ -709,8 +795,8 @@ export class EmployeesService {
         return created;
       });
     } catch (err) {
-      const conflict = this.conflictFromUniqueViolation(err);
-      if (conflict) throw conflict;
+      const mapped = this.httpExceptionFromDbError(err);
+      if (mapped) throw mapped;
       throw err;
     }
 
@@ -801,13 +887,25 @@ export class EmployeesService {
     }
 
     const now = new Date();
+    let password_hash: string;
+    let password_reveal: string;
+    try {
+      password_hash = await bcrypt.hash(portalAccount.password, 10);
+      password_reveal = encryptSecret(portalAccount.password);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error && /JWT_SECRET/i.test(err.message)
+          ? 'Server is missing JWT_SECRET — cannot store a recoverable portal password. Contact an admin.'
+          : 'Could not prepare portal password. Contact an admin.',
+      );
+    }
     return {
       data: {
         id: uuidv4(),
         username,
         full_name: rest.full_name?.trim() || username,
-        password_hash: await bcrypt.hash(portalAccount.password, 10),
-        password_reveal: encryptSecret(portalAccount.password),
+        password_hash,
+        password_reveal,
         role,
         campus_id: portalAccount.campus_id ?? rest.campus_id ?? null,
         allowed_class_ids: [],
@@ -864,7 +962,7 @@ export class EmployeesService {
           employee_code_number: hasCodeInput
             ? rest.employee_code_number
             : existing.employee_code_number,
-          campusPrefix: campusPrefixForId(nextCampusId),
+          campusPrefix: await this.resolveCampusPrefix(nextCampusId),
         })
       : null;
 
@@ -930,8 +1028,8 @@ export class EmployeesService {
           segment_id: rest.segment_id !== undefined ? rest.segment_id : undefined,
           job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
           notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
-          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined) : undefined,
-          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined) : undefined,
+          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined, 'expected check-in time') : undefined,
+          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined, 'expected check-out time') : undefined,
           check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
           late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
           monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
@@ -972,8 +1070,8 @@ export class EmployeesService {
       return updated;
       });
     } catch (err) {
-      const conflict = this.conflictFromUniqueViolation(err);
-      if (conflict) throw conflict;
+      const mapped = this.httpExceptionFromDbError(err);
+      if (mapped) throw mapped;
       throw err;
     }
 
