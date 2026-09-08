@@ -9,13 +9,15 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
+import { SalaryIncrementsService } from '../salary-increments/salary-increments.service';
+import { UpdateEmployeeIncrementCycleDto } from '../salary-increments/dto/salary-increments.dto';
 
 @ApiTags('HR Employees')
 @ApiBearerAuth()
 @Controller('hr/employees')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
 export class EmployeesController {
-  constructor(private readonly employeesService: EmployeesService) {}
+  constructor(private readonly employeesService: EmployeesService, private readonly salaryIncrements: SalaryIncrementsService) {}
 
   @Get('export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
@@ -153,6 +155,18 @@ export class EmployeesController {
     const data = await this.employeesService.getProgressionPeriods(id);
     return createApiResponse(data, HttpStatus.OK, 'Employee progression retrieved successfully');
   }
+
+  @Get(':id/salary-increment-status')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async salaryIncrementStatus(@Param('id', ParseIntPipe) id: number) { return createApiResponse(await this.salaryIncrements.employeeStatus(id), HttpStatus.OK, 'Salary increment status retrieved'); }
+
+  @Get(':id/salary-increments')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  async salaryIncrementHistory(@Param('id', ParseIntPipe) id: number) { return createApiResponse(await this.salaryIncrements.history(id), HttpStatus.OK, 'Salary increment history retrieved'); }
+
+  @Patch(':id/increment-cycle')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async updateIncrementCycle(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeIncrementCycleDto) { return createApiResponse(await this.salaryIncrements.updateEmployeeCycle(id, dto.increment_cycle_months ?? null), HttpStatus.OK, 'Increment cycle updated'); }
 
   @Post(':id/previous-employers')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))

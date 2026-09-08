@@ -42,6 +42,8 @@ import { TimetablesModule } from '../timetables/timetables.module';
 import { StorageModule } from '../../common/storage/storage.module';
 import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-notice-board.module';
 import { AccessModule } from '../access/access.module';
+import { SalaryIncrementsController } from './salary-increments/salary-increments.controller';
+import { SalaryIncrementsService } from './salary-increments/salary-increments.service';
 
 @Module({
   imports: [
@@ -72,6 +74,7 @@ import { AccessModule } from '../access/access.module';
     SecurityDepositsController,
     EmployeeLoansListController,
     EmployeeLoansController,
+    SalaryIncrementsController,
   ],
   providers: [
     EmployeesService,
@@ -92,6 +95,7 @@ import { AccessModule } from '../access/access.module';
     PayrollService,
     PayslipPdfService,
     EmployeeProfileResolverService,
+    SalaryIncrementsService,
   ],
   exports: [
     EmployeesService,
