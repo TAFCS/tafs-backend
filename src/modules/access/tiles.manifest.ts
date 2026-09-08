@@ -53,6 +53,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'hr.payroll_rules', module: 'hr', label: 'Payroll Rules', description: 'EOBI, SESSI & income tax rates', href: '/hr/payroll/rules', capabilities: ['hr.payroll.view'] },
   { id: 'hr.security_deposits', module: 'hr', label: 'Security Deposits', description: 'Caution money plans across employees', href: '/hr/security-deposits', capabilities: ['hr.employees.view'] },
   { id: 'hr.employee_loans', module: 'hr', label: 'Employee Loans', description: 'Salary advance loans across employees', href: '/hr/employee-loans', capabilities: ['hr.employees.view'] },
+  { id: 'hr.salary_increments', module: 'hr', label: 'Salary Increments', description: 'Plan, review and apply salary increases in bulk', href: '/hr/salary-increments', capabilities: ['hr.employees.view'] },
   { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'] },
 
   // ?? Attendance ???????????????????????????????????????????????????????????
