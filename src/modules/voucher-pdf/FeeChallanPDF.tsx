@@ -218,6 +218,16 @@ const styles = StyleSheet.create({
         letterSpacing: 6,
         fontFamily: 'Helvetica-Bold',
     },
+    waivedStamp: {
+        textAlign: 'center',
+        color: '#0f766e',
+        fontSize: 90,
+        fontWeight: 'bold',
+        opacity: 0.16,
+        transform: 'rotate(-35deg)',
+        letterSpacing: 10,
+        fontFamily: 'Helvetica-Bold',
+    },
     header: {
         flexDirection: 'column',
         marginBottom: 3,
@@ -595,6 +605,8 @@ interface FeeChallanPDFProps {
     paidStamp?: boolean;
     /** When true, a diagonal PAY IMMEDIATELY watermark is stamped across each challan copy */
     payImmediate?: boolean;
+    /** When true, a diagonal WAIVED watermark is stamped across the page */
+    waived?: boolean;
     siblings?: {
         full_name: string;
         cc: number | string;
@@ -900,7 +912,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, waived, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[PAGE_WIDTH, PAGE_HEIGHT]} style={styles.page} wrap>
             {/* Left 85% for the 3 Challan Copies.
@@ -1121,6 +1133,16 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                 <View style={styles.payImmediateWatermark}>
                     <View style={styles.payImmediateWatermarkInner}>
                         <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                    </View>
+                </View>
+            )}
+
+            {/* WAIVED watermark — the whole voucher was written off. Same
+                single-per-page mechanism as PAY IMMEDIATELY above. */}
+            {waived && (
+                <View style={styles.payImmediateWatermark}>
+                    <View style={styles.payImmediateWatermarkInner}>
+                        <Text style={styles.waivedStamp}>WAIVED</Text>
                     </View>
                 </View>
             )}

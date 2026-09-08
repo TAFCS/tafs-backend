@@ -59,6 +59,9 @@ export class BulkVoucherLogicService {
                     student_id: { in: studentIds },
                     fee_date: { lte: feeDateTo },
                     status: { in: statuses as any },
+                    // Waived heads are a permanent write-off — never re-billed,
+                    // even if a caller passes WAIVED in include_statuses.
+                    NOT: { status: 'WAIVED' as any },
                     is_discount: false, // discount rows are included separately per-voucher
                 },
                 include: {

@@ -91,6 +91,7 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
         showDiscount: data.showDiscount ?? true,
         paidStamp: data.paidStamp ?? false,
         payImmediate: data.payImmediate ?? false,
+        waived: data.waived ?? false,
         siblings: data.siblings
             ?.filter((s) => s.cc !== data.student.cc)
             .map((s) => ({

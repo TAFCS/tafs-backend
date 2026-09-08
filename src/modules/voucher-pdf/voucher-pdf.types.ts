@@ -52,6 +52,8 @@ export interface VoucherPdfData {
     paidStamp?: boolean;
     /** When true, overlay a diagonal PAY IMMEDIATELY watermark on all three challan copies */
     payImmediate?: boolean;
+    /** When true, overlay a diagonal WAIVED watermark — the whole voucher was written off */
+    waived?: boolean;
     /** When false, hide the discount column. Default: true */
     showDiscount?: boolean;
     /** Portal URL to encode in QR code on each challan copy */

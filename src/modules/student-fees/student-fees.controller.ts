@@ -23,6 +23,7 @@ import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateDiscountDto } from './dto/create-discount.dto';
 import { ApplyScholarshipDto } from './dto/apply-scholarship.dto';
 import { TransferHeadsDto } from './dto/transfer-heads.dto';
+import { WaiveHeadsDto, UnwaiveHeadsDto } from './dto/waive-heads.dto';
 
 @Controller('student-fees')
 @UseGuards(JwtStaffGuard, PoliciesGuard)
@@ -348,6 +349,28 @@ export class StudentFeesController {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.applyScholarshipToStudent(body, changedBy);
         return { success: true, data };
+    }
+
+    // ─── Fee Waiver Endpoints ─────────────────────────────────────────────────
+    // Loose heads only (not on any voucher). Heads that sit on a voucher are
+    // waived through the whole voucher: POST /v1/vouchers/:id/waive.
+
+    @Post('waive')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async waiveHeads(@Body() body: WaiveHeadsDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.waiveHeads(body.student_fee_ids, body.reason, changedBy);
+        return { success: true, message: 'Fee head(s) waived.', data };
+    }
+
+    @Post('unwaive')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee') || ability.can(Action.Manage, 'all'))
+    async unwaiveHeads(@Body() body: UnwaiveHeadsDto, @Req() req: Request) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const data = await this.studentFeesService.unwaiveHeads(body.student_fee_ids, changedBy);
+        return { success: true, message: 'Fee head waiver reversed.', data };
     }
 
     @Delete('reset/:studentId')

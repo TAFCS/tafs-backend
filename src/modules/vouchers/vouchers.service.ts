@@ -308,6 +308,10 @@ export class VouchersService {
      * `feeDate`. Nothing about head overlap; the new voucher is simply the
      * current bill for its period and everything before it.
      *
+     * WAIVED vouchers (and their heads) are deliberately never superseded or
+     * absorbed — a waiver is a permanent write-off, so the head must not
+     * reappear on a later voucher.
+     *
      * Returns:
      *  - voidVoucherIds: to flip to VOID after the new voucher exists.
      *  - absorbFeeIds:  every still-outstanding (outstanding > 0), non-discount
@@ -361,7 +365,7 @@ export class VouchersService {
             if (h.student_fee_id == null) continue;
             const sf = h.student_fees;
             if (!sf || sf.is_discount) continue;
-            if (sf.status === 'PAID' || sf.status === 'DISCOUNT') continue;
+            if (sf.status === 'PAID' || sf.status === 'DISCOUNT' || sf.status === 'WAIVED') continue;
             const outstanding =
                 Number(sf.amount ?? sf.amount_before_discount ?? 0) - Number(sf.amount_paid ?? 0);
             if (outstanding <= 0) continue;
@@ -473,6 +477,20 @@ export class VouchersService {
                     scholarship_presets: true,
                 },
             });
+
+            // A WAIVED head is a permanent write-off — it must never be put back
+            // on a voucher (computeArrears and supersession already exclude them;
+            // this rejects an explicit orderedFeeIds entry so it can't slip
+            // through and get silently demoted to ISSUED in step 4).
+            const waivedInPayload = feeRecords.filter(
+                (f: any) => !f.is_discount && f.status === 'WAIVED',
+            );
+            if (waivedInPayload.length > 0) {
+                throw new BadRequestException(
+                    `Cannot issue a voucher for ${waivedInPayload.length} waived fee head(s). ` +
+                    `Un-waive them first: [${waivedInPayload.map((f: any) => f.id).join(', ')}].`,
+                );
+            }
 
             // 1.c Resolve gross ("before discount") prices from class_fee_schedule —
             // the same single source of truth the rendered voucher uses. Using the
@@ -1246,7 +1264,7 @@ export class VouchersService {
     }
 
     /** Helper to prepare data for VoucherPdfService */
-    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, payImmediate = false) {
+    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, payImmediate = false, waived = false) {
         // 0. Term resolution.
         //
         // Every month label and every chronological sort below needs to know where
@@ -1853,6 +1871,7 @@ export class VouchersService {
                 qrUrl,
                 paidStamp,
                 payImmediate,
+                waived,
                 generatedByName: voucher.generated_by_name ?? undefined,
                 generatedAt: voucher.generated_at ?? undefined,
                 showDiscount: true,
@@ -2422,6 +2441,12 @@ export class VouchersService {
         if (voucher.status === 'PAID') {
             throw new BadRequestException(
                 `Voucher #${voucherId} is already fully paid.`,
+            );
+        }
+
+        if (voucher.status === 'WAIVED') {
+            throw new BadRequestException(
+                `Voucher #${voucherId} has been waived. Un-waive it before recording a deposit.`,
             );
         }
 
@@ -3865,8 +3890,9 @@ export class VouchersService {
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
         const finalPaidStamp = voucher.status === 'PAID';
-        const finalPayImmediate = (voucher as any).pay_immediately === true && !finalPaidStamp;
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp, false, finalPayImmediate);
+        const finalWaived = voucher.status === 'WAIVED';
+        const finalPayImmediate = (voucher as any).pay_immediately === true && !finalPaidStamp && !finalWaived;
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp, false, finalPayImmediate, finalWaived);
         await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
@@ -3959,9 +3985,10 @@ export class VouchersService {
         // Enforce paid stamp strictly based on whether the voucher is fully paid in DB
         const isActuallyPaid = voucher.status === 'PAID';
         const finalPaidStamp = isActuallyPaid;
-        // Never show the urgency watermark on an already fully-paid voucher, even
-        // if pay_immediately is still true from creation time.
-        const finalPayImmediate = voucher.pay_immediately === true && !isActuallyPaid;
+        const finalWaived = voucher.status === 'WAIVED';
+        // Never show the urgency watermark on an already fully-paid or waived
+        // voucher, even if pay_immediately is still true from creation time.
+        const finalPayImmediate = voucher.pay_immediately === true && !isActuallyPaid && !finalWaived;
 
         // ── FROZEN PAID RECEIPT ──────────────────────────────────────────────
         // A paid receipt is a permanent artifact of a payment that happened, not
@@ -3999,7 +4026,7 @@ export class VouchersService {
         });
         if (!full) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp, false, finalPayImmediate);
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp, false, finalPayImmediate, finalWaived);
         voucherData.showDiscount = showDiscount;
         // Prefer persisted stamp; if missing and a name was passed (first generate),
         // write it once so regenerations stay stable.
@@ -5391,9 +5418,15 @@ export class VouchersService {
         // VOID is a manual override (superseded voucher) — never recalculate it.
         // PAID is also definitional — hardcoded by deposit flow or split transaction.
         // EXPIRED is set by the validity-date cron and must not be overridden back to OVERDUE.
+        // WAIVED is a manual write-off (see waiveVoucher) — only un-waive restores it.
         // Re-deriving it from student_fees breaks split vouchers where a head only
         // covers a *portion* of the underlying student_fee amount.
-        if (voucher.status === 'VOID' || voucher.status === 'PAID' || voucher.status === 'EXPIRED') {
+        if (
+            voucher.status === 'VOID' ||
+            voucher.status === 'PAID' ||
+            voucher.status === 'EXPIRED' ||
+            voucher.status === 'WAIVED'
+        ) {
             const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
             const mappedHeads = (voucher.voucher_heads || []).map((h: any) => {
                 const fee = h.student_fees;
@@ -5678,12 +5711,14 @@ export class VouchersService {
     ) {
         const client = tx || this.prisma;
 
-        // 1. Fetch unpaid / partially-paid regular fees before targetFeeDate
+        // 1. Fetch unpaid / partially-paid regular fees before targetFeeDate.
+        //    WAIVED heads are a permanent write-off — excluded so they never
+        //    accrue arrears or trigger a Rs 1000 late-payment surcharge.
         const candidates = await client.student_fees.findMany({
             where: {
                 student_id: studentId,
                 fee_date: { lt: targetFeeDate },
-                status: { notIn: ['PAID', 'DISCOUNT'] as any[] },
+                status: { notIn: ['PAID', 'DISCOUNT', 'WAIVED'] as any[] },
                 is_arrear_surcharge: false,
                 is_discount: false,
             } as any,
@@ -6284,6 +6319,201 @@ export class VouchersService {
         return this.releaseVouchers(held.map((v) => v.id), changedBy);
     }
 
+    /**
+     * Waive a whole voucher — a permanent write-off. Every non-discount head is
+     * marked WAIVED (waived_amount = its outstanding amount), the voucher_heads
+     * balances are zeroed, and the voucher's status becomes 'WAIVED' (which the
+     * challan PDF stamps with a diagonal "WAIVED" watermark).
+     *
+     * Only allowed on a voucher with no payments — UNPAID / OVERDUE / EXPIRED.
+     * A PARTIALLY_PAID voucher must be split first (splitPartiallyPaid); the
+     * resulting all-unpaid balance voucher can then be waived.
+     *
+     * Reversible via unwaiveVoucher().
+     */
+    async waiveVoucher(id: number, reason: string | undefined, changedBy: string = 'system') {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id },
+            include: { voucher_heads: { include: { student_fees: true } } },
+        });
+        if (!voucher) {
+            throw new NotFoundException(`Voucher #${id} not found`);
+        }
+
+        if (voucher.status === 'WAIVED') {
+            throw new BadRequestException(`Voucher #${id} is already waived.`);
+        }
+        if (voucher.status === 'VOID') {
+            throw new BadRequestException(`Voucher #${id} has been voided and cannot be waived.`);
+        }
+        if (voucher.status === 'PAID') {
+            throw new BadRequestException(`Voucher #${id} is fully paid and cannot be waived.`);
+        }
+        if (voucher.status === 'PARTIALLY_PAID') {
+            throw new BadRequestException(
+                `Split this voucher before waiving — it has payments recorded.`,
+            );
+        }
+        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'EXPIRED') {
+            throw new BadRequestException(
+                `Only UNPAID, OVERDUE, or EXPIRED vouchers can be waived. Voucher #${id} is ${voucher.status}.`,
+            );
+        }
+
+        const nonDiscountHeads = voucher.voucher_heads.filter(
+            (h) => h.student_fees && !h.student_fees.is_discount,
+        );
+        // Defensive: PARTIALLY_PAID should already have caught this, but a stray
+        // paid head under a non-partial status must not be silently written off.
+        const paidHead = nonDiscountHeads.find(
+            (h) => Number(h.student_fees!.amount_paid ?? 0) > 0,
+        );
+        if (paidHead) {
+            throw new BadRequestException(
+                `Voucher #${id} has a fee head with a recorded payment. Split the voucher before waiving.`,
+            );
+        }
+
+        const feeIds = nonDiscountHeads.map((h) => h.student_fee_id);
+        const now = new Date();
+
+        await this.prisma.$transaction(async (tx) => {
+            for (const h of nonDiscountHeads) {
+                await tx.student_fees.update({
+                    where: { id: h.student_fee_id },
+                    data: {
+                        status: 'WAIVED',
+                        waived_amount: h.student_fees!.amount ?? h.student_fees!.amount_before_discount ?? new Prisma.Decimal(0),
+                        waived_at: now,
+                        waived_by: changedBy,
+                        waive_reason: reason ?? null,
+                    } as any,
+                });
+            }
+            if (feeIds.length > 0) {
+                await tx.$executeRaw`
+                    UPDATE voucher_heads
+                    SET waived = true, balance = 0
+                    WHERE voucher_id = ${id}
+                      AND student_fee_id IN (${Prisma.join(feeIds)})`;
+            }
+            // The whole voucher is written off — its late-payment surcharges go with it.
+            await tx.voucher_arrear_surcharges.updateMany({
+                where: { voucher_id: id, waived: false },
+                data: { waived: true, waived_by: changedBy },
+            });
+            await tx.vouchers.update({
+                where: { id },
+                data: {
+                    status: 'WAIVED',
+                    waived_at: now,
+                    waived_by: changedBy,
+                    waive_reason: reason ?? null,
+                    surcharge_waived: true,
+                    surcharge_waived_by: changedBy,
+                    // Drop the cached challan so the next fetch re-renders it with
+                    // the WAIVED watermark.
+                    pdf_url: null,
+                } as any,
+            });
+        });
+
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(id),
+            action: 'UPDATED',
+            field: 'status',
+            old_value: voucher.status ?? null,
+            new_value: 'WAIVED',
+            changed_by: changedBy,
+            student_id: voucher.student_id,
+            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) waived — ${nonDiscountHeads.length} fee head(s) written off${reason ? `: ${reason}` : ''}.`,
+        });
+
+        return this.findOne(id);
+    }
+
+    /**
+     * Reverse a waiver. Heads go back to ISSUED (they were on a voucher), their
+     * waived_* fields are cleared, voucher_heads balances are recomputed, and the
+     * voucher returns to OVERDUE (if past due) or UNPAID.
+     */
+    async unwaiveVoucher(id: number, changedBy: string = 'system') {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id },
+            include: { voucher_heads: { include: { student_fees: true } } },
+        });
+        if (!voucher) {
+            throw new NotFoundException(`Voucher #${id} not found`);
+        }
+        if (voucher.status !== 'WAIVED') {
+            throw new BadRequestException(`Voucher #${id} is not waived (status ${voucher.status}).`);
+        }
+
+        const nonDiscountFeeIds = voucher.voucher_heads
+            .filter((h) => h.student_fees && !h.student_fees.is_discount)
+            .map((h) => h.student_fee_id);
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const due = voucher.due_date ? new Date(voucher.due_date) : null;
+        if (due) due.setHours(0, 0, 0, 0);
+        const restoredStatus = due && due < today ? 'OVERDUE' : 'UNPAID';
+
+        await this.prisma.$transaction(async (tx) => {
+            if (nonDiscountFeeIds.length > 0) {
+                await tx.student_fees.updateMany({
+                    where: { id: { in: nonDiscountFeeIds } },
+                    data: {
+                        status: 'ISSUED',
+                        waived_amount: null,
+                        waived_at: null,
+                        waived_by: null,
+                        waive_reason: null,
+                    } as any,
+                });
+            }
+            await tx.$executeRaw`
+                UPDATE voucher_heads
+                SET waived = false,
+                    balance = GREATEST(net_amount - COALESCE(amount_deposited, 0), 0)
+                WHERE voucher_id = ${id}`;
+            // Reverse the surcharge write-off applied by waiveVoucher. (A surcharge
+            // that was manually waived before the voucher waiver is also restored
+            // here — an accepted edge case; re-waive it individually if needed.)
+            await tx.voucher_arrear_surcharges.updateMany({
+                where: { voucher_id: id },
+                data: { waived: false, waived_by: null },
+            });
+            await tx.vouchers.update({
+                where: { id },
+                data: {
+                    status: restoredStatus,
+                    waived_at: null,
+                    waived_by: null,
+                    waive_reason: null,
+                    surcharge_waived: false,
+                    surcharge_waived_by: null,
+                    pdf_url: null,
+                } as any,
+            });
+        });
+
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(id),
+            action: 'UPDATED',
+            field: 'status',
+            old_value: 'WAIVED',
+            new_value: restoredStatus,
+            changed_by: changedBy,
+            student_id: voucher.student_id,
+            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) un-waived — ${nonDiscountFeeIds.length} fee head(s) restored to ${restoredStatus}.`,
+        });
+
+        return this.findOne(id);
+    }
+
     async remove(id: number, changedBy: string = 'system') {
         const voucher = await this.prisma.vouchers.findUnique({
             where: { id },
@@ -6311,6 +6541,12 @@ export class VouchersService {
         // PAID and PARTIALLY_PAID vouchers cannot be deleted directly.
         // To undo a payment: clear the deposit via the deposit page — for PAID vouchers the
         // deposit clear automatically deletes the voucher; for PARTIALLY_PAID it reverts to UNPAID.
+        // WAIVED vouchers must be un-waived first (restores heads + status).
+        if (voucher.status === 'WAIVED') {
+            throw new BadRequestException(
+                `Voucher #${id} has been waived. Un-waive it before deleting.`,
+            );
+        }
         if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'VOID' && voucher.status !== 'EXPIRED') {
             throw new BadRequestException(
                 `Only UNPAID, OVERDUE, VOID, or EXPIRED vouchers can be deleted. ` +

@@ -29,6 +29,7 @@ import { FilterVouchersDto } from './dto/filter-vouchers.dto';
 import { FilterPendingReleaseVouchersDto } from './dto/filter-pending-release-vouchers.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { ClearDepositDto } from './dto/clear-deposit.dto';
+import { WaiveVoucherDto } from './dto/waive-voucher.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
 import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
@@ -310,6 +311,49 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher deposit recorded successfully',
+            data: voucher,
+        };
+    }
+
+    @Post(':id/waive')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async waiveVoucher(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: WaiveVoucherDto,
+        @Req() req: any,
+    ) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.waiveVoucher(id, dto.reason, changedBy);
+        return {
+            success: true,
+            message: 'Voucher waived — fee heads written off.',
+            data: voucher,
+        };
+    }
+
+    @Post(':id/unwaive')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async unwaiveVoucher(
+        @Param('id', ParseIntPipe) id: number,
+        @Req() req: any,
+    ) {
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const voucher = await this.vouchersService.unwaiveVoucher(id, changedBy);
+        return {
+            success: true,
+            message: 'Voucher waiver reversed — fee heads restored.',
             data: voucher,
         };
     }
