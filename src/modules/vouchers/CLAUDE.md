@@ -53,6 +53,14 @@ arrear group) at the moment a new voucher is issued, that voucher gets:
 Both constants (`PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD`, `PAY_IMMEDIATE_DUE_DAYS`) live near the
 top of `vouchers.service.ts`, above `PDF_FREEZE_SELECT`.
 
+**Frontend enabler.** The whole feature is gated behind `app_config.pay_immediately_enabled`
+(checked via `VouchersService.isPayImmediateEnabled()`, generic `app_config` key-value store —
+see `../app-config/app-config.service.ts`), seeded `'false'`. It ships dormant: merging this code
+doesn't change voucher behavior until a SUPER_ADMIN flips the toggle on `/admin/developer`
+(webapp) or `PATCH /v1/app-config/pay_immediately_enabled`. Once confirmed in production, that
+default can be reconsidered — but don't remove the check itself, since it's the one on/off switch
+for both `create()` and `splitPartiallyPaid()`.
+
 This was implemented independently in both places, per the rule above:
 
 - `create()`: right after `surchargeGroups` is computed from `computeArrears()`, before the

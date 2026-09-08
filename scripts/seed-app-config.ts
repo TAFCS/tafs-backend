@@ -14,6 +14,11 @@ const initialConfigs = [
     value: '250',
     description: 'Last issued School Leaving Certificate (SLC) number. Next issued = this + 1.',
   },
+  {
+    key: 'pay_immediately_enabled',
+    value: 'false',
+    description: 'When true, a voucher issued to a student with 2+ months of arrears gets its due/validity dates forced to issue_date+4 and a PAY IMMEDIATELY watermark. Off by default until confirmed — see VouchersService.',
+  },
 ];
 
 async function main() {

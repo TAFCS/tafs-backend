@@ -370,6 +370,17 @@ export class VouchersService {
         return { voidVoucherIds, absorbFeeIds: [...absorb], meta };
     }
 
+    // PAY IMMEDIATELY frontend enabler — see CLAUDE.md. Gated behind
+    // app_config.pay_immediately_enabled so the auto-detection can be
+    // deployed dormant (seeded 'false') and switched on later from
+    // /admin/developer without a code change. No cache: every call reads
+    // Postgres directly, same as the rest of app_config (see AppConfigService)
+    // — a toggle takes effect on the very next voucher issued.
+    private async isPayImmediateEnabled(tx: Prisma.TransactionClient): Promise<boolean> {
+        const row = await tx.app_config.findUnique({ where: { key: 'pay_immediately_enabled' } });
+        return row?.value === 'true';
+    }
+
     async create(
         dto: CreateVoucherDto,
         pdfBuffer?: Buffer,
@@ -421,7 +432,10 @@ export class VouchersService {
             // PAY IMMEDIATELY: 2+ distinct arrear months outstanding forces the
             // due/validity dates to issue_date + PAY_IMMEDIATE_DUE_DAYS, overriding
             // whatever the caller sent. See PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD.
-            const payImmediate = surchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD;
+            // Gated by app_config.pay_immediately_enabled — see isPayImmediateEnabled().
+            const payImmediate =
+                surchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD &&
+                (await this.isPayImmediateEnabled(tx));
             if (payImmediate) {
                 const forcedDate = new Date(issueDate);
                 forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
@@ -4739,7 +4753,10 @@ export class VouchersService {
                 waiveBalanceSurcharge,
                 tx,
             );
-            const payImmediate = splitSurchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD;
+            // Gated by app_config.pay_immediately_enabled — see isPayImmediateEnabled().
+            const payImmediate =
+                splitSurchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD &&
+                (await this.isPayImmediateEnabled(tx));
             if (payImmediate) {
                 const forcedDate = new Date(issueDate);
                 forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
