@@ -78,6 +78,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'] },
   { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'] },
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'] },
+  { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
   { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'] },

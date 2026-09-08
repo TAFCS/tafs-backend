@@ -15,7 +15,9 @@ export class SegmentsController {
   constructor(private readonly segmentsService: SegmentsService) {}
 
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @CheckPolicies(
+    (ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Class'),
+  )
   async findAll() {
     const data = await this.segmentsService.findAll();
     return createApiResponse(data, HttpStatus.OK, 'Segments retrieved successfully');

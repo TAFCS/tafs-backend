@@ -8,6 +8,9 @@ export class SegmentsService {
   async findAll() {
     return this.prisma.segments.findMany({
       orderBy: { display_order: 'asc' },
+      include: {
+        _count: { select: { classes: true, employee_profiles: true } },
+      },
     });
   }
 }
