@@ -126,7 +126,17 @@ export class AttendanceObjectionsService {
     const existing = await this.prisma.attendance_objections.findUnique({
       where: { id },
       include: {
-        employee: { select: { id: true, campus_id: true, user_id: true, full_name: true, employee_code: true } },
+        employee: {
+          select: {
+            id: true,
+            campus_id: true,
+            user_id: true,
+            full_name: true,
+            employee_code: true,
+            leaving_time: true,
+            reporting_time: true,
+          },
+        },
         scan: { select: { id: true, scan_time: true, direction: true, device_sn: true, device_pin: true } },
       },
     });
@@ -175,7 +185,37 @@ export class AttendanceObjectionsService {
         ? `Objection accepted: ${dto.admin_notes.trim()}`
         : `Objection accepted: ${existing.reason}`;
 
-      if (existing.employee.campus_id) {
+      let checkInAt: Date | undefined = undefined;
+      let checkOutAt: Date | undefined = undefined;
+
+      if (existing.scan_id) {
+        if (isCheckOut) {
+          checkOutAt = existing.claimed_time;
+        } else {
+          checkInAt = existing.claimed_time;
+        }
+      } else {
+        // Day-level objection (zero biometric scans recorded for the day):
+        // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
+        checkInAt = existing.claimed_time;
+        if (existing.employee.leaving_time) {
+          const lt = new Date(existing.employee.leaving_time);
+          const d = new Date(existing.attendance_date);
+          checkOutAt = new Date(
+            Date.UTC(
+              d.getUTCFullYear(),
+              d.getUTCMonth(),
+              d.getUTCDate(),
+              lt.getUTCHours(),
+              lt.getUTCMinutes(),
+              0,
+            ),
+          );
+        }
+      }
+
+      const targetCampusId = existing.employee.campus_id ?? user.campusId;
+      if (targetCampusId) {
         await this.prisma.attendance_staff_daily.upsert({
           where: {
             employee_id_date: {
@@ -185,21 +225,20 @@ export class AttendanceObjectionsService {
           },
           create: {
             employee_id: existing.employee_id,
-            campus_id: existing.employee.campus_id,
+            campus_id: targetCampusId,
             date: existing.attendance_date,
             status: StaffAttendanceStatus.PRESENT,
             source: AttendanceSource.MANUAL,
-            check_in_at: isCheckOut ? undefined : existing.claimed_time,
-            check_out_at: isCheckOut ? existing.claimed_time : undefined,
+            check_in_at: checkInAt,
+            check_out_at: checkOutAt,
             notes: noteText,
             marked_by: user.sub,
           },
           update: {
             status: StaffAttendanceStatus.PRESENT,
             source: AttendanceSource.MANUAL,
-            ...(isCheckOut
-              ? { check_out_at: existing.claimed_time }
-              : { check_in_at: existing.claimed_time }),
+            ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
+            ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
             notes: noteText,
             marked_by: user.sub,
           },
@@ -240,6 +279,8 @@ export class AttendanceObjectionsService {
           status: dto.status,
           objection_id: String(id),
           date: dateLabel,
+          route: '/my-objections',
+          click_action: 'FLUTTER_NOTIFICATION_CLICK',
         },
       );
     }
@@ -322,7 +363,12 @@ export class AttendanceObjectionsService {
       userIds,
       'Attendance objection filed',
       `${employeeName} filed an objection for ${dateLabel}`,
-      { type: 'attendance_objection', date: dateLabel },
+      {
+        type: 'attendance_objection',
+        date: dateLabel,
+        route: '/hr/objections',
+        click_action: '/hr/objections',
+      },
     );
   }
 }
