@@ -61,6 +61,8 @@ export class AnalyticsService {
       academic_year: currentYear,
       is_discount: false,
       is_arrear_surcharge: false,
+      // Waived heads are a permanent write-off — never expected, never owed.
+      status: { not: 'WAIVED' as const },
       ...feeFilter,
     };
 
@@ -434,6 +436,8 @@ export class AnalyticsService {
       academic_year: currentYear,
       is_discount: false,
       is_arrear_surcharge: false,
+      // Waived heads are a permanent write-off — never expected, never owed.
+      status: { not: 'WAIVED' as const },
       ...feeFilter,
     };
 

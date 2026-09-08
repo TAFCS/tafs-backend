@@ -67,6 +67,7 @@ const FEE_HEAD_SELECT = {
   status: true,
   amount: true,
   amount_paid: true,
+  waived_amount: true,
   target_month: true,
   academic_year: true,
   term_start_month: true,
@@ -212,6 +213,7 @@ const DEFAULTER_HEAD_SELECT = {
   fee_date: true,
   amount_paid: true,
   amount_before_discount: true,
+  status: true,
 } satisfies Prisma.student_feesSelect;
 
 type DefaulterStudent = Prisma.studentsGetPayload<{
@@ -389,7 +391,7 @@ export class FinancialReportsService {
     ]);
 
     const studentIds = groups.map((g) => g.student_id);
-    const [students, discGroups] = studentIds.length
+    const [students, discGroups, waivedGroups] = studentIds.length
       ? await Promise.all([
           this.prisma.students.findMany({
             where: { cc: { in: studentIds } },
@@ -415,11 +417,22 @@ export class FinancialReportsService {
             _sum: { amount: true },
             _count: { _all: true },
           }),
+          // Waived amounts for this page's students — netted out of outstanding
+          // and surfaced as a Waived column.
+          this.prisma.student_fees.groupBy({
+            by: ['student_id'],
+            where: { ...where, is_discount: false, status: fee_status_enum.WAIVED, student_id: { in: studentIds } },
+            _sum: { amount: true },
+            _count: { _all: true },
+          }),
         ])
-      : [[], []];
+      : [[], [], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
     const discountByStudent = new Map(
       discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
+    const waivedByStudent = new Map(
+      waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
     );
 
     return {
@@ -427,6 +440,7 @@ export class FinancialReportsService {
       items: groups.map((group) => {
         const student = studentMap.get(group.student_id);
         const discount = discountByStudent.get(group.student_id);
+        const waived = this.roundMoney(waivedByStudent.get(group.student_id) ?? 0);
         const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
         const paid = this.toMoney(group._sum.amount_paid);
         return {
@@ -439,7 +453,8 @@ export class FinancialReportsService {
           head_count: group._count._all + (discount?.count ?? 0),
           amount: billed,
           amount_paid: paid,
-          outstanding: this.roundMoney(billed - paid),
+          waived,
+          outstanding: this.roundMoney(billed - paid - waived),
         };
       }),
       pagination: createPaginationMeta(page, limit, studentCount),
@@ -468,7 +483,7 @@ export class FinancialReportsService {
     // into one generic bucket here rather than being broken out per discount preset —
     // that finer detail is only available in the flat "heads" view and the Fee Matrix,
     // where each row/cell is labeled individually from discount_presets.title.
-    const [groups, discGroups, totals, studentCount, feeTypes] = await Promise.all([
+    const [groups, discGroups, waivedGroups, totals, studentCount, feeTypes] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['fee_type_id', 'description_prefix'],
         where: { ...where, is_discount: false },
@@ -479,6 +494,12 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['fee_type_id', 'description_prefix'],
         where: { ...where, is_discount: true },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['fee_type_id', 'description_prefix'],
+        where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
         _sum: { amount: true },
         _count: { _all: true },
       }),
@@ -497,9 +518,13 @@ export class FinancialReportsService {
     const discountByKey = new Map(
       discGroups.map((d) => [groupKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
     );
+    const waivedByKey = new Map(
+      waivedGroups.map((w) => [groupKey(w), this.toMoney(w._sum.amount)]),
+    );
     const seenKeys = new Set(groups.map(groupKey));
     const items = groups.map((group) => {
       const discount = discountByKey.get(groupKey(group));
+      const waived = this.roundMoney(waivedByKey.get(groupKey(group)) ?? 0);
       const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
       const amountPaid = this.toMoney(group._sum.amount_paid);
       const feeName = group.fee_type_id != null ? feeTypeMap.get(group.fee_type_id) ?? '' : '';
@@ -510,7 +535,8 @@ export class FinancialReportsService {
         head_count: group._count._all + (discount?.count ?? 0),
         amount,
         amount_paid: amountPaid,
-        outstanding: this.roundMoney(amount - amountPaid),
+        waived,
+        outstanding: this.roundMoney(amount - amountPaid - waived),
       };
     });
     // A discount bucket with no matching non-discount row (e.g. every fee head it
@@ -525,6 +551,7 @@ export class FinancialReportsService {
         head_count: disc._count._all,
         amount: -this.toMoney(disc._sum.amount),
         amount_paid: 0,
+        waived: 0,
         outstanding: -this.toMoney(disc._sum.amount),
       });
     }
@@ -555,7 +582,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, discGroups, totals, studentCount, classTerms] = await Promise.all([
+    const [groups, discGroups, waivedGroups, totals, studentCount, classTerms] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['target_month', 'academic_year', 'term_start_month'],
         where: { ...where, is_discount: false },
@@ -566,6 +593,12 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['target_month', 'academic_year', 'term_start_month'],
         where: { ...where, is_discount: true },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['target_month', 'academic_year', 'term_start_month'],
+        where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
         _sum: { amount: true },
         _count: { _all: true },
       }),
@@ -581,6 +614,9 @@ export class FinancialReportsService {
     const discountByPeriod = new Map(
       discGroups.map((d) => [periodKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
     );
+    const waivedByPeriod = new Map(
+      waivedGroups.map((w) => [periodKey(w), this.toMoney(w._sum.amount)]),
+    );
     const seenPeriodKeys = new Set(groups.map(periodKey));
     const buildPeriodItem = (
       targetMonth: number,
@@ -589,6 +625,7 @@ export class FinancialReportsService {
       amount: number,
       amountPaid: number,
       headCount: number,
+      waived: number,
     ) => {
       const termStart =
         termStartMonth ?? (classTerms.size ? [...classTerms.values()][0] : 8);
@@ -599,11 +636,13 @@ export class FinancialReportsService {
         head_count: headCount,
         amount,
         amount_paid: amountPaid,
-        outstanding: this.roundMoney(amount - amountPaid),
+        waived,
+        outstanding: this.roundMoney(amount - amountPaid - waived),
       };
     };
     const items = groups.map((group) => {
       const discount = discountByPeriod.get(periodKey(group));
+      const waived = this.roundMoney(waivedByPeriod.get(periodKey(group)) ?? 0);
       const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
       const amountPaid = this.toMoney(group._sum.amount_paid);
       return buildPeriodItem(
@@ -613,6 +652,7 @@ export class FinancialReportsService {
         amount,
         amountPaid,
         group._count._all + (discount?.count ?? 0),
+        waived,
       );
     });
     // A period with only discount rows (no matching non-discount head this filter)
@@ -627,6 +667,7 @@ export class FinancialReportsService {
           -this.toMoney(disc._sum.amount),
           0,
           disc._count._all,
+          0,
         ),
       );
     }
@@ -658,7 +699,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [groups, discGroups, totals, studentCount] = await Promise.all([
+    const [groups, discGroups, waivedGroups, totals, studentCount] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
         where: { ...where, is_discount: false },
@@ -671,6 +712,12 @@ export class FinancialReportsService {
         _sum: { amount: true },
         _count: { _all: true },
       }),
+      this.prisma.student_fees.groupBy({
+        by: ['student_id'],
+        where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
       this.feeHeadMoneyTotals(where),
       this.prisma.students.count({
         where: { ...studentWhere, student_fees: { some: leaf } },
@@ -680,19 +727,25 @@ export class FinancialReportsService {
     // Merge each student's discount total into their fee-head total before class
     // bucketing, so a class's amount is net-of-discount. Union both group sets so a
     // student with only a discount row (no fee head this filter) still gets a row.
-    const perStudent = new Map<number, { amount: number; amountPaid: number; headCount: number }>();
+    const perStudent = new Map<number, { amount: number; amountPaid: number; headCount: number; waived: number }>();
     for (const group of groups) {
       perStudent.set(group.student_id, {
         amount: this.toMoney(group._sum.amount),
         amountPaid: this.toMoney(group._sum.amount_paid),
         headCount: group._count._all,
+        waived: 0,
       });
     }
     for (const disc of discGroups) {
-      const existing = perStudent.get(disc.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0 };
+      const existing = perStudent.get(disc.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0, waived: 0 };
       existing.amount = this.roundMoney(existing.amount - this.toMoney(disc._sum.amount));
       existing.headCount += disc._count._all;
       perStudent.set(disc.student_id, existing);
+    }
+    for (const w of waivedGroups) {
+      const existing = perStudent.get(w.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0, waived: 0 };
+      existing.waived = this.roundMoney(existing.waived + this.toMoney(w._sum.amount));
+      perStudent.set(w.student_id, existing);
     }
 
     const studentIds = [...perStudent.keys()];
@@ -720,6 +773,7 @@ export class FinancialReportsService {
         head_count: number;
         amount: number;
         amount_paid: number;
+        waived: number;
         outstanding: number;
       }
     >();
@@ -735,13 +789,15 @@ export class FinancialReportsService {
         head_count: 0,
         amount: 0,
         amount_paid: 0,
+        waived: 0,
         outstanding: 0,
       };
       existing.student_count += 1;
       existing.head_count += sums.headCount;
       existing.amount = this.roundMoney(existing.amount + sums.amount);
       existing.amount_paid = this.roundMoney(existing.amount_paid + sums.amountPaid);
-      existing.outstanding = this.roundMoney(existing.amount - existing.amount_paid);
+      existing.waived = this.roundMoney(existing.waived + sums.waived);
+      existing.outstanding = this.roundMoney(existing.amount - existing.amount_paid - existing.waived);
       classBuckets.set(bucketKey, existing);
     }
 
@@ -848,6 +904,7 @@ export class FinancialReportsService {
       { header: 'Status', key: 'status', width: 16 },
       { header: 'Amount', key: 'amount', width: 14 },
       { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived_amount', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
     const data = items.map((item) => ({
@@ -863,6 +920,7 @@ export class FinancialReportsService {
       status: item.status ?? '',
       amount: item.amount,
       amount_paid: item.amount_paid,
+      waived_amount: item.waived_amount,
       outstanding: item.outstanding,
     }));
 
@@ -896,7 +954,7 @@ export class FinancialReportsService {
     this.assertExportCap(groups.length);
 
     const studentIds = groups.map((g) => g.student_id);
-    const [students, discGroups] = studentIds.length
+    const [students, discGroups, waivedGroups] = studentIds.length
       ? await Promise.all([
           this.prisma.students.findMany({
             where: { cc: { in: studentIds } },
@@ -919,11 +977,20 @@ export class FinancialReportsService {
             _sum: { amount: true },
             _count: { _all: true },
           }),
+          this.prisma.student_fees.groupBy({
+            by: ['student_id'],
+            where: { ...where, is_discount: false, status: fee_status_enum.WAIVED, student_id: { in: studentIds } },
+            _sum: { amount: true },
+            _count: { _all: true },
+          }),
         ])
-      : [[], []];
+      : [[], [], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
     const discountByStudent = new Map(
       discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+    );
+    const waivedByStudent = new Map(
+      waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
     );
     const columns: ExportColumn[] = [
       { header: 'CC', key: 'cc', width: 10 },
@@ -935,11 +1002,13 @@ export class FinancialReportsService {
       { header: 'Heads', key: 'head_count', width: 10 },
       { header: 'Amount', key: 'amount', width: 14 },
       { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
     const data = groups.map((group) => {
       const student = studentMap.get(group.student_id);
       const discount = discountByStudent.get(group.student_id);
+      const waived = this.roundMoney(waivedByStudent.get(group.student_id) ?? 0);
       const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
       const paid = this.toMoney(group._sum.amount_paid);
       return {
@@ -952,7 +1021,8 @@ export class FinancialReportsService {
         head_count: group._count._all + (discount?.count ?? 0),
         amount: billed,
         amount_paid: paid,
-        outstanding: this.roundMoney(billed - paid),
+        waived,
+        outstanding: this.roundMoney(billed - paid - waived),
       };
     });
 
@@ -979,6 +1049,7 @@ export class FinancialReportsService {
       { header: 'Heads', key: 'head_count', width: 10 },
       { header: 'Amount', key: 'amount', width: 14 },
       { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
     const data = result.items.map((item) => ({
@@ -986,6 +1057,7 @@ export class FinancialReportsService {
       head_count: item.head_count,
       amount: item.amount,
       amount_paid: item.amount_paid,
+      waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
     return this.buildExportFile(
@@ -1012,6 +1084,7 @@ export class FinancialReportsService {
       { header: 'Heads', key: 'head_count', width: 10 },
       { header: 'Amount', key: 'amount', width: 14 },
       { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
     const data = result.items.map((item) => ({
@@ -1020,6 +1093,7 @@ export class FinancialReportsService {
       head_count: item.head_count,
       amount: item.amount,
       amount_paid: item.amount_paid,
+      waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
     return this.buildExportFile(
@@ -1046,6 +1120,7 @@ export class FinancialReportsService {
       { header: 'Heads', key: 'head_count', width: 10 },
       { header: 'Amount', key: 'amount', width: 14 },
       { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
     const data = result.items.map((item) => ({
@@ -1054,6 +1129,7 @@ export class FinancialReportsService {
       head_count: item.head_count,
       amount: item.amount,
       amount_paid: item.amount_paid,
+      waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
     return this.buildExportFile(
@@ -1681,6 +1757,7 @@ export class FinancialReportsService {
         AND sf.is_discount = false
         AND sf.status <> 'PAID'
         AND sf.status <> 'DISCOUNT'
+        AND sf.status <> 'WAIVED'
         AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
       GROUP BY sf.student_id
     `);
@@ -1869,7 +1946,9 @@ export class FinancialReportsService {
       if (index === undefined) continue;
 
       const cell = cells[index];
-      const outstanding = this.headOutstanding(head);
+      // A waived head is a written-off — billed for the month but nothing owed.
+      const isWaived = head.status === fee_status_enum.WAIVED;
+      const outstanding = isWaived ? 0 : this.headOutstanding(head);
       cell.head_count += 1;
       cell.amount = this.roundMoney(
         cell.amount + this.toMoney(head.amount ?? head.amount_before_discount ?? 0),
@@ -2701,8 +2780,10 @@ export class FinancialReportsService {
       'student_count',
       'billed_count',
       'to_be_billed_count',
+      'waived_count',
       'billed',
       'to_be_billed',
+      'waived',
       'amount',
       'amount_paid',
       'outstanding',
@@ -3143,12 +3224,19 @@ export class FinancialReportsService {
     let billedCount = 0;
     let toBeBilled = 0;
     let toBeBilledCount = 0;
+    let waived = 0;
+    let waivedCount = 0;
     for (const row of byStatus) {
       const amount = this.toMoney(row._sum.amount);
       const count = row._count._all;
       if ((row.status ?? fee_status_enum.NOT_ISSUED) === fee_status_enum.NOT_ISSUED) {
         toBeBilled = this.roundMoney(toBeBilled + amount);
         toBeBilledCount += count;
+      } else if (row.status === fee_status_enum.WAIVED) {
+        // Waived heads are a permanent write-off — their own bucket, excluded
+        // from both billed and to-be-billed, and netted out of Outstanding below.
+        waived = this.roundMoney(waived + amount);
+        waivedCount += count;
       } else {
         billed = this.roundMoney(billed + amount);
         billedCount += count;
@@ -3167,11 +3255,13 @@ export class FinancialReportsService {
       count: totalsAgg._count + discAgg._count,
       billed_count: billedCount,
       to_be_billed_count: toBeBilledCount,
+      waived_count: waivedCount,
       billed,
       to_be_billed: toBeBilled,
+      waived,
       amount,
       amount_paid: amountPaid,
-      outstanding: this.roundMoney(amount - amountPaid),
+      outstanding: this.roundMoney(amount - amountPaid - waived),
     };
   }
 
@@ -3253,6 +3343,10 @@ export class FinancialReportsService {
   ) {
     const amount = this.signedAmount(row);
     const amountPaid = this.toMoney(row.amount_paid); // always 0 for discount rows
+    const isWaived = row.status === fee_status_enum.WAIVED;
+    const waivedAmount = isWaived
+      ? this.roundMoney(this.toMoney(row.waived_amount) || amount)
+      : 0;
     const classId =
       row.students.class_id ??
       row.students.graduated_from_class_id ??
@@ -3282,7 +3376,9 @@ export class FinancialReportsService {
       status: (row.status ?? fee_status_enum.NOT_ISSUED) as fee_status_enum,
       amount,
       amount_paid: amountPaid,
-      outstanding: this.roundMoney(amount - amountPaid),
+      waived_amount: waivedAmount,
+      // A waived head is never expected to be paid — no outstanding.
+      outstanding: isWaived ? 0 : this.roundMoney(amount - amountPaid),
     };
   }
 
@@ -3326,12 +3422,16 @@ export class FinancialReportsService {
     outstanding: number;
     billed: number;
     to_be_billed: number;
+    waived?: number;
   }) {
+    const waived = this.roundMoney(totals.waived ?? 0);
+    // Waived heads sit outside billed / to_be_billed and are netted out of
+    // outstanding, so both identities carry a + waived term.
     const billedPlusToBeBilled = this.roundMoney(
-      totals.billed + totals.to_be_billed,
+      totals.billed + totals.to_be_billed + waived,
     );
     const paidPlusOutstanding = this.roundMoney(
-      totals.amount_paid + totals.outstanding,
+      totals.amount_paid + totals.outstanding + waived,
     );
     return {
       billed_plus_to_be_billed: billedPlusToBeBilled === totals.amount,

@@ -209,6 +209,8 @@ export class StudentsService {
     now.setHours(0, 0, 0, 0);
 
     for (const fee of fees) {
+      // Waived heads are a permanent write-off — never counted as outstanding.
+      if (fee.status === 'WAIVED') continue;
       const balance = new Prisma.Decimal(fee.amount || 0).sub(fee.amount_paid || 0);
       if (balance.gt(0)) {
         outstanding = outstanding.add(balance);
@@ -793,7 +795,8 @@ export class StudentsService {
       const now = new Date();
       now.setHours(0, 0, 0, 0);
       const allFees = await this.prisma.student_fees.findMany({
-        where: { student_id: { in: studentIds } },
+        // Waived heads are a permanent write-off — excluded from the badge math.
+        where: { student_id: { in: studentIds }, status: { not: 'WAIVED' } },
         select: { student_id: true, amount: true, amount_paid: true, due_date: true }
       });
 
