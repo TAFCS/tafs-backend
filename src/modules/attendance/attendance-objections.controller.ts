@@ -61,6 +61,14 @@ export class AttendanceObjectionsController {
     return createApiResponse(data, HttpStatus.OK, 'Objections retrieved successfully');
   }
 
+  @Get('pending-count')
+  @UseGuards(PoliciesGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
+  async countPending(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.objectionsService.countPending(user);
+    return createApiResponse(data, HttpStatus.OK, 'Pending objections count retrieved successfully');
+  }
+
   @Patch(':id')
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))

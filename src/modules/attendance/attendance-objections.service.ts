@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AttendanceObjectionStatus, StaffRole } from '@prisma/client';
+import {
+  AttendanceObjectionStatus,
+  AttendanceSource,
+  StaffAttendanceStatus,
+  StaffRole,
+} from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -120,7 +125,10 @@ export class AttendanceObjectionsService {
 
     const existing = await this.prisma.attendance_objections.findUnique({
       where: { id },
-      include: { employee: { select: { campus_id: true } } },
+      include: {
+        employee: { select: { id: true, campus_id: true, user_id: true, full_name: true, employee_code: true } },
+        scan: { select: { id: true, scan_time: true, direction: true, device_sn: true, device_pin: true } },
+      },
     });
     if (!existing) throw new NotFoundException('Objection not found');
     if (existing.employee.campus_id) {
@@ -142,11 +150,98 @@ export class AttendanceObjectionsService {
       },
     });
 
-    if (dto.status === AttendanceObjectionStatus.ACCEPTED && existing.scan_id) {
-      await this.prisma.zk_attendance_scans.update({
-        where: { id: existing.scan_id },
-        data: { work_code: 'OBJECTION_ACCEPTED' },
-      });
+    if (dto.status === AttendanceObjectionStatus.ACCEPTED) {
+      // 1. Tag the biometric scan and update its time if possible
+      if (existing.scan_id) {
+        try {
+          await this.prisma.zk_attendance_scans.update({
+            where: { id: existing.scan_id },
+            data: {
+              work_code: 'OBJECTION_ACCEPTED',
+              scan_time: existing.claimed_time,
+            },
+          });
+        } catch {
+          await this.prisma.zk_attendance_scans.update({
+            where: { id: existing.scan_id },
+            data: { work_code: 'OBJECTION_ACCEPTED' },
+          });
+        }
+      }
+
+      // 2. Correct the daily attendance record (status -> PRESENT, check_in_at/check_out_at -> claimed_time)
+      const isCheckOut = existing.scan?.direction === 'OUT';
+      const noteText = dto.admin_notes?.trim()
+        ? `Objection accepted: ${dto.admin_notes.trim()}`
+        : `Objection accepted: ${existing.reason}`;
+
+      if (existing.employee.campus_id) {
+        await this.prisma.attendance_staff_daily.upsert({
+          where: {
+            employee_id_date: {
+              employee_id: existing.employee_id,
+              date: existing.attendance_date,
+            },
+          },
+          create: {
+            employee_id: existing.employee_id,
+            campus_id: existing.employee.campus_id,
+            date: existing.attendance_date,
+            status: StaffAttendanceStatus.PRESENT,
+            source: AttendanceSource.MANUAL,
+            check_in_at: isCheckOut ? undefined : existing.claimed_time,
+            check_out_at: isCheckOut ? existing.claimed_time : undefined,
+            notes: noteText,
+            marked_by: user.sub,
+          },
+          update: {
+            status: StaffAttendanceStatus.PRESENT,
+            source: AttendanceSource.MANUAL,
+            ...(isCheckOut
+              ? { check_out_at: existing.claimed_time }
+              : { check_in_at: existing.claimed_time }),
+            notes: noteText,
+            marked_by: user.sub,
+          },
+        });
+      }
+
+      // 3. Clear any pending payroll flags for this employee & date
+      try {
+        await this.prisma.payroll_flags.deleteMany({
+          where: {
+            employee_id: existing.employee_id,
+            anchor_date: existing.attendance_date,
+            status: 'PENDING',
+          },
+        });
+      } catch {
+        // Non-fatal if payroll flags model structure varies
+      }
+    }
+
+    // Notify the employee directly via FCM
+    if (existing.employee.user_id) {
+      const isAccepted = dto.status === AttendanceObjectionStatus.ACCEPTED;
+      const dateLabel = existing.attendance_date.toISOString().slice(0, 10);
+      const title = isAccepted
+        ? 'Attendance objection accepted'
+        : 'Attendance objection rejected';
+      const body = isAccepted
+        ? `Your attendance objection for ${dateLabel} was accepted.${dto.admin_notes?.trim() ? ` Note: ${dto.admin_notes.trim()}` : ''}`
+        : `Your attendance objection for ${dateLabel} was rejected.${dto.admin_notes?.trim() ? ` Reason: ${dto.admin_notes.trim()}` : ''}`;
+
+      await this.fcmService.sendToUsers(
+        [existing.employee.user_id],
+        title,
+        body,
+        {
+          type: 'attendance_objection_decision',
+          status: dto.status,
+          objection_id: String(id),
+          date: dateLabel,
+        },
+      );
     }
 
     const employeeLabel = updated.employee.full_name
@@ -177,6 +272,17 @@ export class AttendanceObjectionsService {
     });
 
     return updated;
+  }
+
+  async countPending(user: IJwtStaffPayload): Promise<{ count: number }> {
+    const campusIds = user.campusId != null ? [user.campusId] : undefined;
+    const count = await this.prisma.attendance_objections.count({
+      where: {
+        status: AttendanceObjectionStatus.PENDING,
+        ...(campusIds?.length ? { employee: { campus_id: { in: campusIds } } } : {}),
+      },
+    });
+    return { count };
   }
 
   private async notifyReviewers(employeeName: string, date: Date) {
