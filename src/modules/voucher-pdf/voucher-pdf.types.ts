@@ -50,6 +50,8 @@ export interface VoucherPdfData {
     generatedAt?: Date | string;
     /** When true, overlay a PAID stamp on all three challan copies */
     paidStamp?: boolean;
+    /** When true, overlay a diagonal PAY IMMEDIATELY watermark on all three challan copies */
+    payImmediate?: boolean;
     /** When false, hide the discount column. Default: true */
     showDiscount?: boolean;
     /** Portal URL to encode in QR code on each challan copy */

@@ -185,6 +185,29 @@ const styles = StyleSheet.create({
         letterSpacing: 4,
         fontFamily: 'Helvetica-Bold',
     },
+    // One watermark for the whole page (not per-copy). The outer box is offset by
+    // the Page's own padding (negative top/left) so it spans the full physical
+    // page (PAGE_WIDTH x PAGE_HEIGHT) regardless of that padding, then centers
+    // the rotated text via flex rather than manual position math.
+    payImmediateWatermark: {
+        position: 'absolute',
+        top: -PAGE_PADDING_V,
+        left: -5,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    payImmediateStamp: {
+        textAlign: 'center',
+        color: '#dc2626',
+        fontSize: 80,
+        fontWeight: 'bold',
+        opacity: 0.16,
+        transform: 'rotate(-35deg)',
+        letterSpacing: 6,
+        fontFamily: 'Helvetica-Bold',
+    },
     header: {
         flexDirection: 'column',
         marginBottom: 3,
@@ -560,6 +583,8 @@ interface FeeChallanPDFProps {
     showDiscount?: boolean;
     /** When true, a PAID watermark is stamped across each challan copy */
     paidStamp?: boolean;
+    /** When true, a diagonal PAY IMMEDIATELY watermark is stamped across each challan copy */
+    payImmediate?: boolean;
     siblings?: {
         full_name: string;
         cc: number | string;
@@ -865,9 +890,20 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
     </View>
 );
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
+export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, arrearsHistory, installmentsHistory, paymentHistory, paymentHistoryTitle, qrUrl }: FeeChallanPDFProps) => (
     <Document>
         <Page size={[PAGE_WIDTH, PAGE_HEIGHT]} style={styles.page} wrap>
+            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
+                Rendered first so every later sibling (challan block, history column) draws
+                on top of it, same layering as the per-copy PAID stamp. Not `fixed`, so — like
+                the challan block below — it only appears on page 1, never on the history
+                column's overflow page 2. */}
+            {payImmediate && (
+                <View style={styles.payImmediateWatermark}>
+                    <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                </View>
+            )}
+
             {/* Left 85% for the 3 Challan Copies.
                 Absolutely positioned so it sits outside normal flow — it renders on page 1 only
                 and never participates in pagination, leaving the history column free to overflow

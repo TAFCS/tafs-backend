@@ -90,6 +90,7 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
         totalAmount: data.totalAmount,
         showDiscount: data.showDiscount ?? true,
         paidStamp: data.paidStamp ?? false,
+        payImmediate: data.payImmediate ?? false,
         siblings: data.siblings
             ?.filter((s) => s.cc !== data.student.cc)
             .map((s) => ({

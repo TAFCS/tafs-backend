@@ -971,6 +971,11 @@ model vouchers {
   bulk_voucher_job_id       Int?
   released_to_parent_at     DateTime?                   @db.Timestamp(6)
   released_by               String?                     @db.VarChar(100)
+  /// Frozen at creation time: true when the student already had 2+ distinct
+  /// arrear months outstanding when this voucher was issued. Drives the forced
+  /// issue_date+4 due/validity dates and the PDF's "PAY IMMEDIATELY" watermark.
+  /// Never recomputed on reprint — see VouchersService.create() / splitPartiallyPaid().
+  pay_immediately           Boolean                     @default(false)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]

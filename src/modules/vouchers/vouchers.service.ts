@@ -110,6 +110,14 @@ const VOUCHER_INCLUDE = {
     },
 };
 
+// PAY IMMEDIATELY: a student already 2+ distinct billing months behind when a
+// new voucher is issued gets that voucher's due/validity dates forced to
+// issue_date + this many days, plus a watermark on the PDF. Applied
+// independently in create() AND splitPartiallyPaid() — see CLAUDE.md in this
+// directory for why those two don't share code.
+const PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD = 2;
+const PAY_IMMEDIATE_DUE_DAYS = 4;
+
 /** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
 const PDF_FREEZE_SELECT = {
     id: true,
@@ -119,6 +127,7 @@ const PDF_FREEZE_SELECT = {
     paid_pdf_url: true,
     paid_pdf_filename: true,
     fee_date: true,
+    pay_immediately: true,
     students: { select: { gr_number: true } },
 };
 
@@ -130,6 +139,7 @@ type PdfFreezeRow = {
     paid_pdf_url: string | null;
     paid_pdf_filename: string | null;
     fee_date: Date | string | null;
+    pay_immediately: boolean | null;
     students: { gr_number: string | null } | null;
 };
 
@@ -378,8 +388,8 @@ export class VouchersService {
         }
 
         const issueDate = new Date(dto.issue_date);
-        const dueDate = new Date(dto.due_date);
-        const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
+        let dueDate = new Date(dto.due_date);
+        let validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
         const feeDate = dto.fee_date ? new Date(dto.fee_date) : null;
 
         // Audit events for side effects (superseded vouchers voided) collected inside
@@ -406,6 +416,17 @@ export class VouchersService {
                 );
                 serverArrearFeeIds = arrearsInfo.arrear_fee_ids;
                 surchargeGroups = arrearsInfo.surcharge_groups;
+            }
+
+            // PAY IMMEDIATELY: 2+ distinct arrear months outstanding forces the
+            // due/validity dates to issue_date + PAY_IMMEDIATE_DUE_DAYS, overriding
+            // whatever the caller sent. See PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD.
+            const payImmediate = surchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD;
+            if (payImmediate) {
+                const forcedDate = new Date(issueDate);
+                forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
+                dueDate = forcedDate;
+                validityDate = forcedDate;
             }
 
             for (const fid of serverArrearFeeIds) {
@@ -503,6 +524,7 @@ export class VouchersService {
                     total_payable_after_due: 0,
                     surcharge_waived: dto.waive_surcharge || false,
                     surcharge_waived_by: dto.waived_by || null,
+                    pay_immediately: payImmediate,
                     generated_by_name: generatorName ?? null,
                     generated_at: new Date(),
                     bulk_voucher_job_id: bulkVoucherJobId ?? null,
@@ -1210,7 +1232,7 @@ export class VouchersService {
     }
 
     /** Helper to prepare data for VoucherPdfService */
-    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false) {
+    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, payImmediate = false) {
         // 0. Term resolution.
         //
         // Every month label and every chronological sort below needs to know where
@@ -1816,6 +1838,7 @@ export class VouchersService {
                 reprintFeeAmount: voucher.reprint_fee_charge ? Number(voucher.reprint_fee_amount ?? 100) : 0,
                 qrUrl,
                 paidStamp,
+                payImmediate,
                 generatedByName: voucher.generated_by_name ?? undefined,
                 generatedAt: voucher.generated_at ?? undefined,
                 showDiscount: true,
@@ -3828,7 +3851,8 @@ export class VouchersService {
         if (!voucher) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
         const finalPaidStamp = voucher.status === 'PAID';
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp);
+        const finalPayImmediate = (voucher as any).pay_immediately === true && !finalPaidStamp;
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp, false, finalPayImmediate);
         await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
@@ -3921,6 +3945,9 @@ export class VouchersService {
         // Enforce paid stamp strictly based on whether the voucher is fully paid in DB
         const isActuallyPaid = voucher.status === 'PAID';
         const finalPaidStamp = isActuallyPaid;
+        // Never show the urgency watermark on an already fully-paid voucher, even
+        // if pay_immediately is still true from creation time.
+        const finalPayImmediate = voucher.pay_immediately === true && !isActuallyPaid;
 
         // ── FROZEN PAID RECEIPT ──────────────────────────────────────────────
         // A paid receipt is a permanent artifact of a payment that happened, not
@@ -3958,7 +3985,7 @@ export class VouchersService {
         });
         if (!full) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp);
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp, false, finalPayImmediate);
         voucherData.showDiscount = showDiscount;
         // Prefer persisted stamp; if missing and a name was passed (first generate),
         // write it once so regenerations stay stable.
@@ -4456,8 +4483,8 @@ export class VouchersService {
         }
 
         const issueDate = new Date(dto.issue_date);
-        const dueDate = new Date(dto.due_date);
-        const validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
+        let dueDate = new Date(dto.due_date);
+        let validityDate = dto.validity_date ? new Date(dto.validity_date) : null;
 
         // ── Shared voucher-issuance settings for the BALANCE (unpaid) voucher ──
         // These mirror the single-issuance form (`create()` / CreateVoucherDto).
@@ -4702,6 +4729,24 @@ export class VouchersService {
             const targetYear = feeRef?.academic_year ?? original.academic_year;
             const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
 
+            // PAY IMMEDIATELY (balance voucher only — see create() for the same
+            // rule on single/bulk issuance). Read-only: does not touch student_fees
+            // or persisted surcharges, so it doesn't disturb Step 8's "split NEVER
+            // recomputes or drops arrear surcharges" invariant.
+            const { surcharge_groups: splitSurchargeGroups } = await this.computeArrears(
+                original.student_id,
+                targetFeeDate ? new Date(targetFeeDate) : new Date(original.fee_date!),
+                waiveBalanceSurcharge,
+                tx,
+            );
+            const payImmediate = splitSurchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD;
+            if (payImmediate) {
+                const forcedDate = new Date(issueDate);
+                forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
+                dueDate = forcedDate;
+                validityDate = forcedDate;
+            }
+
             const commonFields = {
                 student_id: original.student_id,
                 campus_id: original.campus_id,
@@ -4776,6 +4821,7 @@ export class VouchersService {
                     total_payable_after_due: unpaidTotal.add(lateFeeVal).add(balanceReprintAmount),
                     total_arrears: unpaidArrears,
                     reprint_fee_amount: balanceReprintCharge ? balanceReprintAmount : null,
+                    pay_immediately: payImmediate,
                     // Hold-for-release: null => invisible to parents until an admin
                     // releases it via the Pending Release page. Otherwise inherit
                     // the parent's visibility (a PARTIALLY_PAID parent is released),
