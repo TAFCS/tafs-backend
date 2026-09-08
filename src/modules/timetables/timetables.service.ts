@@ -559,6 +559,67 @@ export class TimetablesService {
     return result;
   }
 
+  private async cleanupSlotReschedules(
+    tx: Prisma.TransactionClient,
+    targetSlotIds: number[],
+  ) {
+    if (targetSlotIds.length === 0) return;
+
+    // 1. For active SCHEDULED class reschedules originating from these slots:
+    // clean up linked DRAFT makeup roll sessions if not shared with other active reschedules.
+    const scheduledClassReschedules = await tx.class_session_reschedules.findMany({
+      where: {
+        source_timetable_slot_id: { in: targetSlotIds },
+        status: 'SCHEDULED',
+      },
+      select: { id: true, makeup_roll_session_id: true },
+    });
+
+    for (const r of scheduledClassReschedules) {
+      if (r.makeup_roll_session_id) {
+        const remaining = await tx.class_session_reschedules.count({
+          where: {
+            makeup_roll_session_id: r.makeup_roll_session_id,
+            status: 'SCHEDULED',
+            id: { not: r.id },
+          },
+        });
+        if (remaining === 0) {
+          const session = await tx.attendance_roll_sessions.findUnique({
+            where: { id: r.makeup_roll_session_id },
+            select: { id: true, status: true },
+          });
+          if (session && session.status === 'DRAFT') {
+            await tx.attendance_roll_records.deleteMany({
+              where: { session_id: session.id },
+            });
+            await tx.attendance_roll_sessions.delete({
+              where: { id: session.id },
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Unlink any reschedules that used any target slot as their makeup slot
+    await tx.class_session_reschedules.updateMany({
+      where: { makeup_timetable_slot_id: { in: targetSlotIds } },
+      data: { makeup_timetable_slot_id: null },
+    });
+    await tx.staff_lesson_reschedules.updateMany({
+      where: { makeup_timetable_slot_id: { in: targetSlotIds } },
+      data: { makeup_timetable_slot_id: null },
+    });
+
+    // 3. Delete any reschedules originating from these slots
+    await tx.class_session_reschedules.deleteMany({
+      where: { source_timetable_slot_id: { in: targetSlotIds } },
+    });
+    await tx.staff_lesson_reschedules.deleteMany({
+      where: { source_timetable_slot_id: { in: targetSlotIds } },
+    });
+  }
+
   async deleteSlot(slotId: number, user: IJwtStaffPayload) {
     const slot = await this.prisma.timetable_slots.findUnique({
       where: { id: slotId },
@@ -574,13 +635,23 @@ export class TimetablesService {
     const subjectLabel = slot.subjects?.name ?? `Subject #${slot.subject_id}`;
 
     if (slot.slot_order === 1) {
-      await this.prisma.timetable_slots.deleteMany({
+      const targetSlots = await this.prisma.timetable_slots.findMany({
         where: {
           timetable_id: slot.timetable_id,
           day_of_week: slot.day_of_week,
           block_number: slot.block_number,
         },
+        select: { id: true },
       });
+      const targetSlotIds = targetSlots.map((s) => s.id);
+
+      await this.prisma.$transaction(async (tx) => {
+        await this.cleanupSlotReschedules(tx, targetSlotIds);
+        await tx.timetable_slots.deleteMany({
+          where: { id: { in: targetSlotIds } },
+        });
+      });
+
       void this.auditLogs.log({
         entity_type: 'TIMETABLE_SLOT',
         entity_id: String(slotId),
@@ -596,6 +667,7 @@ export class TimetablesService {
     // this cell down by one so orders stay contiguous (1..N). The "add next
     // split" UI always offers max(slot_order)+1, which relies on that.
     await this.prisma.$transaction(async (tx) => {
+      await this.cleanupSlotReschedules(tx, [slotId]);
       await tx.timetable_slots.delete({ where: { id: slotId } });
       const higher = await tx.timetable_slots.findMany({
         where: {

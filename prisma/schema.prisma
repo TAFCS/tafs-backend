@@ -1691,7 +1691,7 @@ model attendance_roll_sessions {
   subjects                                              subjects?                   @relation(fields: [snapshot_subject_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_attendance_roll_sessions_submitted_by_idTousers users?                      @relation("attendance_roll_sessions_submitted_by_idTousers", fields: [submitted_by_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   teaching_groups                                       teaching_groups?            @relation(fields: [teaching_group_id], references: [id], onUpdate: NoAction)
-  timetable_slots                                       timetable_slots?            @relation(fields: [timetable_slot_id], references: [id], onUpdate: NoAction)
+  timetable_slots                                       timetable_slots?            @relation(fields: [timetable_slot_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   reschedule_as_makeup                                  class_session_reschedules[] @relation("RescheduleMakeupSession")
   reschedule_as_source                                  class_session_reschedules?  @relation("RescheduleSourceSession")
 
@@ -1720,9 +1720,9 @@ model class_session_reschedules {
   attendance_roll_sessions attendance_roll_sessions[]
   users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
   makeup_roll_session      attendance_roll_sessions?    @relation("RescheduleMakeupSession", fields: [makeup_roll_session_id], references: [id])
-  makeup_timetable_slot    timetable_slots?             @relation("RescheduleMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
+  makeup_timetable_slot    timetable_slots?             @relation("RescheduleMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: SetNull)
   source_roll_session      attendance_roll_sessions?    @relation("RescheduleSourceSession", fields: [source_roll_session_id], references: [id])
-  source_timetable_slot    timetable_slots              @relation("RescheduleSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: NoAction)
+  source_timetable_slot    timetable_slots              @relation("RescheduleSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: Cascade)
   teaching_groups          teaching_groups              @relation(fields: [teaching_group_id], references: [id], onDelete: Cascade)
 
   @@unique([teaching_group_id, source_date, source_timetable_slot_id], map: "class_session_reschedules_source_key")
@@ -1751,9 +1751,9 @@ model staff_lesson_reschedules {
   classes                  classes                      @relation(fields: [class_id], references: [id], onDelete: NoAction)
   users                    users?                       @relation(fields: [created_by_id], references: [id], onDelete: NoAction)
   employee_profiles        employee_profiles            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  makeup_timetable_slot    timetable_slots?             @relation("StaffLessonMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: NoAction)
+  makeup_timetable_slot    timetable_slots?             @relation("StaffLessonMakeupSlot", fields: [makeup_timetable_slot_id], references: [id], onDelete: SetNull)
   sections                 sections                     @relation(fields: [section_id], references: [id], onDelete: NoAction)
-  source_timetable_slot    timetable_slots              @relation("StaffLessonSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: NoAction)
+  source_timetable_slot    timetable_slots              @relation("StaffLessonSourceSlot", fields: [source_timetable_slot_id], references: [id], onDelete: Cascade)
 
   @@unique([source_timetable_slot_id, source_date], map: "staff_lesson_reschedules_source_key")
   @@index([employee_id])
