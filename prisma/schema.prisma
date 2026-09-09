@@ -971,6 +971,11 @@ model vouchers {
   total_arrears             Decimal?                    @default(0) @db.Decimal(12, 2)
   voucher_number            String?                     @unique @db.VarChar(11)
   split_parent_id           Int?
+  /// Set to the id of the voucher that superseded this one by fee-date
+  /// (VouchersService.create step 6). It is the exact record of what to
+  /// reactivate when that superseding voucher is deleted — see
+  /// _destroyVoucherInTx STEP 1. Cleared on reactivation (STEP 7).
+  superseded_by_voucher_id  Int?
   reprint_fee_charge        Boolean                     @default(false)
   reprint_fee_amount        Decimal?                    @db.Decimal(12, 2)
   generated_by_name         String?                     @db.VarChar(100)
@@ -1006,6 +1011,7 @@ model vouchers {
   @@index([bulk_voucher_job_id])
   @@index([released_to_parent_at])
   @@index([student_id, status], map: "idx_vouchers_student_status")
+  @@index([superseded_by_voucher_id], map: "idx_vouchers_superseded_by")
 }
 
 model bundle_fee_type_names {

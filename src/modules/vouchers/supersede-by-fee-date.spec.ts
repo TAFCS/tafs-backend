@@ -306,9 +306,70 @@ describe('VouchersService — supersession by fee date', () => {
       expect(txVouchersUpdateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ id: { in: [42, 43] } }),
-          data: { status: 'VOID' },
+          // The superseding voucher's id is stamped so delete-time reactivation
+          // (_destroyVoucherInTx STEP 1) is exact rather than head-overlap guesswork.
+          data: { status: 'VOID', superseded_by_voucher_id: 500 },
         }),
       );
+    });
+  });
+
+  describe('_destroyVoucherInTx — delete-time reactivation', () => {
+    it('reactivates a predecessor by the superseded_by link even when head-overlap fails (discount head)', async () => {
+      const vouchersUpdate = jest.fn().mockResolvedValue({ id: 42, voucher_number: 'V42' });
+      const linkedFindMany = jest.fn().mockResolvedValue([
+        { id: 42, due_date: new Date('2020-01-01') }, // long past due -> OVERDUE
+      ]);
+
+      const tx: any = {
+        vouchers: {
+          findMany: linkedFindMany,
+          update: vouchersUpdate,
+          delete: jest.fn().mockResolvedValue({ id: 500, voucher_number: 'V500' }),
+        },
+        voucher_heads: {
+          // STEP 1 fallback-heuristic queries + STEP 6 reactivated-head lookup + STEP 4 delete
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        deposit_allocations: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        student_fees: {
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findFirst: jest.fn(),
+          findUnique: jest.fn(),
+        },
+      };
+
+      // The voucher being deleted (V500) carries one regular head; V42 (VOID,
+      // superseded_by = 500) also carries a *discount* head that was never
+      // absorbed, so the old containment heuristic would never reactivate it.
+      const deleted = {
+        id: 500,
+        student_id: 7000,
+        voucher_number: 'V500',
+        fee_date: new Date('2026-10-01'),
+        voucher_heads: [
+          { student_fee_id: 4242, student_fees: { fee_date: new Date('2026-10-01'), description_prefix: null } },
+        ],
+      };
+
+      const auditEvents: any[] = [];
+      await (svc() as any)._destroyVoucherInTx(500, deleted, tx, true, auditEvents);
+
+      expect(linkedFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ superseded_by_voucher_id: 500, status: 'VOID' }),
+        }),
+      );
+      expect(vouchersUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 42 },
+          data: { status: 'OVERDUE', superseded_by_voucher_id: null },
+        }),
+      );
+      expect(auditEvents.some((e) => e.entity_id === '42' && e.new_value === 'OVERDUE')).toBe(true);
     });
   });
 });

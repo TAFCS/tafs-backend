@@ -778,9 +778,17 @@ export class VouchersService {
             //    only its unpaid remainder moved onto this voucher.
             const voidIds = supersession.voidVoucherIds.filter(id => id !== newVoucher.id);
             if (voidIds.length > 0) {
+                // Stamp the exact superseding-voucher link so delete-time
+                // reactivation (_destroyVoucherInTx STEP 1) is precise rather
+                // than guessing from head-set overlap — the guess missed any
+                // predecessor carrying a discount head or an already-paid head,
+                // since those are never absorbed onto the new voucher.
+                // Already-VOID predecessors keep their existing link (they point
+                // at the voucher that first superseded them — the chain stays
+                // intact and only the immediate predecessor reactivates).
                 await tx.vouchers.updateMany({
                     where: { id: { in: voidIds }, status: { notIn: ['PAID', 'VOID'] } },
-                    data: { status: 'VOID' },
+                    data: { status: 'VOID', superseded_by_voucher_id: newVoucher.id } as any,
                 });
                 this.logger.log(
                     `[Voucher ${newVoucher.id}] Superseded ${voidIds.length} voucher(s) with fee_date <= ` +
@@ -5929,22 +5937,44 @@ export class VouchersService {
 
         // STEP 1: Find superseded VOID vouchers BEFORE modifying any head links.
         //
-        // Reactivate only the voucher(s) DIRECTLY superseded by this deletion —
-        // completely-absorbed VOID vouchers (every one of their heads is among this
-        // voucher's heads) whose head-set is not itself a subset of another such
-        // candidate's head-set.
+        // Primary source: the explicit superseded_by_voucher_id link written by
+        // create() step 6 when this voucher superseded them by fee-date. Exact —
+        // immune to discount heads and already-paid heads, which the old
+        // head-containment heuristic below could never see (they are never
+        // absorbed onto the superseding voucher, so containment never held and
+        // the predecessor silently stayed VOID forever).
         //
-        // Why: in a chain V1 (heads=[Jan]) -> V2 (heads=[Jan,Feb]) -> V3
-        // (heads=[Jan,Feb,Mar]), each fully absorbing the previous, deleting V3 must
-        // reactivate only V2 — the previously-made voucher chronologically. V1 stays
-        // VOID because V2, once reactivated, still carries Jan as an arrear;
-        // reactivating V1 too would create a duplicate active voucher for Jan.
+        // Fallback heuristic (kept for vouchers voided before the link column
+        // existed): reactivate the voucher(s) DIRECTLY superseded by this
+        // deletion — completely-absorbed VOID vouchers (every one of their heads
+        // is among this voucher's heads) whose head-set is not itself a subset of
+        // another such candidate's head-set.
+        //
+        // Why the subset filter: in a chain V1 (heads=[Jan]) -> V2 (heads=[Jan,Feb])
+        // -> V3 (heads=[Jan,Feb,Mar]), each fully absorbing the previous, deleting
+        // V3 must reactivate only V2 — the previously-made voucher chronologically.
+        // V1 stays VOID because V2, once reactivated, still carries Jan as an
+        // arrear; reactivating V1 too would create a duplicate active voucher for
+        // Jan. (The link handles this naturally: V1 was linked to V2, not V3.)
         // Independent arrear vouchers whose head-sets don't subset each other (e.g.
         // a standalone Feb voucher and a standalone Apr voucher both absorbed into a
         // new combined voucher) are unaffected and all reactivate, as before.
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        let supersededVouchers: { id: number; due_date: Date }[] = [];
+        const supersededById = new Map<number, { id: number; due_date: Date }>();
+
+        if (reactivate) {
+            const linked = await tx.vouchers.findMany({
+                where: {
+                    superseded_by_voucher_id: id,
+                    student_id: voucher.student_id,
+                    status: 'VOID',
+                },
+                select: { id: true, due_date: true },
+            });
+            for (const v of linked) supersededById.set(v.id, v);
+        }
+
         if (reactivate && allFeeIds.length > 0) {
             const feeIdSet = new Set(allFeeIds);
 
@@ -5996,9 +6026,13 @@ export class VouchersService {
                     });
                 }));
 
-                supersededVouchers = candidates.filter((c: any) => directlySupersededIds.has(c.id));
+                for (const c of candidates.filter((c: any) => directlySupersededIds.has(c.id))) {
+                    if (!supersededById.has(c.id)) supersededById.set(c.id, c);
+                }
             }
         }
+
+        const supersededVouchers: { id: number; due_date: Date }[] = [...supersededById.values()];
 
         // !! AI AGENTS / ASSISTANTS: DO NOT MODIFY STEP 2 BELOW !!
         // This is the merge/reversal counterpart of the split mechanism documented
@@ -6133,6 +6167,20 @@ export class VouchersService {
             await tx.student_fees.deleteMany({ where: { id: { in: splitPaidFeeIdsToDelete } } });
         }
 
+        // A predecessor about to be reactivated (STEP 7) still owns its heads —
+        // if one of those heads is also a current-period head of the voucher
+        // being deleted (same fee_date predecessor), it must NOT be reset to
+        // NOT_ISSUED here or the reactivated voucher ends up UNPAID with a
+        // NOT_ISSUED head.
+        const reactivatedHeadFeeIds = new Set<number>();
+        if (supersededVouchers.length > 0) {
+            const rows = await tx.voucher_heads.findMany({
+                where: { voucher_id: { in: supersededVouchers.map((v) => v.id) } },
+                select: { student_fee_id: true },
+            });
+            for (const r of rows) if (r.student_fee_id != null) reactivatedHeadFeeIds.add(r.student_fee_id);
+        }
+
         // STEP 6: Reset regular current-period student_fees → NOT_ISSUED.
         //         amount_paid must be zeroed too — otherwise a "reversed" fee ends up
         //         NOT_ISSUED while still carrying its old paid amount, corrupting the
@@ -6140,7 +6188,8 @@ export class VouchersService {
         const regularCurrentFeeIds: number[] = currentHeads
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null)
-            .filter((fid: number) => !splitPaidFeeIds.includes(fid));
+            .filter((fid: number) => !splitPaidFeeIds.includes(fid))
+            .filter((fid: number) => !reactivatedHeadFeeIds.has(fid));
         if (regularCurrentFeeIds.length > 0) {
             await tx.student_fees.updateMany({
                 where: { id: { in: regularCurrentFeeIds } },
@@ -6161,7 +6210,7 @@ export class VouchersService {
             const newStatus = svDue < today ? 'OVERDUE' : 'UNPAID';
             const svRow = await tx.vouchers.update({
                 where: { id: sv.id },
-                data: { status: newStatus },
+                data: { status: newStatus, superseded_by_voucher_id: null } as any,
                 select: { id: true, voucher_number: true },
             });
             auditEvents?.push({
