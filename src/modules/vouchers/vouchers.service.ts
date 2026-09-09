@@ -416,6 +416,21 @@ export class VouchersService {
             let finalOrderedFeeIds = [...(dto.orderedFeeIds ?? [])];
             let surchargeGroups: Array<{ date: Date; target_month: number; academic_year: string }> = [];
 
+            // Fully-waived challan: every non-discount head the caller asked for is
+            // already WAIVED. The voucher is issued as a written-off record —
+            // status WAIVED, nothing payable, WAIVED watermark — and must NOT run
+            // arrears or supersession (it would otherwise void a real unpaid
+            // predecessor). A mixed group (some waived, some charged) is a normal
+            // voucher; the waived heads ride along as zero-balance heads (below).
+            const orderedStatuses = await tx.student_fees.findMany({
+                where: { id: { in: dto.orderedFeeIds ?? [] } },
+                select: { id: true, status: true, is_discount: true },
+            });
+            const nonDiscountOrdered = orderedStatuses.filter((f) => !f.is_discount);
+            const issueAsWaived =
+                nonDiscountOrdered.length > 0 &&
+                nonDiscountOrdered.every((f) => f.status === 'WAIVED');
+
             // Server-authoritative arrears — the ONLY source of truth for which older
             // heads ride on this voucher and how many late-payment surcharge months
             // apply. Always re-derived here, inside the transaction, from live data.
@@ -425,7 +440,7 @@ export class VouchersService {
             // committed, which stacked a duplicate surcharge on every later month and
             // orphaned arrears when a prior voucher was voided by supersession (step 6).
             let serverArrearFeeIds: number[] = [];
-            if (feeDate) {
+            if (feeDate && !issueAsWaived) {
                 const arrearsInfo = await this.computeArrears(
                     dto.student_id, feeDate, dto.waive_surcharge, tx,
                 );
@@ -459,7 +474,7 @@ export class VouchersService {
             // vouchers are left alone. For a PARTIALLY_PAID predecessor only the
             // unpaid remainder is absorbed; the paid portion stays recorded
             // against the voided voucher via its deposit_allocations.
-            const supersession = feeDate
+            const supersession = feeDate && !issueAsWaived
                 ? await this._planFeeDateSupersession(tx, dto.student_id, feeDate)
                 : { voidVoucherIds: [] as number[], absorbFeeIds: [] as number[], meta: [] as { id: number; voucher_number: string | null; status: string | null }[] };
             for (const fid of supersession.absorbFeeIds) {
@@ -478,19 +493,12 @@ export class VouchersService {
                 },
             });
 
-            // A WAIVED head is a permanent write-off — it must never be put back
-            // on a voucher (computeArrears and supersession already exclude them;
-            // this rejects an explicit orderedFeeIds entry so it can't slip
-            // through and get silently demoted to ISSUED in step 4).
-            const waivedInPayload = feeRecords.filter(
-                (f: any) => !f.is_discount && f.status === 'WAIVED',
-            );
-            if (waivedInPayload.length > 0) {
-                throw new BadRequestException(
-                    `Cannot issue a voucher for ${waivedInPayload.length} waived fee head(s). ` +
-                    `Un-waive them first: [${waivedInPayload.map((f: any) => f.id).join(', ')}].`,
-                );
-            }
+            // A WAIVED head is a permanent write-off. It is NOT billed: it rides on
+            // the voucher as a zero-balance head (see the head-building loop) so the
+            // challan can show it as a green "WAIVED" credit line, and its
+            // student_fees.status stays WAIVED (step 4 skips it). When every
+            // non-discount head is waived the whole voucher is issued as WAIVED
+            // (see issueAsWaived above / step 5).
 
             // 1.c Resolve gross ("before discount") prices from class_fee_schedule —
             // the same single source of truth the rendered voucher uses. Using the
@@ -584,6 +592,7 @@ export class VouchersService {
                 description_prefix: string | null;
                 scholarship_amount: Prisma.Decimal;
                 scholarship_label: string | null;
+                waived?: boolean;
             }[] = [];
 
             for (const fee of feeRecords) {
@@ -606,6 +615,31 @@ export class VouchersService {
                         description_prefix: null,
                         scholarship_amount: new Prisma.Decimal(0),
                         scholarship_label: null,
+                    });
+                    continue;
+                }
+
+                // Waived head: a permanent write-off. Rides on the voucher as a
+                // zero-balance head so the challan can show it (green "WAIVED"
+                // line via prepareVoucherPdfData); never billed, so its full
+                // amount is NOT added to totalBeforeDueDecimal / totalArrearsDecimal,
+                // and step 4 leaves student_fees.status = 'WAIVED'.
+                if ((fee as any).status === 'WAIVED') {
+                    const waivedAmt = new Prisma.Decimal(
+                        fee.amount ?? (fee as any).amount_before_discount ?? 0,
+                    );
+                    voucherHeadsData.push({
+                        voucher_id: newVoucher.id,
+                        student_fee_id: fee.id,
+                        discount_amount: new Prisma.Decimal(0),
+                        discount_label: null,
+                        net_amount: waivedAmt,
+                        amount_deposited: 0,
+                        balance: new Prisma.Decimal(0),
+                        description_prefix: (fee as any).description_prefix ?? null,
+                        scholarship_amount: new Prisma.Decimal(0),
+                        scholarship_label: null,
+                        waived: true,
                     });
                     continue;
                 }
@@ -706,9 +740,11 @@ export class VouchersService {
             // IMPORTANT: never demote a fee that is already PARTIALLY_PAID or PAID back to ISSUED.
             // The valid forward-only status chain is: NOT_ISSUED → ISSUED → PARTIALLY_PAID / PAID.
             // Arrear fees included in a new voucher must keep their payment progress.
+            // WAIVED heads are skipped entirely — they ride on the voucher as a
+            // zero-balance display head and keep status = 'WAIVED', no issue dates.
             await Promise.all(
                 feeRecords
-                    .filter((fee) => !(fee as any).is_discount)
+                    .filter((fee) => !(fee as any).is_discount && (fee as any).status !== 'WAIVED')
                     .map((fee) => {
                         const alreadyProgressed =
                             (fee as any).status === 'PARTIALLY_PAID' ||
@@ -741,15 +777,29 @@ export class VouchersService {
             const totalBeforeDueWithSurcharge = totalBeforeDueDecimal.add(activeSurchargeTotal).add(reprintFeeVal);
             const totalAfterDueDecimal = totalBeforeDueWithSurcharge.add(lateFeeVal);
 
+            // Fully-waived challan: written-off record — nothing payable, status
+            // WAIVED (drives the diagonal WAIVED watermark), surcharge waived for
+            // parity with waiveVoucher(). Reversible via unwaiveVoucher().
+            const waivedPatch = issueAsWaived
+                ? {
+                    status: 'WAIVED',
+                    waived_at: new Date(),
+                    waived_by: changedBy,
+                    surcharge_waived: true,
+                    surcharge_waived_by: changedBy,
+                }
+                : {};
+
             const updatedVoucher = await tx.vouchers.update({
                 where: { id: newVoucher.id },
                 data: {
-                    total_payable_before_due: totalBeforeDueWithSurcharge,
-                    total_payable_after_due: totalAfterDueDecimal,
+                    total_payable_before_due: issueAsWaived ? new Prisma.Decimal(0) : totalBeforeDueWithSurcharge,
+                    total_payable_after_due: issueAsWaived ? new Prisma.Decimal(0) : totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
                     voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
                     reprint_fee_amount: dto.reprint_fee_charge ? new Prisma.Decimal(reprintFeeVal) : null,
-                },
+                    ...waivedPatch,
+                } as any,
                 include: VOUCHER_INCLUDE,
             });
 
@@ -908,7 +958,11 @@ export class VouchersService {
         // send_notification === false still suppresses the instant push for
         // immediately-released vouchers; scheduled reminders are unaffected by
         // that choice but skip anything still held.
-        if (dto.requires_release) {
+        if ((finalVoucher.status as string) === 'WAIVED') {
+            this.logger.log(
+                `[Voucher ${finalVoucher.id}] Issued as WAIVED (written-off record) — no parent notification.`,
+            );
+        } else if (dto.requires_release) {
             this.logger.log(
                 `[Voucher ${finalVoucher.id}] Held for release — issued notification deferred until an admin releases it.`,
             );
@@ -1442,6 +1496,47 @@ export class VouchersService {
             let description = prefixStr + feeTypeDesc + monthSuffix;
             let baseDescription = prefixStr + feeTypeDesc;
 
+            // ── Waived head ────────────────────────────────────────────────
+            // A permanent write-off (voucher_heads.waived / student_fees.status
+            // = 'WAIVED'). It is on the voucher for the record only: nothing is
+            // payable, so netAmount/balance are 0 and it is left OUT of every
+            // total (totalAmount comes from voucher.total_payable_before_due,
+            // which create() built without it). The challan shows it as a green
+            // "WAIVED" credit line via `waivedAmount`. Skip the installment,
+            // arrear, gross/discount and scholarship machinery below — none of
+            // it applies to a zero-balance display row.
+            if (h.waived === true || sf?.status === 'WAIVED') {
+                const waivedAmount = Number(
+                    sf?.amount ?? sf?.amount_before_discount ?? h.net_amount ?? 0,
+                );
+                return {
+                    description,
+                    originalDescription: feeTypeDesc + monthSuffix,
+                    baseDescription,
+                    amount: 0,
+                    discount: 0,
+                    amountAfterDiscount: 0,
+                    scholarship: 0,
+                    scholarshipPercentage: null,
+                    netAmount: 0,
+                    amountDeposited: 0,
+                    balance: 0,
+                    isArrear: false,
+                    isSurcharge: false,
+                    isDiscount: false,
+                    isWaived: true,
+                    waivedAmount,
+                    feeDate: sfFeeDate ? new Date(sfFeeDate).toISOString().split('T')[0] : undefined,
+                    target_month: sf?.target_month,
+                    term_start_month: sf?.term_start_month ?? null,
+                    academic_year: effectiveAcadYear || sf?.academic_year,
+                    fee_type_id: sf?.fee_type_id ?? null,
+                    priority_order: sf?.fee_types?.priority_order ?? null,
+                    voucher_head_id: h.id,
+                };
+            }
+            // ── End waived head ───────────────────────────────────────────
+
             // Handle Installment Sequence (e.g. 1/6)
             // STANDALONE vs MERGED Check:
             // Standalone = student_fees.fee_type_id corresponds to the original installment's fee_type_id.
@@ -1569,6 +1664,7 @@ export class VouchersService {
             (h) =>
                 !h.isDiscount &&
                 !h.isSurcharge &&
+                !(h as any).isWaived &&
                 h.target_month != null &&
                 !!h.academic_year &&
                 !!h.baseDescription,
@@ -1577,6 +1673,7 @@ export class VouchersService {
             (h) =>
                 h.isDiscount ||
                 h.isSurcharge ||
+                (h as any).isWaived ||
                 h.target_month == null ||
                 !h.academic_year ||
                 !h.baseDescription,
@@ -1707,6 +1804,9 @@ export class VouchersService {
         const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
             if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
             if (f.status === 'PAID') return false;
+            // A waived installment is a permanent write-off — never surface it as
+            // an outstanding "missed arrear" the student still owes.
+            if (f.status === 'WAIVED') return false;
             if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
             if (f.fee_date && voucher.fee_date) {
                 return new Date(f.fee_date) < new Date(voucher.fee_date);
@@ -4517,6 +4617,16 @@ export class VouchersService {
                     scholarship_label: (h as any).scholarship_label ?? null,
                 });
 
+            } else if (sf.status === 'WAIVED') {
+                // A PARTIALLY_PAID voucher must never carry a WAIVED head: a head
+                // with any payment cannot be waived, and waiving any head waives
+                // the whole voucher (status → 'WAIVED', which is rejected above).
+                // If one is seen here the family is already corrupt — fail loudly
+                // rather than silently drop it from both output vouchers.
+                throw new BadRequestException(
+                    `Voucher head #${h.id}: student fee #${sf.id} is WAIVED — a PARTIALLY_PAID ` +
+                    `voucher should not contain a waived head. Un-waive it, or reverse the deposit, before splitting.`,
+                );
             } else {
                 throw new BadRequestException(
                     `Voucher head #${h.id}: unsupported student_fees.status ${sf.status} for split.`,
@@ -6181,6 +6291,15 @@ export class VouchersService {
             for (const r of rows) if (r.student_fee_id != null) reactivatedHeadFeeIds.add(r.student_fee_id);
         }
 
+        // Waived heads rode on this voucher only as zero-balance display heads —
+        // deleting the voucher must NOT reset them to NOT_ISSUED; they stay WAIVED.
+        const waivedHeadFeeIds = new Set<number>(
+            heads
+                .filter((h: any) => h.waived === true || h.student_fees?.status === 'WAIVED')
+                .map((h: any) => h.student_fee_id)
+                .filter((fid: any): fid is number => fid !== null),
+        );
+
         // STEP 6: Reset regular current-period student_fees → NOT_ISSUED.
         //         amount_paid must be zeroed too — otherwise a "reversed" fee ends up
         //         NOT_ISSUED while still carrying its old paid amount, corrupting the
@@ -6189,7 +6308,8 @@ export class VouchersService {
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null)
             .filter((fid: number) => !splitPaidFeeIds.includes(fid))
-            .filter((fid: number) => !reactivatedHeadFeeIds.has(fid));
+            .filter((fid: number) => !reactivatedHeadFeeIds.has(fid))
+            .filter((fid: number) => !waivedHeadFeeIds.has(fid));
         if (regularCurrentFeeIds.length > 0) {
             await tx.student_fees.updateMany({
                 where: { id: { in: regularCurrentFeeIds } },

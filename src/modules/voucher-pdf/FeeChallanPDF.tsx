@@ -545,6 +545,8 @@ export interface FeeItem {
     discountLabel?: string;
     isArrear?: boolean;    // true = this row belongs to the ARREARS section
     isSurcharge?: boolean; // true = this row is a surcharge/late fee
+    isWaived?: boolean;    // true = permanent write-off; rendered as a green WAIVED credit line, nets to 0
+    waivedAmount?: number; // the struck-off charge shown on a waived row
     feeDate?: string;      // underlying fee_date (for ARREAR rows)
 }
 
@@ -706,6 +708,27 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 const renderFeeRow = (fee: any, i: string | number) => {
                     const effectiveNet = fee.netAmount ?? fee.amount;
                     const isMTF = fee.description.toLowerCase().includes('tuition');
+                    const fmtW = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
+                    // Waived head: a permanent write-off. Show the original charge,
+                    // then a green "WAIVED" credit line that cancels it — the AMOUNT
+                    // column still reconciles to 0 for this head.
+                    if (fee.isWaived) {
+                        const w = Number(fee.waivedAmount ?? fee.amount ?? 0);
+                        return (
+                            <React.Fragment key={i}>
+                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                    <Text style={styles.colDesc}>{fee.description}</Text>
+                                    <Text style={styles.colAmount}>{fmtW(w)}</Text>
+                                </View>
+                                <View style={styles.tableRow}>
+                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`WAIVED — ${fee.description}`}</Text>
+                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmtW(w)}</Text>
+                                </View>
+                            </React.Fragment>
+                        );
+                    }
+
                     const hasDiscount = showDiscount !== false && Number(fee.discount) > 0;
                     const hasScholarship = showDiscount !== false && Number(fee.scholarship) > 0;
                     const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });

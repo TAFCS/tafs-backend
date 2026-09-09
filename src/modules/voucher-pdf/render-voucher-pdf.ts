@@ -85,6 +85,8 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
             scholarshipPercentage: f.scholarshipPercentage,
             discountLabel: f.discountLabel,
             isArrear: f.isArrear,
+            isWaived: f.isWaived,
+            waivedAmount: f.waivedAmount,
             feeDate: f.feeDate,
         })),
         totalAmount: data.totalAmount,

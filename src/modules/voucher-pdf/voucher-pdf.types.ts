@@ -41,6 +41,15 @@ export interface VoucherPdfData {
         discountLabel?: string;
         isArrear?: boolean;
         feeDate?: string;
+        /**
+         * True when this head is a permanent write-off (student_fees.status =
+         * 'WAIVED' / voucher_heads.waived). It rides on the voucher for the
+         * record only: nothing is payable, so `netAmount` is 0 and it is not in
+         * `totalAmount`. `waivedAmount` is the struck-off figure, shown as a
+         * green "WAIVED" credit line by the challan components.
+         */
+        isWaived?: boolean;
+        waivedAmount?: number;
     }>;
     totalAmount: number;
     lateFeeAmount: number;
