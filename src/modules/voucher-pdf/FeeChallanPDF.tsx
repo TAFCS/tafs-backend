@@ -267,16 +267,16 @@ const styles = StyleSheet.create({
     studentCol: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
+        alignItems: 'flex-start',
     },
     label: {
-        fontSize: 6,
+        fontSize: 5,
         textTransform: 'uppercase',
         color: '#333333',
         fontWeight: 'bold',
     },
     value: {
-        fontSize: 8,
+        fontSize: 6.8,
         fontWeight: 'bold',
         color: '#1a1a1a',
     },
@@ -388,19 +388,19 @@ const styles = StyleSheet.create({
     stampSignatureRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        marginTop: 10,
-        marginBottom: 3,
+        marginTop: 4,
+        marginBottom: 2,
     },
     stampBox: {
-        width: 60,
-        height: 22,
-        borderWidth: 1,
+        width: 52,
+        height: 14,
+        borderWidth: 0.75,
         borderColor: '#999999',
         justifyContent: 'center',
         alignItems: 'center',
     },
     stampText: {
-        fontSize: 6,
+        fontSize: 5,
         color: '#333333',
         fontWeight: 'bold',
     },
@@ -416,18 +416,18 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     signatureText: {
-        fontSize: 6,
+        fontSize: 5.5,
         color: '#333333',
         fontWeight: 'bold',
     },
     generatedBy: {
-        fontSize: 5,
-        color: '#333333',
+        fontSize: 4.5,
+        color: '#555555',
         textAlign: 'center',
-        marginTop: 5,
+        marginTop: 3,
         borderTopWidth: 0.5,
         borderTopColor: '#efefef',
-        paddingTop: 2,
+        paddingTop: 1.5,
     },
     bankNoteContainer: {
         backgroundColor: '#f8fafc',
@@ -647,54 +647,65 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={styles.studentSection}>
             <View style={styles.studentCol}>
-                <View style={{ flex: 3.5 }}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Student Name</Text>
                     <Text style={styles.value}>{student.student_full_name}</Text>
                 </View>
-                <View style={{ minWidth: 42, flexShrink: 0, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
-                    <Text style={[styles.value, { textAlign: 'right' }]}>{student.gender || 'N/A'}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Gender</Text>
+                    <Text style={styles.value}>{student.gender || 'N/A'}</Text>
                 </View>
-            </View>
-            <View style={styles.studentCol}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>CC#</Text>
                     <Text style={styles.value}>{student.cc}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>GR#</Text>
-                    <Text style={styles.value}>{student.gr_number}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Level</Text>
-                    <Text style={styles.value}>{student.className}</Text>
-                </View>
-                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Section</Text>
-                    <Text style={[styles.value, { textAlign: 'right' }]}>{student.sectionName}</Text>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right' }]}>Issue Date</Text>
+                    <Text style={[styles.value, { textAlign: 'right' }]}>{formatDateToDDMMYYYY(details.issueDate)}</Text>
                 </View>
             </View>
             <View style={styles.studentCol}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
+                    <Text style={styles.label}>Father's Name</Text>
+                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
+                </View>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>House</Text>
+                    <Text style={styles.value}>{student.house_name || 'N/A'}</Text>
+                </View>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>GR#</Text>
+                    <Text style={styles.value}>{student.gr_number}</Text>
+                </View>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right', color: '#dc2626' }]}>Due Date</Text>
+                    <Text style={[styles.value, { textAlign: 'right', color: '#dc2626', fontSize: 7.2 }]}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
+                </View>
+            </View>
+            <View style={styles.studentCol}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Voucher #</Text>
                     <Text style={styles.value}>{details.voucherNumber}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Issue Date</Text>
-                    <Text style={styles.value}>{formatDateToDDMMYYYY(details.issueDate)}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Level</Text>
+                    <Text style={styles.value}>{student.className}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Due Date</Text>
-                    <Text style={styles.value}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Section</Text>
+                    <Text style={styles.value}>{student.sectionName}</Text>
                 </View>
-                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Validity</Text>
-                    <Text style={[styles.value, { color: '#e11d48', textAlign: 'right' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right', color: '#d97706' }]}>Validity</Text>
+                    <Text style={[styles.value, { textAlign: 'right', color: '#d97706' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
                 </View>
             </View>
-            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 6, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
-                <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
+                    <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                </View>
+                <View />
             </View>
         </View>
 
