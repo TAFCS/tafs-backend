@@ -38,6 +38,8 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
             grade_and_section: `${data.student.className} - ${data.student.sectionName}`,
             gender: data.student.gender,
             father_name: data.student.fatherName,
+            house_name: data.student.houseName || 'N/A',
+            group: data.student.group,
         },
         details: {
             month: data.month,

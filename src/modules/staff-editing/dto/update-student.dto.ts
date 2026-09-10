@@ -213,5 +213,10 @@ export class UpdateStudentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
+  discipline?: string | null;
+
+  @IsOptional()
+  @IsString()
   photo_blue_bg_url?: string | null;
 }

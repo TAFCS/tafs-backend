@@ -14,7 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
-import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, type TermContext } from '../../common/utils/academic-labels';
+import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, isEligibleForDisciplineGroup, type TermContext } from '../../common/utils/academic-labels';
 import { getClassTermMap } from '../../common/utils/class-terms.util';
 import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 import { toMeezanVoucherNumber } from '../../utils/meezan.util';
@@ -27,6 +27,7 @@ import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
+import { isFatherRelationship } from './invalidate-unpaid-pdfs';
 import type { Response } from 'express';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
@@ -52,12 +53,15 @@ const VOUCHER_INCLUDE = {
             campus_id: true,
             class_id: true,
             section_id: true,
-            classes: { select: { id: true, description: true } },
+            classes: { select: { id: true, description: true, class_code: true, academic_system: true } },
             sections: { select: { id: true, description: true } },
+            houses: { select: { id: true, house_name: true, house_color: true } },
             student_guardians: {
-                where: { relationship: 'FATHER' },
-                take: 1,
                 include: { guardians: { select: { full_name: true } } },
+            },
+            student_admissions: {
+                select: { discipline: true, academic_system: true, requested_grade: true, application_date: true },
+                orderBy: { application_date: 'desc' as const },
             },
         },
     },
@@ -65,7 +69,7 @@ const VOUCHER_INCLUDE = {
         select: { id: true, campus_name: true },
     },
     classes: {
-        select: { id: true, description: true },
+        select: { id: true, description: true, class_code: true, academic_system: true },
     },
     sections: {
         select: { id: true, description: true },
@@ -1937,18 +1941,35 @@ export class VouchersService {
         const key = `vouchers/${voucher.student_id}/${filename}`;
         const qrUrl = this.storage.getPublicUrl(key);
 
+        const studentDiscipline = (voucher.students?.student_admissions || []).find((a: any) => a.discipline?.trim())?.discipline?.trim() || null;
+        const classNameForGroup = voucher.classes?.description || voucher.students?.classes?.description || '';
+        const classCodeForGroup = voucher.classes?.class_code || voucher.students?.classes?.class_code || '';
+        const academicSystemForGroup = voucher.classes?.academic_system || voucher.students?.classes?.academic_system || voucher.students?.student_admissions?.[0]?.academic_system || '';
+
+        const isGroupEligible = isEligibleForDisciplineGroup({
+            className: classNameForGroup,
+            classCode: classCodeForGroup,
+            academicSystem: academicSystemForGroup,
+        });
+
+        const studentGroup = isGroupEligible && studentDiscipline ? studentDiscipline : undefined;
+
         return {
             voucherData: {
                 voucherNumber: (voucher as any).voucher_number ?? voucher.id.toString(),
                 student: {
                     cc: voucher.students.cc,
                     fullName: voucher.students.full_name,
-                    fatherName: voucher.students?.student_guardians?.[0]?.guardians?.full_name || 'N/A',
+                    fatherName: (voucher.students?.student_guardians || []).find((sg: any) => isFatherRelationship(sg.relationship))?.guardians?.full_name
+                        || voucher.students?.student_guardians?.[0]?.guardians?.full_name
+                        || 'N/A',
                     gender: voucher.students?.gender || 'N/A',
                     grNumber: voucher.students.gr_number || 'N/A',
                     className: voucher.classes?.description || 'N/A',
                     sectionName: voucher.sections?.description || 'N/A',
+                    houseName: voucher.students?.houses?.house_color || voucher.students?.houses?.house_name || 'N/A',
                     classId: voucher.class_id,
+                    group: studentGroup,
                 },
                 siblings: siblings.filter(s => s.cc !== voucher.student_id).map(s => ({
                     cc: s.cc,
