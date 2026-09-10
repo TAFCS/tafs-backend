@@ -59,7 +59,17 @@ change makes one false, the change is wrong, not the rule.
 10. **Bulk issuance shares `create()`** — single + bulk both call
     `VouchersService.create()`; `splitPartiallyPaid()` is a hand-maintained
     duplicate. Any issuance-behaviour change lands in both.
-11. `npx tsc --noEmit -p tsconfig.build.json` is clean.
+11. **Schema reads must not outrun the migration** — the datasource is the
+    shared remote DB and `prisma migrate deploy` is run deliberately, so a
+    column added to `schema.prisma` does NOT exist yet. Never add a new column
+    to a hot `select` (especially `PDF_FREEZE_SELECT`, `VOUCHER_INCLUDE`,
+    `PDF_FREEZE_SELECT`'s callers `generatePdf` / `loadFreezeRows`) in the same
+    commit that introduces it — Prisma fails the whole query with `P2022` and
+    takes down *every* voucher, not just the new feature's. Either apply the
+    migration first, or read the column defensively until it lands.
+    `npx prisma migrate status` must say "Database schema is up to date!"
+    before shipping code that reads new columns.
+12. `npx tsc --noEmit -p tsconfig.build.json` is clean.
 
 ---
 
