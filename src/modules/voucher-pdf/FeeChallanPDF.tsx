@@ -680,7 +680,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 </View>
                 <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
                     <Text style={[styles.label, { textAlign: 'right', color: '#dc2626' }]}>Due Date</Text>
-                    <Text style={[styles.value, { textAlign: 'right', color: '#dc2626', fontSize: 7.2 }]}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
+                    <Text style={[styles.value, { textAlign: 'right', color: '#dc2626' }]}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
                 </View>
             </View>
             <View style={styles.studentCol}>
