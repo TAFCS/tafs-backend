@@ -244,7 +244,7 @@ export class CreateEmployeeDto {
   previous_employers?: PreviousEmployerDto[];
 }
 
-export class UpdateEmployeeDto extends CreateEmployeeDto {}
+export class UpdateEmployeeDto extends CreateEmployeeDto { }
 
 export class UpdateEmployeeStatusDto {
   @IsEnum(EmployeeStatus)
@@ -454,7 +454,7 @@ export class EmployeesService {
     private readonly caslAbilityFactory: CaslAbilityFactory,
     private readonly accessService: AccessService,
     private readonly employeeProgression: EmployeeProgressionService,
-  ) {}
+  ) { }
 
   /** Snapshot the tracked employment state of an employee_profiles row (with relations loaded). */
   private progressionSnapshotFrom(row: any): EmployeeProgressionSnapshot {
@@ -500,18 +500,18 @@ export class EmployeesService {
       managerIds.length === 0
         ? []
         : await this.prisma.employee_profiles.findMany({
-            where: { id: { in: managerIds } },
-            select: { id: true, full_name: true },
-          });
+          where: { id: { in: managerIds } },
+          select: { id: true, full_name: true },
+        });
     const managerNameById = new Map(managers.map((m) => [m.id, m.full_name]));
 
     return periods.map((p) => ({
       ...p,
       reporting_manager: p.reporting_manager_id
         ? {
-            id: p.reporting_manager_id,
-            full_name: managerNameById.get(p.reporting_manager_id) ?? null,
-          }
+          id: p.reporting_manager_id,
+          full_name: managerNameById.get(p.reporting_manager_id) ?? null,
+        }
         : null,
     }));
   }
@@ -668,9 +668,15 @@ export class EmployeesService {
     return null;
   }
 
-  /** Canonical HR employee campus prefix (GEJ / GKF / NNN). */
+  /** Prefer DB campus_prefix / campus_code; fall back to hardcoded id map. */
   private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
     if (campusId == null) return null;
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { campus_prefix: true, campus_code: true },
+    });
+    const fromDb = campus?.campus_prefix?.trim() || campus?.campus_code?.trim() || '';
+    if (fromDb) return fromDb.toUpperCase();
     return campusPrefixForId(campusId);
   }
 
@@ -844,25 +850,25 @@ export class EmployeesService {
             emergency_contact_relationship: rest.emergency_contact_relationship || null,
             employee_class_section_assignments: class_section_assignments?.length
               ? {
-                  create: class_section_assignments.map((a) => ({
-                    class_id: a.class_id,
-                    section_id: a.section_id
-                  }))
-                }
+                create: class_section_assignments.map((a) => ({
+                  class_id: a.class_id,
+                  section_id: a.section_id
+                }))
+              }
               : undefined,
             employee_previous_employers: previous_employers?.length
               ? {
-                  create: previous_employers
-                    .filter((e) => e.employer_name?.trim())
-                    .map((e) => ({
-                      employer_name: e.employer_name.trim(),
-                      location: e.location?.trim() || null,
-                      job_title: e.job_title?.trim() || null,
-                      employed_from: e.employed_from?.trim() || null,
-                      employed_to: e.employed_to?.trim() || null,
-                      reason_for_leaving: e.reason_for_leaving?.trim() || null,
-                    })),
-                }
+                create: previous_employers
+                  .filter((e) => e.employer_name?.trim())
+                  .map((e) => ({
+                    employer_name: e.employer_name.trim(),
+                    location: e.location?.trim() || null,
+                    job_title: e.job_title?.trim() || null,
+                    employed_from: e.employed_from?.trim() || null,
+                    employed_to: e.employed_to?.trim() || null,
+                    reason_for_leaving: e.reason_for_leaving?.trim() || null,
+                  })),
+              }
               : undefined,
           },
           include: includeRelations,
@@ -1059,15 +1065,15 @@ export class EmployeesService {
     const shouldResolveCode = hasCodeInput || campusChanged;
     const codeFields = shouldResolveCode
       ? resolveEmployeeCodeFields({
-          employee_code: hasCodeInput ? rest.employee_code : existing.employee_code,
-          employee_code_dep: hasCodeInput
-            ? rest.employee_code_dep
-            : existing.employee_code_dep,
-          employee_code_number: hasCodeInput
-            ? rest.employee_code_number
-            : existing.employee_code_number,
-          campusPrefix: await this.resolveCampusPrefix(nextCampusId),
-        })
+        employee_code: hasCodeInput ? rest.employee_code : existing.employee_code,
+        employee_code_dep: hasCodeInput
+          ? rest.employee_code_dep
+          : existing.employee_code_dep,
+        employee_code_number: hasCodeInput
+          ? rest.employee_code_number
+          : existing.employee_code_number,
+        campusPrefix: await this.resolveCampusPrefix(nextCampusId),
+      })
       : null;
 
     if (codeFields?.employee_code) {
@@ -1083,95 +1089,95 @@ export class EmployeesService {
     let result: any;
     try {
       result = await this.prisma.$transaction(async (tx) => {
-      if (class_section_assignments !== undefined) {
-        await tx.employee_class_section_assignments.deleteMany({ where: { employee_id: id } });
-        if (class_section_assignments.length) {
-          await tx.employee_class_section_assignments.createMany({
-            data: class_section_assignments.map((a) => ({
-              employee_id: id,
-              class_id: a.class_id,
-              section_id: a.section_id
-            }))
-          });
+        if (class_section_assignments !== undefined) {
+          await tx.employee_class_section_assignments.deleteMany({ where: { employee_id: id } });
+          if (class_section_assignments.length) {
+            await tx.employee_class_section_assignments.createMany({
+              data: class_section_assignments.map((a) => ({
+                employee_id: id,
+                class_id: a.class_id,
+                section_id: a.section_id
+              }))
+            });
+          }
         }
-      }
 
-      const userId = account
-        ? (await tx.users.create({ data: account.data, select: { id: true } })).id
-        : rest.user_id !== undefined
-          ? rest.user_id
-          : undefined;
+        const userId = account
+          ? (await tx.users.create({ data: account.data, select: { id: true } })).id
+          : rest.user_id !== undefined
+            ? rest.user_id
+            : undefined;
 
-      const updated = await tx.employee_profiles.update({
-        where: { id },
-        data: {
-          user_id: userId,
-          cnic: rest.cnic !== undefined ? rest.cnic : undefined,
-          join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
-          employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
-          department_id: rest.department_id !== undefined ? rest.department_id : undefined,
-          reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
-          employee_code: codeFields
-            ? codeFields.employee_code
-            : rest.employee_code !== undefined
-              ? nullIfEmpty(rest.employee_code)
-              : undefined,
-          employee_code_dep: codeFields ? codeFields.employee_code_dep : undefined,
-          employee_code_number: codeFields ? codeFields.employee_code_number : undefined,
-          full_name: rest.full_name !== undefined ? nullIfEmpty(rest.full_name) : undefined,
-          father_name: rest.father_name !== undefined ? nullIfEmpty(rest.father_name) : undefined,
-          mother_name: rest.mother_name !== undefined ? nullIfEmpty(rest.mother_name) : undefined,
-          date_of_birth:
-            rest.date_of_birth !== undefined ? (rest.date_of_birth ? new Date(rest.date_of_birth) : null) : undefined,
-          address: rest.address !== undefined ? nullIfEmpty(rest.address) : undefined,
-          personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
-          secondary_phone: rest.secondary_phone !== undefined ? nullIfEmpty(rest.secondary_phone) : undefined,
-          personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
-          job_title: rest.job_title !== undefined ? upperOrNull(rest.job_title) : undefined,
-          staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
-          segment_id: rest.segment_id !== undefined ? rest.segment_id : undefined,
-          job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
-          notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
-          reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined, 'expected check-in time') : undefined,
-          leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined, 'expected check-out time') : undefined,
-          check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
-          late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
-          monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
-          payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
-          campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
-          days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
-          photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
-          father_photo_url: rest.father_photo_url !== undefined ? rest.father_photo_url : undefined,
-          father_cnic: rest.father_cnic !== undefined ? nullIfEmpty(rest.father_cnic) : undefined,
-          mother_photo_url: rest.mother_photo_url !== undefined ? rest.mother_photo_url : undefined,
-          mother_cnic: rest.mother_cnic !== undefined ? nullIfEmpty(rest.mother_cnic) : undefined,
-          spouse_name: rest.spouse_name !== undefined ? nullIfEmpty(rest.spouse_name) : undefined,
-          spouse_cnic: rest.spouse_cnic !== undefined ? nullIfEmpty(rest.spouse_cnic) : undefined,
-          spouse_photo_url: rest.spouse_photo_url !== undefined ? rest.spouse_photo_url : undefined,
-          account_number: rest.account_number !== undefined ? nullIfEmpty(rest.account_number) : undefined,
-          bank_name: rest.bank_name !== undefined ? nullIfEmpty(rest.bank_name) : undefined,
-          emergency_contact_name: rest.emergency_contact_name !== undefined ? nullIfEmpty(rest.emergency_contact_name) : undefined,
-          emergency_contact_phone: rest.emergency_contact_phone !== undefined ? nullIfEmpty(rest.emergency_contact_phone) : undefined,
-          emergency_contact_relationship:
-            rest.emergency_contact_relationship !== undefined ? nullIfEmpty(rest.emergency_contact_relationship) : undefined,
-        },
-        include: includeRelations
-      });
+        const updated = await tx.employee_profiles.update({
+          where: { id },
+          data: {
+            user_id: userId,
+            cnic: rest.cnic !== undefined ? rest.cnic : undefined,
+            join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
+            employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
+            department_id: rest.department_id !== undefined ? rest.department_id : undefined,
+            reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
+            employee_code: codeFields
+              ? codeFields.employee_code
+              : rest.employee_code !== undefined
+                ? nullIfEmpty(rest.employee_code)
+                : undefined,
+            employee_code_dep: codeFields ? codeFields.employee_code_dep : undefined,
+            employee_code_number: codeFields ? codeFields.employee_code_number : undefined,
+            full_name: rest.full_name !== undefined ? nullIfEmpty(rest.full_name) : undefined,
+            father_name: rest.father_name !== undefined ? nullIfEmpty(rest.father_name) : undefined,
+            mother_name: rest.mother_name !== undefined ? nullIfEmpty(rest.mother_name) : undefined,
+            date_of_birth:
+              rest.date_of_birth !== undefined ? (rest.date_of_birth ? new Date(rest.date_of_birth) : null) : undefined,
+            address: rest.address !== undefined ? nullIfEmpty(rest.address) : undefined,
+            personal_phone: rest.personal_phone !== undefined ? nullIfEmpty(rest.personal_phone) : undefined,
+            secondary_phone: rest.secondary_phone !== undefined ? nullIfEmpty(rest.secondary_phone) : undefined,
+            personal_email: rest.personal_email !== undefined ? nullIfEmpty(rest.personal_email) : undefined,
+            job_title: rest.job_title !== undefined ? upperOrNull(rest.job_title) : undefined,
+            staff_category_id: rest.staff_category_id !== undefined ? rest.staff_category_id : undefined,
+            segment_id: rest.segment_id !== undefined ? rest.segment_id : undefined,
+            job_description: rest.job_description !== undefined ? upperOrNull(rest.job_description) : undefined,
+            notes: rest.notes !== undefined ? nullIfEmpty(rest.notes) : undefined,
+            reporting_time: rest.reporting_time !== undefined ? toTime(rest.reporting_time ?? undefined, 'expected check-in time') : undefined,
+            leaving_time: rest.leaving_time !== undefined ? toTime(rest.leaving_time ?? undefined, 'expected check-out time') : undefined,
+            check_in_source: rest.check_in_source !== undefined ? rest.check_in_source : undefined,
+            late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
+            monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
+            payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
+            campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
+            days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
+            photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
+            father_photo_url: rest.father_photo_url !== undefined ? rest.father_photo_url : undefined,
+            father_cnic: rest.father_cnic !== undefined ? nullIfEmpty(rest.father_cnic) : undefined,
+            mother_photo_url: rest.mother_photo_url !== undefined ? rest.mother_photo_url : undefined,
+            mother_cnic: rest.mother_cnic !== undefined ? nullIfEmpty(rest.mother_cnic) : undefined,
+            spouse_name: rest.spouse_name !== undefined ? nullIfEmpty(rest.spouse_name) : undefined,
+            spouse_cnic: rest.spouse_cnic !== undefined ? nullIfEmpty(rest.spouse_cnic) : undefined,
+            spouse_photo_url: rest.spouse_photo_url !== undefined ? rest.spouse_photo_url : undefined,
+            account_number: rest.account_number !== undefined ? nullIfEmpty(rest.account_number) : undefined,
+            bank_name: rest.bank_name !== undefined ? nullIfEmpty(rest.bank_name) : undefined,
+            emergency_contact_name: rest.emergency_contact_name !== undefined ? nullIfEmpty(rest.emergency_contact_name) : undefined,
+            emergency_contact_phone: rest.emergency_contact_phone !== undefined ? nullIfEmpty(rest.emergency_contact_phone) : undefined,
+            emergency_contact_relationship:
+              rest.emergency_contact_relationship !== undefined ? nullIfEmpty(rest.emergency_contact_relationship) : undefined,
+          },
+          include: includeRelations
+        });
 
-      const priorSnapshot = this.progressionSnapshotFrom(existing);
-      const nextSnapshot = this.progressionSnapshotFrom(updated);
-      await this.employeeProgression.recordProgressionChange(tx, {
-        employeeId: id,
-        ...nextSnapshot,
-        changeType: this.employeeProgression.resolveChangeType({
-          prior: priorSnapshot,
-          next: nextSnapshot,
-          defaultType: 'REASSIGNED',
-        }),
-        changedBy: changedBy ?? null,
-      });
+        const priorSnapshot = this.progressionSnapshotFrom(existing);
+        const nextSnapshot = this.progressionSnapshotFrom(updated);
+        await this.employeeProgression.recordProgressionChange(tx, {
+          employeeId: id,
+          ...nextSnapshot,
+          changeType: this.employeeProgression.resolveChangeType({
+            prior: priorSnapshot,
+            next: nextSnapshot,
+            defaultType: 'REASSIGNED',
+          }),
+          changedBy: changedBy ?? null,
+        });
 
-      return updated;
+        return updated;
       });
     } catch (err) {
       const mapped = this.httpExceptionFromDbError(err);

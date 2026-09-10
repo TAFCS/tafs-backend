@@ -9,6 +9,7 @@ export interface VoucherPdfData {
         grNumber: string;
         className: string;
         sectionName: string;
+        houseName?: string;
     };
     siblings?: Array<{
         cc: number;

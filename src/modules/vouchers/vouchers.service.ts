@@ -55,6 +55,7 @@ const VOUCHER_INCLUDE = {
             section_id: true,
             classes: { select: { id: true, description: true } },
             sections: { select: { id: true, description: true } },
+            houses: { select: { id: true, house_name: true, house_color: true } },
             student_guardians: {
                 include: { guardians: { select: { full_name: true } } },
             },
@@ -1935,6 +1936,7 @@ export class VouchersService {
                     grNumber: voucher.students.gr_number || 'N/A',
                     className: voucher.classes?.description || 'N/A',
                     sectionName: voucher.sections?.description || 'N/A',
+                    houseName: voucher.students?.houses?.house_color || voucher.students?.houses?.house_name || 'N/A',
                     classId: voucher.class_id,
                 },
                 siblings: siblings.filter(s => s.cc !== voucher.student_id).map(s => ({

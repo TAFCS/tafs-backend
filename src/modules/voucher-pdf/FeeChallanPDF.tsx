@@ -572,6 +572,7 @@ interface FeeChallanPDFProps {
         grade_and_section: string;
         gender?: string;
         father_name?: string;
+        house_name?: string;
     };
     details: {
         month: string;
@@ -646,15 +647,11 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={styles.studentSection}>
             <View style={styles.studentCol}>
-                <View style={{ flex: 2 }}>
+                <View style={{ flex: 3.5 }}>
                     <Text style={styles.label}>Student Name</Text>
                     <Text style={styles.value}>{student.student_full_name}</Text>
                 </View>
-                <View style={{ flex: 1.5 }}>
-                    <Text style={styles.label}>Father's Name</Text>
-                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
-                </View>
-                <View style={{ minWidth: 35, flexShrink: 0, alignItems: 'flex-end' }}>
+                <View style={{ minWidth: 42, flexShrink: 0, alignItems: 'flex-end' }}>
                     <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
                     <Text style={[styles.value, { textAlign: 'right' }]}>{student.gender || 'N/A'}</Text>
                 </View>

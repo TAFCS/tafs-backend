@@ -468,6 +468,7 @@ interface FeeChallanPDFProps {
         grade_and_section: string;
         gender?: string;
         father_name?: string;
+        house_name?: string;
     };
     details: {
         month: string;
@@ -538,492 +539,499 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
 
         <View style={styles.studentSection}>
             <View style={styles.studentCol}>
-                <View style={{ flex: 2 }}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Student Name</Text>
                     <Text style={styles.value}>{student.student_full_name}</Text>
                 </View>
-                <View style={{ flex: 1.5 }}>
-                    <Text style={styles.label}>Father's Name</Text>
-                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Gender</Text>
+                    <Text style={styles.value}>{student.gender || 'N/A'}</Text>
                 </View>
-                <View style={{ flex: 0.5, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Gender</Text>
-                    <Text style={[styles.value, { textAlign: 'right' }]}>{student.gender || 'N/A'}</Text>
-                </View>
-            </View>
-            <View style={styles.studentCol}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>CC#</Text>
                     <Text style={styles.value}>{student.cc}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>GR#</Text>
-                    <Text style={styles.value}>{student.gr_number}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Level</Text>
-                    <Text style={styles.value}>{student.className}</Text>
-                </View>
-                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Section</Text>
-                    <Text style={[styles.value, { textAlign: 'right' }]}>{student.sectionName}</Text>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right' }]}>Issue Date</Text>
+                    <Text style={[styles.value, { textAlign: 'right' }]}>{formatDateToDDMMYYYY(details.issueDate)}</Text>
                 </View>
             </View>
             <View style={styles.studentCol}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
+                    <Text style={styles.label}>Father's Name</Text>
+                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
+                </View>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>House</Text>
+                    <Text style={styles.value}>{student.house_name || 'N/A'}</Text>
+                </View>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>GR#</Text>
+                    <Text style={styles.value}>{student.gr_number}</Text>
+                </View>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right', color: '#dc2626' }]}>Due Date</Text>
+                    <Text style={[styles.value, { textAlign: 'right', color: '#dc2626', fontSize: 7.2 }]}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
+                </View>
+            </View>
+            <View style={styles.studentCol}>
+                <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Voucher #</Text>
                     <Text style={styles.value}>{details.voucherNumber}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Issue Date</Text>
-                    <Text style={styles.value}>{formatDateToDDMMYYYY(details.issueDate)}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Level</Text>
+                    <Text style={styles.value}>{student.className}</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Due Date</Text>
-                    <Text style={styles.value}>{formatDateToDDMMYYYY(details.dueDate)}</Text>
+                <View style={{ flex: 0.72, paddingRight: 2 }}>
+                    <Text style={styles.label}>Section</Text>
+                    <Text style={styles.value}>{student.sectionName}</Text>
                 </View>
-                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    <Text style={[styles.label, { textAlign: 'right' }]}>Validity</Text>
-                    <Text style={[styles.value, { color: '#e11d48', textAlign: 'right' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
+                <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
+                    <Text style={[styles.label, { textAlign: 'right', color: '#d97706' }]}>Validity</Text>
+                    <Text style={[styles.value, { textAlign: 'right', color: '#d97706' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
                 </View>
             </View>
-            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
-                <Text style={{ fontSize: 6, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
+                    <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                </View>
+                <View />
             </View>
         </View>
 
-        {/* <View style={[styles.studentSection, { backgroundColor: '#f8fafc', borderColor: '#cbd5e1', paddingVertical: 2 }]}>
+            {/* <View style={[styles.studentSection, { backgroundColor: '#f8fafc', borderColor: '#cbd5e1', paddingVertical: 2 }]}>
             <Text style={[styles.value, { textAlign: 'center', fontSize: 7, marginBottom: 1 }]}>Meezan bank limited</Text>
             <Text style={[styles.value, { textAlign: 'center', fontSize: 6, color: '#4b5563', marginBottom: 1 }]}>All meezan bank branches in Pakistan</Text>
             <Text style={[styles.value, { textAlign: 'center', fontSize: 6, color: '#4b5563' }]}>MBL Code: TAFCS</Text>
         </View> */}
 
-        <View style={[styles.feeTable, { marginTop: 4 }]}>
-            {(() => {
-                const renderFeeRow = (fee: any, i: string | number) => {
-                    const effectiveNet = fee.netAmount ?? fee.amount;
-                    const isMTF = fee.description.toLowerCase().includes('tuition');
+            <View style={[styles.feeTable, { marginTop: 4 }]}>
+                {(() => {
+                    const renderFeeRow = (fee: any, i: string | number) => {
+                        const effectiveNet = fee.netAmount ?? fee.amount;
+                        const isMTF = fee.description.toLowerCase().includes('tuition');
 
-                    // Waived head: a permanent write-off. Show the original charge,
-                    // then a green "WAIVED" credit line that cancels it — the AMOUNT
-                    // column still reconciles to 0 for this head.
-                    if (fee.isWaived) {
-                        const fmtW = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-                        const w = Number(fee.waivedAmount ?? fee.amount ?? 0);
+                        // Waived head: a permanent write-off. Show the original charge,
+                        // then a green "WAIVED" credit line that cancels it — the AMOUNT
+                        // column still reconciles to 0 for this head.
+                        if (fee.isWaived) {
+                            const fmtW = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+                            const w = Number(fee.waivedAmount ?? fee.amount ?? 0);
+                            return (
+                                <React.Fragment key={i}>
+                                    <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                        <Text style={styles.colDesc}>{fee.description}</Text>
+                                        <Text style={styles.colAmount}>{fmtW(w)}</Text>
+                                    </View>
+                                    <View style={styles.tableRow}>
+                                        <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`WAIVED — ${fee.description}`}</Text>
+                                        <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmtW(w)}</Text>
+                                    </View>
+                                </React.Fragment>
+                            );
+                        }
+
+                        const hasDiscount = showDiscount !== false && Number(fee.discount) > 0;
+                        const hasScholarship = showDiscount !== false && Number(fee.scholarship) > 0;
+                        const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
+                        if (isMTF && (hasDiscount || hasScholarship)) {
+                            const amountAfterDiscount = fee.amountAfterDiscount ?? fee.amount;
+                            const scholarshipPct = fee.scholarshipPercentage != null ? ` (${fee.scholarshipPercentage}%)` : '';
+                            return (
+                                <React.Fragment key={i}>
+                                    <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                        <Text style={styles.colDesc}>{fee.description}</Text>
+                                        <Text style={styles.colAmount}>{fmt(fee.amount)}</Text>
+                                    </View>
+                                    {hasDiscount && (
+                                        <React.Fragment>
+                                            <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                                <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`DISCOUNT ON ${fee.description}`}</Text>
+                                                <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.discount)}</Text>
+                                            </View>
+                                            <View style={hasScholarship ? [styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }] : styles.tableRow}>
+                                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER DISCOUNT`}</Text>
+                                                <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(amountAfterDiscount)}</Text>
+                                            </View>
+                                        </React.Fragment>
+                                    )}
+                                    {hasScholarship && (
+                                        <React.Fragment>
+                                            <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
+                                                <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`SCHOLARSHIP ON ${fee.description}${scholarshipPct}`}</Text>
+                                                <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.scholarship)}</Text>
+                                            </View>
+                                            <View style={styles.tableRow}>
+                                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER SCHOLARSHIP`}</Text>
+                                                <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(effectiveNet)}</Text>
+                                            </View>
+                                        </React.Fragment>
+                                    )}
+                                </React.Fragment>
+                            );
+                        }
+
                         return (
-                            <React.Fragment key={i}>
-                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                    <Text style={styles.colDesc}>{fee.description}</Text>
-                                    <Text style={styles.colAmount}>{fmtW(w)}</Text>
-                                </View>
-                                <View style={styles.tableRow}>
-                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`WAIVED — ${fee.description}`}</Text>
-                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmtW(w)}</Text>
-                                </View>
-                            </React.Fragment>
+                            <View key={i} style={styles.tableRow}>
+                                <Text style={styles.colDesc}>{fee.description}</Text>
+                                <Text style={styles.colAmount}>{fmt(effectiveNet)}</Text>
+                            </View>
                         );
-                    }
-
-                    const hasDiscount = showDiscount !== false && Number(fee.discount) > 0;
-                    const hasScholarship = showDiscount !== false && Number(fee.scholarship) > 0;
-                    const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-
-                    if (isMTF && (hasDiscount || hasScholarship)) {
-                        const amountAfterDiscount = fee.amountAfterDiscount ?? fee.amount;
-                        const scholarshipPct = fee.scholarshipPercentage != null ? ` (${fee.scholarshipPercentage}%)` : '';
-                        return (
-                            <React.Fragment key={i}>
-                                <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                    <Text style={styles.colDesc}>{fee.description}</Text>
-                                    <Text style={styles.colAmount}>{fmt(fee.amount)}</Text>
-                                </View>
-                                {hasDiscount && (
-                                    <React.Fragment>
-                                        <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                            <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`DISCOUNT ON ${fee.description}`}</Text>
-                                            <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.discount)}</Text>
-                                        </View>
-                                        <View style={hasScholarship ? [styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }] : styles.tableRow}>
-                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER DISCOUNT`}</Text>
-                                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(amountAfterDiscount)}</Text>
-                                        </View>
-                                    </React.Fragment>
-                                )}
-                                {hasScholarship && (
-                                    <React.Fragment>
-                                        <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                            <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`SCHOLARSHIP ON ${fee.description}${scholarshipPct}`}</Text>
-                                            <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmt(fee.scholarship)}</Text>
-                                        </View>
-                                        <View style={styles.tableRow}>
-                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>{`${fee.description} AFTER SCHOLARSHIP`}</Text>
-                                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>{fmt(effectiveNet)}</Text>
-                                        </View>
-                                    </React.Fragment>
-                                )}
-                            </React.Fragment>
-                        );
-                    }
+                    };
 
                     return (
-                        <View key={i} style={styles.tableRow}>
-                            <Text style={styles.colDesc}>{fee.description}</Text>
-                            <Text style={styles.colAmount}>{fmt(effectiveNet)}</Text>
-                        </View>
-                    );
-                };
+                        <>
+                            <View style={styles.tableHeader}>
+                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
+                                <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
+                            </View>
 
-                return (
-                    <>
-                        <View style={styles.tableHeader}>
-                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>Description</Text>
-                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>Amount</Text>
-                        </View>
+                            {(() => {
+                                const arrearFees = fees.filter(f => f.isArrear && !f.isSurcharge);
+                                const currentFees = fees.filter(f => !f.isArrear && !f.isSurcharge);
+                                const arrearTotal = arrearFees.reduce((s, f) => s + (f.netAmount || 0), 0);
+                                const hasArrearSurcharge = details.totalSurcharge != null && details.totalSurcharge > 0;
 
-                        {(() => {
-                            const arrearFees = fees.filter(f => f.isArrear && !f.isSurcharge);
-                            const currentFees = fees.filter(f => !f.isArrear && !f.isSurcharge);
-                            const arrearTotal = arrearFees.reduce((s, f) => s + (f.netAmount || 0), 0);
-                            const hasArrearSurcharge = details.totalSurcharge != null && details.totalSurcharge > 0;
-
-                            return (
-                                <>
-                                    {arrearFees.length > 0 && (
-                                        <View style={styles.tableRow}>
-                                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>
-                                                {details.arrearsLabel || 'TOTAL ARREARS'}
-                                            </Text>
-                                            <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
-                                                {Math.round(arrearTotal).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                            </Text>
-                                        </View>
-                                    )}
-                                    {hasArrearSurcharge && (
-                                        <>
+                                return (
+                                    <>
+                                        {arrearFees.length > 0 && (
                                             <View style={styles.tableRow}>
-                                                <Text style={styles.colDesc}>LATE PAYMENT SURCHARGE</Text>
-                                                <Text style={styles.colAmount}>
-                                                    {Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>
+                                                    {details.arrearsLabel || 'TOTAL ARREARS'}
+                                                </Text>
+                                                <Text style={[styles.colAmount, { fontWeight: 'bold' }]}>
+                                                    {Math.round(arrearTotal).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                                 </Text>
                                             </View>
-                                            {details.surchargeWaived && (
+                                        )}
+                                        {hasArrearSurcharge && (
+                                            <>
                                                 <View style={styles.tableRow}>
-                                                    <Text style={[styles.colDesc, { color: '#16a34a' }]}>SURCHARGE WAIVED</Text>
-                                                    <Text style={[styles.colAmount, { color: '#16a34a' }]}>
-                                                        -{Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                    <Text style={styles.colDesc}>LATE PAYMENT SURCHARGE</Text>
+                                                    <Text style={styles.colAmount}>
+                                                        {Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                                     </Text>
                                                 </View>
-                                            )}
-                                        </>
-                                    )}
-                                    {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
-                                </>
-                            );
-                        })()}
+                                                {details.surchargeWaived && (
+                                                    <View style={styles.tableRow}>
+                                                        <Text style={[styles.colDesc, { color: '#16a34a' }]}>SURCHARGE WAIVED</Text>
+                                                        <Text style={[styles.colAmount, { color: '#16a34a' }]}>
+                                                            -{Math.round(details.totalSurcharge!).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </>
+                                        )}
+                                        {currentFees.map((fee, idx) => renderFeeRow(fee, `c-${idx}`))}
+                                    </>
+                                );
+                            })()}
 
-                        <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
-                            <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
-                            <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
-                                {Math.round(totalAmount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </Text>
-                        </View>
-                    </>
-                );
-            })()}
+                            <View style={[styles.totalRow, { borderBottomWidth: 0.5, borderBottomColor: '#333333', paddingBottom: 2, marginTop: 4 }]}>
+                                <Text style={[styles.colDesc, { fontWeight: 'bold' }]}>PAYABLE BY DUE DATE</Text>
+                                <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8 }]}>
+                                    {Math.round(totalAmount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </Text>
+                            </View>
+                        </>
+                    );
+                })()}
 
-            {details.applyLateFee && (
-                <View style={[styles.tableRow, { borderBottomWidth: 0, marginTop: 2 }]}>
-                    <Text style={styles.colDesc}>Late Payment Surcharge</Text>
-                    <Text style={styles.colAmount}>{Number(details.lateFeeAmount || 1000).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</Text>
-                </View>
-            )}
-
-            <View style={[styles.totalRow, { marginTop: 0, paddingTop: 2 }]}>
-                <Text style={[styles.colDesc, { fontWeight: 'bold', color: '#e11d48' }]}>PAYABLE AFTER DUE DATE</Text>
-                <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8, color: '#e11d48' }]}>
-                    {Math.round(totalAmount + (details.applyLateFee ? (details.lateFeeAmount || 1000) : 0)).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </Text>
-            </View>
-        </View>
-
-        <View style={styles.footerContainer}>
-            <View style={styles.bankNoteContainer}>
-                <Text style={styles.bankNoteLabel}>NOTE FOR BANK:</Text>
-                <Text style={styles.bankNoteText}>THESE FUNDS ARE INTENDED FOR THE AMERICAN FOUNDATION SCHOOL'S ACCOUNT {details.bank.account} HELD WITH GULISTAN-E-JAUHAR</Text>
-            </View>
-
-            <View style={styles.footer}>
-                <Text style={{ fontSize: 5, fontWeight: 'bold', marginBottom: 2 }}>IMPORTANT POLICIES:</Text>
-                <Text style={styles.instructions}>1. ALL ADMISSION AND TUITION FEES ARE STRICTLY NON-REFUNDABLE AND NON-ADJUSTABLE ONCE PAID.</Text>
-                <Text style={styles.instructions}>2. A LATE FEE OF PKR {(details.lateFeeAmount || 1000).toLocaleString()}/- APPLIES TO ALL DEPOSITS MADE AFTER THE DUE DATE; THESE ADDITIONAL PROCEEDS ARE DONATED EXCLUSIVELY FOR CHARITABLE PURPOSES.</Text>
-                <Text style={styles.instructions}>3. A CHARGE OF PKR 100/- WILL BE APPLIED FOR THE ISSUANCE OF ANY DUPLICATE FEE VOUCHER.</Text>
-                <Text style={styles.instructions}>4. PARENTS ARE RESPONSIBLE FOR COLLECTING FEE VOUCHERS FROM THEIR RESPECTIVE CAMPUS IF THEY ARE NOT RECEIVED OR DELIVERED BY THE STUDENT.</Text>
-                <Text style={styles.instructions}>5. STUDENTS WITH FEES REMAINING UNPAID FOR ONE MONTH BEYOND THE DEADLINE WILL BE SUSPENDED FROM ATTENDING CLASSES UNTIL ALL OUTSTANDING DUES ARE CLEARED.</Text>
-
-                <View style={styles.paymentOptionsTable}>
-                    <View style={styles.paymentOptionsHeader}>
-                        <Text>PAYMENT OPTIONS (CASH ACCEPTED)</Text>
+                {details.applyLateFee && (
+                    <View style={[styles.tableRow, { borderBottomWidth: 0, marginTop: 2 }]}>
+                        <Text style={styles.colDesc}>Late Payment Surcharge</Text>
+                        <Text style={styles.colAmount}>{Number(details.lateFeeAmount || 1000).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</Text>
                     </View>
-                    <View style={styles.paymentOptionsRow}>
-                        <View style={styles.paymentOptionsCol1}>
-                            <Text style={{ fontWeight: 'bold' }}>BANK COUNTERS</Text>
-                        </View>
-                        <View style={styles.paymentOptionsCol2}>
-                            <Text>CASH, MBL CHEQUES, AND PAY ORDERS ARE ACCEPTED AT ALL MBL BRANCHES.</Text>
-                        </View>
-                    </View>
-                    <View style={styles.paymentOptionsRow}>
-                        <View style={styles.paymentOptionsCol1}>
-                            <Text style={{ fontWeight: 'bold' }}>CMS ONLINE</Text>
-                        </View>
-                        <View style={styles.paymentOptionsCol2}>
-                            <Text>PAY VIA THE CMS ONLINE DEPOSIT MODULE USING CUSTOMER CODE: TAFCS.</Text>
-                        </View>
-                    </View>
-                    <View style={styles.paymentOptionsRow}>
-                        <View style={styles.paymentOptionsCol1}>
-                            <Text style={{ fontWeight: 'bold' }}>MBL DIGITAL BANKING</Text>
-                        </View>
-                        <View style={styles.paymentOptionsCol2}>
-                            <Text>SELECT "SCHOOL" AS THE BENEFICIARY FROM THE BILLER OPTION VIA MOBILE OR INTERNET BANKING.</Text>
-                        </View>
-                    </View>
-                    <View style={[styles.paymentOptionsRow, { borderBottomWidth: 0 }]}>
-                        <View style={styles.paymentOptionsCol1}>
-                            <Text style={{ fontWeight: 'bold' }}>OTHER BANKS/DIGITAL CHANNELS</Text>
-                        </View>
-                        <View style={styles.paymentOptionsCol2}>
-                            <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 24-DIGIT INVOICE NUMBER.</Text>
-                            <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL ID: 1006259110046</Text>
-                        </View>
-                    </View>
-                </View>
+                )}
 
-                <View style={styles.stampSignatureRow}>
-                    <View style={styles.stampBox}>
-                        <Text style={styles.stampText}>BANK'S STAMP</Text>
-                    </View>
-                    <View style={styles.signatureLineContainer}>
-                        <View style={styles.signatureLine}>
-                            <Text style={styles.signatureText}>HEAD OF INSTITUTION</Text>
-                        </View>
-                    </View>
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 5, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2 }}>
-                    <Text style={[styles.generatedBy, { flex: 1, marginTop: 0, borderTopWidth: 0, paddingTop: 0, textAlign: 'left' }]}>
-                        GENERATED BY {details.generatedBy.fullName}{`\n`}{details.generatedBy.timestampStr}
+                <View style={[styles.totalRow, { marginTop: 0, paddingTop: 2 }]}>
+                    <Text style={[styles.colDesc, { fontWeight: 'bold', color: '#e11d48' }]}>PAYABLE AFTER DUE DATE</Text>
+                    <Text style={[styles.colAmount, { fontWeight: 'bold', fontSize: 8, color: '#e11d48' }]}>
+                        {Math.round(totalAmount + (details.applyLateFee ? (details.lateFeeAmount || 1000) : 0)).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                     </Text>
                 </View>
             </View>
-        </View>
-    </View>
-);
 
-export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, waived, arrearsHistory, installmentsHistory, paymentHistory, qrUrl }: FeeChallanPDFProps) => (
-    <Document>
-        <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
-            {/* Left 85% for the 3 Challan Copies */}
-            <View style={{ width: '85%', flexDirection: 'row' }}>
-                <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
-                <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
+            <View style={styles.footerContainer}>
+                <View style={styles.bankNoteContainer}>
+                    <Text style={styles.bankNoteLabel}>NOTE FOR BANK:</Text>
+                    <Text style={styles.bankNoteText}>THESE FUNDS ARE INTENDED FOR THE AMERICAN FOUNDATION SCHOOL'S ACCOUNT {details.bank.account} HELD WITH GULISTAN-E-JAUHAR</Text>
+                </View>
+
+                <View style={styles.footer}>
+                    <Text style={{ fontSize: 5, fontWeight: 'bold', marginBottom: 2 }}>IMPORTANT POLICIES:</Text>
+                    <Text style={styles.instructions}>1. ALL ADMISSION AND TUITION FEES ARE STRICTLY NON-REFUNDABLE AND NON-ADJUSTABLE ONCE PAID.</Text>
+                    <Text style={styles.instructions}>2. A LATE FEE OF PKR {(details.lateFeeAmount || 1000).toLocaleString()}/- APPLIES TO ALL DEPOSITS MADE AFTER THE DUE DATE; THESE ADDITIONAL PROCEEDS ARE DONATED EXCLUSIVELY FOR CHARITABLE PURPOSES.</Text>
+                    <Text style={styles.instructions}>3. A CHARGE OF PKR 100/- WILL BE APPLIED FOR THE ISSUANCE OF ANY DUPLICATE FEE VOUCHER.</Text>
+                    <Text style={styles.instructions}>4. PARENTS ARE RESPONSIBLE FOR COLLECTING FEE VOUCHERS FROM THEIR RESPECTIVE CAMPUS IF THEY ARE NOT RECEIVED OR DELIVERED BY THE STUDENT.</Text>
+                    <Text style={styles.instructions}>5. STUDENTS WITH FEES REMAINING UNPAID FOR ONE MONTH BEYOND THE DEADLINE WILL BE SUSPENDED FROM ATTENDING CLASSES UNTIL ALL OUTSTANDING DUES ARE CLEARED.</Text>
+
+                    <View style={styles.paymentOptionsTable}>
+                        <View style={styles.paymentOptionsHeader}>
+                            <Text>PAYMENT OPTIONS (CASH ACCEPTED)</Text>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>BANK COUNTERS</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>CASH, MBL CHEQUES, AND PAY ORDERS ARE ACCEPTED AT ALL MBL BRANCHES.</Text>
+                            </View>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>CMS ONLINE</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY VIA THE CMS ONLINE DEPOSIT MODULE USING CUSTOMER CODE: TAFCS.</Text>
+                            </View>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>MBL DIGITAL BANKING</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>SELECT "SCHOOL" AS THE BENEFICIARY FROM THE BILLER OPTION VIA MOBILE OR INTERNET BANKING.</Text>
+                            </View>
+                        </View>
+                        <View style={[styles.paymentOptionsRow, { borderBottomWidth: 0 }]}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>OTHER BANKS/DIGITAL CHANNELS</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 24-DIGIT INVOICE NUMBER.</Text>
+                                <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL ID: 1006259110046</Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={styles.stampSignatureRow}>
+                        <View style={styles.stampBox}>
+                            <Text style={styles.stampText}>BANK'S STAMP</Text>
+                        </View>
+                        <View style={styles.signatureLineContainer}>
+                            <View style={styles.signatureLine}>
+                                <Text style={styles.signatureText}>HEAD OF INSTITUTION</Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 5, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2 }}>
+                        <Text style={[styles.generatedBy, { flex: 1, marginTop: 0, borderTopWidth: 0, paddingTop: 0, textAlign: 'left' }]}>
+                            GENERATED BY {details.generatedBy.fullName}{`\n`}{details.generatedBy.timestampStr}
+                        </Text>
+                    </View>
+                </View>
             </View>
+        </View>
+        );
 
-            {/* Right 15% for the 4th Column - History & Metadata */}
-            <View style={{ width: '15%', paddingLeft: 8, borderLeftWidth: 1, borderLeftColor: '#e4e4e4', borderLeftStyle: 'solid', flexDirection: 'column', height: '100%' }}>
-
-                {/* ARREAR'S HISTORY */}
-                <View style={styles.historySection}>
-                    <Text style={styles.historyTitle}>ARREAR'S HISTORY</Text>
-                    <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
-                            <Text style={styles.historyTableHeaderCell}>MONTH</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMT</Text>
-                        </View>
-                        {arrearsHistory && arrearsHistory.length > 0 ? (() => {
-                            const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                            // `monthLabel` is resolved by prepareVoucherPdfData, which knows the
-                            // term each head was written under (student_fees.term_start_month).
-                            // This component only ever saw the student's *current* class, so it
-                            // could not label a head billed before a move between term systems.
-                            // The date fallback is for legacy rows with no month/year.
-                            const getMonthLabel = (r: any) => {
-                                if (r.monthLabel) return r.monthLabel;
-                                const [y, m] = r.date.split('-');
-                                return `${MONTHS_SHORT[parseInt(m) - 1].toUpperCase()} ${y.slice(-2)}`;
-                            };
-                            let runningTotal = 0;
-                            return (
-                                <>
-                                    {arrearsHistory.map((a: any, idx: number) => {
-                                        const amt = parseFloat(String(a.amount).replace(/,/g, '')) || 0;
-                                        runningTotal += amt;
-                                        return (
-                                            <View key={idx} style={styles.historyTableRow}>
-                                                <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
-                                                <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
-                                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{amt.toLocaleString()}</Text>
-                                            </View>
-                                        );
-                                    })}
-                                    <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL OUTSTANDING</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>
-                                            {runningTotal.toLocaleString()}
-                                        </Text>
-                                    </View>
-                                </>
-                            );
-                        })() : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={styles.historyTableCell}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
-                            </View>
-                        )}
-                    </View>
+        export const FeeChallanPDF = ({student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, waived, arrearsHistory, installmentsHistory, paymentHistory, qrUrl}: FeeChallanPDFProps) => (
+        <Document>
+            <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
+                {/* Left 85% for the 3 Challan Copies */}
+                <View style={{ width: '85%', flexDirection: 'row' }}>
+                    <ChallanCopy copyType="Bank Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
+                    <ChallanCopy copyType="School Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} />
+                    <ChallanCopy copyType="Student Copy" student={student} details={details} fees={fees} totalAmount={totalAmount} showDiscount={showDiscount} paidStamp={paidStamp} siblings={siblings} isLast={true} />
                 </View>
-                
-                {/* PAYMENT HISTORY */}
-                <View style={styles.historySection}>
-                    <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
-                    <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
-                            <Text style={styles.historyTableHeaderCell}>DATE</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
-                        </View>
-                        {paymentHistory && paymentHistory.length > 0 ? (
-                            <>
-                                {paymentHistory.map((p: any, idx: number) => (
-                                    <View key={idx} style={styles.historyTableRow}>
-                                        <Text style={styles.historyTableCell}>{(() => {
-                                            const [y, m, d] = String(p.date || '').split('-');
-                                            return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
-                                        })()}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 2 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.head || '-'}</Text>
-                                        <Text style={[styles.historyTableCell, { textAlign: 'right' }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
-                                    </View>
-                                ))}
-                                <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL PAID</Text>
-                                    <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
+
+                {/* Right 15% for the 4th Column - History & Metadata */}
+                <View style={{ width: '15%', paddingLeft: 8, borderLeftWidth: 1, borderLeftColor: '#e4e4e4', borderLeftStyle: 'solid', flexDirection: 'column', height: '100%' }}>
+
+                    {/* ARREAR'S HISTORY */}
+                    <View style={styles.historySection}>
+                        <Text style={styles.historyTitle}>ARREAR'S HISTORY</Text>
+                        <View style={styles.historyTable}>
+                            <View style={styles.historyTableHeader}>
+                                <Text style={styles.historyTableHeaderCell}>MONTH</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>FEE</Text>
+                                <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMT</Text>
+                            </View>
+                            {arrearsHistory && arrearsHistory.length > 0 ? (() => {
+                                const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                // `monthLabel` is resolved by prepareVoucherPdfData, which knows the
+                                // term each head was written under (student_fees.term_start_month).
+                                // This component only ever saw the student's *current* class, so it
+                                // could not label a head billed before a move between term systems.
+                                // The date fallback is for legacy rows with no month/year.
+                                const getMonthLabel = (r: any) => {
+                                    if (r.monthLabel) return r.monthLabel;
+                                    const [y, m] = r.date.split('-');
+                                    return `${MONTHS_SHORT[parseInt(m) - 1].toUpperCase()} ${y.slice(-2)}`;
+                                };
+                                let runningTotal = 0;
+                                return (
+                                    <>
+                                        {arrearsHistory.map((a: any, idx: number) => {
+                                            const amt = parseFloat(String(a.amount).replace(/,/g, '')) || 0;
+                                            runningTotal += amt;
+                                            return (
+                                                <View key={idx} style={styles.historyTableRow}>
+                                                    <Text style={styles.historyTableCell}>{getMonthLabel(a)}</Text>
+                                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>{a.head}</Text>
+                                                    <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>{amt.toLocaleString()}</Text>
+                                                </View>
+                                            );
+                                        })}
+                                        <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
+                                            <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL OUTSTANDING</Text>
+                                            <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>
+                                                {runningTotal.toLocaleString()}
+                                            </Text>
+                                        </View>
+                                    </>
+                                );
+                            })() : (
+                                <View style={styles.historyTableRow}>
+                                    <Text style={styles.historyTableCell}>-</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                                 </View>
-                            </>
-                        ) : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={styles.historyTableCell}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
-                            </View>
-                        )}
-                    </View>
-                </View>
-
-                {/* INSTALLMENTS PLAN */}
-                <View style={styles.historySection}>
-                    <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
-                    <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right' }]}>STATUS</Text>
+                            )}
                         </View>
-                        {installmentsHistory && installmentsHistory.length > 0 ? (() => {
-                            const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
-                            return (
+                    </View>
+
+                    {/* PAYMENT HISTORY */}
+                    <View style={styles.historySection}>
+                        <Text style={styles.historyTitle}>PAYMENT HISTORY</Text>
+                        <View style={styles.historyTable}>
+                            <View style={styles.historyTableHeader}>
+                                <Text style={styles.historyTableHeaderCell}>DATE</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
+                                <Text style={[styles.historyTableHeaderCell, { textAlign: 'right' }]}>AMOUNT</Text>
+                            </View>
+                            {paymentHistory && paymentHistory.length > 0 ? (
                                 <>
-                                    {installmentsHistory.map((inst: any, idx: number) => (
+                                    {paymentHistory.map((p: any, idx: number) => (
                                         <View key={idx} style={styles.historyTableRow}>
-                                            <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{inst.month}</Text>
-                                            <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
-                                            <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
-                                                {Number(inst.amount || 0).toLocaleString()}
-                                            </Text>
-                                            <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
-                                                {inst.status}
-                                            </Text>
+                                            <Text style={styles.historyTableCell}>{(() => {
+                                                const [y, m, d] = String(p.date || '').split('-');
+                                                return y && m && d ? `${d}/${m}/${y}` : (p.date || 'N/A');
+                                            })()}</Text>
+                                            <Text style={[styles.historyTableCell, { flex: 2 }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.head || '-'}</Text>
+                                            <Text style={[styles.historyTableCell, { textAlign: 'right' }, p.isDiscount ? { color: '#16a34a' } : {}]}>{p.amount || '0'}</Text>
                                         </View>
                                     ))}
                                     <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2 }]}>TOTAL</Text>
-                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8 }]}>
-                                            {planTotal.toLocaleString()}
-                                        </Text>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3 }]}>TOTAL PAID</Text>
+                                        <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right' }]}>{paymentHistory[paymentHistory.length - 1]?.totalAmount || '0'}</Text>
                                     </View>
                                 </>
-                            );
-                        })() : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
-                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right' }]}>-</Text>
-                            </View>
-                        )}
-                    </View>
-                </View>
-
-                {/* SIBLINGS Section */}
-                <View style={styles.historySection}>
-                    <Text style={styles.historyTitle}>SIBLINGS</Text>
-                    <View style={styles.historyTable}>
-                        <View style={styles.historyTableHeader}>
-                            <Text style={styles.historyTableHeaderCell}>CC</Text>
-                            <Text style={styles.historyTableHeaderCell}>GR</Text>
-                            <Text style={styles.historyTableHeaderCell}>LVL</Text>
-                            <Text style={[styles.historyTableHeaderCell, { flex: 2.2 }]}>NAME</Text>
-                            <Text style={styles.historyTableHeaderCell}>STATUS</Text>
-                        </View>
-                        {siblings && siblings.length > 0 ? (
-                            siblings.map((s, idx) => (
-                                <View key={idx} style={styles.historyTableRow}>
-                                    <Text style={styles.historyTableCell}>{s.cc}</Text>
-                                    <Text style={styles.historyTableCell}>{s.gr_number}</Text>
-                                    <Text style={styles.historyTableCell}>{s.className}</Text>
-                                    <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name}</Text>
-                                    <Text style={styles.historyTableCell}>{s.status || 'Active'}</Text>
+                            ) : (
+                                <View style={styles.historyTableRow}>
+                                    <Text style={styles.historyTableCell}>-</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { textAlign: 'right' }]}>-</Text>
                                 </View>
-                            ))
-                        ) : (
-                            <View style={styles.historyTableRow}>
-                                <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5 }]}>No siblings</Text>
-                            </View>
-                        )}
+                            )}
+                        </View>
                     </View>
+
+                    {/* INSTALLMENTS PLAN */}
+                    <View style={styles.historySection}>
+                        <Text style={styles.historyTitle}>INSTALLMENTS PLAN</Text>
+                        <View style={styles.historyTable}>
+                            <View style={styles.historyTableHeader}>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 1.2 }]}>MONTH</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 2 }]}>HEAD</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 1, textAlign: 'right' }]}>AMOUNT</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 0.8, textAlign: 'right' }]}>STATUS</Text>
+                            </View>
+                            {installmentsHistory && installmentsHistory.length > 0 ? (() => {
+                                const planTotal = installmentsHistory.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+                                return (
+                                    <>
+                                        {installmentsHistory.map((inst: any, idx: number) => (
+                                            <View key={idx} style={styles.historyTableRow}>
+                                                <Text style={[styles.historyTableCell, { flex: 1.2 }]}>{inst.month}</Text>
+                                                <Text style={[styles.historyTableCell, { flex: 2 }]}>{inst.head}</Text>
+                                                <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
+                                                    {Number(inst.amount || 0).toLocaleString()}
+                                                </Text>
+                                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
+                                                    {inst.status}
+                                                </Text>
+                                            </View>
+                                        ))}
+                                        <View style={{ flexDirection: 'row', backgroundColor: '#1e293b', paddingHorizontal: 2, paddingVertical: 1.5, marginTop: 1 }}>
+                                            <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', flex: 3.2 }]}>TOTAL</Text>
+                                            <Text style={[styles.historyTableCell, { fontWeight: 'bold', color: '#ffffff', textAlign: 'right', flex: 0.8 }]}>
+                                                {planTotal.toLocaleString()}
+                                            </Text>
+                                        </View>
+                                    </>
+                                );
+                            })() : (
+                                <View style={styles.historyTableRow}>
+                                    <Text style={[styles.historyTableCell, { flex: 1.2 }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 2 }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>-</Text>
+                                    <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right' }]}>-</Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+
+                    {/* SIBLINGS Section */}
+                    <View style={styles.historySection}>
+                        <Text style={styles.historyTitle}>SIBLINGS</Text>
+                        <View style={styles.historyTable}>
+                            <View style={styles.historyTableHeader}>
+                                <Text style={styles.historyTableHeaderCell}>CC</Text>
+                                <Text style={styles.historyTableHeaderCell}>GR</Text>
+                                <Text style={styles.historyTableHeaderCell}>LVL</Text>
+                                <Text style={[styles.historyTableHeaderCell, { flex: 2.2 }]}>NAME</Text>
+                                <Text style={styles.historyTableHeaderCell}>STATUS</Text>
+                            </View>
+                            {siblings && siblings.length > 0 ? (
+                                siblings.map((s, idx) => (
+                                    <View key={idx} style={styles.historyTableRow}>
+                                        <Text style={styles.historyTableCell}>{s.cc}</Text>
+                                        <Text style={styles.historyTableCell}>{s.gr_number}</Text>
+                                        <Text style={styles.historyTableCell}>{s.className}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name}</Text>
+                                        <Text style={styles.historyTableCell}>{s.status || 'Active'}</Text>
+                                    </View>
+                                ))
+                            ) : (
+                                <View style={styles.historyTableRow}>
+                                    <Text style={[styles.historyTableCell, { textAlign: 'center', flex: 1, fontStyle: 'italic', fontSize: 3.5 }]}>No siblings</Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+
+                    {/* QR CODE — scans directly to the challan PDF */}
+                    {qrUrl && (
+                        <View style={{ marginTop: 'auto', alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
+                            <QrCodeView url={qrUrl} size={52} />
+                            <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
+                        </View>
+                    )}
                 </View>
 
-                {/* QR CODE — scans directly to the challan PDF */}
-                {qrUrl && (
-                    <View style={{ marginTop: 'auto', alignItems: 'center', paddingTop: 6, borderTopWidth: 0.5, borderTopColor: '#e2e8f0' }}>
-                        <QrCodeView url={qrUrl} size={52} />
-                        <Text style={{ fontSize: 4, color: '#334155', marginTop: 2, textAlign: 'center', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.3 }}>Scan to open PDF</Text>
-                    </View>
-                )}
-            </View>
-
-            {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
+                {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
                 Rendered LAST, so it paints on top of everything — react-pdf has no z-index and
                 stacks purely in document order. */}
-            {payImmediate && (
-                <View style={styles.payImmediateWatermark}>
-                    <View style={styles.payImmediateWatermarkInner}>
-                        <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                {payImmediate && (
+                    <View style={styles.payImmediateWatermark}>
+                        <View style={styles.payImmediateWatermarkInner}>
+                            <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
+                        </View>
                     </View>
-                </View>
-            )}
+                )}
 
-            {waived && (
-                <View style={styles.payImmediateWatermark}>
-                    <View style={styles.payImmediateWatermarkInner}>
-                        <Text style={styles.waivedStamp}>WAIVED</Text>
+                {waived && (
+                    <View style={styles.payImmediateWatermark}>
+                        <View style={styles.payImmediateWatermarkInner}>
+                            <Text style={styles.waivedStamp}>WAIVED</Text>
+                        </View>
                     </View>
-                </View>
-            )}
-        </Page>
-    </Document>
-);
+                )}
+            </Page>
+        </Document>
+        );
