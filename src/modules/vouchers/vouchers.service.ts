@@ -27,6 +27,7 @@ import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
+import { isFatherRelationship } from './invalidate-unpaid-pdfs';
 import type { Response } from 'express';
 
 const SPLIT_PREFIX_MAX_DB_LEN = 255;
@@ -55,8 +56,6 @@ const VOUCHER_INCLUDE = {
             classes: { select: { id: true, description: true } },
             sections: { select: { id: true, description: true } },
             student_guardians: {
-                where: { relationship: 'FATHER' },
-                take: 1,
                 include: { guardians: { select: { full_name: true } } },
             },
         },
@@ -1929,7 +1928,9 @@ export class VouchersService {
                 student: {
                     cc: voucher.students.cc,
                     fullName: voucher.students.full_name,
-                    fatherName: voucher.students?.student_guardians?.[0]?.guardians?.full_name || 'N/A',
+                    fatherName: (voucher.students?.student_guardians || []).find((sg: any) => isFatherRelationship(sg.relationship))?.guardians?.full_name
+                        || voucher.students?.student_guardians?.[0]?.guardians?.full_name
+                        || 'N/A',
                     gender: voucher.students?.gender || 'N/A',
                     grNumber: voucher.students.gr_number || 'N/A',
                     className: voucher.classes?.description || 'N/A',
