@@ -1032,7 +1032,9 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
 
                 {/* PAYMENT HISTORY (LAST 3 PAYMENTS) */}
                 <View style={styles.historySection} wrap={isLong(paymentHistory)}>
-                    <Text style={styles.historyTitle}>{paymentHistoryTitle || 'PAYMENT HISTORY'}</Text>
+                    <Text style={styles.historyTitle}>
+                        {paymentHistoryTitle ? paymentHistoryTitle.replace(/\s*\(/, '\n(') : 'PAYMENT HISTORY'}
+                    </Text>
                     <View style={styles.historyTable}>
                         {(() => {
                             const COLS = [0.95, 1.9, 0.8, 0.75];
