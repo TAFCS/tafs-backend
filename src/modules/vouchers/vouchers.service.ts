@@ -61,7 +61,7 @@ const VOUCHER_INCLUDE = {
             },
             student_admissions: {
                 select: { discipline: true, academic_system: true, requested_grade: true, application_date: true },
-                orderBy: { application_date: 'desc' },
+                orderBy: { application_date: 'desc' as const },
             },
         },
     },

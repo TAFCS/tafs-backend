@@ -709,7 +709,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 {student.group ? (
                     <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
                         <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>GROUP:</Text>
-                        <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{student.group}</Text>
+                        <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{String(student.group).toUpperCase()}</Text>
                     </View>
                 ) : (
                     <View />

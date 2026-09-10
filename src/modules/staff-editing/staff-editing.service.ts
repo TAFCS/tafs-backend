@@ -338,6 +338,7 @@ export class StaffEditingService {
     const {
       dob,
       doa,
+      discipline,
       father_name,
       father_cnic,
       mother_name,
@@ -612,6 +613,52 @@ export class StaffEditingService {
             await tx.student_progression_periods.updateMany({
               where: { student_cc: cc, valid_to: null },
               data: { gr_number: studentData.gr_number as string | null },
+            });
+          }
+        }
+
+        // 1b. Update discipline in student_admissions if provided
+        if (discipline !== undefined) {
+          const normDiscipline = typeof discipline === 'string' && discipline.trim() ? discipline.trim() : null;
+          const latestAdmission = await tx.student_admissions.findFirst({
+            where: { student_id: cc },
+            orderBy: { application_date: 'desc' },
+          });
+
+          if (latestAdmission) {
+            const oldDiscipline = latestAdmission.discipline ?? null;
+            if (oldDiscipline !== normDiscipline) {
+              await tx.student_admissions.update({
+                where: { id: latestAdmission.id },
+                data: { discipline: normDiscipline },
+              });
+              fieldChanges.push({
+                entity_type: 'STUDENT',
+                entity_id: String(cc),
+                action: 'UPDATED',
+                field: 'student.discipline',
+                old_value: oldDiscipline,
+                new_value: normDiscipline,
+                student_id: cc,
+              });
+            }
+          } else if (normDiscipline) {
+            await tx.student_admissions.create({
+              data: {
+                student_id: cc,
+                academic_system: (existing as any).classes?.academic_system || 'Secondary',
+                requested_grade: (existing as any).classes?.description || '',
+                discipline: normDiscipline,
+              },
+            });
+            fieldChanges.push({
+              entity_type: 'STUDENT',
+              entity_id: String(cc),
+              action: 'CREATED',
+              field: 'student.discipline',
+              old_value: null,
+              new_value: normDiscipline,
+              student_id: cc,
             });
           }
         }
@@ -1565,6 +1612,7 @@ export class StaffEditingService {
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
+      discipline: (s.student_admissions || []).find((a: any) => a.discipline?.trim())?.discipline ?? admission?.discipline ?? null,
       family_id: s.family_id,
       home_phone: s.families?.home_phone || s.home_phone || null,
       household_name: s.families?.household_name ?? null,
@@ -1636,6 +1684,7 @@ export class StaffEditingService {
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
       academic_year: s.academic_year ?? admission?.academic_year ?? null,
+      discipline: (s.student_admissions || []).find((a: any) => a.discipline?.trim())?.discipline ?? admission?.discipline ?? null,
       // All sub-tables
       has_transfer: !!s.has_transfer,
       has_quick_admission_slip: s.quick_admission_meta != null,
@@ -1856,6 +1905,7 @@ export class StaffEditingService {
       academic_system: dto.academic_system,
       requested_grade: dto.requested_grade,
       academic_year: dto.academic_year,
+      discipline: dto.discipline !== undefined ? (dto.discipline ? String(dto.discipline).trim() : null) : undefined,
       application_date: dto.application_date ? new Date(dto.application_date) : new Date(),
     };
 
