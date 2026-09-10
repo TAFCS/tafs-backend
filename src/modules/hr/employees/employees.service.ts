@@ -668,15 +668,9 @@ export class EmployeesService {
     return null;
   }
 
-  /** Prefer DB campus_prefix / campus_code; fall back to hardcoded id map. */
+  /** Canonical HR employee campus prefix (GEJ / GKF / NNN). */
   private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
     if (campusId == null) return null;
-    const campus = await this.prisma.campuses.findUnique({
-      where: { id: campusId },
-      select: { campus_prefix: true, campus_code: true },
-    });
-    const fromDb = campus?.campus_prefix?.trim() || campus?.campus_code?.trim() || '';
-    if (fromDb) return fromDb.toUpperCase();
     return campusPrefixForId(campusId);
   }
 
