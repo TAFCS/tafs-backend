@@ -329,11 +329,16 @@ export class VouchersController {
         @Req() req: any,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher = await this.vouchersService.waiveVoucher(id, dto.reason, changedBy);
+        const voucher: any = await this.vouchersService.waiveVoucher(id, dto.reason, changedBy);
         return {
             success: true,
             message: 'Voucher waived — fee heads written off.',
             data: voucher,
+            // The WAIVED-stamped challan, minted on the spot by waiveVoucher()
+            // exactly as a PAID receipt is. Null only if rendering failed — the
+            // waiver still stands and the next PDF request mints it.
+            waived_pdf_url: voucher?.waived_pdf?.pdf_url ?? null,
+            waived_pdf_filename: voucher?.waived_pdf?.filename ?? null,
         };
     }
 

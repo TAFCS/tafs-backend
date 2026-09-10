@@ -45,14 +45,17 @@ change makes one false, the change is wrong, not the rule.
    `clearDeposit` re-derive `student_fees.amount_paid`,
    `voucher_arrear_surcharges.amount_paid` and each voucher's heads/status from
    the allocations that survive. A reversed head keeps any *other* payment.
-8. **PAID PDF is write-once** — `vouchers.paid_pdf_url` / `paid_pdf_filename`
-   are minted lazily and never re-rendered; only a genuine payment reversal
-   (`clearDeposit`) clears them.
+8. **Stamped PDFs are write-once** — `paid_pdf_url` / `paid_pdf_filename` and
+   `waived_pdf_url` / `waived_pdf_filename` are minted once and never
+   re-rendered. Only the matching reversal clears them: `clearDeposit` /
+   `reverseDeposit` for the PAID receipt, `unwaiveVoucher` for the WAIVED
+   challan. See **Rule C**.
 9. **Waiver** (`project_fee_head_voucher_waiver`) — a `WAIVED` head/voucher is a
    permanent write-off: excluded from arrears, deposits rejected, never
-   re-billed (`create()` rejects a waived id in `orderedFeeIds`; supersession
-   never scans/absorbs a waived voucher). `normalizeVoucher` treats `WAIVED` as
-   terminal like `VOID/PAID/EXPIRED`. Un-waive is the only way back.
+   re-billed (`create()` issues a fully-waived challan as a WAIVED voucher
+   rather than billing it; supersession never scans/absorbs a waived voucher).
+   `normalizeVoucher` treats `WAIVED` as terminal like `VOID/PAID/EXPIRED`.
+   Un-waive is the only way back. See **Rule C** for the full lifecycle.
 10. **Bulk issuance shares `create()`** — single + bulk both call
     `VouchersService.create()`; `splitPartiallyPaid()` is a hand-maintained
     duplicate. Any issuance-behaviour change lands in both.
@@ -137,6 +140,68 @@ fields, defaults, and validation; a field added for one appears in all five;
 regenerate on the latest voucher reissues with the chosen inputs and the old
 voucher is superseded/replaced per Rule A (so its predecessors still reactivate
 if the regenerated one is later deleted).
+
+---
+
+## Rule C — WAIVED is the write-off mirror of PAID, and must behave identically
+
+**Invariant.** `ISSUED → WAIVED → ISSUED` must work exactly the way
+`ISSUED → PAID → ISSUED` already works. Every mechanism that exists for a
+payment has a waiver counterpart, and the two must stay in step. If you change
+one column of the table below, change the other.
+
+| | Payment | Waiver |
+|---|---|---|
+| Enters the terminal state | `recordDeposit()` — all heads settled | `waiveVoucher()` — all heads written off |
+| `vouchers.status` | `PAID` | `WAIVED` |
+| `student_fees.status` | `PAID` | `WAIVED` |
+| Stamped artifact | `paid_pdf_url` / `paid_pdf_filename` / `paid_pdf_generated_at` | `waived_pdf_url` / `waived_pdf_filename` / `waived_pdf_generated_at` |
+| Storage key suffix | `_paid.pdf` | `_waived.pdf` |
+| PDF overlay | diagonal green `PAID` stamp | diagonal `WAIVED` watermark |
+| Frozen by | `freezePaidPdf()` | `freezeWaivedPdf()` |
+| Returns to ISSUED via | `clearDeposit()` / `reverseDeposit()` | `unwaiveVoucher()` |
+| Reversal clears the artifact | yes — `paid_pdf_url = null` | yes — `waived_pdf_url = null` |
+
+**The three PDF columns are three distinct objects.** `pdf_url` is the ISSUED
+challan (a *cache*), `paid_pdf_url` is the PAID receipt and `waived_pdf_url` is
+the WAIVED challan (both *frozen artifacts*). They live under different storage
+keys because `prepareVoucherPdfData` appends a `paid` / `waived` suffix.
+`storedPdfUrl()` is the single place that maps status → column; never read one
+of these columns directly to decide what to serve.
+
+- A stamped render is **never** written into `pdf_url`. If it were, reversing
+  the payment or undoing the waiver would leave a stamped file standing as the
+  "issued" challan.
+- `waiveVoucher()` deliberately **leaves `pdf_url` intact** — it is dormant while
+  the voucher is WAIVED (`storedPdfUrl`/`generatePdf` both route to
+  `waived_pdf_url`), so un-waiving hands back the byte-identical challan the
+  parent was originally issued. This mirrors `recordDeposit()` leaving `pdf_url`
+  alone on the way to PAID.
+- `unwaiveVoucher()` **does** clear `pdf_url`, because restoring the arrear
+  surcharges can land on a different `surcharge_waived` value than the one baked
+  into the cached render (the manually-waived-surcharge edge case).
+- Storage objects are never deleted on reversal, only unlinked — same orphan
+  policy as `generateMainColumnReceipt`.
+
+**Generated on the spot.** Waiving from the deposit page mints and downloads the
+WAIVED challan in the same request, the way splitting downloads its PAID receipt
+and balance challan. `waiveVoucher()` renders **after** its transaction commits
+(`prepareVoucherPdfData` reads `vouchers.status` to pick the watermark, so the
+row must already say `WAIVED`), and the render is **non-fatal**: the write-off is
+already durable, so a render failure logs and the next `generatePdf()` mints it.
+
+**Check after any change to waive, un-waive, or the PDF freeze:**
+
+1. Waive an UNPAID voucher → status `WAIVED`, every non-discount head `WAIVED`,
+   `waived_pdf_url` populated, PDF carries the WAIVED watermark, challan
+   downloads without a second click.
+2. Ask for that voucher's PDF again → identical URL, `frozen: true`, no
+   re-render, no re-upload.
+3. Un-waive → heads back to `ISSUED`, status `UNPAID`/`OVERDUE`,
+   `waived_pdf_url` null.
+4. Re-waive → a **fresh** artifact is minted; the first one is not resurrected.
+5. A PAID voucher still resolves to `paid_pdf_url`, never `waived_pdf_url`.
+6. `npm test -- waived-pdf-freeze paid-pdf-freeze` green.
 
 ---
 

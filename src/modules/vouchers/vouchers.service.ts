@@ -126,6 +126,8 @@ const PDF_FREEZE_SELECT = {
     pdf_url: true,
     paid_pdf_url: true,
     paid_pdf_filename: true,
+    waived_pdf_url: true,
+    waived_pdf_filename: true,
     fee_date: true,
     pay_immediately: true,
     students: { select: { gr_number: true } },
@@ -138,6 +140,8 @@ type PdfFreezeRow = {
     pdf_url: string | null;
     paid_pdf_url: string | null;
     paid_pdf_filename: string | null;
+    waived_pdf_url: string | null;
+    waived_pdf_filename: string | null;
     fee_date: Date | string | null;
     pay_immediately: boolean | null;
     students: { gr_number: string | null } | null;
@@ -1913,7 +1917,17 @@ export class VouchersService {
         // SPECIAL ADMIN WORKFLOW: distinct suffix when forceHeadsAsCurrent is on,
         // so this alternate receipt never collides with / overwrites the
         // canonical voucher PDF or its pdf_url. See generateMainColumnReceipt().
-        const paidSuffix = [paidStamp ? 'paid' : null, forceHeadsAsCurrent ? 'main-receipt' : null]
+        //
+        // 'waived' earns a suffix for the same reason 'paid' does: the WAIVED
+        // challan is a frozen artifact stored under waived_pdf_url, so its
+        // object key must never be the unpaid challan's key — otherwise waiving
+        // would overwrite the issued challan in storage and un-waiving would
+        // leave pdf_url pointing at a WAIVED-watermarked file.
+        const paidSuffix = [
+            paidStamp ? 'paid' : null,
+            waived ? 'waived' : null,
+            forceHeadsAsCurrent ? 'main-receipt' : null,
+        ]
             .filter(Boolean)
             .join('-');
         // Kept separate from `key` so callers can hand the exact download name to
@@ -3946,9 +3960,22 @@ export class VouchersService {
         });
     }
 
-    /** Paid receipts use paid_pdf_url; everything else uses pdf_url. Never mix the two. */
+    /**
+     * Paid receipts use paid_pdf_url, waived challans use waived_pdf_url, and
+     * everything else uses pdf_url. Never mix the three — each is a distinct
+     * storage object under a distinct key (see prepareVoucherPdfData's suffix).
+     */
     private storedPdfUrl(voucher: PdfFreezeRow): string | null {
-        return voucher.status === 'PAID' ? voucher.paid_pdf_url : voucher.pdf_url;
+        if (voucher.status === 'PAID') return voucher.paid_pdf_url;
+        if (voucher.status === 'WAIVED') return voucher.waived_pdf_url;
+        return voucher.pdf_url;
+    }
+
+    /** The frozen download name that goes with storedPdfUrl(), if one exists. */
+    private storedPdfFilename(voucher: PdfFreezeRow): string | null {
+        if (voucher.status === 'PAID') return voucher.paid_pdf_filename;
+        if (voucher.status === 'WAIVED') return voucher.waived_pdf_filename;
+        return null;
     }
 
     private uniquifyZipName(name: string, used: Set<string>): string {
@@ -3977,7 +4004,7 @@ export class VouchersService {
             return {
                 buffer,
                 url,
-                filename: voucher.paid_pdf_filename ?? this.rebuildFilename(voucher),
+                filename: this.storedPdfFilename(voucher) ?? this.rebuildFilename(voucher),
             };
         } catch (err: any) {
             this.logger.warn(
@@ -4004,10 +4031,20 @@ export class VouchersService {
         await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
-        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
+        // pdf_url is the *unpaid challan* cache. A PAID receipt and a WAIVED
+        // challan are separate frozen artifacts under their own keys — writing
+        // either into pdf_url would leave a stamped file behind as the "issued"
+        // challan once the payment is reversed or the waiver is undone.
+        if (!finalPaidStamp && !finalWaived) {
+            await this.prisma.vouchers.update({ where: { id: voucherId }, data: { pdf_url: url } });
+        }
 
         if (finalPaidStamp) {
             const frozen = await this.freezePaidPdf(voucherId, url, filename);
+            return { buffer, url: frozen.pdf_url, filename: frozen.filename };
+        }
+        if (finalWaived) {
+            const frozen = await this.freezeWaivedPdf(voucherId, url, filename);
             return { buffer, url: frozen.pdf_url, filename: frozen.filename };
         }
         return { buffer, url, filename };
@@ -4120,7 +4157,21 @@ export class VouchersService {
             };
         }
 
-        if (!opts?.force && !finalPaidStamp && voucher.pdf_url) {
+        // ── FROZEN WAIVED CHALLAN ────────────────────────────────────────────
+        // Same contract as the paid receipt above, for the same reasons: the
+        // WAIVED challan is the permanent artifact of a write-off decision, so
+        // once minted (normally by waiveVoucher() itself, on the spot) it is
+        // served byte-for-byte forever. `opts.force` does not apply — a wrong
+        // waiver is fixed by un-waiving, which is what clears this.
+        if (finalWaived && (voucher as any).waived_pdf_url) {
+            return {
+                pdf_url: (voucher as any).waived_pdf_url,
+                filename: (voucher as any).waived_pdf_filename ?? undefined,
+                frozen: true,
+            };
+        }
+
+        if (!opts?.force && !finalPaidStamp && !finalWaived && voucher.pdf_url) {
             return {
                 pdf_url: voucher.pdf_url,
                 filename: this.rebuildFilename(voucher),
@@ -4146,11 +4197,21 @@ export class VouchersService {
         const releasePatch = this.regenerateReleasePatch(opts);
         await this.prisma.vouchers.update({
             where: { id: voucherId },
-            data: { pdf_url: pdfUrl, ...releasePatch },
+            data: {
+                // Never let a stamped render become the unpaid challan cache —
+                // see renderAndStorePdfBuffer for the full reasoning.
+                ...(finalPaidStamp || finalWaived ? {} : { pdf_url: pdfUrl }),
+                ...releasePatch,
+            },
         });
 
         if (finalPaidStamp) {
             const frozen = await this.freezePaidPdf(voucherId, pdfUrl, filename);
+            return { pdf_url: frozen.pdf_url, filename: frozen.filename, frozen: false };
+        }
+
+        if (finalWaived) {
+            const frozen = await this.freezeWaivedPdf(voucherId, pdfUrl, filename);
             return { pdf_url: frozen.pdf_url, filename: frozen.filename, frozen: false };
         }
 
@@ -4231,6 +4292,37 @@ export class VouchersService {
         return {
             pdf_url: row?.paid_pdf_url ?? pdfUrl,
             filename: row?.paid_pdf_filename ?? filename,
+        };
+    }
+
+    /**
+     * Write-once persistence of the WAIVED challan — the exact mirror of
+     * freezePaidPdf, with the same concurrent-first-request reasoning (both
+     * racers computed the same deterministic key, so the loser's identical
+     * upload is harmless; we read back so every caller returns the winner).
+     *
+     * A waived challan documents a write-off decision, not a cache of the
+     * current row. Cleared ONLY by unwaiveVoucher() — the counterpart of
+     * clearDeposit() clearing paid_pdf_url on a payment reversal.
+     */
+    private async freezeWaivedPdf(voucherId: number, pdfUrl: string, filename: string) {
+        await this.prisma.vouchers.updateMany({
+            where: { id: voucherId, waived_pdf_url: null } as any,
+            data: {
+                waived_pdf_url: pdfUrl,
+                waived_pdf_filename: filename,
+                waived_pdf_generated_at: new Date(),
+            } as any,
+        });
+
+        const row = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: { waived_pdf_url: true, waived_pdf_filename: true } as any,
+        }) as any;
+
+        return {
+            pdf_url: row?.waived_pdf_url ?? pdfUrl,
+            filename: row?.waived_pdf_filename ?? filename,
         };
     }
 
@@ -6580,9 +6672,13 @@ export class VouchersService {
                     waive_reason: reason ?? null,
                     surcharge_waived: true,
                     surcharge_waived_by: changedBy,
-                    // Drop the cached challan so the next fetch re-renders it with
-                    // the WAIVED watermark.
-                    pdf_url: null,
+                    // pdf_url (the ISSUED challan) is deliberately left in place.
+                    // It is dormant while status = 'WAIVED' — storedPdfUrl() and
+                    // generatePdf() both route a WAIVED voucher to waived_pdf_url
+                    // instead — so keeping it means un-waiving hands the parent
+                    // back the byte-identical challan they were originally issued,
+                    // with no re-render. Exactly how recordDeposit leaves pdf_url
+                    // alone when a voucher goes ISSUED -> PAID.
                 } as any,
             });
         });
@@ -6599,7 +6695,27 @@ export class VouchersService {
             note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) waived — ${nonDiscountHeads.length} fee head(s) written off${reason ? `: ${reason}` : ''}.`,
         });
 
-        return this.findOne(id);
+        // Mint the WAIVED-stamped challan on the spot, exactly as a fully-paid
+        // voucher gets its PAID receipt. Must run AFTER the transaction commits:
+        // prepareVoucherPdfData reads vouchers.status to decide the watermark,
+        // so it has to see 'WAIVED' in the database.
+        //
+        // Deliberately non-fatal. The write-off is the state change that matters
+        // and it is already durable; if rendering or the upload fails we log and
+        // return, and the next generatePdf() call mints and freezes it instead.
+        let waivedPdf: { pdf_url: string; filename?: string } | null = null;
+        try {
+            const gen = await this.generatePdf(id, true, false, changedBy);
+            waivedPdf = { pdf_url: gen.pdf_url, filename: gen.filename ?? undefined };
+        } catch (err: any) {
+            this.logger.error(
+                `[Voucher ${id}] Waived, but the WAIVED challan could not be generated: ${err?.message}. ` +
+                `It will be minted on the next PDF request.`,
+            );
+        }
+
+        const result: any = await this.findOne(id);
+        return { ...result, waived_pdf: waivedPdf };
     }
 
     /**
@@ -6663,6 +6779,21 @@ export class VouchersService {
                     waive_reason: null,
                     surcharge_waived: false,
                     surcharge_waived_by: null,
+                    // A waiver that has been reversed did not happen: the frozen
+                    // WAIVED challan must not survive to be re-served if this
+                    // voucher is waived again later (a second waiver mints a
+                    // fresh one). This is the exact counterpart of clearDeposit()
+                    // clearing paid_pdf_url on a payment reversal — un-waiving is
+                    // the ONLY thing that unfreezes it. The storage object is
+                    // intentionally left in place, never deleted.
+                    waived_pdf_url: null,
+                    waived_pdf_filename: null,
+                    waived_pdf_generated_at: null,
+                    // Drop the ISSUED challan cache too. Restoring the surcharges
+                    // above can legitimately land on a different surcharge_waived
+                    // value than the one baked into the cached render (see the
+                    // manually-waived-surcharge edge case noted there), so the
+                    // next fetch re-renders from live data.
                     pdf_url: null,
                 } as any,
             });

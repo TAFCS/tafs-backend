@@ -989,6 +989,15 @@ model vouchers {
   /// which is mutable — see buildVoucherFilename / voucher-filename.util.ts.
   paid_pdf_filename         String?                     @db.VarChar(255)
   paid_pdf_generated_at     DateTime?                   @db.Timestamp(6)
+  /// WRITE-ONCE. The frozen WAIVED challan — the exact mirror of paid_pdf_url.
+  /// Minted the moment the voucher is waived (waiveVoucher) and never
+  /// re-rendered. Cleared only by unwaiveVoucher(), the counterpart of
+  /// clearDeposit() clearing paid_pdf_url on a payment reversal.
+  waived_pdf_url            String?
+  /// WRITE-ONCE. The download filename frozen alongside waived_pdf_url; same
+  /// mutable-gr_number reasoning as paid_pdf_filename.
+  waived_pdf_filename       String?                     @db.VarChar(255)
+  waived_pdf_generated_at   DateTime?                   @db.Timestamp(6)
   bulk_voucher_job_id       Int?
   released_to_parent_at     DateTime?                   @db.Timestamp(6)
   released_by               String?                     @db.VarChar(100)
