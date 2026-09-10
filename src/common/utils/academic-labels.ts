@@ -20,6 +20,56 @@ export function isSpecial(classId?: number): boolean {
 }
 
 /**
+ * Checks if a class is eligible to display the academic discipline/group label
+ * on fee challans.
+ *
+ * Eligible classes:
+ * - O-Levels: O1, O2, O3 (and variations like O-I, O-II, O-III, O Level I..III)
+ * - Senior Cambridge / Matric: SR-I, SR-II, SR-III (and variations like SR 1..3, SRI..III, Senior I..III)
+ * - Secondary System of Studies: VI, VII, VIII, IX, X (and variations like Class 6..10, Grade VI..X)
+ */
+export function isEligibleForDisciplineGroup(params: {
+    className?: string | null;
+    classCode?: string | null;
+    academicSystem?: string | null;
+}): boolean {
+    const rawClass = `${params.className || ''} ${params.classCode || ''}`.toUpperCase().trim();
+    const system = (params.academicSystem || '').toUpperCase().trim();
+
+    // O1 - O3
+    if (/\bO[-\s]?(LEVEL\s*)?(1|2|3|I|II|III)\b/i.test(rawClass) || /^O[1-3]$/i.test(rawClass) || /^O(I|II|III)$/i.test(rawClass)) {
+        return true;
+    }
+
+    // SR-I, SR-II, SR-III
+    if (
+        /\bSR[-\s\.]*(1|2|3|I|II|III)\b/i.test(rawClass) ||
+        /\bSENIOR[-\s]*(1|2|3|I|II|III)\b/i.test(rawClass) ||
+        /^SR[1-3]$/i.test(rawClass) ||
+        /^SR(I|II|III)$/i.test(rawClass)
+    ) {
+        return true;
+    }
+
+    // Secondary System of Studies: VI, VII, VIII, IX, X
+    if (
+        /\b(CLASS|GRADE)?\s*(VI|VII|VIII|IX|X)\b/i.test(rawClass) ||
+        /\b(CLASS|GRADE)\s*(6|7|8|9|10)\b/i.test(rawClass) ||
+        /^(VI|VII|VIII|IX|X|6|7|8|9|10)$/i.test(rawClass)
+    ) {
+        return true;
+    }
+
+    if (system.includes('SECONDARY') || system.includes('MATRIC')) {
+        if (/\b(6|7|8|9|10|VI|VII|VIII|IX|X)\b/i.test(rawClass)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * Where a term cutoff comes from, in priority order.
  *
  * This is an object rather than a bare number on purpose. Every one of these

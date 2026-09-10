@@ -39,6 +39,7 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
             gender: data.student.gender,
             father_name: data.student.fatherName,
             house_name: data.student.houseName || 'N/A',
+            group: data.student.group,
         },
         details: {
             month: data.month,

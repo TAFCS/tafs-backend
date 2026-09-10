@@ -10,6 +10,7 @@ export interface VoucherPdfData {
         className: string;
         sectionName: string;
         houseName?: string;
+        group?: string | null;
     };
     siblings?: Array<{
         cc: number;

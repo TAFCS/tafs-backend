@@ -7,6 +7,7 @@ import {
     resolveTermStartMonth,
     termOfHead,
     termRelativeSlot,
+    isEligibleForDisciplineGroup,
 } from './academic-labels';
 
 const CAMBRIDGE_CLASS = 11; // SR-III, Aug-Jul
@@ -144,3 +145,47 @@ describe('getConsolidatedMonthsLabel', () => {
         expect(getConsolidatedMonthsLabel([])).toBe('');
     });
 });
+
+describe('isEligibleForDisciplineGroup', () => {
+    it('returns true for O-Level classes (O1 to O3 and variations)', () => {
+        expect(isEligibleForDisciplineGroup({ className: 'O1' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O2' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O3' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O-I' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O-II' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O-III' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'O Level 1' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ classCode: 'O-3' })).toBe(true);
+    });
+
+    it('returns true for Senior Cambridge classes (SR-I to SR-III)', () => {
+        expect(isEligibleForDisciplineGroup({ className: 'SR-I' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'SR-II' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'SR-III' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'SR I' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'SR. 2' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ classCode: 'SR3' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'Senior I' })).toBe(true);
+    });
+
+    it('returns true for Secondary System of Studies (VI to X)', () => {
+        expect(isEligibleForDisciplineGroup({ className: 'VI' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'VII' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'VIII' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'IX' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'X' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'Class VI' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'Class 9', academicSystem: 'SECONDARY' })).toBe(true);
+        expect(isEligibleForDisciplineGroup({ className: 'Class 10' })).toBe(true);
+    });
+
+    it('returns false for ineligible classes', () => {
+        expect(isEligibleForDisciplineGroup({ className: 'Pre-Nursery' })).toBe(false);
+        expect(isEligibleForDisciplineGroup({ className: 'Nursery' })).toBe(false);
+        expect(isEligibleForDisciplineGroup({ className: 'KG' })).toBe(false);
+        expect(isEligibleForDisciplineGroup({ className: 'Class I' })).toBe(false);
+        expect(isEligibleForDisciplineGroup({ className: 'Class V' })).toBe(false);
+        expect(isEligibleForDisciplineGroup({ className: 'Grade 5' })).toBe(false);
+    });
+});
+
