@@ -276,14 +276,49 @@ export class StudentsService {
     if (section_id?.length) where.section_id = { in: section_id };
     if (house_id?.length)   where.house_id   = { in: house_id };
     if (discipline?.length) {
-      if (!where.AND) where.AND = [];
-      (where.AND as Prisma.studentsWhereInput[]).push({
-        student_admissions: {
-          some: {
-            discipline: { in: discipline, mode: 'insensitive' },
+      const hasNone = discipline.includes('none') || discipline.includes('no_discipline');
+      const namedDisciplines = discipline.filter((d) => d !== 'none' && d !== 'no_discipline');
+
+      const disciplineOrConditions: Prisma.studentsWhereInput[] = [];
+
+      if (namedDisciplines.length > 0) {
+        disciplineOrConditions.push({
+          student_admissions: {
+            some: {
+              discipline: { in: namedDisciplines, mode: 'insensitive' },
+            },
           },
-        },
-      });
+        });
+      }
+
+      if (hasNone) {
+        disciplineOrConditions.push({
+          OR: [
+            { student_admissions: { none: {} } },
+            {
+              student_admissions: {
+                every: {
+                  OR: [
+                    { discipline: null },
+                    { discipline: '' },
+                  ],
+                },
+              },
+            },
+          ],
+        });
+      }
+
+      if (disciplineOrConditions.length > 0) {
+        if (!where.AND) where.AND = [];
+        if (disciplineOrConditions.length === 1) {
+          (where.AND as Prisma.studentsWhereInput[]).push(disciplineOrConditions[0]);
+        } else {
+          (where.AND as Prisma.studentsWhereInput[]).push({
+            OR: disciplineOrConditions,
+          });
+        }
+      }
     }
     // UNCONFIRMED is kept as an alias for QUICK_ADMISSION (real students status).
     if (status?.length) {
