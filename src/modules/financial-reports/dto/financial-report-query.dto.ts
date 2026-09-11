@@ -112,8 +112,8 @@ export class ListFeeHeadsQueryDto extends FinancialReportQueryDto {
   status?: fee_status_enum[];
 
   @IsOptional()
-  @IsIn(['heads', 'student', 'fee_type', 'period', 'class'])
-  view?: 'heads' | 'student' | 'fee_type' | 'period' | 'class';
+  @IsIn(['heads', 'student', 'fee_type', 'period', 'class', 'fee_date'])
+  view?: 'heads' | 'student' | 'fee_type' | 'period' | 'class' | 'fee_date';
 }
 
 export class ListDepositsQueryDto extends FinancialReportQueryDto {

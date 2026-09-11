@@ -326,6 +326,9 @@ export class FinancialReportsService {
     if (view === 'class') {
       return this.listFeeHeadsByClass(query, user);
     }
+    if (view === 'fee_date') {
+      return this.listFeeHeadsByFeeDate(query, user);
+    }
 
     const leaf = this.feeHeadsLeafWhere(query);
     const studentWhere = this.buildStudentWhere(query, user);
@@ -414,7 +417,7 @@ export class FinancialReportsService {
           this.prisma.student_fees.groupBy({
             by: ['student_id'],
             where: { ...where, is_discount: true, student_id: { in: studentIds } },
-            _sum: { amount: true },
+            _sum: { amount: true, amount_paid: true },
             _count: { _all: true },
           }),
           // Waived amounts for this page's students — netted out of outstanding
@@ -429,7 +432,10 @@ export class FinancialReportsService {
       : [[], [], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
     const discountByStudent = new Map(
-      discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+      discGroups.map((d) => [
+        d.student_id,
+        { amount: this.toMoney(d._sum.amount), consumed: d._sum.amount_paid, count: d._count._all },
+      ]),
     );
     const waivedByStudent = new Map(
       waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
@@ -442,7 +448,7 @@ export class FinancialReportsService {
         const discount = discountByStudent.get(group.student_id);
         const waived = this.roundMoney(waivedByStudent.get(group.student_id) ?? 0);
         const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
-        const paid = this.toMoney(group._sum.amount_paid);
+        const paid = this.netPaid(group._sum.amount_paid, discount?.consumed);
         return {
           cc: group.student_id,
           gr_number: student?.gr_number ?? null,
@@ -494,7 +500,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['fee_type_id', 'description_prefix'],
         where: { ...where, is_discount: true },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.prisma.student_fees.groupBy({
@@ -516,7 +522,10 @@ export class FinancialReportsService {
     const groupKey = (g: { fee_type_id: number | null; description_prefix: string | null }) =>
       `${g.fee_type_id ?? ''}|${g.description_prefix ?? ''}`;
     const discountByKey = new Map(
-      discGroups.map((d) => [groupKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+      discGroups.map((d) => [
+        groupKey(d),
+        { amount: this.toMoney(d._sum.amount), consumed: d._sum.amount_paid, count: d._count._all },
+      ]),
     );
     const waivedByKey = new Map(
       waivedGroups.map((w) => [groupKey(w), this.toMoney(w._sum.amount)]),
@@ -526,7 +535,7 @@ export class FinancialReportsService {
       const discount = discountByKey.get(groupKey(group));
       const waived = this.roundMoney(waivedByKey.get(groupKey(group)) ?? 0);
       const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
-      const amountPaid = this.toMoney(group._sum.amount_paid);
+      const amountPaid = this.netPaid(group._sum.amount_paid, discount?.consumed);
       const feeName = group.fee_type_id != null ? feeTypeMap.get(group.fee_type_id) ?? '' : '';
       const feeType = [group.description_prefix, feeName].filter(Boolean).join(' ');
       return {
@@ -545,14 +554,16 @@ export class FinancialReportsService {
     for (const disc of discGroups) {
       const key = groupKey(disc);
       if (seenKeys.has(key)) continue;
+      const amount = -this.toMoney(disc._sum.amount);
+      const amountPaid = this.netPaid(0, disc._sum.amount_paid);
       items.push({
         fee_type_id: disc.fee_type_id,
         fee_type: 'Discount',
         head_count: disc._count._all,
-        amount: -this.toMoney(disc._sum.amount),
-        amount_paid: 0,
+        amount,
+        amount_paid: amountPaid,
         waived: 0,
-        outstanding: -this.toMoney(disc._sum.amount),
+        outstanding: this.roundMoney(amount - amountPaid),
       });
     }
     const start = (page - 1) * limit;
@@ -593,7 +604,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['target_month', 'academic_year', 'term_start_month'],
         where: { ...where, is_discount: true },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.prisma.student_fees.groupBy({
@@ -612,7 +623,10 @@ export class FinancialReportsService {
     const periodKey = (g: { target_month: number; academic_year: string; term_start_month: number | null }) =>
       `${g.target_month}|${g.academic_year}|${g.term_start_month ?? ''}`;
     const discountByPeriod = new Map(
-      discGroups.map((d) => [periodKey(d), { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+      discGroups.map((d) => [
+        periodKey(d),
+        { amount: this.toMoney(d._sum.amount), consumed: d._sum.amount_paid, count: d._count._all },
+      ]),
     );
     const waivedByPeriod = new Map(
       waivedGroups.map((w) => [periodKey(w), this.toMoney(w._sum.amount)]),
@@ -644,7 +658,7 @@ export class FinancialReportsService {
       const discount = discountByPeriod.get(periodKey(group));
       const waived = this.roundMoney(waivedByPeriod.get(periodKey(group)) ?? 0);
       const amount = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
-      const amountPaid = this.toMoney(group._sum.amount_paid);
+      const amountPaid = this.netPaid(group._sum.amount_paid, discount?.consumed);
       return buildPeriodItem(
         group.target_month,
         group.academic_year,
@@ -665,7 +679,7 @@ export class FinancialReportsService {
           disc.academic_year,
           disc.term_start_month,
           -this.toMoney(disc._sum.amount),
-          0,
+          this.netPaid(0, disc._sum.amount_paid),
           disc._count._all,
           0,
         ),
@@ -709,7 +723,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
         where: { ...where, is_discount: true },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.prisma.student_fees.groupBy({
@@ -739,6 +753,7 @@ export class FinancialReportsService {
     for (const disc of discGroups) {
       const existing = perStudent.get(disc.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0, waived: 0 };
       existing.amount = this.roundMoney(existing.amount - this.toMoney(disc._sum.amount));
+      existing.amountPaid = this.netPaid(existing.amountPaid, disc._sum.amount_paid);
       existing.headCount += disc._count._all;
       perStudent.set(disc.student_id, existing);
     }
@@ -818,6 +833,141 @@ export class FinancialReportsService {
     };
   }
 
+  /**
+   * One row per fee_date, with the discount as its own column.
+   *
+   * A discount belongs to the fee date it was billed on — the voucher it rides
+   * on — so grouping by fee_date keeps it next to the heads it reduces. The
+   * other views can't: "By fee type" lumps every discount into one bucket, and
+   * "By period" files it under whichever target month the discount row carries
+   * (an annual voucher billed on one fee_date spreads over twelve months, with
+   * its discount parked on one of them).
+   *
+   * billed = fee heads before discount; amount = billed + discount (net, what is
+   * owed); amount_paid is cash only (netPaid). Waived heads stay in billed and
+   * are netted out of outstanding, as in every other view.
+   */
+  private async listFeeHeadsByFeeDate(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ) {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+    };
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 50, 200);
+
+    const [groups, discGroups, waivedGroups, totals, studentCount] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['fee_date'],
+        where: { ...where, is_discount: false },
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['fee_date'],
+        where: { ...where, is_discount: true },
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['fee_date'],
+        where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
+        _sum: { amount: true },
+      }),
+      this.feeHeadMoneyTotals(where),
+      this.prisma.students.count({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+      }),
+    ]);
+
+    type Bucket = {
+      fee_date: string | null;
+      head_count: number;
+      discount_count: number;
+      billed: number;
+      discount: number;
+      headsPaid: Prisma.Decimal | null;
+      discountConsumed: Prisma.Decimal | null;
+      waived: number;
+    };
+    // Union of all three group sets, so a fee date with only a discount (every
+    // head it offsets fell outside the filter) still gets a row.
+    const buckets = new Map<string, Bucket>();
+    const bucketFor = (feeDate: Date | null) => {
+      const key = this.formatDateOnly(feeDate) ?? '';
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          fee_date: this.formatDateOnly(feeDate),
+          head_count: 0,
+          discount_count: 0,
+          billed: 0,
+          discount: 0,
+          headsPaid: null,
+          discountConsumed: null,
+          waived: 0,
+        };
+        buckets.set(key, bucket);
+      }
+      return bucket;
+    };
+    for (const g of groups) {
+      const b = bucketFor(g.fee_date);
+      b.head_count = g._count._all;
+      b.billed = this.toMoney(g._sum.amount);
+      b.headsPaid = g._sum.amount_paid;
+    }
+    for (const d of discGroups) {
+      const b = bucketFor(d.fee_date);
+      b.discount_count = d._count._all;
+      b.discount = -this.toMoney(d._sum.amount);
+      b.discountConsumed = d._sum.amount_paid;
+    }
+    for (const w of waivedGroups) {
+      bucketFor(w.fee_date).waived = this.toMoney(w._sum.amount);
+    }
+
+    const items = [...buckets.values()]
+      // Oldest first; rows with no fee_date last.
+      .sort((a, b) =>
+        a.fee_date === b.fee_date ? 0
+          : a.fee_date === null ? 1
+            : b.fee_date === null ? -1
+              : a.fee_date.localeCompare(b.fee_date),
+      )
+      .map((b) => {
+        const amount = this.roundMoney(b.billed + b.discount);
+        const amountPaid = this.netPaid(b.headsPaid, b.discountConsumed);
+        return {
+          fee_date: b.fee_date,
+          head_count: b.head_count,
+          discount_count: b.discount_count,
+          billed: b.billed,
+          discount: b.discount,
+          amount,
+          amount_paid: amountPaid,
+          waived: b.waived,
+          outstanding: this.roundMoney(amount - amountPaid - b.waived),
+        };
+      });
+    const start = (page - 1) * limit;
+
+    return {
+      view: 'fee_date' as const,
+      items: items.slice(start, start + limit),
+      pagination: createPaginationMeta(page, limit, items.length),
+      totals: {
+        ...totals,
+        student_count: studentCount,
+        ...this.buildTotalsCheck(totals),
+      },
+    };
+  }
+
   async listDeposits(query: ListDepositsQueryDto, user: IJwtStaffPayload) {
     this.assertDateRange(query);
     const where = this.buildDepositsWhere(query, user);
@@ -876,6 +1026,9 @@ export class FinancialReportsService {
     }
     if (view === 'class') {
       return this.exportFeeHeadsByClass(query, user);
+    }
+    if (view === 'fee_date') {
+      return this.exportFeeHeadsByFeeDate(query, user);
     }
 
     const where = this.buildFeeHeadsWhere(query, user);
@@ -974,7 +1127,7 @@ export class FinancialReportsService {
           this.prisma.student_fees.groupBy({
             by: ['student_id'],
             where: { ...where, is_discount: true, student_id: { in: studentIds } },
-            _sum: { amount: true },
+            _sum: { amount: true, amount_paid: true },
             _count: { _all: true },
           }),
           this.prisma.student_fees.groupBy({
@@ -987,7 +1140,10 @@ export class FinancialReportsService {
       : [[], [], []];
     const studentMap = new Map(students.map((s) => [s.cc, s]));
     const discountByStudent = new Map(
-      discGroups.map((d) => [d.student_id, { amount: this.toMoney(d._sum.amount), count: d._count._all }]),
+      discGroups.map((d) => [
+        d.student_id,
+        { amount: this.toMoney(d._sum.amount), consumed: d._sum.amount_paid, count: d._count._all },
+      ]),
     );
     const waivedByStudent = new Map(
       waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
@@ -1010,7 +1166,7 @@ export class FinancialReportsService {
       const discount = discountByStudent.get(group.student_id);
       const waived = this.roundMoney(waivedByStudent.get(group.student_id) ?? 0);
       const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
-      const paid = this.toMoney(group._sum.amount_paid);
+      const paid = this.netPaid(group._sum.amount_paid, discount?.consumed);
       return {
         cc: group.student_id,
         gr_number: student?.gr_number ?? '',
@@ -1135,6 +1291,39 @@ export class FinancialReportsService {
     return this.buildExportFile(
       'Fee Heads by Class',
       `fee-heads-by-class-${query.from_date}-to-${query.to_date}`,
+      columns,
+      data,
+      query.format,
+    );
+  }
+
+  private async exportFeeHeadsByFeeDate(
+    query: ExportFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const result = await this.listFeeHeadsByFeeDate(
+      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
+      user,
+    );
+    this.assertExportCap(result.items.length);
+    const columns: ExportColumn[] = [
+      { header: 'Fee date', key: 'fee_date', width: 14 },
+      { header: 'Heads', key: 'head_count', width: 10 },
+      { header: 'Billed', key: 'billed', width: 14 },
+      { header: 'Discounts', key: 'discount_count', width: 11 },
+      { header: 'Discount', key: 'discount', width: 14 },
+      { header: 'Net amount', key: 'amount', width: 14 },
+      { header: 'Amount paid', key: 'amount_paid', width: 14 },
+      { header: 'Waived', key: 'waived', width: 14 },
+      { header: 'Outstanding', key: 'outstanding', width: 14 },
+    ];
+    const data = result.items.map((item) => ({
+      ...item,
+      fee_date: item.fee_date ?? 'No fee date',
+    }));
+    return this.buildExportFile(
+      'Fee Heads by Fee Date',
+      `fee-heads-by-fee-date-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
       query.format,
@@ -3190,6 +3379,7 @@ export class FinancialReportsService {
    * do the same). Prisma's aggregate/groupBy can't conditionally negate in SQL, so
    * discounts are queried separately here and subtracted in JS. Discount rows are
    * always status=DISCOUNT (never NOT_ISSUED), so they always net out of "billed".
+   * Paid nets the discount out the same way — see netPaid.
    */
   private async feeHeadMoneyTotals(where: Prisma.student_feesWhereInput) {
     const nonDiscountWhere: Prisma.student_feesWhereInput = { ...where, is_discount: false };
@@ -3203,7 +3393,7 @@ export class FinancialReportsService {
       }),
       this.prisma.student_fees.aggregate({
         where: discountWhere,
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: true,
       }),
       this.prisma.student_fees.groupBy({
@@ -3250,7 +3440,7 @@ export class FinancialReportsService {
     const amount = this.roundMoney(
       this.toMoney(totalsAgg._sum.amount) - this.toMoney(discAgg._sum.amount),
     );
-    const amountPaid = this.toMoney(totalsAgg._sum.amount_paid); // discount rows always have amount_paid=0
+    const amountPaid = this.netPaid(totalsAgg._sum.amount_paid, discAgg._sum.amount_paid);
     return {
       count: totalsAgg._count + discAgg._count,
       billed_count: billedCount,
@@ -3342,7 +3532,10 @@ export class FinancialReportsService {
     classTerms: ReadonlyMap<number, number>,
   ) {
     const amount = this.signedAmount(row);
-    const amountPaid = this.toMoney(row.amount_paid); // always 0 for discount rows
+    // A discount row's amount_paid is the part of it already spent settling heads;
+    // it shows as negative paid so it cancels the discount-settled part of those
+    // heads' paid (see netPaid). Fully used: amount -X, paid -X, outstanding 0.
+    const amountPaid = row.is_discount ? this.netPaid(0, row.amount_paid) : this.toMoney(row.amount_paid);
     const isWaived = row.status === fee_status_enum.WAIVED;
     const waivedAmount = isWaived
       ? this.roundMoney(this.toMoney(row.waived_amount) || amount)
@@ -3639,6 +3832,26 @@ export class FinancialReportsService {
   private signedAmount(row: { amount: Prisma.Decimal | number | null; is_discount: boolean }): number {
     const raw = this.toMoney(row.amount);
     return row.is_discount ? -raw : raw;
+  }
+
+  /**
+   * Money actually received against fee heads: the heads' amount_paid minus the
+   * discount that was spent to settle them.
+   *
+   * When a discount closes a head (VouchersService.applyDiscountCreditInTx) it
+   * is written into that head's amount_paid, so the head can show PAID — and
+   * mirrored onto the discount row's own amount_paid as "consumed" (see
+   * syncDiscountHeadsAmountPaidInTx). Summing heads' amount_paid alone therefore
+   * counts the discount as cash: a 100,000 voucher with a 20,000 discount, paid
+   * with 80,000, reported 100,000 paid and -20,000 outstanding. Subtracting the
+   * discount rows' consumed amount gives the 80,000 back. Both sums must cover
+   * the same filtered set of student_fees rows.
+   */
+  private netPaid(
+    headsPaid: Prisma.Decimal | number | null | undefined,
+    discountConsumed: Prisma.Decimal | number | null | undefined,
+  ): number {
+    return this.roundMoney(this.toMoney(headsPaid) - this.toMoney(discountConsumed));
   }
 
   private roundMoney(value: number): number {

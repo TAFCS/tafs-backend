@@ -41,6 +41,13 @@ change makes one false, the change is wrong, not the rule.
    (`is_discount = true`, `status = DISCOUNT`, `amount_paid = 0`). Every money
    roll-up queries them separately and subtracts. A discount head's
    `voucher_heads.balance` is hardcoded 0 and can never be deposited against.
+   **Paid is cash only.** When a discount settles a head it is written into
+   that head's `amount_paid` and into the discount row's own `amount_paid`
+   (as consumed), so any "paid" roll-up must be heads' `amount_paid` **minus**
+   discount rows' `amount_paid` (`FinancialReportsService.netPaid`). Summing
+   heads alone counts the discount as money: a 100,000 voucher with a 20,000
+   discount paid with 80,000 reported 100,000 paid, −20,000 outstanding.
+   `npm test -- fee-heads-discount`.
 7. **Deposit reversal recomputes, never zeroes** — `reverseDeposit` /
    `clearDeposit` re-derive `student_fees.amount_paid`,
    `voucher_arrear_surcharges.amount_paid` and each voucher's heads/status from
