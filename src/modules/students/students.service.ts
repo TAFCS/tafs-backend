@@ -248,7 +248,7 @@ export class StudentsService {
     query: GetStudentsDto,
     user?: IJwtStaffPayload,
   ): Promise<Prisma.studentsWhereInput> {
-    const { search, campus_id, class_id, section_id, house_id, status, has_photo, had_quick_admission } = query;
+    const { search, campus_id, class_id, section_id, house_id, status, discipline, has_photo, had_quick_admission } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
     if (search) {
@@ -275,6 +275,16 @@ export class StudentsService {
     if (class_id?.length)   where.class_id   = { in: class_id };
     if (section_id?.length) where.section_id = { in: section_id };
     if (house_id?.length)   where.house_id   = { in: house_id };
+    if (discipline?.length) {
+      if (!where.AND) where.AND = [];
+      (where.AND as Prisma.studentsWhereInput[]).push({
+        student_admissions: {
+          some: {
+            discipline: { in: discipline, mode: 'insensitive' },
+          },
+        },
+      });
+    }
     // UNCONFIRMED is kept as an alias for QUICK_ADMISSION (real students status).
     if (status?.length) {
       const mapped = status.map((s) =>
@@ -569,6 +579,7 @@ export class StudentsService {
             photograph_url: s.photograph_url ?? null,
             academic_system: adm?.academic_system ?? null,
             requested_grade: adm?.requested_grade ?? null,
+            discipline: adm?.discipline ?? null,
             primary_guardian_name: primary?.guardians?.full_name ?? null,
             guardian_relationship: primary?.relationship ?? null,
             primary_guardian_cnic: primary?.guardians?.cnic ?? null,
@@ -654,6 +665,7 @@ export class StudentsService {
           academic_system: true,
           academic_year: true,
           application_date: true,
+          discipline: true,
         },
       };
     }
@@ -668,6 +680,7 @@ export class StudentsService {
           academic_system: true,
           academic_year: true,
           application_date: true,
+          discipline: true,
         },
       };
     }
@@ -887,6 +900,7 @@ export class StudentsService {
           photograph_url: s.photograph_url,
           academic_system: latestAdmission?.academic_system,
           requested_grade: latestAdmission?.requested_grade,
+          discipline: latestAdmission?.discipline ?? null,
           primary_guardian_name: primaryGuardianNode?.guardians?.full_name,
           guardian_relationship: primaryGuardianNode?.relationship,
           primary_guardian_cnic: primaryGuardianNode?.guardians?.cnic,
@@ -899,6 +913,7 @@ export class StudentsService {
         mappedData.academic = {
           academic_system: latestAdmission?.academic_system,
           requested_grade: latestAdmission?.requested_grade,
+          discipline: latestAdmission?.discipline ?? null,
           academic_year: latestAdmission?.academic_year,
           application_date: latestAdmission?.application_date,
           admission_age_years: s.admission_age_years,
@@ -1046,6 +1061,7 @@ export class StudentsService {
           take: 1,
           select: {
             academic_year: true,
+            discipline: true,
           }
         }
       }
@@ -1085,6 +1101,7 @@ export class StudentsService {
       section: { header: 'Section', width: 12, getValue: (s) => s.sections?.description || '' },
       house: { header: 'House', width: 15, getValue: (s) => s.houses?.house_name || '' },
       status: { header: 'Status', width: 15, getValue: (s) => s.status || '' },
+      discipline: { header: 'Discipline', width: 18, getValue: (s) => s.student_admissions?.[0]?.discipline || '' },
       academic_year: { header: 'Academic Year', width: 15, getValue: (s) => s.academic_year || s.student_admissions?.[0]?.academic_year || '' },
       is_complementary: { header: 'Is Complementary', width: 18, getValue: (s) => s.is_complementary ? 'Yes' : 'No' },
       is_fee_endowment: { header: 'Is Fee Endowment', width: 18, getValue: (s) => s.is_fee_endowment ? 'Yes' : 'No' },

@@ -55,6 +55,12 @@ export class GetStudentsDto {
   status?: StudentListStatus[];
 
   @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsString({ each: true })
+  discipline?: string[];
+
+  @IsOptional()
   @IsArray()
   @IsEnum(['core', 'academic', 'family', 'contact', 'demographic', 'medical', 'history'], { each: true })
   @Transform(({ value }) => {
