@@ -415,6 +415,28 @@ export class VouchersController {
      * rows are re-linked without renaming. The original voucher is VOID; deposit_allocations stay on
      * the original voucher_id (Case A updates student_fee_id to the new paid fee row).
      */
+    /**
+     * Would splitting this voucher now issue a PAY IMMEDIATELY balance voucher,
+     * and with what due/validity date for `issue_date`? Read-only — lets the split
+     * modal prefill the dates the split itself will enforce.
+     */
+    @Get(':id/split-preview')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Create, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async previewSplit(
+        @Param('id', ParseIntPipe) id: number,
+        @Query('issue_date') issueDate?: string,
+    ) {
+        return {
+            success: true,
+            data: await this.vouchersService.previewSplitPayImmediate(id, issueDate),
+        };
+    }
+
     @Post(':id/split-partially-paid')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.CREATED)

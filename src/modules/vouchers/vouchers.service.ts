@@ -507,6 +507,71 @@ export class VouchersService {
         return row?.value === 'true';
     }
 
+    /**
+     * The head that defines a split's balance-voucher period: the one on the
+     * voucher's own fee_date (the "current period" head), else the first head.
+     */
+    private splitFeeRef(
+        original: { fee_date: Date | null },
+        heads: Array<{ student_fees: any }>,
+    ) {
+        const current = heads.find((h) => {
+            const fd = h.student_fees?.fee_date;
+            return fd && original.fee_date && new Date(fd).getTime() === new Date(original.fee_date).getTime();
+        });
+        return current?.student_fees ?? heads[0]?.student_fees ?? null;
+    }
+
+    /**
+     * PAY IMMEDIATELY for a split's balance voucher — the same isPayImmediate()
+     * rule and system-settings toggle create() uses for single + bulk issuance,
+     * with arrears taken relative to the balance voucher's own fee_date.
+     *
+     * Reads the state BEFORE the split moves anything: use_nearest_future_fee_date
+     * / balance_fee_date re-date a partially-paid head's balance, and whether the
+     * family has two unpaid vouchers must not depend on where that option files
+     * it. Also what lets the deposit page preview it (previewSplitPayImmediate):
+     * both callers ask this one method, so they can't disagree.
+     */
+    private async splitPayImmediate(
+        client: Prisma.TransactionClient,
+        original: { student_id: number; fee_date: Date | null },
+        heads: Array<{ student_fees: any }>,
+    ): Promise<boolean> {
+        const targetFeeDate = this.splitFeeRef(original, heads)?.fee_date ?? original.fee_date;
+        if (!targetFeeDate) return false; // no arrears without a fee_date, as in create()
+        const arrears = await this.computeArrears(original.student_id, new Date(targetFeeDate), false, client);
+        return isPayImmediate(arrears) && (await this.isPayImmediateEnabled(client));
+    }
+
+    /**
+     * Deposit page prefill: would splitting this voucher now issue a PAY
+     * IMMEDIATELY balance voucher, and with what due/validity date for the given
+     * issue date? Same decision (splitPayImmediate) and date rule
+     * (payImmediateDueDate) splitPartiallyPaid() applies; writes nothing.
+     */
+    async previewSplitPayImmediate(voucherId: number, issueDateStr?: string) {
+        if (issueDateStr && !/^\d{4}-\d{2}-\d{2}$/.test(issueDateStr)) {
+            throw new BadRequestException('issue_date must be YYYY-MM-DD.');
+        }
+        const original = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: { student_id: true, fee_date: true },
+        });
+        if (!original) throw new NotFoundException(`Voucher ${voucherId} not found`);
+        const heads = await this.prisma.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            include: { student_fees: true },
+        });
+
+        if (!(await this.splitPayImmediate(this.prisma, original, heads))) {
+            return { pay_immediately: false, due_date: null, validity_date: null };
+        }
+        const issueDate = new Date(issueDateStr ?? new Date().toISOString().slice(0, 10));
+        const due = payImmediateDueDate(issueDate).toISOString().slice(0, 10);
+        return { pay_immediately: true, due_date: due, validity_date: due };
+    }
+
     async create(
         dto: CreateVoucherDto,
         pdfBuffer?: Buffer,
@@ -4940,6 +5005,15 @@ export class VouchersService {
 
         const { paidVoucher, unpaidVoucher } = await this.prisma.$transaction(async (tx) => {
 
+            // ── PAY IMMEDIATELY (balance voucher only) — decided FIRST, before Step 1
+            //    re-dates anything. See splitPayImmediate(); the deposit page's
+            //    prefill (previewSplitPayImmediate) asks the very same question.
+            const payImmediate = await this.splitPayImmediate(tx, original, allHeads);
+            if (payImmediate) {
+                dueDate = payImmediateDueDate(issueDate);
+                validityDate = dueDate;
+            }
+
             // ── Step 1: For every PARTIALLY_PAID student_fees row, create two new rows
             //           (paid side + balance side) and delete the original.
             //           The map now carries the correct prefixes derived above.
@@ -5127,37 +5201,10 @@ export class VouchersService {
             //    arrear head can easily have the lowest id, which would bake the wrong
             //    MMYY into the new voucher numbers via toMeezanVoucherNumber. Mirrors how
             //    _destroyVoucherInTx derives "current period" via MAX(fee_date).
-            const currentPeriodHead = allHeads.find((h) => {
-                const fd = h.student_fees?.fee_date;
-                return fd && original.fee_date && new Date(fd).getTime() === new Date(original.fee_date).getTime();
-            });
-            const feeRef = currentPeriodHead?.student_fees ?? allHeads[0]?.student_fees;
+            const feeRef = this.splitFeeRef(original, allHeads);
             const targetMonth = feeRef?.target_month ?? original.month;
             const targetYear = feeRef?.academic_year ?? original.academic_year;
             const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
-
-            // PAY IMMEDIATELY (balance voucher only) — same isPayImmediate() rule and
-            // system-settings toggle as create() uses for single + bulk issuance.
-            // Arrears are taken relative to the balance voucher's own fee_date, like
-            // create(), and skipped when there is none (create() does the same).
-            // Read-only: does not touch student_fees or surcharge rows (Step 8 writes
-            // the balance voucher's surcharges from its own heads).
-            const splitArrears = targetFeeDate
-                ? await this.computeArrears(
-                    original.student_id,
-                    new Date(targetFeeDate),
-                    waiveBalanceSurcharge,
-                    tx,
-                )
-                : null;
-            const payImmediate =
-                splitArrears !== null &&
-                isPayImmediate(splitArrears) &&
-                (await this.isPayImmediateEnabled(tx));
-            if (payImmediate) {
-                dueDate = payImmediateDueDate(issueDate);
-                validityDate = dueDate;
-            }
 
             const commonFields = {
                 student_id: original.student_id,

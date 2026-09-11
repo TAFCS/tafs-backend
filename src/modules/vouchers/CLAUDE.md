@@ -136,7 +136,17 @@ re-inline the rule at a call site.**
 |---|---|---|---|
 | 1 | `/fee-challan` single | `create()`, right after `computeArrears()` | `isPayImmediate(arrearsInfo) && isPayImmediateEnabled(tx)` → forces dates, sets `pay_immediately` |
 | 2 | Bulk job | same code — bulk calls `create()` once per student | same; decided **per student**, so one bulk job can mix PAY IMMEDIATELY and normal vouchers |
-| 3 | Split balance voucher | `splitPartiallyPaid()`, right after `targetFeeDate` is derived | same calls; a **read-only** `computeArrears()` (it writes nothing — Step 8 owns the surcharge rows); applied to the `unpaid` insert only |
+| 3 | Split balance voucher | `splitPayImmediate()`, called **first** in the split's transaction — before Step 1 re-dates anything | same rule + toggle, arrears relative to the balance voucher's fee_date, read-only; applied to the `unpaid` insert only |
+
+**Why the split decides before Step 1.** `use_nearest_future_fee_date` / `balance_fee_date` move a
+partially-paid head's balance to a later fee_date. Checking afterwards made the answer depend on
+where that bookkeeping option filed the balance; whether the family has two unpaid vouchers
+must not.
+
+**Deposit page prefill.** `GET /v1/vouchers/:id/split-preview?issue_date=YYYY-MM-DD` →
+`previewSplitPayImmediate()` calls the same `splitPayImmediate()` and `payImmediateDueDate()`,
+so the split modal can prefill (and lock) the due/validity date the split will enforce. It
+writes nothing. Never compute the rule in the webapp — ask this endpoint.
 
 **The watermark is decided in `prepareVoucherPdfData()`, from the voucher row** —
 `pay_immediately && !paidStamp && !waived`. Callers do not pass it. It used to be a parameter,
