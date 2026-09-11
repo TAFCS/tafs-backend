@@ -114,13 +114,61 @@ const VOUCHER_INCLUDE = {
     },
 };
 
-// PAY IMMEDIATELY: a student already 2+ distinct billing months behind when a
-// new voucher is issued gets that voucher's due/validity dates forced to
-// issue_date + this many days, plus a watermark on the PDF. Applied
-// independently in create() AND splitPartiallyPaid() — see CLAUDE.md in this
-// directory for why those two don't share code.
-const PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD = 2;
-const PAY_IMMEDIATE_DUE_DAYS = 4;
+// ─── PAY IMMEDIATELY ─────────────────────────────────────────────────────
+// The rules live here and only here. create() (single + bulk issuance) and
+// splitPartiallyPaid() (the balance voucher) both call isPayImmediate() and
+// payImmediateDueDate() — they share no other code, so do not re-inline the
+// rule at either call site. Full spec: src/modules/vouchers/CLAUDE.md.
+const PAY_IMMEDIATE_MIN_UNPAID_VOUCHERS = 2;
+const PAY_IMMEDIATE_DUE_DAYS = 4; // days to pay, Sundays not counted — see payImmediateDueDate
+
+/**
+ * True when the student has not paid the last two vouchers issued to them.
+ *
+ * `arrears` must be computeArrears() for the voucher being issued, so it only
+ * holds heads with fee_date strictly BEFORE the new voucher's own fee_date —
+ * the current fee_date is ignored by construction.
+ *
+ * Both conditions are required: the arrears span at least two distinct
+ * fee_dates AND at least two distinct target months. Annual billing puts
+ * twelve target months on ONE fee_date — one unpaid voucher, not two — and
+ * must not fire; counting target months alone got that wrong.
+ */
+export function isPayImmediate(arrears: {
+    rows: Array<{ isSurcharge: boolean; fee_date: string }>;
+    surcharge_groups: unknown[];
+}): boolean {
+    const unpaidFeeDates = new Set(
+        arrears.rows
+            .filter((r) => !r.isSurcharge && r.fee_date !== 'undated')
+            .map((r) => r.fee_date),
+    );
+    // surcharge_groups is one entry per distinct (academic_year, target_month).
+    return (
+        unpaidFeeDates.size >= PAY_IMMEDIATE_MIN_UNPAID_VOUCHERS &&
+        arrears.surcharge_groups.length >= PAY_IMMEDIATE_MIN_UNPAID_VOUCHERS
+    );
+}
+
+/**
+ * Due date AND validity date for a PAY IMMEDIATELY voucher: issue_date + 4 days,
+ * not counting Sundays. Any window that crosses a Sunday becomes +5 — issued on
+ * a Friday, it is due the next Wednesday (Sat, Mon, Tue, Wed). The result is
+ * never a Sunday.
+ */
+export function payImmediateDueDate(issueDate: Date): Date {
+    // UTC arithmetic — these are @db.Date columns stored at UTC midnight, and
+    // local-time setDate()/getDay() would drift a day on a server with a
+    // negative offset.
+    const d = new Date(issueDate);
+    let counted = 0;
+    while (counted < PAY_IMMEDIATE_DUE_DAYS) {
+        d.setUTCDate(d.getUTCDate() + 1);
+        if (d.getUTCDay() !== 0) counted++; // Sundays don't count
+    }
+    return d;
+}
+
 
 /** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
 const PDF_FREEZE_SELECT = {
@@ -133,7 +181,6 @@ const PDF_FREEZE_SELECT = {
     waived_pdf_url: true,
     waived_pdf_filename: true,
     fee_date: true,
-    pay_immediately: true,
     students: { select: { gr_number: true } },
 };
 
@@ -147,7 +194,6 @@ type PdfFreezeRow = {
     waived_pdf_url: string | null;
     waived_pdf_filename: string | null;
     fee_date: Date | string | null;
-    pay_immediately: boolean | null;
     students: { gr_number: string | null } | null;
 };
 
@@ -448,26 +494,25 @@ export class VouchersService {
             // committed, which stacked a duplicate surcharge on every later month and
             // orphaned arrears when a prior voucher was voided by supersession (step 6).
             let serverArrearFeeIds: number[] = [];
+            let arrearsInfo: Awaited<ReturnType<VouchersService['computeArrears']>> | null = null;
             if (feeDate && !issueAsWaived) {
-                const arrearsInfo = await this.computeArrears(
+                arrearsInfo = await this.computeArrears(
                     dto.student_id, feeDate, dto.waive_surcharge, tx,
                 );
                 serverArrearFeeIds = arrearsInfo.arrear_fee_ids;
                 surchargeGroups = arrearsInfo.surcharge_groups;
             }
 
-            // PAY IMMEDIATELY: 2+ distinct arrear months outstanding forces the
-            // due/validity dates to issue_date + PAY_IMMEDIATE_DUE_DAYS, overriding
-            // whatever the caller sent. See PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD.
-            // Gated by app_config.pay_immediately_enabled — see isPayImmediateEnabled().
+            // PAY IMMEDIATELY (single + bulk issuance) — rule in isPayImmediate(),
+            // gated by the system-settings toggle. Overrides whatever due/validity
+            // dates the caller sent.
             const payImmediate =
-                surchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD &&
+                arrearsInfo !== null &&
+                isPayImmediate(arrearsInfo) &&
                 (await this.isPayImmediateEnabled(tx));
             if (payImmediate) {
-                const forcedDate = new Date(issueDate);
-                forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
-                dueDate = forcedDate;
-                validityDate = forcedDate;
+                dueDate = payImmediateDueDate(issueDate);
+                validityDate = dueDate;
             }
 
             for (const fid of serverArrearFeeIds) {
@@ -1334,7 +1379,15 @@ export class VouchersService {
     }
 
     /** Helper to prepare data for VoucherPdfService */
-    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, payImmediate = false, waived = false) {
+    private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, waived = false) {
+        // PAY IMMEDIATELY watermark — derived from the row, never passed in by the
+        // caller. It used to be a parameter, and the split's balance-voucher render
+        // forgot to pass it: the voucher was stored pay_immediately=true with the
+        // forced 4-day dates, but its PDF came out unwatermarked. Deriving it here
+        // means every render path (single, bulk, split, regenerate) gets the same
+        // answer. A PAID receipt or WAIVED challan never carries it.
+        const payImmediate = voucher.pay_immediately === true && !paidStamp && !waived;
+
         // 0. Term resolution.
         //
         // Every month label and every chronological sort below needs to know where
@@ -4047,8 +4100,7 @@ export class VouchersService {
 
         const finalPaidStamp = voucher.status === 'PAID';
         const finalWaived = voucher.status === 'WAIVED';
-        const finalPayImmediate = (voucher as any).pay_immediately === true && !finalPaidStamp && !finalWaived;
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp, false, finalPayImmediate, finalWaived);
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(voucher, finalPaidStamp, false, finalWaived);
         await this.ensureVoucherGenerationMeta(voucherId, voucher, generatedByName, voucherData);
         const buffer = await this.pdfService.generateVoucherPdf(voucherData);
         const url = await this.storage.upload(key, buffer);
@@ -4152,9 +4204,6 @@ export class VouchersService {
         const isActuallyPaid = voucher.status === 'PAID';
         const finalPaidStamp = isActuallyPaid;
         const finalWaived = voucher.status === 'WAIVED';
-        // Never show the urgency watermark on an already fully-paid or waived
-        // voucher, even if pay_immediately is still true from creation time.
-        const finalPayImmediate = voucher.pay_immediately === true && !isActuallyPaid && !finalWaived;
 
         // ── FROZEN PAID RECEIPT ──────────────────────────────────────────────
         // A paid receipt is a permanent artifact of a payment that happened, not
@@ -4206,7 +4255,7 @@ export class VouchersService {
         });
         if (!full) throw new NotFoundException(`Voucher ${voucherId} not found`);
 
-        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp, false, finalPayImmediate, finalWaived);
+        const { voucherData, key, filename } = await this.prepareVoucherPdfData(full, finalPaidStamp, false, finalWaived);
         voucherData.showDiscount = showDiscount;
         // Prefer persisted stamp; if missing and a name was passed (first generate),
         // write it once so regenerations stay stable.
@@ -5001,25 +5050,27 @@ export class VouchersService {
             const targetYear = feeRef?.academic_year ?? original.academic_year;
             const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
 
-            // PAY IMMEDIATELY (balance voucher only — see create() for the same
-            // rule on single/bulk issuance). Read-only: does not touch student_fees
-            // or persisted surcharges, so it doesn't disturb Step 8's "split NEVER
-            // recomputes or drops arrear surcharges" invariant.
-            const { surcharge_groups: splitSurchargeGroups } = await this.computeArrears(
-                original.student_id,
-                targetFeeDate ? new Date(targetFeeDate) : new Date(original.fee_date!),
-                waiveBalanceSurcharge,
-                tx,
-            );
-            // Gated by app_config.pay_immediately_enabled — see isPayImmediateEnabled().
+            // PAY IMMEDIATELY (balance voucher only) — same isPayImmediate() rule and
+            // system-settings toggle as create() uses for single + bulk issuance.
+            // Arrears are taken relative to the balance voucher's own fee_date, like
+            // create(), and skipped when there is none (create() does the same).
+            // Read-only: does not touch student_fees or surcharge rows (Step 8 writes
+            // the balance voucher's surcharges from its own heads).
+            const splitArrears = targetFeeDate
+                ? await this.computeArrears(
+                    original.student_id,
+                    new Date(targetFeeDate),
+                    waiveBalanceSurcharge,
+                    tx,
+                )
+                : null;
             const payImmediate =
-                splitSurchargeGroups.length >= PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD &&
+                splitArrears !== null &&
+                isPayImmediate(splitArrears) &&
                 (await this.isPayImmediateEnabled(tx));
             if (payImmediate) {
-                const forcedDate = new Date(issueDate);
-                forcedDate.setDate(forcedDate.getDate() + PAY_IMMEDIATE_DUE_DAYS);
-                dueDate = forcedDate;
-                validityDate = forcedDate;
+                dueDate = payImmediateDueDate(issueDate);
+                validityDate = dueDate;
             }
 
             const commonFields = {

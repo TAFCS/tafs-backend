@@ -44,42 +44,132 @@ shared ways across the frontend — `+10/+15 days` in the single-issuance form, 
 bulk job config, and "inherit from original" in the split settings panel. That drift already
 exists; this task didn't need to fix it, just don't add to the pile.
 
-## Worked example: PAY IMMEDIATELY
+## PAY IMMEDIATELY — the rules
 
-When a student already has arrears spanning 2+ distinct billing months (tracked via
-`computeArrears()`'s `surcharge_groups`, one entry per distinct `(academic_year, target_month)`
-arrear group) at the moment a new voucher is issued, that voucher gets:
+A voucher issued to a student who has not paid their last two vouchers is a **PAY IMMEDIATELY**
+voucher. These rules apply **identically in all three sources above** — single, bulk, and the
+split balance voucher. If a change makes one of them behave differently, the change is wrong.
 
-- `due_date` and `validity_date` forced to `issue_date + PAY_IMMEDIATE_DUE_DAYS` (4 days),
-  overriding whatever the caller/UI sent.
-- `vouchers.pay_immediately = true`, persisted once at creation (not recomputed on reprint).
-- A diagonal red "PAY IMMEDIATELY" watermark on the PDF (see `FeeChallanPDF.tsx` /
-  `FeeChallanPDF_MeezanBank.tsx`, mirroring the existing green `PAID` watermark pattern), shown
-  whenever `pay_immediately` is true and the voucher isn't fully `PAID`.
+### Rule 1 — when a voucher is PAY IMMEDIATELY
 
-Both constants (`PAY_IMMEDIATE_ARREAR_MONTHS_THRESHOLD`, `PAY_IMMEDIATE_DUE_DAYS`) live near the
-top of `vouchers.service.ts`, above `PDF_FREEZE_SELECT`.
+Look only at the student's **arrears** — unpaid heads whose `fee_date` is **strictly before** the
+new voucher's own `fee_date`. **Ignore the current fee_date.** Arrears come from
+`computeArrears()` and nowhere else (it already excludes `PAID`, `DISCOUNT`, `WAIVED`, surcharge
+and discount rows, and heads with nothing outstanding).
 
-**Frontend enabler.** The whole feature is gated behind `app_config.pay_immediately_enabled`
-(checked via `VouchersService.isPayImmediateEnabled()`, generic `app_config` key-value store —
-see `../app-config/app-config.service.ts`), seeded `'false'`. It ships dormant: merging this code
-doesn't change voucher behavior until a SUPER_ADMIN flips the toggle on `/admin/developer`
-(webapp) or `PATCH /v1/app-config/pay_immediately_enabled`. Once confirmed in production, that
-default can be reconsidered — but don't remove the check itself, since it's the one on/off switch
-for both `create()` and `splitPartiallyPaid()`.
+The voucher is PAY IMMEDIATELY when those arrears span **both**:
 
-This was implemented independently in both places, per the rule above:
+- **at least 2 different `fee_date`s**, and
+- **at least 2 different target months** (distinct `(academic_year, target_month)`).
 
-- `create()`: right after `surchargeGroups` is computed from `computeArrears()`, before the
-  arrear fee ids are merged into `finalOrderedFeeIds`.
-- `splitPartiallyPaid()`: right after `targetFeeDate` is derived, via a **read-only** call to
-  `computeArrears()` (it does not touch `student_fees` or persisted surcharges — that would
-  violate the split's separate "never recompute or drop arrear surcharges" invariant). Applied
-  only to the **balance/unpaid** voucher — the paid receipt keeps the original voucher's dates and
-  is never eligible.
+Two fee_dates with two target months means two vouchers were issued to the family and neither
+was paid. **Both conditions are required** — this is the part that is easy to get wrong:
 
-If you're adding the next cross-cutting voucher-issuance feature, search both functions for
-`PAY_IMMEDIATE` first — it's the template to follow.
+| Arrears | Fee dates | Target months | PAY IMMEDIATELY? |
+|---|---|---|---|
+| Aug voucher + Sep voucher unpaid | 2 | 2 | **yes** |
+| Aug, Sep, Oct, Nov all unpaid | 4 | 4 | **yes** |
+| A whole year billed on **one** fee_date, unpaid | 1 | 12 | **no** — one unpaid voucher |
+| Two fee_dates for the same month | 2 | 1 | **no** |
+| Only last month unpaid | 1 | 1 | no |
+
+The annual-billing row is real: counting target months alone (the first implementation did)
+wrongly flagged 25 of the 550 students with arrears on 2026-09-11.
+
+Any outstanding balance counts as unpaid — a Rs 50 leftover on an old head still makes that
+fee_date an unpaid voucher. That is the rule as specified, not a rounding bug.
+
+### Rule 2 — what a PAY IMMEDIATELY voucher gets
+
+- **`due_date` = `validity_date` = `issue_date` + 4 days, not counting Sundays.** Both are
+  forced, overriding whatever the user typed or the bulk job / split form sent. The family has
+  four days to pay before the voucher expires. Count forward from the issue date and skip every
+  Sunday, so any window that crosses a Sunday becomes **+5** — issued on a **Friday**, it is due
+  the next **Wednesday**. The due date is never a Sunday. Only Sundays are skipped (not
+  Saturdays, not holidays).
+
+  | Issued | Days counted | Due | Offset |
+  |---|---|---|---|
+  | Sun | Mon Tue Wed Thu | Thu | +4 |
+  | Mon | Tue Wed Thu Fri | Fri | +4 |
+  | Tue | Wed Thu Fri Sat | Sat | +4 |
+  | Wed | Thu Fri Sat ~~Sun~~ Mon | Mon | +5 |
+  | Thu | Fri Sat ~~Sun~~ Mon Tue | Tue | +5 |
+  | Fri | Sat ~~Sun~~ Mon Tue Wed | Wed | +5 |
+  | Sat | ~~Sun~~ Mon Tue Wed Thu | Thu | +5 |
+
+  Computed only by `payImmediateDueDate()`, in UTC (`getUTCDay() === 0` is Sunday — the columns
+  are `@db.Date` at UTC midnight).
+- **`vouchers.pay_immediately = true`**, written once at issuance and never recomputed — a
+  reprint shows what was issued, even if the family has since paid the older vouchers.
+- **One big diagonal red "PAY IMMEDIATELY" watermark across the whole page** — one mark for the
+  page, not one per copy, drawn **on top** of everything.
+
+### Rule 3 — the system-settings toggle governs all three
+
+Everything above happens **only while `app_config.pay_immediately_enabled` is `'true'`** —
+the "PAY IMMEDIATELY Vouchers" switch on **`/admin/developer`** (SUPER_ADMIN only; also
+`PATCH /v1/app-config/pay_immediately_enabled`). Seeded `'false'`. All three sources read the
+same key via `isPayImmediateEnabled()`, so flipping it changes single, bulk and split together, on
+the very next voucher (no cache). Never add a per-source switch, and never remove the check.
+
+The toggle only decides what **new** vouchers get. Turning it off does not strip the watermark
+or dates from vouchers already issued as PAY IMMEDIATELY (Rule 2: `pay_immediately` is frozen).
+
+### Never PAY IMMEDIATELY
+
+- A **PAID** voucher's receipt or a **WAIVED** challan — the watermark is suppressed on those
+  renders even if `pay_immediately` is true.
+- The split's **PAID receipt** — only the split's **balance** voucher is ever eligible.
+- A split with `balance_disposition = DO_NOT_ISSUE` — there is no balance voucher.
+- A fully-waived challan (`issueAsWaived`) — it skips `computeArrears()` entirely.
+- A voucher with no `fee_date` — no arrears can be computed, in either `create()` or the split.
+
+### Where it is enforced — one rule, three sources
+
+The rule is written **once**, as module-level functions at the top of `vouchers.service.ts`:
+`isPayImmediate()` (Rule 1), `payImmediateDueDate()` (Rule 2 dates), and the constants
+`PAY_IMMEDIATE_MIN_UNPAID_VOUCHERS` / `PAY_IMMEDIATE_DUE_DAYS`. Each source calls them; **never
+re-inline the rule at a call site.**
+
+| # | Source | Where | What it does |
+|---|---|---|---|
+| 1 | `/fee-challan` single | `create()`, right after `computeArrears()` | `isPayImmediate(arrearsInfo) && isPayImmediateEnabled(tx)` → forces dates, sets `pay_immediately` |
+| 2 | Bulk job | same code — bulk calls `create()` once per student | same; decided **per student**, so one bulk job can mix PAY IMMEDIATELY and normal vouchers |
+| 3 | Split balance voucher | `splitPartiallyPaid()`, right after `targetFeeDate` is derived | same calls; a **read-only** `computeArrears()` (it writes nothing — Step 8 owns the surcharge rows); applied to the `unpaid` insert only |
+
+**The watermark is decided in `prepareVoucherPdfData()`, from the voucher row** —
+`pay_immediately && !paidStamp && !waived`. Callers do not pass it. It used to be a parameter,
+and the split's balance-voucher render forgot to pass it: the voucher was stored
+`pay_immediately = true` with the 4-day dates but downloaded **without** the watermark. Deriving
+it from the row means every render path (single, bulk, split, regenerate, reprint) agrees.
+
+### Watermark rendering — two traps already hit
+
+Both in `FeeChallanPDF.tsx` (mirrored in `FeeChallanPDF_MeezanBank.tsx`):
+
+1. **Z-order.** react-pdf has no `z-index`; it stacks in document order. The watermark must be
+   the **last** child of `<Page>` to paint on top. As the first child it sat behind the tables.
+2. **Spurious second page.** react-pdf counts an absolute box's overflow when deciding page
+   breaks. A full-page-height watermark box made **every** PAY IMMEDIATELY voucher print a blank
+   second page. The outer box is clamped to the flow area (`CONTENT_HEIGHT - QR_RESERVE`); the
+   inner box carries the full page size for coverage — the same nesting the challan block uses.
+   It is not `fixed`, so it stays on page 1 when a long history column overflows to page 2.
+
+### Check after touching any of this
+
+1. `npm test -- pay-immediately` — the Rule 1 table and the Rule 2 dates (every issue weekday,
+   never a Sunday), including the annual-billing case.
+2. With the toggle **on**, issue for a student with two unpaid vouchers from each source:
+   `/fee-challan`, a bulk job, and a split's balance voucher. All three: due = validity =
+   issue + 4 days with Sundays not counted (a Friday issue is due Wednesday),
+   `pay_immediately = true`, watermark on top, **one page**.
+3. Same student with the toggle **off**: all three issue normally.
+4. A student whose arrears are one annual voucher: never PAY IMMEDIATELY.
+
+If you're adding the next cross-cutting voucher-issuance feature, follow this pattern: write the
+rule once, call it from both `create()` and `splitPartiallyPaid()`, and derive any PDF effect from
+the voucher row inside `prepareVoucherPdfData()` rather than threading it through callers.
 
 ## Worked example: WAIVED heads at issuance
 

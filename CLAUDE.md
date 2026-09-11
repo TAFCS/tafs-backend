@@ -58,7 +58,10 @@ change makes one false, the change is wrong, not the rule.
    Un-waive is the only way back. See **Rule C** for the full lifecycle.
 10. **Bulk issuance shares `create()`** — single + bulk both call
     `VouchersService.create()`; `splitPartiallyPaid()` is a hand-maintained
-    duplicate. Any issuance-behaviour change lands in both.
+    duplicate. Any issuance-behaviour change lands in both. **PAY IMMEDIATELY**
+    must stay identical across single, bulk and the split balance voucher and
+    obey the `pay_immediately_enabled` toggle — rules and checks in
+    `src/modules/vouchers/CLAUDE.md`; `npm test -- pay-immediately`.
 11. **Schema reads must not outrun the migration** — the datasource is the
     shared remote DB and `prisma migrate deploy` is run deliberately, so a
     column added to `schema.prisma` does NOT exist yet. Never add a new column

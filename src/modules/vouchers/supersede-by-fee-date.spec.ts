@@ -271,7 +271,7 @@ describe('VouchersService — supersession by fee date', () => {
 
       jest
         .spyOn(service as any, 'computeArrears')
-        .mockResolvedValue({ arrear_fee_ids: [], surcharge_groups: [] } as any);
+        .mockResolvedValue({ arrear_fee_ids: [], surcharge_groups: [], rows: [] } as any);
       jest.spyOn(service as any, 'buildScheduleGrossMap').mockResolvedValue(new Map());
       jest.spyOn(service as any, 'resolveGeneratedByName').mockResolvedValue('Tester');
 
