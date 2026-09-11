@@ -529,6 +529,18 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     });
   }
 
+  private async ensureAnnouncementConversation() {
+    const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+    return this.prisma.chat_conversations.upsert({
+      where: { id: ANNOUNCEMENT_CONV_ID },
+      create: {
+        id: ANNOUNCEMENT_CONV_ID,
+        last_message_snippet: 'Announcements',
+      },
+      update: {},
+    });
+  }
+
   /**
    * Per-family scoped announcement — used for roll call taken (per-student result).
    * Saves to the sentinel announcement conversation but delivers only to this family's socket room + FCM.
@@ -540,6 +552,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     targetSection?: string,
   ): Promise<void> {
     const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+    const conversation = await this.ensureAnnouncementConversation();
 
     const message = await this.prisma.chat_messages.create({
       data: {
@@ -552,10 +565,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         target_grade: targetGrade ?? null,
         target_section: targetSection ?? null,
       },
-    });
-
-    const conversation = await this.prisma.chat_conversations.findUnique({
-      where: { id: ANNOUNCEMENT_CONV_ID },
     });
 
     // Deliver only to the specific family room
@@ -601,6 +610,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     console.log('[ChatGateway] Received sendAnnouncement:', data);
 
     const ANNOUNCEMENT_CONV_ID = '00000000-0000-0000-0000-000000000000';
+    const conversation = await this.ensureAnnouncementConversation();
 
     // 1. Save to Database
     const announcement = await this.prisma.chat_messages.create({
@@ -631,10 +641,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       new_value: (data.content ?? '').slice(0, 80),
       note: `Chat announcement (${target}) | Body: ${(data.content ?? '').slice(0, 120)}${(data.content?.length ?? 0) > 120 ? '…' : ''}`,
       changed_by: actor,
-    });
-
-    const conversation = await this.prisma.chat_conversations.findUnique({
-      where: { id: ANNOUNCEMENT_CONV_ID }
     });
 
     // 2. Broadcast via Socket Rooms
