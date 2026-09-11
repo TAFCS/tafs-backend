@@ -3075,13 +3075,17 @@ export class VouchersService {
      * or `'ALL'` for automated flows (Meezan) with no interactive "which
      * heads did staff pick" concept. Restricting to touched heads for manual
      * deposits keeps this from ever reaching into a head the depositor
-     * didn't intend to pay this cycle.
+     * didn't intend to pay this cycle — EXCEPT when the remaining discount can
+     * close every short head: then the deposit has paid the voucher's net
+     * total, and every short head is closed regardless of which got cash. A
+     * discount larger than one head leaves a head with no cash at all (see
+     * the settlesVoucher comment below).
      *
      * Candidate heads are closed in `id` ascending order — a plain,
-     * deterministic tie-break. In the overwhelming common case there is at
-     * most one head left short, so ordering doesn't matter; multiple
-     * simultaneously-short heads only happen from unusual manual partial
-     * distributions, where there is no domain-defined "correct" order anyway.
+     * deterministic tie-break. When the deposit settles the voucher every
+     * short head is closed, so ordering doesn't matter; otherwise it only
+     * decides which of several touched, short heads a partial discount
+     * reaches first, where there is no domain-defined "correct" order anyway.
      *
      * Returns the total amount actually applied (0 if there's no discount on
      * this voucher, or no capacity left).
@@ -3119,10 +3123,24 @@ export class VouchersService {
         );
         if (remainingPool.lte(0)) return new Prisma.Decimal(0);
 
-        const candidateHeads = heads
+        const shortHeads = heads
             .filter((h) => !h.student_fees?.is_discount)
-            .filter((h) => eligibleHeadIds === 'ALL' || eligibleHeadIds.includes(h.id))
-            .filter((h) => new Prisma.Decimal(h.balance ?? 0).gt(0))
+            .filter((h) => new Prisma.Decimal(h.balance ?? 0).gt(0));
+        const totalShort = shortHeads.reduce(
+            (sum, h) => sum.add(new Prisma.Decimal(h.balance ?? 0)),
+            new Prisma.Decimal(0),
+        );
+        // If what's left of the discount can close EVERY short head, this deposit
+        // has paid the voucher's net total — spend the discount on all of them,
+        // not just the heads the deposit touched. Auto-fill fills heads in order
+        // with the net amount, so a discount bigger than one head leaves a head
+        // with no cash at all; it never reaches eligibleHeadIds and used to stay
+        // unpaid, stranding a fully-paid voucher at PARTIALLY_PAID (voucher
+        // #10691). A genuine partial payment can't satisfy this, so the
+        // touched-heads restriction still guards it.
+        const settlesVoucher = totalShort.lte(remainingPool);
+        const candidateHeads = shortHeads
+            .filter((h) => eligibleHeadIds === 'ALL' || settlesVoucher || eligibleHeadIds.includes(h.id))
             .sort((a, b) => a.id - b.id);
 
         let totalApplied = new Prisma.Decimal(0);
