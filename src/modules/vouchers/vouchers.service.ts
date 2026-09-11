@@ -169,6 +169,74 @@ export function payImmediateDueDate(issueDate: Date): Date {
     return d;
 }
 
+/**
+ * Arrear surcharges for a split's BALANCE voucher (splitPartiallyPaid, Step 8).
+ *
+ * The balance voucher is a new unpaid voucher of its own, so it inherits none of
+ * the original voucher's surcharge rows — not its waivers, and not surcharges for
+ * months it no longer carries (a balance holding only this month's fees used to
+ * print "previous months' late payment surcharge — surcharge waived" for a month
+ * the partial payment had cleared; voucher #10880).
+ *
+ * Like create(), it gets one surcharge per arrear month — a month with an unpaid,
+ * non-discount head whose fee_date is before the balance voucher's own — but only
+ * for what of that month's surcharge is still unpaid. Auto-fill pays a month's
+ * surcharge before its fees, so a family can have paid July's surcharge and run
+ * short on July's fees; charging it again would bill it twice. A month with no
+ * surcharge row on the original is charged the standard Rs 1,000.
+ *
+ * Returns the rows to insert; the caller applies the split form's Charge/Waive
+ * toggle (dto.waive_surcharge), exactly as create() does.
+ */
+export function splitBalanceSurcharges(
+    balanceHeads: Array<{
+        student_fees: {
+            fee_date: Date | string | null;
+            target_month: number | null;
+            academic_year: string | null;
+            is_discount?: boolean | null;
+        } | null;
+        net_amount: Prisma.Decimal | number | string;
+    }>,
+    originalSurcharges: Array<{
+        arrear_fee_date: Date;
+        arrear_month: number;
+        arrear_year: string;
+        amount: Prisma.Decimal | number | string | null;
+        amount_paid: Prisma.Decimal | number | string | null;
+    }>,
+    balanceFeeDate: Date | null,
+): Array<{ arrear_fee_date: Date; arrear_month: number; arrear_year: string; amount: Prisma.Decimal }> {
+    if (!balanceFeeDate) return [];
+
+    const months = new Map<string, { feeDate: Date; month: number; year: string }>();
+    for (const { student_fees: sf, net_amount } of balanceHeads) {
+        if (!sf || sf.is_discount || !sf.fee_date || sf.target_month == null || !sf.academic_year) continue;
+        if (new Prisma.Decimal(net_amount).lte(0)) continue;
+        const feeDate = new Date(sf.fee_date);
+        if (feeDate >= balanceFeeDate) continue; // current period — not an arrear
+        const key = `${sf.academic_year}_${sf.target_month}`;
+        const seen = months.get(key);
+        if (!seen || feeDate < seen.feeDate) {
+            months.set(key, { feeDate, month: sf.target_month, year: sf.academic_year });
+        }
+    }
+
+    const rows: Array<{ arrear_fee_date: Date; arrear_month: number; arrear_year: string; amount: Prisma.Decimal }> = [];
+    for (const [key, m] of months) {
+        const orig = originalSurcharges.find((s) => `${s.arrear_year}_${s.arrear_month}` === key);
+        // Same Rs 1,000 per arrear month as create() / computeArrears().
+        const owed = new Prisma.Decimal(orig?.amount ?? 1000).sub(new Prisma.Decimal(orig?.amount_paid ?? 0));
+        if (owed.lte(0)) continue;
+        rows.push({
+            arrear_fee_date: orig?.arrear_fee_date ?? m.feeDate,
+            arrear_month: m.month,
+            arrear_year: m.year,
+            amount: owed,
+        });
+    }
+    return rows;
+}
 
 /** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
 const PDF_FREEZE_SELECT = {
@@ -4847,9 +4915,9 @@ export class VouchersService {
             !holdBalance &&
             disposition === 'ISSUE_AND_NOTIFY' &&
             dto.send_notification !== false;
-        // The split NEVER recomputes or drops arrear surcharges (see Step 8) —
-        // this lever just marks whatever surcharge rows land on the balance
-        // voucher as waived, mirroring CreateVoucherDto.waive_surcharge.
+        // The Charge/Waive toggle for the BALANCE voucher's own arrear surcharges
+        // (Step 8), mirroring CreateVoucherDto.waive_surcharge. A waiver on the
+        // original voucher is never inherited — only this decides.
         const waiveBalanceSurcharge = dto.waive_surcharge === true;
         const surchargeWaivedBy = waiveBalanceSurcharge
             ? (dto.waived_by ?? changedBy ?? null)
@@ -5164,16 +5232,20 @@ export class VouchersService {
                     total_payable_before_due: unpaidTotal.add(balanceReprintAmount),
                     total_payable_after_due: unpaidTotal.add(lateFeeVal).add(balanceReprintAmount),
                     total_arrears: unpaidArrears,
+                    // Both, like create(): the PDF prints the reprint line only when
+                    // reprint_fee_charge is set, so the amount alone left an
+                    // unexplained Rs 100 in the challan's total.
+                    reprint_fee_charge: balanceReprintCharge,
                     reprint_fee_amount: balanceReprintCharge ? balanceReprintAmount : null,
                     pay_immediately: payImmediate,
-                    // Hold-for-release: null => invisible to parents until an admin
-                    // releases it via the Pending Release page. Otherwise inherit
-                    // the parent's visibility (a PARTIALLY_PAID parent is released),
-                    // falling back to "now" if the parent was itself still held.
-                    released_to_parent_at: holdBalance
-                        ? null
-                        : (original.released_to_parent_at ?? new Date()),
-                    released_by: holdBalance ? null : original.released_by,
+                    // A new voucher of its own — it inherits none of the original's
+                    // issuance traits (see CLAUDE.md). It wasn't produced by the
+                    // original's bulk job, and it is released now (or held) exactly
+                    // like a single-issued voucher: create() sets
+                    // `requires_release ? null : new Date()` and no released_by.
+                    bulk_voucher_job_id: null,
+                    released_to_parent_at: holdBalance ? null : new Date(),
+                    released_by: null,
                     split_parent_id: original.id,
                 } as any,
             });
@@ -5245,80 +5317,61 @@ export class VouchersService {
                 unpaid: new Prisma.Decimal(0),
             };
 
+            // PAID receipt: whatever part of each original surcharge was actually
+            // collected travels to it with its payment history (so Step 9 can re-link
+            // the allocations that funded it). A fully consumed row moves whole; a
+            // partially consumed one moves as a paid portion of `amount_paid`. Waived
+            // and untouched rows collected nothing and never reach the receipt.
             for (const s of originalSurcharges) {
                 const amount = new Prisma.Decimal(s.amount || 0);
                 const amountPaid = new Prisma.Decimal(s.amount_paid || 0);
-                const baseFields = {
-                    arrear_fee_date: s.arrear_fee_date,
-                    arrear_month: s.arrear_month,
-                    arrear_year: s.arrear_year,
-                };
+                if (s.waived || amountPaid.lte(0)) continue;
 
-                if (s.waived) {
-                    // Waived — preserve the audit trail (waived/waived_by) on the unpaid
-                    // side; the old code dropped these rows (and their history) entirely.
-                    const created = await (tx as any).voucher_arrear_surcharges.create({
-                        data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: amountPaid, waived: true, waived_by: s.waived_by ?? null },
-                    });
-                    surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
-                    sideSurchargeFlags.unpaid.push({ waived: true, waived_by: s.waived_by ?? null });
-
-                } else if (amountPaid.lte(0)) {
-                    // Untouched — copy forward as-is (today's behavior for this case).
-                    const created = await (tx as any).voucher_arrear_surcharges.create({
-                        data: { voucher_id: unpaid.id, ...baseFields, amount, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
-                    });
-                    surchargeLineage.set(s.id, { side: 'unpaid', newSurchargeId: created.id });
-                    sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
-                    sideSurchargeBeforeDue.unpaid = sideSurchargeBeforeDue.unpaid.add(amount);
-
-                } else if (amountPaid.gte(amount)) {
-                    // Fully consumed — travels whole, with its payment history, to the paid side.
-                    const created = await (tx as any).voucher_arrear_surcharges.create({
-                        data: { voucher_id: paid.id, ...baseFields, amount, amount_paid: amountPaid, waived: false, waived_by: null },
-                    });
-                    surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: created.id });
-                    sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
-                    sideSurchargeBeforeDue.paid = sideSurchargeBeforeDue.paid.add(amount);
-
-                } else {
-                    // Partially consumed — split into a paid portion that carries the
-                    // existing payment history forward, plus a fresh balance portion,
-                    // mirroring the PARTIALLY_PAID fee-head split above. Every pre-existing
-                    // deposit_allocation against this surcharge funded `amount_paid`, so all
-                    // of them belong on the paid portion — the balance portion starts clean.
-                    const remaining = amount.sub(amountPaid);
-                    const paidPortion = await (tx as any).voucher_arrear_surcharges.create({
-                        data: { voucher_id: paid.id, ...baseFields, amount: amountPaid, amount_paid: amountPaid, waived: false, waived_by: null },
-                    });
-                    await (tx as any).voucher_arrear_surcharges.create({
-                        data: { voucher_id: unpaid.id, ...baseFields, amount: remaining, amount_paid: new Prisma.Decimal(0), waived: false, waived_by: null },
-                    });
-                    surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: paidPortion.id });
-                    sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
-                    sideSurchargeFlags.unpaid.push({ waived: false, waived_by: null });
-                    sideSurchargeBeforeDue.paid = sideSurchargeBeforeDue.paid.add(amountPaid);
-                    sideSurchargeBeforeDue.unpaid = sideSurchargeBeforeDue.unpaid.add(remaining);
-                }
+                const rowAmount = Prisma.Decimal.min(amount, amountPaid);
+                const created = await (tx as any).voucher_arrear_surcharges.create({
+                    data: {
+                        voucher_id: paid.id,
+                        arrear_fee_date: s.arrear_fee_date,
+                        arrear_month: s.arrear_month,
+                        arrear_year: s.arrear_year,
+                        amount: rowAmount,
+                        amount_paid: amountPaid,
+                        waived: false,
+                        waived_by: null,
+                    },
+                });
+                surchargeLineage.set(s.id, { side: 'paid', newSurchargeId: created.id });
+                sideSurchargeFlags.paid.push({ waived: false, waived_by: null });
+                sideSurchargeBeforeDue.paid = sideSurchargeBeforeDue.paid.add(rowAmount);
             }
 
-            // ── Step 8a: Waive the BALANCE voucher's arrear surcharges when the
-            //    admin asked for it at split time (dto.waive_surcharge). The split
-            //    still does NOT recompute or drop surcharge rows — this only
-            //    forgives whatever landed on the UNPAID side, mirroring
-            //    CreateVoucherDto.waive_surcharge. The zeroed accumulator below
-            //    keeps them out of the payable totals and Step 8b then flips
-            //    surcharge_waived on the balance voucher. The PAID receipt is left
-            //    alone: a surcharge already consumed there was actually collected.
-            if (waiveBalanceSurcharge) {
-                await (tx as any).voucher_arrear_surcharges.updateMany({
-                    where: { voucher_id: unpaid.id, waived: false },
-                    data: { waived: true, waived_by: surchargeWaivedBy },
+            // BALANCE voucher: its own surcharges, never the original's — see
+            // splitBalanceSurcharges(). Waived only if the split form's Charge/Waive
+            // toggle says so (dto.waive_surcharge), exactly as on single issuance.
+            const balanceSurcharges = splitBalanceSurcharges(
+                unpaidHeadRows.map((row) => ({
+                    student_fees: sortedHeads.find((h) => h.student_fee_id === row.student_fee_id)?.student_fees ?? null,
+                    net_amount: row.net_amount,
+                })),
+                originalSurcharges,
+                targetFeeDate ? new Date(targetFeeDate) : null,
+            );
+            for (const s of balanceSurcharges) {
+                await (tx as any).voucher_arrear_surcharges.create({
+                    data: {
+                        voucher_id: unpaid.id,
+                        ...s,
+                        amount_paid: new Prisma.Decimal(0),
+                        waived: waiveBalanceSurcharge,
+                        waived_by: waiveBalanceSurcharge ? surchargeWaivedBy : null,
+                    },
                 });
-                sideSurchargeBeforeDue.unpaid = new Prisma.Decimal(0);
-                for (const f of sideSurchargeFlags.unpaid) {
-                    f.waived = true;
-                    f.waived_by = surchargeWaivedBy;
+                sideSurchargeFlags.unpaid.push({
+                    waived: waiveBalanceSurcharge,
+                    waived_by: waiveBalanceSurcharge ? surchargeWaivedBy : null,
+                });
+                if (!waiveBalanceSurcharge) {
+                    sideSurchargeBeforeDue.unpaid = sideSurchargeBeforeDue.unpaid.add(s.amount);
                 }
             }
 
