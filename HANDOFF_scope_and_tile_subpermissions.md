@@ -305,10 +305,13 @@ A page with step 6 but not step 3 is unprotected.
    `getUserAccess.allPacks` does), so that endpoint needs widening first.
 2. ~~**Employee Directory**~~ — **DONE**, backend `4848c68` and UI `07aaa55`.
    §5 is kept below as the worked example to copy for the next tile.
-3. **Scope-only sweep** — steps 5 alone across the 12 + 5 call sites above.
+3. ~~**Student Directory**~~ — **DONE**, backend `d0e6c73` and UI `c26c214`.
+   The second worked example, and the one to copy when your tile's actions are
+   **route-shaped rather than tab-shaped** — see §5b.
+4. **Scope-only sweep** — steps 5 alone across the 12 + 5 call sites above.
    No manifest or UI work; pure de-duplication, immediately visible.
-4. **Remaining tiles, riskiest first** — Payroll, Vouchers, People & Access.
-5. **Retire `users.campus_id` and `allowed_class_ids`.** Only once nothing reads
+5. **Remaining tiles, riskiest first** — Payroll, Vouchers, People & Access.
+6. **Retire `users.campus_id` and `allowed_class_ids`.** Only once nothing reads
    them. `campus_id` carries an FK to `campuses` and appears in several
    `select` blocks in `users.service.ts`, so it is its own reviewed change —
    do not bundle it.
@@ -368,6 +371,179 @@ otherwise later, change `whereForEmployees` in `scope.types.ts`, not a call site
 
 ---
 
+## 5b. Second worked example — Student Directory (route-shaped actions)
+
+Do this one first if your tile has no detail panel with tabs. Employee
+Directory is the tab-shaped case; this is the other half, and most tiles look
+like it.
+
+**Total diff: two files backend, three frontend, about 90 lines.** It took one
+pass. If yours is taking much longer, you are probably field-partitioning
+something that does not need it.
+
+### Why the actions look different
+
+`EMPLOYEE_DIRECTORY_ACTIONS` has a `X.view`/`X.edit` pair per tab because
+`PATCH /:id` writes fields belonging to several tabs through one route. The
+student record has **no multi-tab write**, so there is nothing to partition and
+step 4 of the recipe is a no-op. The actions follow the **routes** instead:
+
+```ts
+const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open directory', default: true },
+  { id: 'payment_history.view', label: 'View payment history', implies: ['view'] },
+  { id: 'progression.view',     label: 'View academic history', implies: ['view'] },
+  { id: 'assignment.edit',      label: 'Move a student',  implies: ['view'] },
+  { id: 'status.change',        label: 'Change status',   implies: ['view'] },
+  { id: 'promote',              label: 'Promote',         implies: ['view'] },
+  { id: 'export',               label: 'Export to Excel', implies: ['view'] },
+];
+```
+
+**Rule of thumb.** Group by *what a route lets someone do*, not by where it
+appears on screen. Seven actions across seventeen routes is the right order of
+magnitude; twenty-eight was only justified because tabs were the unit.
+
+### Route map (`students.controller.ts`)
+
+| Route | Action |
+|---|---|
+| `GET /`, `GET /:id`, `GET /search-simple`, `GET /fee-benefit-expiry-alerts` | `view` |
+| `GET /export` | `export` |
+| `GET /:id/payment-history` | `payment_history.view` |
+| `GET /:id/academic-history`, `/:id/progression`, `/:id/house-history` | `progression.view` |
+| `PATCH /:id/assignment` | `assignment.edit` |
+| `PATCH /:id/status`, `/:id/unexpel`, `/:id/undo-left`, `POST /:id/return` | `status.change` |
+| `POST /promotion/single`, `/promotion/bulk`, `/gr-numbers/suggest-for-promotion` | `promote` |
+
+Note the last one: a *helper* route for an action gets that action, not `view`.
+GR suggestions exist only to feed a promotion, so someone who cannot promote
+has no business calling it.
+
+### The trap this tile exposed — do NOT delete the legacy scope helper yet
+
+`students.service.ts` already had `applyStudentScope` (reads `user.campusId`
+and `user.allowedClassIds`), exactly the kind of duplicate §3 step 5 tells you
+to delete. **Deleting it would have opened access.**
+
+`ScopeService.scopeOf` returns `EMPTY_SCOPE` — *unrestricted* — for a token
+with no `scope` claim, and tokens issued before scope shipped have none. They
+live **90 days**. So swapping the helper for `whereForStudents` would have
+given every un-refreshed session at a scoped campus the whole database until
+its token rotated.
+
+What was done instead:
+
+```ts
+const legacy = applyStudentScope(user, where, { campus_id, class_id });
+const universal = this.scope.whereForStudents(user);
+if (Object.keys(universal).length === 0) return legacy;
+return { AND: [legacy, universal] };
+```
+
+They AND. The new fragment is never *wider* than the old helper, because
+migration `20260912120000` backfilled `user_scope_entries` from the very
+columns the helper reads — and it adds the section/segment dimensions the
+helper never had.
+
+> **Generalise this.** In any file that already scopes by `campusId` /
+> `allowedClassIds`, **add** the scope fragment and leave the old check
+> standing. The deletion is rollout item 4, done deliberately once tokens have
+> rotated — not opportunistically while you are in the file.
+
+### Frontend
+
+`src/hooks/use-student-access.ts` is a copy of `use-employee-access.ts` with
+the tile id changed. Copy it again for your tile; the fail-open logic is the
+part that matters and it should stay identical everywhere.
+
+Only two of the eight tabs in `StudentDetailPanel` map onto an action, so the
+map is declared explicitly rather than inferred:
+
+```tsx
+const TAB_ACTION: Record<string, string> = {
+  progression: "progression.view",
+  class_grade: "assignment.edit",
+};
+const visibleTabs = TABS.filter((t) => !TAB_ACTION[t.id] || access.can(TAB_ACTION[t.id]));
+```
+
+Everything not in the map rides on `view`. **Say so in a comment** — the next
+reader will otherwise assume a missing entry is an oversight.
+
+Gate the **button and the body**, not just the button. `setTab("danger_zone")`
+is reachable from state even when its button is hidden, so both the control and
+`{activeTab === "danger_zone" && <DangerZoneTab …>}` carry the check.
+
+---
+
+## 5c. Things that bit us, in order of how much time they cost
+
+Written down so you do not rediscover them.
+
+1. **A UI `filter()` on `tabs` needs an `activeTab` fallback.** `?tab=` comes
+   from the URL and tabs can appear late (Employee `portal` only exists once
+   the record loads). Filtering alone leaves the panel rendering nothing.
+   Both panels compute `activeTab = tabs.some(t => t.id === tab) ? tab : tabs[0]?.id`.
+
+2. **A tile-holder with no view actions must not see a blank page.** Employee
+   Directory prints "You can open this record, but not any of its sections."
+   Do the same rather than shipping an empty div.
+
+3. **`sessionPredatesActions` on `useTileAccess` does not work.** `AuthContext`
+   normalises `effectiveActions ?? []`, so "absent" and "empty" are
+   indistinguishable by the time a component sees it. The working discriminator
+   is `hasTile && !can('view')` — granting a tile always confers its
+   `default: true` action, so that combination can only be a stale token. Both
+   `use-employee-access.ts` and `use-student-access.ts` fail open on it.
+
+4. **Writes are not migration-guarded.** Reads degrade through
+   `readUntilMigrated`; `setUserAccess` and `ScopeService.setScope` do not. On
+   an unmigrated DB either raises P2021 and fails the *entire* access save. This
+   shipped and caused a 500 on `PUT /v1/access/users/:id/access`. Still open —
+   the webapp patches around it with `hasActionOverrides`.
+
+5. **`prisma migrate deploy` is not enough — the backend must also restart.**
+   `AccessSync` projects `access_tile_actions` on boot, and
+   `user_tile_action_grants` has an FK onto it. Between the migration and the
+   restart, every sub-permission save fails the constraint. Check:
+   `select count(*) from access_tile_actions` — 0 means it has not booted since.
+
+6. **Scope rows exist long before anything reads them.** The migration
+   backfilled 223 rows on day one, but they did nothing until the first tile
+   was wired. Do not conclude scope is broken because a scoped user still sees
+   everything — check whether *that tile* has been done.
+
+7. **Exports are the hole people forget.** A scoped list with an unscoped
+   `GET /export` is a one-click dump of everything the list refuses to show.
+   Both directories merge scope into the export query. Check yours.
+
+8. **404, never 403, on `:id`.** Both tiles do this. A 403 confirms the record
+   exists and turns the route into an enumerator.
+
+### How to verify a tile in five minutes
+
+No test harness needed — People & Access can express all of it:
+
+1. Pick a victim account. Give it the tile and **nothing else**. It should see
+   the list and open a record, with every optional tab and button gone.
+2. Add one `X.view`. That tab appears, read-only. Its `X.edit` sibling is absent.
+3. Add `X.edit`. The pencil appears and a save works.
+4. Deny `X.view` explicitly with the tile still granted. `X.edit` must vanish
+   too — denials expand in reverse through `implies`.
+5. Set a campus scope. The list shrinks; **the Excel export shrinks with it**;
+   a foreign `:id` returns 404, not 403.
+6. Log in as a role carrying the legacy bridge capability
+   (`hr.employees.edit` / `students.directory.edit`). It must still do
+   everything — that is the bridge working, not a bug.
+7. SUPER_ADMIN sees everything throughout.
+
+Remember the victim account must **reload the page** after any change: scope
+and actions ride on the JWT, and `refreshStaffToken` re-resolves both from the
+database on the next page load.
+
+---
+
 ## 6. Per-page checklist
 
 ```
@@ -381,7 +557,11 @@ otherwise later, change `whereForEmployees` in `scope.types.ts`, not a call site
 [ ] :id lookups 404 (not 403) when out of scope
 [ ] Creates/moves assert the TARGET is in scope
 [ ] Any private assertCampusAccess in the file deleted, ScopeService used
-[ ] UI hides/disables via useTileAccess; pickers narrowed via useUserScope
+[ ] UI hides/disables via a use<Tile>Access copy; pickers via useUserScope
+[ ] Tab lists that filter also compute an activeTab fallback
+[ ] Gated panels gate the BODY as well as the button that opens them
+[ ] A tile-holder with no view actions gets a message, not a blank page
+[ ] An existing campusId/allowedClassIds check was ADDED to, not replaced
 [ ] Verified: grant only `X.view` → tab read-only, siblings absent, API 403s directly
 [ ] Verified: legacy role with the bridge capability still does everything
 [ ] Verified: scoped user sees a filtered list and 404s on a foreign :id
@@ -394,13 +574,20 @@ otherwise later, change `whereForEmployees` in `scope.types.ts`, not a call site
 
 ```bash
 cd tafs-backend
-npx jest src/common/scope src/common/guards src/modules/access src/modules/auth
-npx nest build
+npx jest src/common/scope src/common/guards src/modules/access src/modules/auth src/modules/hr/employees
+npx nest build          # the real gate
 ```
 
-45 specs cover the foundation: scope AND-ing / empty-is-unrestricted / null
+50 specs cover the foundation: scope AND-ing / empty-is-unrestricted / null
 exclusion, action defaults, `implies` expansion, reverse-implies denial, the
-legacy bridge, denied tiles, and SUPER_ADMIN bypass on both layers.
+legacy bridge, denied tiles, SUPER_ADMIN bypass on both layers, and that every
+key of `UpdateEmployeeDto` appears in `EMPLOYEE_FIELD_TAB_MAP` (add a DTO field
+without mapping it and CI fails).
+
+On the **webapp**: `npx tsc --noEmit` must be clean and `npm run build` must
+compile. `npx eslint` carries a large pre-existing error count in these files
+(46 in `studentwise-fees`, 177 across `identity/students`) — **diff it against
+`git stash`, never read the absolute number.**
 
 `npx tsc --noEmit` in `tafs-backend` reports pre-existing errors in `scripts/`
 (stale models: `staff_types`, `designations`) and in `*.spec.ts` (no jest types
@@ -417,5 +604,16 @@ is clean.
   Directory sub-permission, which is intended but worth stating out loud.
 - **Scope on students** — `whereForStudents` exists and is tested but has no
   caller yet.
+- **Unguarded writes** — `setUserAccess` / `ScopeService.setScope` blow up the
+  whole save on an unmigrated DB. Client-side patch in place; fix before the
+  next access-layer migration.
+- **Access Packs cannot carry sub-permissions in the UI** — `listPacks` does
+  not return `tileActions`, so the People & Access pack editor cannot show
+  them. Widen that endpoint first.
+- **Legacy scope helpers still stand** — `applyStudentScope` and the 12
+  copies of `assertCampusAccess`. Removing them is rollout item 4 and must wait
+  for tokens to rotate; see §5b.
+- **The Employee Advanced form is not field-gated** — entrance-gated only; the
+  API field-partitions behind it.
 - **Scoping the admin panel itself** — should a campus-scoped admin be able to
   grant access outside their own scope? Currently yes. Probably wants to be no.
