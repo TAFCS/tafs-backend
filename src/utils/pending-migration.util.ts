@@ -12,12 +12,26 @@ import { Prisma } from '@prisma/client';
  *
  *   P2021 — the table does not exist in the current database
  *   P2022 — the column does not exist in the current database
+ *   P2010 — raw query failed (Postgres 42P01: relation does not exist, 42703: column does not exist)
  */
 export function isPendingMigrationError(err: unknown): boolean {
-  return (
-    err instanceof Prisma.PrismaClientKnownRequestError &&
-    (err.code === 'P2021' || err.code === 'P2022')
-  );
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
+    return false;
+  }
+  if (err.code === 'P2021' || err.code === 'P2022') {
+    return true;
+  }
+  if (err.code === 'P2010') {
+    const dbCode = err.meta?.code;
+    const dbMessage = typeof err.meta?.message === 'string' ? err.meta.message : '';
+    if (dbCode === '42P01' || dbCode === '42703') {
+      return true;
+    }
+    if (dbMessage.includes('does not exist')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
