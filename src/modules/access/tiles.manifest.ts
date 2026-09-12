@@ -27,6 +27,21 @@ export type TileManifestEntry = {
    * sub-permissions existed: granting the tile grants the whole tile.
    */
   actions?: TileAction[];
+  /**
+   * Legacy bridge. Holding any of these capability keys confers EVERY action
+   * of this tile.
+   *
+   * This is what stops sub-permissions from being a breaking change. Before
+   * they existed, `hr.employees.edit` in a role baseline meant "can do
+   * anything in the employee directory". The day actions ship, that has to
+   * keep meaning the same thing, or every existing role silently loses edit
+   * access to everything. Narrowing only happens once an admin deliberately
+   * sets sub-permissions.
+   *
+   * Remove a key here only once every role that carries it has been
+   * re-expressed as packs and actions.
+   */
+  legacyFullAccessCapabilities?: string[];
 };
 
 /**
@@ -117,7 +132,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['system.permissions.manage'] },
 
   // ?? HR & Payroll ?????????????????????????????????????????????????????????
-  { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS },
+  { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'hr.register_employee', module: 'hr', label: 'Register a Employee', description: 'Create new employee profile', href: '/hr/employees/new', capabilities: ['hr.employees.view'] },
   { id: 'hr.departments', module: 'hr', label: 'Departments', description: 'Departments and staff categories', href: '/hr/departments', capabilities: ['hr.employees.view'] },
   { id: 'hr.payroll', module: 'hr', label: 'Payroll', description: 'Salary processing', href: '/hr/payroll', capabilities: ['hr.payroll.view'] },
@@ -190,6 +205,7 @@ export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
     default: a.default ?? false,
     implies: a.implies ?? [],
   })),
+  legacyFullAccessCapabilities: t.legacyFullAccessCapabilities ?? [],
 }));
 
 export function catalogFromManifest() {

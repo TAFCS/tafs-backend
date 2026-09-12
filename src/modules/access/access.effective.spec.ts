@@ -1,12 +1,27 @@
 import { StaffRole } from '@prisma/client';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
 
+const DIRECTORY_ACTIONS = [
+  { id: 'view', default: true, implies: [] },
+  { id: 'profile.view', default: false, implies: ['view'] },
+  { id: 'profile.edit', default: false, implies: ['profile.view'] },
+  { id: 'schedule_pay.view', default: false, implies: ['view'] },
+  { id: 'schedule_pay.edit', default: false, implies: ['schedule_pay.view'] },
+  { id: 'delete', default: false, implies: ['view'] },
+];
+
 const tiles: EffectiveTile[] = [
   { id: 'finance.vouchers', capabilities: ['finance.vouchers.view'] },
   { id: 'finance.pending_release', capabilities: ['finance.vouchers.release'] },
   { id: 'finance.payment_history', capabilities: ['finance.vouchers.view'] },
   { id: 'student.directory', capabilities: ['students.directory.view'] },
   { id: 'hr.payroll', capabilities: ['hr.payroll.view'] },
+  {
+    id: 'hr.employee_directory',
+    capabilities: ['hr.employees.view'],
+    actions: DIRECTORY_ACTIONS,
+    legacyFullAccessCapabilities: ['hr.employees.edit'],
+  },
 ];
 
 const allKeys = [
@@ -15,7 +30,19 @@ const allKeys = [
   'students.directory.view',
   'hr.payroll.view',
   'hr.leave.apply',
+  'hr.employees.view',
+  'hr.employees.edit',
 ];
+
+const base = {
+  allPermissionKeys: allKeys,
+  activeTiles: tiles,
+  roleKeys: [] as string[],
+  packTileIds: [] as string[],
+  allowTileIds: [] as string[],
+  denyTileIds: [] as string[],
+  userPerms: [] as { key: string; granted: boolean }[],
+};
 
 describe('AccessService.resolveEffective (computeEffectiveAccess)', () => {
   it('unions role baseline with pack tiles and allow grants', () => {
@@ -110,5 +137,130 @@ describe('AccessService.resolveEffective (computeEffectiveAccess)', () => {
 
     expect(result.capabilityKeys).toEqual(roleKeys);
     expect(result.tileIds).toEqual([]);
+  });
+});
+
+describe('tile sub-permissions', () => {
+  it('grants only the default action when the tile alone is granted', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view'],
+    });
+
+    expect(result.actionIds).toEqual(['hr.employee_directory#view']);
+  });
+
+  it('expands implies transitively for a pack action', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view'],
+      packActions: [{ tileId: 'hr.employee_directory', actionId: 'profile.edit' }],
+    });
+
+    // profile.edit -> profile.view -> view
+    expect([...result.actionIds].sort()).toEqual(
+      [
+        'hr.employee_directory#profile.edit',
+        'hr.employee_directory#profile.view',
+        'hr.employee_directory#view',
+      ].sort(),
+    );
+    expect(result.actionIds).not.toContain('hr.employee_directory#delete');
+    expect(result.actionIds).not.toContain('hr.employee_directory#schedule_pay.view');
+  });
+
+  it('legacy bridge: an edit capability from the role baseline confers every action', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view', 'hr.employees.edit'],
+    });
+
+    expect([...result.actionIds].sort()).toEqual(
+      DIRECTORY_ACTIONS.map((a) => `hr.employee_directory#${a.id}`).sort(),
+    );
+  });
+
+  it('a user deny beats a pack grant', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view'],
+      packActions: [{ tileId: 'hr.employee_directory', actionId: 'delete' }],
+      userActionGrants: [
+        { tileId: 'hr.employee_directory', actionId: 'delete', allow: false },
+      ],
+    });
+
+    expect(result.actionIds).not.toContain('hr.employee_directory#delete');
+    expect(result.actionIds).toContain('hr.employee_directory#view');
+  });
+
+  it('denying an action also denies anything that would have conferred it', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view', 'hr.employees.edit'],
+      userActionGrants: [
+        { tileId: 'hr.employee_directory', actionId: 'profile.view', allow: false },
+      ],
+    });
+
+    // denying view-profile must not leave edit-profile standing
+    expect(result.actionIds).not.toContain('hr.employee_directory#profile.view');
+    expect(result.actionIds).not.toContain('hr.employee_directory#profile.edit');
+    expect(result.actionIds).toContain('hr.employee_directory#schedule_pay.edit');
+  });
+
+  it('a denied tile takes its actions with it', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['hr.employees.view', 'hr.employees.edit'],
+      denyTileIds: ['hr.employee_directory'],
+    });
+
+    expect(result.tileIds).not.toContain('hr.employee_directory');
+    expect(result.actionIds).toEqual([]);
+  });
+
+  it('actions do not resolve for a tile the user does not hold', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: [],
+      packActions: [{ tileId: 'hr.employee_directory', actionId: 'delete' }],
+    });
+
+    expect(result.tileIds).not.toContain('hr.employee_directory');
+    expect(result.actionIds).toEqual([]);
+  });
+
+  it('SUPER_ADMIN holds every action regardless of denies', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.SUPER_ADMIN,
+      denyTileIds: ['hr.employee_directory'],
+      userActionGrants: [
+        { tileId: 'hr.employee_directory', actionId: 'delete', allow: false },
+      ],
+    });
+
+    expect([...result.actionIds].sort()).toEqual(
+      DIRECTORY_ACTIONS.map((a) => `hr.employee_directory#${a.id}`).sort(),
+    );
+  });
+
+  it('tiles with no declared actions contribute none', () => {
+    const result = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      roleKeys: ['finance.vouchers.view'],
+    });
+
+    expect(result.tileIds).toContain('finance.vouchers');
+    expect(result.actionIds).toEqual([]);
   });
 });

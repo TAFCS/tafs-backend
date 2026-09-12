@@ -9,10 +9,13 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import {
+  actionKey,
   catalogFromManifest,
+  MANIFEST_ACTION_KEYS,
   MANIFEST_EFFECTIVE_TILES,
   MANIFEST_TILE_IDS,
 } from './tiles.manifest';
+import { readUntilMigrated } from '../../utils/pending-migration.util';
 
 @Injectable()
 export class AccessService {
@@ -26,25 +29,28 @@ export class AccessService {
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
-    const [allPerms, rolePerms, packRows, grants, userPerms] = await Promise.all([
-      this.prisma.permissions.findMany({ select: { key: true } }),
-      this.prisma.role_permissions.findMany({
-        where: { role },
-        include: { permissions: { select: { key: true } } },
-      }),
-      this.prisma.user_access_packs.findMany({
-        where: { user_id: userId },
-        include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
-      }),
-      this.prisma.user_tile_grants.findMany({
-        where: { user_id: userId },
-        select: { tile_id: true, allow: true },
-      }),
-      this.prisma.user_permissions.findMany({
-        where: { user_id: userId },
-        include: { permissions: { select: { key: true } } },
-      }),
-    ]);
+    const [allPerms, rolePerms, packRows, grants, userPerms, packActions, userActionGrants] =
+      await Promise.all([
+        this.prisma.permissions.findMany({ select: { key: true } }),
+        this.prisma.role_permissions.findMany({
+          where: { role },
+          include: { permissions: { select: { key: true } } },
+        }),
+        this.prisma.user_access_packs.findMany({
+          where: { user_id: userId },
+          include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
+        }),
+        this.prisma.user_tile_grants.findMany({
+          where: { user_id: userId },
+          select: { tile_id: true, allow: true },
+        }),
+        this.prisma.user_permissions.findMany({
+          where: { user_id: userId },
+          include: { permissions: { select: { key: true } } },
+        }),
+        this.readPackActions(userId),
+        this.readUserActionGrants(userId),
+      ]);
 
     return computeEffectiveAccess({
       role,
@@ -55,7 +61,51 @@ export class AccessService {
       allowTileIds: grants.filter((g) => g.allow).map((g) => g.tile_id),
       denyTileIds: grants.filter((g) => !g.allow).map((g) => g.tile_id),
       userPerms: userPerms.map((up) => ({ key: up.permissions.key, granted: up.granted })),
+      packActions,
+      userActionGrants,
     });
+  }
+
+  /**
+   * Sub-permission reads are guarded until their migration lands on the shared
+   * DB (CLAUDE.md rule 11). Empty means "no sub-permissions", which is exactly
+   * how tiles behaved before actions existed.
+   */
+  private async readPackActions(userId: string) {
+    return readUntilMigrated(
+      async () => {
+        const rows = await this.prisma.access_pack_tile_actions.findMany({
+          where: { pack: { user_packs: { some: { user_id: userId } } } },
+          select: { tile_id: true, action_id: true },
+        });
+        return rows.map((r) => ({ tileId: r.tile_id, actionId: r.action_id }));
+      },
+      [] as { tileId: string; actionId: string }[],
+    );
+  }
+
+  private async readUserActionGrants(userId: string) {
+    return readUntilMigrated(
+      async () => {
+        const rows = await this.prisma.user_tile_action_grants.findMany({
+          where: { user_id: userId },
+          select: { tile_id: true, action_id: true, allow: true },
+        });
+        return rows.map((r) => ({ tileId: r.tile_id, actionId: r.action_id, allow: r.allow }));
+      },
+      [] as { tileId: string; actionId: string; allow: boolean }[],
+    );
+  }
+
+  private assertActionsExist(refs: { tileId: string; actionId: string }[]) {
+    const unknown = refs.filter((r) => !MANIFEST_ACTION_KEYS.has(actionKey(r.tileId, r.actionId)));
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        `Unknown tile sub-permission(s): ${unknown
+          .map((r) => actionKey(r.tileId, r.actionId))
+          .join(', ')}`,
+      );
+    }
   }
 
   async getUserAccess(userId: string) {
@@ -65,7 +115,7 @@ export class AccessService {
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
-    const [packs, assigned, grants, rolePerms] = await Promise.all([
+    const [packs, assigned, grants, rolePerms, actionGrants] = await Promise.all([
       this.prisma.access_packs.findMany({
         orderBy: { name: 'asc' },
         include: { tiles: { select: { tile_id: true } } },
@@ -82,7 +132,36 @@ export class AccessService {
         where: { role: user.role },
         include: { permissions: { select: { key: true } } },
       }),
+      readUntilMigrated(
+        () =>
+          this.prisma.user_tile_action_grants.findMany({
+            where: { user_id: userId },
+            select: { tile_id: true, action_id: true, allow: true, note: true, granted_at: true },
+          }),
+        [] as {
+          tile_id: string;
+          action_id: string;
+          allow: boolean;
+          note: string | null;
+          granted_at: Date;
+        }[],
+      ),
     ]);
+
+    const packActionRows = await readUntilMigrated(
+      () =>
+        this.prisma.access_pack_tile_actions.findMany({
+          select: { pack_id: true, tile_id: true, action_id: true },
+        }),
+      [] as { pack_id: string; tile_id: string; action_id: string }[],
+    );
+    const actionsByPack = new Map<string, { tileId: string; actionId: string }[]>();
+    for (const row of packActionRows) {
+      actionsByPack.set(row.pack_id, [
+        ...(actionsByPack.get(row.pack_id) ?? []),
+        { tileId: row.tile_id, actionId: row.action_id },
+      ]);
+    }
 
     const roleKeySet = new Set(rolePerms.map((rp) => rp.permissions.key));
     const roleTileIds = MANIFEST_EFFECTIVE_TILES
@@ -102,9 +181,17 @@ export class AccessService {
         description: p.description,
         is_system: p.is_system,
         tileIds: p.tiles.map((t) => t.tile_id),
+        tileActions: actionsByPack.get(p.id) ?? [],
       })),
       grants: grants.map((g) => ({
         tileId: g.tile_id,
+        allow: g.allow,
+        note: g.note,
+        grantedAt: g.granted_at,
+      })),
+      actionGrants: actionGrants.map((g) => ({
+        tileId: g.tile_id,
+        actionId: g.action_id,
         allow: g.allow,
         note: g.note,
         grantedAt: g.granted_at,
@@ -134,6 +221,9 @@ export class AccessService {
     }
     await this.assertTilesExist(grantTileIds);
 
+    const actionGrants = dto.tileActionGrants ?? [];
+    this.assertActionsExist(actionGrants);
+
     const existingPacks = await this.prisma.user_access_packs.findMany({
       where: { user_id: userId },
       select: { pack_id: true },
@@ -142,6 +232,14 @@ export class AccessService {
       where: { user_id: userId },
       select: { tile_id: true, allow: true },
     });
+    const existingActionGrants = await readUntilMigrated(
+      () =>
+        this.prisma.user_tile_action_grants.findMany({
+          where: { user_id: userId },
+          select: { tile_id: true, action_id: true, allow: true },
+        }),
+      [] as { tile_id: string; action_id: string; allow: boolean }[],
+    );
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user_access_packs.deleteMany({
@@ -178,6 +276,25 @@ export class AccessService {
             note: grant.note ?? null,
           },
         });
+      }
+
+      // Only touch sub-permissions when the caller actually sent them, so a
+      // client built before actions existed cannot silently wipe them.
+      if (dto.tileActionGrants !== undefined) {
+        await tx.user_tile_action_grants.deleteMany({ where: { user_id: userId } });
+        if (actionGrants.length > 0) {
+          await tx.user_tile_action_grants.createMany({
+            data: actionGrants.map((g) => ({
+              user_id: userId,
+              tile_id: g.tileId,
+              action_id: g.actionId,
+              allow: g.allow,
+              granted_by: actorId,
+              note: g.note ?? null,
+            })),
+            skipDuplicates: true,
+          });
+        }
       }
     });
 
@@ -224,6 +341,36 @@ export class AccessService {
       });
     }
 
+    if (dto.tileActionGrants !== undefined) {
+      const before = new Map(
+        existingActionGrants.map((g) => [actionKey(g.tile_id, g.action_id), g.allow]),
+      );
+      const after = new Map(actionGrants.map((g) => [actionKey(g.tileId, g.actionId), g.allow]));
+      for (const k of new Set([...before.keys(), ...after.keys()])) {
+        const wasAllowed = before.get(k);
+        const isAllowed = after.get(k);
+        if (wasAllowed === isAllowed) continue;
+        await this.auditLogs.log({
+          entity_type: 'PERMISSION',
+          entity_id: `${userId}:${k}`,
+          action: isAllowed === undefined ? 'DELETED' : wasAllowed === undefined ? 'CREATED' : 'UPDATED',
+          section: 'system',
+          field: 'user_tile_action_grant',
+          old_value: wasAllowed === undefined ? null : String(wasAllowed),
+          new_value: isAllowed === undefined ? null : String(isAllowed),
+          changed_by: changedBy,
+          note:
+            `Sub-permission "${k}" for user ${user.username} (#${userId}): ` +
+            (isAllowed === undefined
+              ? `removed (was allow=${wasAllowed})`
+              : wasAllowed === undefined
+                ? `set allow=${isAllowed}`
+                : `allow ${wasAllowed} -> ${isAllowed}`) +
+            '.',
+        });
+      }
+    }
+
     return this.getUserAccess(userId);
   }
 
@@ -237,6 +384,9 @@ export class AccessService {
   async createPack(dto: CreateAccessPackDto, actorLabel?: string) {
     const tileIds = [...new Set(dto.tileIds ?? [])];
     await this.assertTilesExist(tileIds);
+    const tileActions = dto.tileActions ?? [];
+    this.assertActionsExist(tileActions);
+
     const pack = await this.prisma.access_packs.create({
       data: {
         name: dto.name.trim(),
@@ -248,6 +398,7 @@ export class AccessService {
       },
       include: { tiles: { select: { tile_id: true } } },
     });
+    await this.writePackActions(pack.id, tileActions);
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
       entity_id: pack.id,
@@ -271,6 +422,9 @@ export class AccessService {
     const tileIds = dto.tileIds !== undefined ? [...new Set(dto.tileIds)] : undefined;
     if (tileIds) await this.assertTilesExist(tileIds);
 
+    const tileActions = dto.tileActions;
+    if (tileActions) this.assertActionsExist(tileActions);
+
     const pack = await this.prisma.$transaction(async (tx) => {
       if (tileIds) {
         await tx.access_pack_tiles.deleteMany({
@@ -292,6 +446,8 @@ export class AccessService {
         include: { tiles: { select: { tile_id: true } } },
       });
     });
+
+    if (tileActions) await this.writePackActions(id, tileActions);
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -328,6 +484,35 @@ export class AccessService {
       note: `Deleted access pack "${existing.name}".`,
     });
     return { deleted: true };
+  }
+
+  /**
+   * Replaces a pack's sub-permissions. Guarded until the migration lands, so a
+   * pack edit on an unmigrated deploy still saves its tiles rather than 500ing.
+   */
+  private async writePackActions(
+    packId: string,
+    tileActions: { tileId: string; actionId: string }[],
+  ) {
+    await readUntilMigrated(
+      async () => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.access_pack_tile_actions.deleteMany({ where: { pack_id: packId } });
+          if (tileActions.length > 0) {
+            await tx.access_pack_tile_actions.createMany({
+              data: tileActions.map((a) => ({
+                pack_id: packId,
+                tile_id: a.tileId,
+                action_id: a.actionId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        });
+        return true;
+      },
+      false,
+    );
   }
 
   private async assertTilesExist(tileIds: string[]) {
