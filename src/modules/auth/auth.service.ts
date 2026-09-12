@@ -16,6 +16,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { otp_purpose } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -36,6 +37,7 @@ export class AuthService {
     private otpService: OtpService,
     private fcmService: FcmService,
     private auditLogs: AuditLogsService,
+    private scopeService: ScopeService,
   ) {}
 
   // ─── Staff ─────────────────────────────────────────────────────────────────
@@ -93,8 +95,13 @@ export class AuthService {
     allowed_class_ids: number[] | null;
     campuses?: { campus_name: string } | null;
   }) {
-    const { capabilityKeys: permissions, tileIds: effectiveTileIds } =
-      await this.permissionsService.getEffectiveAccess(user.id, user.role);
+    const [
+      { capabilityKeys: permissions, tileIds: effectiveTileIds, actionIds: effectiveActions },
+      scope,
+    ] = await Promise.all([
+      this.permissionsService.getEffectiveAccess(user.id, user.role),
+      this.scopeService.resolve(user.id),
+    ]);
 
     const allowedClassIds = user.allowed_class_ids ?? [];
 
@@ -112,6 +119,8 @@ export class AuthService {
       allowedClassIds,
       userType: 'STAFF',
       permissions,
+      actions: effectiveActions,
+      scope,
     };
 
     const { accessToken, refreshToken } =
@@ -131,6 +140,8 @@ export class AuthService {
         allowedClassIds,
         permissions,
         effectiveTileIds,
+        effectiveActions,
+        scope,
         payrollEnabled: employeeProfile?.payroll_enabled ?? true,
         hasEmployeeProfile: !!employeeProfile,
       },

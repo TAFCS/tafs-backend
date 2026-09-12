@@ -52,6 +52,43 @@ describe('JwtStaffStrategy', () => {
   it('returns payload for active users', async () => {
     const findUnique = jest.fn().mockResolvedValue({ id: 'user-1', is_active: true });
     const strategy = createStrategy({ users: { findUnique } });
-    await expect(strategy.validate(basePayload)).resolves.toEqual(basePayload);
+    await expect(strategy.validate(basePayload)).resolves.toEqual({
+      ...basePayload,
+      actions: [],
+    });
+  });
+
+  it('defaults actions and scope on tokens issued before they existed', async () => {
+    const findUnique = jest.fn().mockResolvedValue({ id: 'user-1', is_active: true });
+    const strategy = createStrategy({ users: { findUnique } });
+
+    const result = await strategy.validate(basePayload);
+
+    // No sub-permissions, and an absent scope that ScopeService reads as
+    // unrestricted -- both are what those sessions already had.
+    expect(result.actions).toEqual([]);
+    expect(result.scope).toBeUndefined();
+  });
+
+  it('preserves actions and scope when the token carries them', async () => {
+    const findUnique = jest.fn().mockResolvedValue({ id: 'user-1', is_active: true });
+    const strategy = createStrategy({ users: { findUnique } });
+
+    const scope = {
+      campuses: [1],
+      segments: [],
+      classes: [],
+      sections: [],
+      departments: [],
+      staffCategories: [],
+    };
+    const result = await strategy.validate({
+      ...basePayload,
+      actions: ['hr.employee_directory#view'],
+      scope,
+    });
+
+    expect(result.actions).toEqual(['hr.employee_directory#view']);
+    expect(result.scope).toEqual(scope);
   });
 });

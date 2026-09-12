@@ -43,6 +43,11 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
       ...payload,
       allowedClassIds: payload.allowedClassIds ?? [],
       permissions: payload.permissions ?? [],
+      // Absent on sessions issued before sub-permissions / scope shipped.
+      // Empty actions means "no sub-permissions", and an absent scope resolves
+      // as unrestricted -- both are the behaviour those sessions already had.
+      actions: payload.actions ?? [],
+      scope: payload.scope,
     };
   }
 }
