@@ -17,6 +17,12 @@ import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credent
 import { CaslAbilityFactory } from '../../auth/casl/casl-ability.factory';
 import { Action } from '../../auth/casl/actions';
 import { v4 as uuidv4 } from 'uuid';
+import { ScopeService } from '../../../common/scope/scope.service';
+import {
+  EMPLOYEE_DIRECTORY_TILE_ID,
+  EMPLOYEE_FIELD_ACTION_OVERRIDES,
+  EMPLOYEE_FIELD_TAB_MAP,
+} from './employee-field-tabs';
 import { AccessService } from '../../access/access.service';
 import { TileGrantDto } from '../../access/dto/access.dto';
 
@@ -446,6 +452,7 @@ function toTime(value?: string | null, fieldLabel = 'time'): Date | null {
   return parsed;
 }
 
+
 @Injectable()
 export class EmployeesService {
   constructor(
@@ -454,7 +461,92 @@ export class EmployeesService {
     private readonly caslAbilityFactory: CaslAbilityFactory,
     private readonly accessService: AccessService,
     private readonly employeeProgression: EmployeeProgressionService,
+    private readonly scope: ScopeService,
   ) { }
+
+  /**
+   * Columns that decide whether an employee is inside a caller's scope.
+   * Employees are scoped by campus / segment / department / staff category --
+   * NOT by class or section, because an employee's link to a class is an
+   * assignment, not an attribute (see common/scope/scope.types.ts).
+   */
+  private static readonly SCOPE_SELECT = {
+    campus_id: true,
+    segment_id: true,
+    department_id: true,
+    staff_category_id: true,
+  } as const;
+
+  /**
+   * Loads an employee and confirms the caller may touch it.
+   *
+   * Throws NotFound -- never Forbidden -- when out of scope, so the directory
+   * cannot be used to enumerate employees at other campuses by probing ids.
+   */
+  private async assertCanTouch(id: number, caller?: IJwtStaffPayload) {
+    const row = await this.prisma.employee_profiles.findUnique({
+      where: { id },
+      select: EmployeesService.SCOPE_SELECT,
+    });
+    if (!row || (caller && !this.scope.canSeeEmployee(caller, row))) {
+      throw new NotFoundException(`Employee profile with ID ${id} not found`);
+    }
+    return row;
+  }
+
+  /**
+   * Authorises an edit field by field against `<tab>.edit`.
+   *
+   * A caller whose session predates sub-permissions (no `actions`) is left
+   * alone: the coarse CASL check already gated them, and failing closed here
+   * would lock out every open session for 90 days until their token rotates.
+   * The route-level @RequireAction is the boundary that does fail closed.
+   */
+  private assertFieldsEditable(dto: object, caller?: IJwtStaffPayload) {
+    if (!caller || caller.role === StaffRole.SUPER_ADMIN) return;
+    if (caller.actions === undefined) return;
+
+    const held = new Set(caller.actions);
+    const denied = Object.entries(dto)
+      .filter(([, v]) => v !== undefined)
+      .map(([field]) => field)
+      .filter((field) => {
+        const override = EMPLOYEE_FIELD_ACTION_OVERRIDES[field];
+        const actionId = override ?? (EMPLOYEE_FIELD_TAB_MAP[field]
+          ? `${EMPLOYEE_FIELD_TAB_MAP[field]}.edit`
+          : null);
+        if (!actionId) return false;
+        return !held.has(`${EMPLOYEE_DIRECTORY_TILE_ID}#${actionId}`);
+      });
+
+    if (denied.length > 0) {
+      throw new ForbiddenException(
+        `You do not have permission to edit: ${denied.join(', ')}.`,
+      );
+    }
+  }
+
+  /**
+   * Confirms the caller may place an employee at this destination, so a scoped
+   * user cannot create or move someone outside their own reach.
+   */
+  private assertDestinationInScope(
+    caller: IJwtStaffPayload | undefined,
+    dest: {
+      campus_id?: number | null;
+      segment_id?: number | null;
+      department_id?: number | null;
+      staff_category_id?: number | null;
+    },
+  ) {
+    if (!caller) return;
+    if (dest.campus_id !== undefined) this.scope.assertCampus(caller, dest.campus_id);
+    if (dest.segment_id !== undefined) this.scope.assertSegment(caller, dest.segment_id);
+    if (dest.department_id !== undefined) this.scope.assertDepartment(caller, dest.department_id);
+    if (dest.staff_category_id !== undefined) {
+      this.scope.assertStaffCategory(caller, dest.staff_category_id);
+    }
+  }
 
   /** Snapshot the tracked employment state of an employee_profiles row (with relations loaded). */
   private progressionSnapshotFrom(row: any): EmployeeProgressionSnapshot {
@@ -477,7 +569,8 @@ export class EmployeesService {
   }
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
-  async getProgressionPeriods(id: number) {
+  async getProgressionPeriods(id: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
     const periods = await this.prisma.employee_progression_periods.findMany({
       where: { employee_id: id },
       orderBy: { valid_from: 'asc' },
@@ -516,8 +609,12 @@ export class EmployeesService {
     }));
   }
 
-  async exportExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
-    const where: Prisma.employee_profilesWhereInput = {};
+  async exportExcel(query: ExportEmployeesDto = {}, caller?: IJwtStaffPayload): Promise<Buffer> {
+    // Scope is applied to the export as well -- otherwise it is a trivial way
+    // to read every employee a scoped user cannot see in the directory.
+    const where: Prisma.employee_profilesWhereInput = caller
+      ? { ...this.scope.whereForEmployees(caller) }
+      : {};
 
     if (query.ids) {
       const idList = query.ids
@@ -568,8 +665,8 @@ export class EmployeesService {
     return buildMasterEmployeesExcelBuffer(employees as any, columns);
   }
 
-  async exportMasterExcel(query: ExportEmployeesDto = {}): Promise<Buffer> {
-    return this.exportExcel(query);
+  async exportMasterExcel(query: ExportEmployeesDto = {}, caller?: IJwtStaffPayload): Promise<Buffer> {
+    return this.exportExcel(query, caller);
   }
 
   /** Ensure staff category belongs to the employee's department. */
@@ -697,21 +794,26 @@ export class EmployeesService {
     }
   }
 
-  async findAll(summary = false) {
+  async findAll(summary = false, caller?: IJwtStaffPayload) {
+    // An unrestricted caller yields {} here, so the query is byte-identical to
+    // what it was before scope existed.
+    const where = caller ? this.scope.whereForEmployees(caller) : {};
     if (summary) {
-      return this.prisma.employee_profiles.findMany({ select: listSelect });
+      return this.prisma.employee_profiles.findMany({ where, select: listSelect });
     }
     return this.prisma.employee_profiles.findMany({
+      where,
       include: includeRelations
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, caller?: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id },
       include: includeRelations
     });
-    if (!employee) {
+    // Out of scope is reported as "not found" so ids cannot be probed.
+    if (!employee || (caller && !this.scope.canSeeEmployee(caller, employee))) {
       throw new NotFoundException(`Employee profile with ID ${id} not found`);
     }
     return employee;
@@ -747,6 +849,13 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
+    this.assertFieldsEditable(dto, caller);
+    this.assertDestinationInScope(caller, {
+      campus_id: dto.campus_id ?? null,
+      segment_id: dto.segment_id ?? null,
+      department_id: dto.department_id ?? null,
+      staff_category_id: dto.staff_category_id ?? null,
+    });
     const {
       class_section_assignments,
       employment_status,
@@ -1007,6 +1116,16 @@ export class EmployeesService {
   }
 
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
+    this.assertFieldsEditable(dto, caller);
+    // Also check where it is being moved TO -- otherwise a scoped user could
+    // reassign someone to a campus they cannot see and lose them.
+    this.assertDestinationInScope(caller, {
+      ...(dto.campus_id !== undefined ? { campus_id: dto.campus_id } : {}),
+      ...(dto.segment_id !== undefined ? { segment_id: dto.segment_id } : {}),
+      ...(dto.department_id !== undefined ? { department_id: dto.department_id } : {}),
+      ...(dto.staff_category_id !== undefined ? { staff_category_id: dto.staff_category_id } : {}),
+    });
     const existing = await this.findOne(id);
 
     const {
@@ -1261,7 +1380,7 @@ export class EmployeesService {
     changedBy?: string,
     opts?: { purge?: boolean; caller?: IJwtStaffPayload },
   ) {
-    const existing = await this.findOne(id);
+    const existing = await this.findOne(id, opts?.caller);
 
     if (opts?.purge) {
       if (opts.caller?.role !== StaffRole.SUPER_ADMIN) {
@@ -1362,9 +1481,10 @@ export class EmployeesService {
     });
   }
 
-  async searchSimple(query: string) {
+  async searchSimple(query: string, caller?: IJwtStaffPayload) {
     const trimmed = (query || '').trim();
     if (!trimmed) return [];
+    const scopeWhere = caller ? this.scope.whereForEmployees(caller) : {};
 
     const isNumeric = /^\d+$/.test(trimmed);
     const results: { id: number; full_name: string | null; employee_code: string | null }[] = [];
@@ -1393,7 +1513,7 @@ export class EmployeesService {
 
     if (isNumeric) {
       const exact = await this.prisma.employee_profiles.findFirst({
-        where: { id: Number(trimmed) },
+        where: { id: Number(trimmed), ...scopeWhere },
         select: { id: true, full_name: true, employee_code: true },
       });
       if (exact) results.push(exact);
@@ -1411,6 +1531,7 @@ export class EmployeesService {
     const others = await this.prisma.employee_profiles.findMany({
       where: {
         OR: orConditions,
+        ...scopeWhere,
         ...(results.length ? { NOT: { id: results[0].id } } : {}),
       },
       select: { id: true, full_name: true, employee_code: true },
@@ -1483,7 +1604,8 @@ export class EmployeesService {
     return { dep: null, number: String(nextNum).padStart(4, '0'), code };
   }
 
-  async getWorkSchedule(employeeId: number) {
+  async getWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: { id: true, days_per_week: true, employee_work_schedules: true },
@@ -1499,6 +1621,7 @@ export class EmployeesService {
   }
 
   async updateStatus(id: number, dto: UpdateEmployeeStatusDto, caller: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
     if (caller.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can change employee status');
     }
@@ -1570,6 +1693,7 @@ export class EmployeesService {
   }
 
   async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
@@ -1610,6 +1734,7 @@ export class EmployeesService {
   }
 
   async clearWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
@@ -1629,6 +1754,7 @@ export class EmployeesService {
   }
 
   async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto, caller: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -1750,6 +1876,7 @@ export class EmployeesService {
   }
 
   async revealAccountPassword(employeeId: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -1778,6 +1905,7 @@ export class EmployeesService {
   }
 
   async changeAccountUsername(employeeId: number, dto: ChangeEmployeeUsernameDto, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');

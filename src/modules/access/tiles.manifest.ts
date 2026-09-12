@@ -180,6 +180,9 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },
 ];
 
+/** Exported so employee-field-tab-map.spec.ts can assert the map lines up. */
+export const EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST = EMPLOYEE_DIRECTORY_ACTIONS;
+
 export const MANIFEST_TILE_IDS = new Set(TILES_MANIFEST.map((t) => t.id));
 
 /** Global address of a sub-permission. */
