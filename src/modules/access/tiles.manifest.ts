@@ -52,6 +52,26 @@ export type TileManifestEntry = {
  * ~25 routes on employees.controller.ts resolved to exactly two checks, so
  * editing a phone number and deleting an employee needed the same permission.
  */
+/**
+ * Sub-permissions for the Student Directory.
+ *
+ * Unlike the Employee Directory these are not tab-shaped: the student record
+ * has no multi-tab write. They follow the routes instead -- reading a student
+ * is one thing, seeing their money is another, and moving or promoting them is
+ * a third.
+ */
+const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open directory', description: 'See the student list, search it, and open a record', default: true },
+
+  { id: 'payment_history.view', label: 'View payment history', description: 'What the family has paid', implies: ['view'] },
+  { id: 'progression.view', label: 'View academic history', description: 'Progression, academic history and house history', implies: ['view'] },
+
+  { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['view'] },
+  { id: 'status.change', label: 'Change status', description: 'Expel, mark left, return, unexpel, undo left', implies: ['view'] },
+  { id: 'promote', label: 'Promote', description: 'Single and bulk promotion, and GR suggestions for it', implies: ['view'] },
+  { id: 'export', label: 'Export to Excel', implies: ['view'] },
+];
+
 const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the employee list and open a record', default: true },
 
@@ -106,7 +126,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'] },
   { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'] },
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'] },
-  { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'] },
+  { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'] },
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'] },
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'] },

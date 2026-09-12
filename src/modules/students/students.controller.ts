@@ -15,18 +15,21 @@ import { StudentReturnMode } from '../../constants/student-return-mode.constant'
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { STUDENTS_MESSAGES } from '../../constants/api-response/students.constant';
 import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
 
 @Controller('students')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class StudentsController {
   constructor(private readonly studentsService: StudentsService) { }
 
   @Get('search-simple')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#view')
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);
     return createApiResponse(
@@ -38,6 +41,7 @@ export class StudentsController {
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#view')
   async findAll(
     @Query() query: GetStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -53,6 +57,7 @@ export class StudentsController {
 
   @Get('export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#export')
   async exportExcel(
     @Query() query: GetStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -69,6 +74,7 @@ export class StudentsController {
 
   @Get('fee-benefit-expiry-alerts')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student') || ability.can(Action.Read, 'Fee'))
+  @RequireAction('student.directory#view')
   async feeBenefitExpiryAlerts(
     @Query('within_days') withinDays: string | undefined,
     @CurrentUser() user: IJwtStaffPayload,
@@ -84,6 +90,7 @@ export class StudentsController {
 
   @Post('gr-numbers/suggest-for-promotion')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#promote')
   async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto) {
     const assignments = await this.studentsService.suggestGrNumbersForPromotion(
       dto.student_ccs,
@@ -99,8 +106,12 @@ export class StudentsController {
 
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    const student = await this.studentsService.findOne(id);
+  @RequireAction('student.directory#view')
+  async findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const student = await this.studentsService.findOne(id, user);
     return createApiResponse(
       student,
       HttpStatus.OK,
@@ -110,6 +121,7 @@ export class StudentsController {
 
   @Get(':id/payment-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#payment_history.view')
   async getPaymentHistory(
     @Param('id', ParseIntPipe) id: number,
     @Query() query: PaymentHistoryQueryDto,
@@ -127,6 +139,7 @@ export class StudentsController {
 
   @Patch(':id/assignment')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#assignment.edit')
   async assignStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AssignStudentDto,
@@ -142,6 +155,7 @@ export class StudentsController {
 
   @Patch(':id/unexpel')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#status.change')
   async unexpelStudent(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -156,6 +170,7 @@ export class StudentsController {
 
   @Patch(':id/undo-left')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#status.change')
   async undoLeftStudent(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -170,6 +185,7 @@ export class StudentsController {
 
   @Post(':id/return')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#status.change')
   async returnStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReturnStudentDto,
@@ -185,6 +201,7 @@ export class StudentsController {
 
   @Patch(':id/status')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#status.change')
   async changeStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ChangeStatusDto,
@@ -200,6 +217,7 @@ export class StudentsController {
 
   @Post('promotion/single')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#promote')
   async promoteSingle(
     @Body() dto: PromoteSingleStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -214,6 +232,7 @@ export class StudentsController {
 
   @Post('promotion/bulk')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
+  @RequireAction('student.directory#promote')
   async promoteBulk(
     @Body() dto: PromoteBulkStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -228,6 +247,7 @@ export class StudentsController {
 
   @Get(':id/academic-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#progression.view')
   async getAcademicHistory(@Param('id', ParseIntPipe) id: number) {
     const history = await this.studentsService.getAcademicHistory(id);
     return createApiResponse(
@@ -239,6 +259,7 @@ export class StudentsController {
 
   @Get(':id/progression')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#progression.view')
   async getProgression(@Param('id', ParseIntPipe) id: number) {
     const periods = await this.studentsService.getProgressionPeriods(id);
     return createApiResponse(
@@ -250,6 +271,7 @@ export class StudentsController {
 
   @Get(':id/house-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#progression.view')
   async getHouseHistory(@Param('id', ParseIntPipe) id: number) {
     const history = await this.studentsService.getHouseHistory(id);
     return createApiResponse(

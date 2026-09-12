@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
+import { ScopeService } from '../../common/scope/scope.service';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { Prisma } from '@prisma/client';
@@ -84,6 +85,7 @@ export class StudentsService {
     private readonly allocation: StudentAllocationService,
     private readonly progressionHistory: ProgressionHistoryService,
     private readonly enrollment: EnrollmentService,
+    private readonly scope: ScopeService,
   ) { }
 
   async resolveClassIdForStudent(cc: number, classId?: number | null): Promise<number | null> {
@@ -404,10 +406,22 @@ export class StudentsService {
     }
 
     if (user) {
-      return applyStudentScope(user, where, {
+      const legacy = applyStudentScope(user, where, {
         campus_id: campus_id,
         class_id: class_id,
       });
+      // Universal scope ANDs on top. It is never wider than the legacy helper:
+      // migration 20260912120000 backfilled user_scope_entries from the very
+      // columns applyStudentScope reads (users.campus_id, allowed_class_ids),
+      // and it adds the section/segment dimensions the helper never had.
+      //
+      // Both run until every session's token carries `scope` — a token issued
+      // before scope shipped resolves to unrestricted, and dropping the legacy
+      // helper now would widen those sessions for up to 90 days. Delete it as
+      // part of the scope-only sweep (handoff §4 item 3), not here.
+      const universal = this.scope.whereForStudents(user);
+      if (Object.keys(universal).length === 0) return legacy;
+      return { AND: [legacy, universal] };
     }
 
     return where;
@@ -1209,9 +1223,13 @@ export class StudentsService {
     return Buffer.from(buffer);
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, user?: IJwtStaffPayload) {
+    // Out of scope reports as "not found", never 403 — a 403 confirms the
+    // record exists and turns this route into a way to enumerate students at
+    // other campuses.
+    const scopeWhere = user ? this.scope.whereForStudents(user) : {};
     const s = await this.prisma.students.findFirst({
-      where: { cc: id, deleted_at: null },
+      where: { cc: id, deleted_at: null, ...scopeWhere },
       include: {
         campuses: true,
         families: {
