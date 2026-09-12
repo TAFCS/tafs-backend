@@ -1,7 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ScopeDimension, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
+import { readUntilMigrated } from '../../utils/pending-migration.util';
 import {
   EMPTY_SCOPE,
   SCOPE_DIMENSION_LABEL,
@@ -23,14 +24,36 @@ import {
  */
 @Injectable()
 export class ScopeService {
+  private readonly logger = new Logger(ScopeService.name);
+  private warnedPendingMigration = false;
+
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Reads a user's scope from the database. Called when a session is issued. */
+  /**
+   * Reads a user's scope from the database. Called on every login and token
+   * refresh, so it must not throw when user_scope_entries has not been
+   * migrated onto the shared DB yet (CLAUDE.md rule 11) -- an unmigrated
+   * deploy would otherwise break every login for a feature nobody is using.
+   * Falling back to EMPTY_SCOPE means unrestricted, which is the behaviour
+   * those sessions already had.
+   */
   async resolve(userId: string): Promise<UserScope> {
-    const entries = await this.prisma.user_scope_entries.findMany({
-      where: { user_id: userId },
-      select: { dimension: true, ref_id: true },
-    });
+    const entries = await readUntilMigrated(
+      () =>
+        this.prisma.user_scope_entries.findMany({
+          where: { user_id: userId },
+          select: { dimension: true, ref_id: true },
+        }),
+      [] as { dimension: ScopeDimension; ref_id: number }[],
+      () => {
+        if (this.warnedPendingMigration) return;
+        this.warnedPendingMigration = true;
+        this.logger.warn(
+          'user_scope_entries is not migrated yet - every user resolves as unrestricted. ' +
+            'Run `prisma migrate deploy` to activate scope enforcement.',
+        );
+      },
+    );
     return scopeFromEntries(entries);
   }
 

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TILES_MANIFEST } from './tiles.manifest';
+import { isPendingMigrationError } from '../../utils/pending-migration.util';
 
 /**
  * Projects TILES_MANIFEST into access_tiles so pack/grant FKs resolve.
@@ -73,7 +74,20 @@ export class AccessSyncService implements OnModuleInit {
       data: { is_active: false },
     });
 
-    const actionCount = await this.syncActions();
+    // Boot must survive the window between this code deploying and its
+    // migration being applied to the shared DB (CLAUDE.md rule 11). A tile
+    // with no projected actions simply behaves as it did before
+    // sub-permissions existed.
+    let actionCount = 0;
+    try {
+      actionCount = await this.syncActions();
+    } catch (err) {
+      if (!isPendingMigrationError(err)) throw err;
+      this.logger.warn(
+        'access_tile_actions is not migrated yet - tile sub-permissions are inert. ' +
+          'Run `prisma migrate deploy` to activate them.',
+      );
+    }
 
     this.logger.log(
       `Projected ${TILES_MANIFEST.length} access tiles and ${actionCount} sub-permissions ` +
