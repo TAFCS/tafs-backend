@@ -78,6 +78,62 @@ export type AuditLogParams = {
   parent_id?: number | null;
 };
 
+/**
+ * `key:value` prefixes understood by the free-text search. Anything else is a
+ * bare term and is matched against every searchable column at once.
+ */
+const SEARCH_KEYS = [
+  'entity',
+  'id',
+  'action',
+  'section',
+  'field',
+  'actor',
+  'note',
+  'value',
+] as const;
+
+type SearchTerm = { key: (typeof SEARCH_KEYS)[number] | null; value: string };
+
+/** `a,b , c` -> ['a','b','c']; blank or undefined -> []. */
+function splitCsv(raw?: string): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Split a search string into terms, honouring quoted phrases so
+ * `note:"marked as left"` and `"monthly pay"` behave as one term.
+ */
+export function parseSearchTerms(raw: string): SearchTerm[] {
+  const terms: SearchTerm[] = [];
+  const pattern = /(\w+):("[^"]*"|'[^']*'|\S+)|("[^"]*"|'[^']*'|\S+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(raw)) !== null) {
+    const unquote = (v: string) => v.replace(/^["']|["']$/g, '').trim();
+    if (match[1]) {
+      const key = match[1].toLowerCase() as (typeof SEARCH_KEYS)[number];
+      const value = unquote(match[2]);
+      if (!value) continue;
+      // An unknown prefix is not a filter -- treat the whole token as text,
+      // so searching for `http://x` or `03-0049` does not silently match all.
+      terms.push(
+        SEARCH_KEYS.includes(key)
+          ? { key, value }
+          : { key: null, value: `${match[1]}:${value}` },
+      );
+    } else if (match[3]) {
+      const value = unquote(match[3]);
+      if (value) terms.push({ key: null, value });
+    }
+  }
+
+  return terms;
+}
+
 @Injectable()
 export class AuditLogsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -141,6 +197,134 @@ export class AuditLogsService {
   }
 
   /**
+   * The where-fragment for one section tab. A section matches either by the
+   * stored `section` column or by the entity types that belong to it, because
+   * rows written before `section` existed only carry `entity_type`.
+   */
+  private sectionClause(section: string): any {
+    if (section === 'house-balancer') {
+      return {
+        OR: [
+          { section: 'house-balancer' },
+          {
+            entity_type: 'HOUSE',
+            action: { in: ['REBALANCED', 'CAMPUS_REBALANCED'] },
+          },
+        ],
+      };
+    }
+    const sectionTypes = SECTION_ENTITY_TYPES[section] ?? [];
+    if (sectionTypes.length > 0) {
+      return { OR: [{ section }, { entity_type: { in: sectionTypes } }] };
+    }
+    return { section };
+  }
+
+  /**
+   * Ways one term can identify the actor.
+   *
+   * `changed_by` holds a uuid, a username, or a system label, but people search
+   * for the name they see in the Actor column -- which is resolved from
+   * `users`. So the typed text is matched against usernames and full names and
+   * the hits are folded back into `changed_by`.
+   */
+  private async actorClauses(value: string): Promise<any[]> {
+    const like = { contains: value, mode: 'insensitive' as const };
+    const clauses: any[] = [{ changed_by: like }];
+
+    const users = await this.prisma.users.findMany({
+      where: { OR: [{ username: like }, { full_name: like }] },
+      select: { id: true, username: true },
+      take: 200,
+    });
+    if (users.length > 0) {
+      clauses.push({
+        changed_by: { in: [...users.map((u) => u.id), ...users.map((u) => u.username)] },
+      });
+    }
+
+    // System actors are labels, not users -- "scheduler", "system", etc.
+    const systemHits = Object.entries(AUDIT_SYSTEM_ACTOR_LABELS)
+      .filter(([actor, label]) =>
+        actor.toLowerCase().includes(value.toLowerCase()) ||
+        label.toLowerCase().includes(value.toLowerCase()),
+      )
+      .map(([actor]) => actor);
+    if (systemHits.length > 0) clauses.push({ changed_by: { in: systemHits } });
+
+    return clauses;
+  }
+
+  /**
+   * Employee rows carry `entity_id = employee_profiles.id`, so an employee's
+   * name or code appears nowhere in the row itself. Resolve it to ids.
+   */
+  private async employeeClauses(value: string): Promise<any[]> {
+    const like = { contains: value, mode: 'insensitive' as const };
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: { OR: [{ full_name: like }, { employee_code: like }] },
+      select: { id: true },
+      take: 500,
+    });
+    if (employees.length === 0) return [];
+    return [
+      {
+        entity_type: { in: [...EMPLOYEE_ENTITY_TYPES] },
+        entity_id: { in: employees.map((e) => String(e.id)) },
+      },
+    ];
+  }
+
+  private async termClause(term: SearchTerm): Promise<any> {
+    const like = { contains: term.value, mode: 'insensitive' as const };
+
+    switch (term.key) {
+      case 'entity':
+        return { entity_type: like };
+      case 'id':
+        return { entity_id: term.value };
+      case 'action':
+        return { action: like };
+      case 'section':
+        return { section: like };
+      case 'field':
+        return { field: like };
+      case 'note':
+        return { note: like };
+      case 'value':
+        return { OR: [{ old_value: like }, { new_value: like }] };
+      case 'actor':
+        return { OR: await this.actorClauses(term.value) };
+      default:
+        return {
+          OR: [
+            { entity_type: like },
+            { entity_id: like },
+            { action: like },
+            { section: like },
+            { field: like },
+            { old_value: like },
+            { new_value: like },
+            { note: like },
+            ...(await this.actorClauses(term.value)),
+            ...(await this.employeeClauses(term.value)),
+          ],
+        };
+    }
+  }
+
+  /**
+   * Free-text search. Terms AND together so each one narrows the result --
+   * `voucher deleted umer` means all three, not any of them.
+   */
+  private async buildSearchClause(raw: string): Promise<any | null> {
+    const terms = parseSearchTerms(raw);
+    if (terms.length === 0) return null;
+    const clauses = await Promise.all(terms.map((term) => this.termClause(term)));
+    return clauses.length === 1 ? clauses[0] : { AND: clauses };
+  }
+
+  /**
    * Find logs matching query criteria.
    * Global feed: top-level parents only (`parent_id` null), with `children` attached.
    * Student-scoped: top-level rows for that student (parent_id null, or orphans whose
@@ -160,29 +344,14 @@ export class AuditLogsService {
     if (isStudentScoped) {
       where.student_id = studentId;
     }
-    if (query.section === 'house-balancer') {
+    const sections = splitCsv(query.section);
+    if (sections.length > 0) {
+      // One clause per section, ORed: picking HR and Finance means either,
+      // never both at once, which is what an AND would have meant.
       where.AND = [
         ...(where.AND ?? []),
-        {
-          OR: [
-            { section: 'house-balancer' },
-            {
-              entity_type: 'HOUSE',
-              action: { in: ['REBALANCED', 'CAMPUS_REBALANCED'] },
-            },
-          ],
-        },
+        { OR: sections.map((section) => this.sectionClause(section)) },
       ];
-    } else if (query.section) {
-      const sectionTypes = SECTION_ENTITY_TYPES[query.section] ?? [];
-      if (sectionTypes.length > 0 && !where.entity_type) {
-        where.OR = [
-          { section: query.section },
-          { entity_type: { in: sectionTypes } },
-        ];
-      } else {
-        where.section = query.section;
-      }
     }
     if (query.entity_type) {
       const types = query.entity_type.split(',').map((t) => t.trim()).filter(Boolean);
@@ -194,6 +363,14 @@ export class AuditLogsService {
     }
     if (query.entity_id) {
       where.entity_id = query.entity_id;
+    }
+    const actions = splitCsv(query.action);
+    if (actions.length > 0) {
+      where.action = actions.length === 1 ? actions[0] : { in: actions };
+    }
+    const fields = splitCsv(query.field);
+    if (fields.length > 0) {
+      where.field = fields.length === 1 ? fields[0] : { in: fields };
     }
     if (query.changed_by) {
       where.changed_by = { contains: query.changed_by, mode: 'insensitive' };
@@ -220,6 +397,34 @@ export class AuditLogsService {
           ],
         },
       });
+    }
+
+    if (query.q?.trim()) {
+      const searchClause = await this.buildSearchClause(query.q);
+      if (searchClause) {
+        if (isStudentScoped) {
+          clauses.push(searchClause);
+        } else {
+          // The global feed only lists parents, but the text people search for
+          // often lives on a child row -- "monthly_pay" is a child of one
+          // "Employee updated" parent. Lift those matches to their parents so
+          // the hit is not invisible.
+          const childHits = await this.prisma.audit_logs.findMany({
+            where: { AND: [searchClause, { parent_id: { not: null } }] },
+            select: { parent_id: true },
+            distinct: ['parent_id'],
+            take: 5000,
+          });
+          const parentIds = childHits
+            .map((c) => c.parent_id)
+            .filter((id): id is number => id != null);
+          clauses.push(
+            parentIds.length > 0
+              ? { OR: [searchClause, { id: { in: parentIds } }] }
+              : searchClause,
+          );
+        }
+      }
     }
 
     const isSuperAdmin = requestingUser?.role === StaffRole.SUPER_ADMIN;

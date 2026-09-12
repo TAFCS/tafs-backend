@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsIn, IsDateString, IsInt } from 'class-validator';
+import { IsOptional, IsString, IsDateString, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryAuditLogsDto {
@@ -7,6 +7,19 @@ export class QueryAuditLogsDto {
   @IsInt()
   student_id?: number;
 
+  /**
+   * Free-text search across the whole row.
+   *
+   * Whitespace-separated terms are ANDed; each bare term ORs across
+   * entity_type, entity_id, action, section, field, old_value, new_value,
+   * note and the actor. Terms may be narrowed with a `key:value` prefix —
+   * see SEARCH_KEYS in the service.
+   */
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  /** Comma-separated. */
   @IsOptional()
   @IsString()
   entity_type?: string;
@@ -15,9 +28,20 @@ export class QueryAuditLogsDto {
   @IsString()
   entity_id?: string;
 
+  /** Comma-separated. */
   @IsOptional()
   @IsString()
   section?: string;
+
+  /** Comma-separated. */
+  @IsOptional()
+  @IsString()
+  action?: string;
+
+  /** Comma-separated. */
+  @IsOptional()
+  @IsString()
+  field?: string;
 
   @IsOptional()
   @IsString()
