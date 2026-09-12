@@ -901,6 +901,7 @@ model users {
   user_refresh_tokens                                                      user_refresh_tokens[]
   granted_tile_grants                                                      user_tile_grants[]           @relation("user_tile_grants_granted_byTousers")
   user_tile_grants                                                         user_tile_grants[]           @relation("user_tile_grants_user_idTousers")
+  user_scope_entries                                                       user_scope_entries[]         @relation("user_scope_entries_user_idTousers")
   campuses                                                                 campuses?                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -1363,15 +1364,15 @@ model employee_progression_periods {
 }
 
 model employee_previous_employers {
-  id                  Int               @id @default(autoincrement())
-  employee_id         Int
-  employer_name       String?           @db.VarChar(100)
-  location            String?           @db.VarChar(100)
-  job_title           String?           @db.VarChar(100)
-  employed_from       String?           @db.VarChar(20)
-  employed_to         String?           @db.VarChar(20)
-  reason_for_leaving  String?
-  employee_profiles   employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  id                 Int               @id @default(autoincrement())
+  employee_id        Int
+  employer_name      String?           @db.VarChar(100)
+  location           String?           @db.VarChar(100)
+  job_title          String?           @db.VarChar(100)
+  employed_from      String?           @db.VarChar(20)
+  employed_to        String?           @db.VarChar(20)
+  reason_for_leaving String?
+  employee_profiles  employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@index([employee_id])
 }
@@ -2359,6 +2360,30 @@ model user_tile_grants {
 
   @@id([user_id, tile_id])
   @@index([tile_id])
+}
+
+/// One row per (user, dimension, id) the user is scoped to. A dimension with no
+/// rows for a user is UNRESTRICTED on that dimension; dimensions AND together.
+/// Replaces users.campus_id + users.allowed_class_ids as the single source of
+/// truth for "which records may this person touch".
+model user_scope_entries {
+  user_id    String
+  dimension  ScopeDimension
+  ref_id     Int
+  created_at DateTime       @default(now()) @db.Timestamp(6)
+  user       users          @relation("user_scope_entries_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, dimension, ref_id])
+  @@index([dimension, ref_id])
+}
+
+enum ScopeDimension {
+  CAMPUS
+  SEGMENT
+  CLASS
+  SECTION
+  DEPARTMENT
+  STAFF_CATEGORY
 }
 
 enum BulkJobStatus {

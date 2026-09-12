@@ -48,6 +48,7 @@ import { HouseBalancerModule } from './modules/house-balancer/house-balancer.mod
 import { StudentAllocationModule } from './modules/student-allocation/student-allocation.module';
 import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 import { AccessModule } from './modules/access/access.module';
+import { ScopeModule } from './common/scope/scope.module';
 
 @Module({
   imports: [
@@ -98,6 +99,7 @@ import { AccessModule } from './modules/access/access.module';
     HouseBalancerModule,
     DailyDigestModule,
     AccessModule,
+    ScopeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
