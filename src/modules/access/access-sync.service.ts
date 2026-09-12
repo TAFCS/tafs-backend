@@ -73,9 +73,67 @@ export class AccessSyncService implements OnModuleInit {
       data: { is_active: false },
     });
 
+    const actionCount = await this.syncActions();
+
     this.logger.log(
-      `Projected ${TILES_MANIFEST.length} access tiles for FKs in ${Date.now() - started}ms` +
-        (deactivated.count ? `, deactivated ${deactivated.count} stale` : ''),
+      `Projected ${TILES_MANIFEST.length} access tiles and ${actionCount} sub-permissions ` +
+        `for FKs in ${Date.now() - started}ms` +
+        (deactivated.count ? `, deactivated ${deactivated.count} stale tile(s)` : ''),
     );
+  }
+
+  /**
+   * Projects each tile's `actions` into access_tile_actions.
+   *
+   * Stale rows are deactivated rather than deleted: deleting would cascade
+   * away every pack and user grant pointing at them, so renaming an action in
+   * the manifest would silently revoke it for everyone. Deactivated rows stop
+   * resolving but keep the grant history intact.
+   */
+  private async syncActions(): Promise<number> {
+    const rows = TILES_MANIFEST.flatMap((tile) =>
+      (tile.actions ?? []).map((action, i) => ({
+        tile_id: tile.id,
+        action_id: action.id,
+        label: action.label,
+        description: action.description ?? null,
+        is_default: action.default ?? false,
+        sort_order: i,
+      })),
+    );
+
+    if (rows.length === 0) {
+      await this.prisma.access_tile_actions.updateMany({
+        where: { is_active: true },
+        data: { is_active: false },
+      });
+      return 0;
+    }
+
+    const values = rows.map(
+      (r) =>
+        Prisma.sql`(${r.tile_id}, ${r.action_id}, ${r.label}, ${r.description}, ${r.is_default}, ${r.sort_order}, true)`,
+    );
+
+    await this.prisma.$executeRaw`
+      INSERT INTO "access_tile_actions" ("tile_id", "action_id", "label", "description", "is_default", "sort_order", "is_active")
+      VALUES ${Prisma.join(values)}
+      ON CONFLICT ("tile_id", "action_id") DO UPDATE SET
+        "label" = EXCLUDED."label",
+        "description" = EXCLUDED."description",
+        "is_default" = EXCLUDED."is_default",
+        "sort_order" = EXCLUDED."sort_order",
+        "is_active" = true
+    `;
+
+    await this.prisma.$executeRaw`
+      UPDATE "access_tile_actions" SET "is_active" = false
+      WHERE "is_active" = true
+        AND ("tile_id", "action_id") NOT IN (${Prisma.join(
+          rows.map((r) => Prisma.sql`(${r.tile_id}, ${r.action_id})`),
+        )})
+    `;
+
+    return rows.length;
   }
 }

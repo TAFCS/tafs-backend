@@ -901,6 +901,8 @@ model users {
   user_refresh_tokens                                                      user_refresh_tokens[]
   granted_tile_grants                                                      user_tile_grants[]           @relation("user_tile_grants_granted_byTousers")
   user_tile_grants                                                         user_tile_grants[]           @relation("user_tile_grants_user_idTousers")
+  granted_tile_action_grants                                               user_tile_action_grants[]    @relation("user_tile_action_grants_granted_byTousers")
+  user_tile_action_grants                                                  user_tile_action_grants[]    @relation("user_tile_action_grants_user_idTousers")
   user_scope_entries                                                       user_scope_entries[]         @relation("user_scope_entries_user_idTousers")
   campuses                                                                 campuses?                    @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -2301,13 +2303,14 @@ model access_pack_tiles {
 }
 
 model access_packs {
-  id          String              @id @default(uuid())
-  name        String              @unique @db.VarChar(100)
-  description String?             @db.VarChar(255)
-  is_system   Boolean             @default(false)
-  created_at  DateTime            @default(now()) @db.Timestamp(6)
-  tiles       access_pack_tiles[]
-  user_packs  user_access_packs[]
+  id           String                     @id @default(uuid())
+  name         String                     @unique @db.VarChar(100)
+  description  String?                    @db.VarChar(255)
+  is_system    Boolean                    @default(false)
+  created_at   DateTime                   @default(now()) @db.Timestamp(6)
+  tiles        access_pack_tiles[]
+  tile_actions access_pack_tile_actions[]
+  user_packs   user_access_packs[]
 }
 
 model access_tile_capabilities {
@@ -2330,6 +2333,7 @@ model access_tiles {
   sort_order   Int                        @default(0)
   is_active    Boolean                    @default(true)
   pack_tiles   access_pack_tiles[]
+  actions      access_tile_actions[]
   capabilities access_tile_capabilities[]
   user_grants  user_tile_grants[]
 }
@@ -2360,6 +2364,53 @@ model user_tile_grants {
 
   @@id([user_id, tile_id])
   @@index([tile_id])
+}
+
+/// Sub-permissions of a tile, projected from TILES_MANIFEST by AccessSync so
+/// pack and grant foreign keys resolve. Addressed as `tileId#actionId`.
+model access_tile_actions {
+  tile_id     String                     @db.VarChar(80)
+  action_id   String                     @db.VarChar(60)
+  label       String                     @db.VarChar(100)
+  description String?                    @db.VarChar(255)
+  is_default  Boolean                    @default(false)
+  sort_order  Int                        @default(0)
+  is_active   Boolean                    @default(true)
+  tile        access_tiles               @relation(fields: [tile_id], references: [id], onDelete: Cascade)
+  pack_grants access_pack_tile_actions[]
+  user_grants user_tile_action_grants[]
+
+  @@id([tile_id, action_id])
+  @@index([tile_id])
+}
+
+/// A sub-permission carried by an access pack.
+model access_pack_tile_actions {
+  pack_id   String
+  tile_id   String              @db.VarChar(80)
+  action_id String              @db.VarChar(60)
+  pack      access_packs        @relation(fields: [pack_id], references: [id], onDelete: Cascade)
+  action    access_tile_actions @relation(fields: [tile_id, action_id], references: [tile_id, action_id], onDelete: Cascade)
+
+  @@id([pack_id, tile_id, action_id])
+  @@index([tile_id, action_id])
+}
+
+/// Per-user override of a single sub-permission. allow=false beats every grant.
+model user_tile_action_grants {
+  user_id         String
+  tile_id         String              @db.VarChar(80)
+  action_id       String              @db.VarChar(60)
+  allow           Boolean
+  granted_by      String
+  granted_at      DateTime            @default(now()) @db.Timestamp(6)
+  note            String?             @db.VarChar(255)
+  granted_by_user users               @relation("user_tile_action_grants_granted_byTousers", fields: [granted_by], references: [id])
+  action          access_tile_actions @relation(fields: [tile_id, action_id], references: [tile_id, action_id], onDelete: Cascade)
+  user            users               @relation("user_tile_action_grants_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, tile_id, action_id])
+  @@index([tile_id, action_id])
 }
 
 /// One row per (user, dimension, id) the user is scoped to. A dimension with no

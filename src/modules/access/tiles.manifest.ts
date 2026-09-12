@@ -1,3 +1,19 @@
+/**
+ * A sub-permission inside a tile: "what may they DO once they are in here".
+ *
+ * Addressed globally as `tileId#actionId`, e.g.
+ * `hr.employee_directory#schedule_pay.edit`.
+ */
+export type TileAction = {
+  id: string;
+  label: string;
+  description?: string;
+  /** Conferred automatically when the tile itself is granted. */
+  default?: boolean;
+  /** Action ids in the same tile that this one also confers, transitively. */
+  implies?: string[];
+};
+
 export type TileManifestEntry = {
   id: string;
   module: string;
@@ -6,7 +22,62 @@ export type TileManifestEntry = {
   href: string;
   group?: string;
   capabilities: string[];
+  /**
+   * Omit entirely and the tile behaves exactly as it did before
+   * sub-permissions existed: granting the tile grants the whole tile.
+   */
+  actions?: TileAction[];
 };
+
+/**
+ * Sub-permissions for the Employee Directory -- the first tile to get them.
+ *
+ * One view/edit pair per tab in EmployeeDetailPanel's BASE_TABS, plus the
+ * discrete actions that were all collapsed into `Manage Employee` before:
+ * ~25 routes on employees.controller.ts resolved to exactly two checks, so
+ * editing a phone number and deleting an employee needed the same permission.
+ */
+const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open directory', description: 'See the employee list and open a record', default: true },
+
+  { id: 'profile.view', label: 'View profile', implies: ['view'] },
+  { id: 'profile.edit', label: 'Edit profile', description: 'Name, CNIC, contact, family, photos, previous employers', implies: ['profile.view'] },
+
+  { id: 'employment.view', label: 'View employment', implies: ['view'] },
+  { id: 'employment.edit', label: 'Edit employment', description: 'Department, category, job title, code, dates', implies: ['employment.view'] },
+
+  { id: 'schedule_pay.view', label: 'View schedule & pay', description: 'Includes the salary figure', implies: ['view'] },
+  { id: 'schedule_pay.edit', label: 'Edit schedule & pay', description: 'Monthly pay, timings, work schedule, increment cycle', implies: ['schedule_pay.view'] },
+
+  { id: 'security_deposit.view', label: 'View security deposit', implies: ['view'] },
+  { id: 'security_deposit.edit', label: 'Edit security deposit', implies: ['security_deposit.view'] },
+
+  { id: 'loan.view', label: 'View loans', implies: ['view'] },
+  { id: 'loan.edit', label: 'Edit loans', implies: ['loan.view'] },
+
+  { id: 'classes.view', label: 'View class & sections', implies: ['view'] },
+  { id: 'classes.edit', label: 'Edit class & sections', implies: ['classes.view'] },
+
+  { id: 'progression.view', label: 'View progression', implies: ['view'] },
+  { id: 'progression.edit', label: 'Edit progression', implies: ['progression.view'] },
+
+  { id: 'portal.view', label: 'View portal account', implies: ['view'] },
+  { id: 'portal.edit', label: 'Edit portal account', description: 'Role, campus and account status', implies: ['portal.view'] },
+  { id: 'portal.reveal_password', label: 'Reveal portal password', description: 'Audited on every use', implies: ['portal.view'] },
+  { id: 'portal.reset_password', label: 'Reset portal password', implies: ['portal.edit'] },
+  { id: 'portal.change_username', label: 'Change username', implies: ['portal.edit'] },
+
+  { id: 'biometric.view', label: 'View biometric', implies: ['view'] },
+  { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['biometric.view'] },
+
+  { id: 'shift_overrides.view', label: 'View shift overrides', implies: ['view'] },
+  { id: 'shift_overrides.edit', label: 'Edit shift overrides', implies: ['shift_overrides.view'] },
+
+  { id: 'create', label: 'Register an employee', implies: ['view'] },
+  { id: 'delete', label: 'Delete an employee', implies: ['view'] },
+  { id: 'status.change', label: 'Change employment status', description: 'Active, Permanent, Family, Left, Terminated', implies: ['employment.view'] },
+  { id: 'export', label: 'Export to Excel', description: 'Directory export and master export', implies: ['view'] },
+];
 
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
@@ -46,7 +117,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['system.permissions.manage'] },
 
   // ?? HR & Payroll ?????????????????????????????????????????????????????????
-  { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'] },
+  { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS },
   { id: 'hr.register_employee', module: 'hr', label: 'Register a Employee', description: 'Create new employee profile', href: '/hr/employees/new', capabilities: ['hr.employees.view'] },
   { id: 'hr.departments', module: 'hr', label: 'Departments', description: 'Departments and staff categories', href: '/hr/departments', capabilities: ['hr.employees.view'] },
   { id: 'hr.payroll', module: 'hr', label: 'Payroll', description: 'Salary processing', href: '/hr/payroll', capabilities: ['hr.payroll.view'] },
@@ -96,9 +167,29 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
 
 export const MANIFEST_TILE_IDS = new Set(TILES_MANIFEST.map((t) => t.id));
 
+/** Global address of a sub-permission. */
+export function actionKey(tileId: string, actionId: string): string {
+  return `${tileId}#${actionId}`;
+}
+
+export function parseActionKey(key: string): { tileId: string; actionId: string } | null {
+  const at = key.indexOf('#');
+  if (at <= 0 || at === key.length - 1) return null;
+  return { tileId: key.slice(0, at), actionId: key.slice(at + 1) };
+}
+
+export const MANIFEST_ACTION_KEYS = new Set(
+  TILES_MANIFEST.flatMap((t) => (t.actions ?? []).map((a) => actionKey(t.id, a.id))),
+);
+
 export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
   id: t.id,
   capabilities: t.capabilities,
+  actions: (t.actions ?? []).map((a) => ({
+    id: a.id,
+    default: a.default ?? false,
+    implies: a.implies ?? [],
+  })),
 }));
 
 export function catalogFromManifest() {
@@ -120,6 +211,15 @@ export function catalogFromManifest() {
         group: t.group ?? null,
         sort_order: t.sort_order,
         capabilities: t.capabilities,
+        actions: (t.actions ?? []).map((a, i) => ({
+          id: a.id,
+          key: actionKey(t.id, a.id),
+          label: a.label,
+          description: a.description ?? null,
+          default: a.default ?? false,
+          implies: a.implies ?? [],
+          sort_order: i,
+        })),
       })),
     })),
   };
