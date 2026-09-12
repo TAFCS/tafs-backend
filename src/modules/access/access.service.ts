@@ -8,6 +8,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
+import { ScopeService } from '../../common/scope/scope.service';
+import { EMPTY_SCOPE, type UserScope } from '../../common/scope/scope.types';
 import {
   actionKey,
   catalogFromManifest,
@@ -22,7 +24,62 @@ export class AccessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scopeService: ScopeService,
   ) {}
+
+  /**
+   * Everything a scope picker can offer. Small, stable reference data -- the
+   * panel fetches it once and filters client-side.
+   */
+  async getScopeOptions() {
+    const [campuses, segments, classes, sections, departments, staffCategories] =
+      await Promise.all([
+        this.prisma.campuses.findMany({
+          where: { is_active: true },
+          select: { id: true, campus_name: true, campus_code: true },
+          orderBy: { campus_name: 'asc' },
+        }),
+        this.prisma.segments.findMany({
+          select: { id: true, name: true, code: true },
+          orderBy: { display_order: 'asc' },
+        }),
+        this.prisma.classes.findMany({
+          select: { id: true, description: true, class_code: true, segment_id: true },
+          orderBy: { id: 'asc' },
+        }),
+        this.prisma.sections.findMany({
+          select: { id: true, description: true },
+          orderBy: { id: 'asc' },
+        }),
+        this.prisma.departments.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.staff_categories.findMany({
+          select: { id: true, name: true, code: true, department_id: true },
+          orderBy: { name: 'asc' },
+        }),
+      ]);
+
+    return {
+      campuses: campuses.map((c) => ({ id: c.id, label: c.campus_name, code: c.campus_code })),
+      segments: segments.map((s) => ({ id: s.id, label: s.name, code: s.code })),
+      classes: classes.map((c) => ({
+        id: c.id,
+        label: c.description,
+        code: c.class_code,
+        segmentId: c.segment_id,
+      })),
+      sections: sections.map((s) => ({ id: s.id, label: s.description })),
+      departments: departments.map((d) => ({ id: d.id, label: d.name })),
+      staffCategories: staffCategories.map((c) => ({
+        id: c.id,
+        label: c.name,
+        code: c.code,
+        departmentId: c.department_id,
+      })),
+    };
+  }
 
   async getCatalog() {
     return catalogFromManifest();
@@ -148,6 +205,8 @@ export class AccessService {
       ),
     ]);
 
+    const scope = await this.scopeService.resolve(userId);
+
     const packActionRows = await readUntilMigrated(
       () =>
         this.prisma.access_pack_tile_actions.findMany({
@@ -196,6 +255,7 @@ export class AccessService {
         note: g.note,
         grantedAt: g.granted_at,
       })),
+      scope,
     };
   }
 
@@ -339,6 +399,30 @@ export class AccessService {
               : `allow ${before} ? ${after}`) +
           '.',
       });
+    }
+
+    if (dto.scope !== undefined) {
+      const previous = await this.scopeService.resolve(userId);
+      const next = await this.scopeService.setScope(userId, dto.scope);
+      const summarise = (sc: UserScope) =>
+        (Object.keys(EMPTY_SCOPE) as (keyof UserScope)[])
+          .map((k) => `${k}=[${[...sc[k]].sort((a, b) => a - b).join(',')}]`)
+          .join(' ');
+      const before = summarise(previous);
+      const after = summarise(next);
+      if (before !== after) {
+        await this.auditLogs.log({
+          entity_type: 'PERMISSION',
+          entity_id: userId,
+          action: 'UPDATED',
+          section: 'system',
+          field: 'user_scope',
+          old_value: before,
+          new_value: after,
+          changed_by: changedBy,
+          note: `Data scope for user ${user.username} (#${userId}): ${before} -> ${after}.`,
+        });
+      }
     }
 
     if (dto.tileActionGrants !== undefined) {

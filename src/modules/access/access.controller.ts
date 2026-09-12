@@ -30,6 +30,13 @@ export class AccessController {
     return createApiResponse(catalog, HttpStatus.OK, 'Access catalog retrieved successfully');
   }
 
+  @Get('scope-options')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  async getScopeOptions() {
+    const options = await this.accessService.getScopeOptions();
+    return createApiResponse(options, HttpStatus.OK, 'Scope options retrieved successfully');
+  }
+
   @Get('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async listPacks() {

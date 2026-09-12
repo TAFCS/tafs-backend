@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class TileActionRefDto {
@@ -72,6 +72,42 @@ export class TileActionGrantDto extends TileActionRefDto {
   note?: string;
 }
 
+/**
+ * A user's universal data scope. An OMITTED or EMPTY array means UNRESTRICTED
+ * on that dimension, not "nothing" -- see common/scope/scope.types.ts.
+ */
+export class UserScopeDto {
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  campuses?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  segments?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  classes?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  sections?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  departments?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  staffCategories?: number[];
+}
+
 export class SetUserAccessDto {
   @IsArray()
   @IsString({ each: true })
@@ -88,4 +124,10 @@ export class SetUserAccessDto {
   @ValidateNested({ each: true })
   @Type(() => TileActionGrantDto)
   tileActionGrants?: TileActionGrantDto[];
+
+  /** Omit to leave the user's scope untouched. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UserScopeDto)
+  scope?: UserScopeDto;
 }
