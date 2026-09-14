@@ -13,10 +13,11 @@ import {
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { otp_purpose } from '@prisma/client';
+import { otp_purpose, StaffRole } from '@prisma/client';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
+import { EMPTY_SCOPE } from '../../common/scope/scope.types';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -110,6 +111,8 @@ export class AuthService {
       select: { id: true, payroll_enabled: true },
     });
 
+    const isSuperAdmin = user.role === StaffRole.SUPER_ADMIN;
+
     const payload: IJwtStaffPayload = {
       sub: user.id,
       username: user.username,
@@ -118,9 +121,12 @@ export class AuthService {
       campusId: user.campus_id,
       allowedClassIds,
       userType: 'STAFF',
-      permissions,
-      actions: effectiveActions,
-      scope,
+      // For SUPER_ADMIN, CASL grants Manage 'all' and TileActionGuard bypasses checks.
+      // Omit the 60+ permission/action strings from the JWT to prevent exceeding
+      // the browser 4KB cookie limit (which causes browser to silently drop tafs_access).
+      permissions: isSuperAdmin ? [] : permissions,
+      actions: isSuperAdmin ? [] : effectiveActions,
+      scope: isSuperAdmin ? EMPTY_SCOPE : scope,
     };
 
     const { accessToken, refreshToken } =
