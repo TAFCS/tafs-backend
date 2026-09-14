@@ -279,7 +279,43 @@ export class StudentsService {
     if (house_id?.length)   where.house_id   = { in: house_id };
     if (discipline?.length) {
       const hasNone = discipline.includes('none') || discipline.includes('no_discipline');
-      const namedDisciplines = discipline.filter((d) => d !== 'none' && d !== 'no_discipline');
+      const rawNamedDisciplines = discipline.filter((d) => d !== 'none' && d !== 'no_discipline');
+
+      const aliasMap: Record<string, string[]> = {
+        'computer': ['computer', 'computer science', 'cs'],
+        'computer science': ['computer', 'computer science', 'cs'],
+        'cs': ['computer', 'computer science', 'cs'],
+        'biology': ['biology', 'bio', 'pre-medical', 'pre medical', 'premedical'],
+        'bio': ['biology', 'bio', 'pre-medical', 'pre medical', 'premedical'],
+        'pre-medical': ['pre-medical', 'pre medical', 'premedical', 'biology', 'bio'],
+        'pre medical': ['pre-medical', 'pre medical', 'premedical', 'biology', 'bio'],
+        'premedical': ['pre-medical', 'pre medical', 'premedical', 'biology', 'bio'],
+        'pre-engineering': ['pre-engineering', 'pre engineering', 'preengineering', 'engineering'],
+        'pre engineering': ['pre-engineering', 'pre engineering', 'preengineering', 'engineering'],
+        'preengineering': ['pre-engineering', 'pre engineering', 'preengineering', 'engineering'],
+        'engineering': ['pre-engineering', 'pre engineering', 'preengineering', 'engineering'],
+        'pre-commerce': ['pre-commerce', 'pre commerce', 'precommerce', 'commerce'],
+        'pre commerce': ['pre-commerce', 'pre commerce', 'precommerce', 'commerce'],
+        'precommerce': ['pre-commerce', 'pre commerce', 'precommerce', 'commerce'],
+        'commerce': ['commerce', 'pre-commerce', 'pre commerce', 'precommerce'],
+        'science': ['science', 'general science'],
+        'general science': ['science', 'general science'],
+        'humanities': ['humanities', 'arts'],
+        'arts': ['humanities', 'arts'],
+        'general': ['general', 'general science'],
+      };
+
+      const expandedSet = new Set<string>();
+      for (const d of rawNamedDisciplines) {
+        expandedSet.add(d);
+        const lower = d.toLowerCase().trim();
+        if (aliasMap[lower]) {
+          for (const alias of aliasMap[lower]) {
+            expandedSet.add(alias);
+          }
+        }
+      }
+      const namedDisciplines = Array.from(expandedSet);
 
       const disciplineOrConditions: Prisma.studentsWhereInput[] = [];
 
