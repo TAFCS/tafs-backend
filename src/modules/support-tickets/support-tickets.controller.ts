@@ -27,6 +27,7 @@ import { parsePagination } from './support-tickets-pagination';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
+import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ForwardTicketDto } from './dto/forward-ticket.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
@@ -161,6 +162,18 @@ export class SupportTicketsController {
   @ApiOperation({ summary: 'Super Admin pending reply approval queue' })
   pendingApprovals(@CurrentUser() staff: any) {
     return this.supportTicketsService.listPendingApprovals(staff);
+  }
+
+  @Patch('messages/:messageId')
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies(canManageTickets)
+  @ApiOperation({ summary: 'Super Admin edit any employee ticket message' })
+  editMessage(
+    @Param('messageId') messageId: string,
+    @Body() dto: EditTicketMessageDto,
+    @CurrentUser() staff: any,
+  ) {
+    return this.supportTicketsService.editStaffMessage(messageId, dto, staff);
   }
 
   @Patch('messages/:messageId/review')

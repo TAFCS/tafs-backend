@@ -1094,6 +1094,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.emitToTicketRoom(ticket.id, 'ticketMessageDeleted', payload);
   }
 
+  async broadcastTicketMessageUpdated(ticket: any, message: any) {
+    const normalizedMessage = {
+      ...message,
+      ticket_id: message?.ticket_id ?? message?.ticketId ?? ticket?.id,
+    };
+    const payload = { ticket, message: normalizedMessage };
+    this.server
+      .to(`family_app_${ticket.family_id}`)
+      .emit('ticketMessageUpdated', payload);
+    if (ticket.current_assignee_id) {
+      this.server
+        .to(`staff_inbox_${ticket.current_assignee_id}`)
+        .emit('ticketMessageUpdated', payload);
+    }
+    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
+      this.server.to('finance_queue').emit('ticketMessageUpdated', payload);
+    }
+    this.server.to('super_admin_approvals').emit('ticketMessageUpdated', payload);
+    this.emitToTicketRoom(ticket.id, 'ticketMessageUpdated', payload);
+  }
+
   private emitToTicketRoom(ticketId: string | null | undefined, event: string, payload: unknown) {
     if (!ticketId) return;
     this.server.to(`ticket_${ticketId}`).emit(event, payload);

@@ -2,6 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { SupportTicketsController } from './support-tickets.controller';
 import { SupportTicketsService } from './support-tickets.service';
 import { ChatService } from '../chat/chat.service';
+import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
+import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
 
 describe('SupportTicketsController', () => {
   let controller: SupportTicketsController;
@@ -13,7 +17,16 @@ describe('SupportTicketsController', () => {
         { provide: SupportTicketsService, useValue: {} },
         { provide: ChatService, useValue: {} },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtStaffGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(JwtParentGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(JwtStaffOrParentGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PoliciesGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<SupportTicketsController>(SupportTicketsController);
   });

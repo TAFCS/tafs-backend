@@ -34,6 +34,7 @@ import {
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
+import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
 
 const MAX_OPEN_TICKETS_PER_FAMILY = 10;
@@ -1191,6 +1192,120 @@ export class SupportTicketsService {
       messageId,
       ticket: updatedTicket,
       message: tombstone,
+    };
+  }
+
+  /** Super Admin edit of any staff message (whether pending approval or already sent). */
+  async editStaffMessage(
+    messageId: string,
+    dto: EditTicketMessageDto,
+    superAdmin: IJwtStaffPayload,
+  ) {
+    if (superAdmin.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only Super Admin can edit employee messages');
+    }
+
+    const newContent = dto.content?.trim();
+    if (!newContent) {
+      throw new BadRequestException('Message content cannot be empty');
+    }
+
+    const message = await this.prisma.ticket_messages.findUnique({
+      where: { id: messageId },
+      include: {
+        ticket: {
+          include: {
+            families: { select: { id: true, household_name: true } },
+            current_assignee: { select: { id: true, full_name: true, role: true } },
+          },
+        },
+        sender_user: { select: { id: true, full_name: true, username: true, role: true } },
+      },
+    });
+
+    if (!message) throw new NotFoundException('Message not found');
+    if (message.deleted_at) {
+      throw new BadRequestException('Cannot edit a deleted message');
+    }
+    if (message.ticket.status === TicketStatus.CLOSED) {
+      throw new BadRequestException('Cannot edit messages on a closed ticket');
+    }
+    if (message.sender_type !== 'STAFF') {
+      throw new BadRequestException('Only employee messages can be edited');
+    }
+
+    const oldContent = message.content;
+    const newSnippet = this.messageSnippet(message.message_type, newContent);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updatedMsg = await tx.ticket_messages.update({
+        where: { id: messageId },
+        data: {
+          content: newContent,
+        },
+        include: {
+          sender_user: { select: { id: true, full_name: true, role: true } },
+          reviewer: { select: { id: true, full_name: true } },
+        },
+      });
+
+      // If this message was the latest approved message on the ticket, update ticket snippets
+      if (message.status === MessageStatus.APPROVED) {
+        const latestApproved = await tx.ticket_messages.findFirst({
+          where: { ticket_id: message.ticket_id, status: MessageStatus.APPROVED, deleted_at: null },
+          orderBy: { created_at: 'desc' },
+          select: { id: true },
+        });
+
+        if (latestApproved?.id === message.id) {
+          await tx.support_tickets.update({
+            where: { id: message.ticket_id },
+            data: {
+              last_message_snippet: newSnippet,
+              last_staff_snippet: newSnippet,
+            },
+          });
+        }
+      }
+
+      return updatedMsg;
+    });
+
+    const senderLabel = message.sender_user?.full_name
+      ? `${message.sender_user.full_name} (@${message.sender_user.username})`
+      : 'Staff';
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: message.ticket_id,
+      action: 'MESSAGE_EDITED',
+      changed_by: superAdmin.username,
+      note: [
+        this.ticketContextLabel(message.ticket),
+        `Super Admin edited employee message (${senderLabel}):`,
+        `Old: "${this.messageSnippet(message.message_type, oldContent)}"`,
+        `New: "${newSnippet}"`,
+      ].join(' | '),
+    });
+
+    const fullTicket = await this.prisma.support_tickets.findUnique({
+      where: { id: message.ticket_id },
+      include: {
+        families: { select: { id: true, household_name: true } },
+        current_assignee: { select: { id: true, full_name: true, role: true } },
+      },
+    });
+
+    await this.chatGateway.broadcastTicketMessageUpdated(
+      fullTicket ?? message.ticket,
+      updated,
+    );
+
+    return {
+      success: true,
+      messageId,
+      ticket: fullTicket ?? message.ticket,
+      message: updated,
     };
   }
 
