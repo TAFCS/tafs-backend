@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { StaffRole } from '@prisma/client';
+import { actionsCover } from '../../modules/access/tiles.manifest';
 import {
   REQUIRE_ACTION_KEY,
   type RequireActionMetadata,
@@ -38,11 +39,14 @@ export class TileActionGuard implements CanActivate {
     const staff = user as IJwtStaffPayload;
     if (staff.role === StaffRole.SUPER_ADMIN) return true;
 
+    // actionsCover, not held.has: a claim may carry `tile#*` for a tile the
+    // user holds in full (see compactActionKeys). Tokens issued before that
+    // shipped carry the expanded list and match just the same.
     const held = new Set(staff.actions ?? []);
     const ok =
       meta.mode === 'any'
-        ? meta.actionKeys.some((k) => held.has(k))
-        : meta.actionKeys.every((k) => held.has(k));
+        ? meta.actionKeys.some((k) => actionsCover(held, k))
+        : meta.actionKeys.every((k) => actionsCover(held, k));
 
     if (!ok) {
       throw new ForbiddenException(

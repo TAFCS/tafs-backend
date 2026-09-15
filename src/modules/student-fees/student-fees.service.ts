@@ -18,6 +18,8 @@ import {
     termOfHead,
 } from '../../common/utils/academic-labels';
 import { getClassTermMap, termStartMonthForClass } from '../../common/utils/class-terms.util';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 // An audit-log entry queued during a transaction/multi-step operation and
 // flushed once the whole operation has committed.
@@ -37,7 +39,72 @@ export class StudentFeesService {
         private readonly prisma: PrismaService,
         private readonly auditLogs: AuditLogsService,
         private readonly studentsService: StudentsService,
+        private readonly scope: ScopeService,
     ) { }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Universal scope — "which students may this person touch".
+    //
+    // Nothing in this service was scoped before: every route returned and wrote
+    // fee heads for every student at every campus. Both helpers below no-op for
+    // an unrestricted user (an empty scope means unrestricted, and SUPER_ADMIN
+    // is exempt), so they cost one extra query only for users who actually
+    // carry scope rows.
+    //
+    // Out-of-scope students are reported as NOT FOUND, never FORBIDDEN: a 403
+    // would confirm the CC exists and turn these routes into an enumerator.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** @param ccs student_fees.student_id values, i.e. students.cc. */
+    private async assertStudentsVisible(user: IJwtStaffPayload, ccs: (number | null | undefined)[]) {
+        // An empty fragment means the user is unrestricted on every student
+        // dimension, so the lookup below could only ever return "visible".
+        // Checking here keeps this page's request count unchanged for the
+        // users who were never scoped in the first place.
+        if (Object.keys(this.scope.whereForStudents(user)).length === 0) return;
+        const wanted = [...new Set(ccs.filter((n): n is number => Number.isInteger(n as number)))];
+        if (wanted.length === 0) return;
+
+        const students = await this.prisma.students.findMany({
+            where: { cc: { in: wanted } },
+            select: {
+                cc: true,
+                campus_id: true,
+                class_id: true,
+                section_id: true,
+                classes: { select: { segment_id: true } },
+            },
+        });
+        const byCc = new Map(students.map((s) => [s.cc, s]));
+
+        for (const cc of wanted) {
+            const student = byCc.get(cc);
+            // A CC that does not exist is left to the caller to report in its own
+            // words; only a real-but-out-of-scope student is masked here.
+            if (!student) continue;
+            const visible = this.scope.canSeeStudent(user, {
+                campus_id: student.campus_id,
+                class_id: student.class_id,
+                section_id: student.section_id,
+                segment_id: student.classes?.segment_id ?? null,
+            });
+            if (!visible) {
+                throw new NotFoundException(`Student with CC number ${cc} not found`);
+            }
+        }
+    }
+
+    /** Resolves fee heads to their students and asserts every one is visible. */
+    private async assertFeeHeadsVisible(user: IJwtStaffPayload, studentFeeIds: number[]) {
+        if (Object.keys(this.scope.whereForStudents(user)).length === 0) return;
+        const ids = [...new Set(studentFeeIds.filter((n) => Number.isInteger(n)))];
+        if (ids.length === 0) return;
+        const rows = await this.prisma.student_fees.findMany({
+            where: { id: { in: ids } },
+            select: { student_id: true },
+        });
+        await this.assertStudentsVisible(user, rows.map((r) => r.student_id));
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Audit-logging helpers — every data-mutating method in this service must
@@ -354,7 +421,8 @@ export class StudentFeesService {
         });
     }
 
-    async findByStudentCC(ccNumber: string, dateFrom?: string, dateTo?: string) {
+    async findByStudentCC(ccNumber: string, user: IJwtStaffPayload, dateFrom?: string, dateTo?: string) {
+        await this.assertStudentsVisible(user, [Number(ccNumber)]);
         const student = await this.prisma.students.findUnique({
             where: { cc: Number(ccNumber) },
             include: {
@@ -502,9 +570,12 @@ export class StudentFeesService {
     async getStudentSchedule(
         studentId: number,
         academicYear: string,
+        user: IJwtStaffPayload,
         classId?: number,
         campusId?: number,
     ) {
+        await this.assertStudentsVisible(user, [studentId]);
+
         // 1. Check for saved fees
         const savedFees = await this.prisma.student_fees.findMany({
             where: {
@@ -607,8 +678,9 @@ export class StudentFeesService {
     }
 
 
-    async bulkSave(dto: BulkSaveStudentFeesDto, changedBy?: string) {
+    async bulkSave(dto: BulkSaveStudentFeesDto, user: IJwtStaffPayload, changedBy?: string) {
         const { student_id, items, bundles } = dto;
+        await this.assertStudentsVisible(user, [student_id]);
 
         if (items.length === 0 && !dto.academic_year) {
             return this.findByStudent(student_id);
@@ -1142,8 +1214,9 @@ export class StudentFeesService {
      * Explicitly update the fee_date for one or more student_fees records.
      * Called before bundle creation to persist any date changes the user made in the UI.
      */
-    async updateFeeDates(updates: { id: number; fee_date: string }[], changedBy: string = 'system') {
+    async updateFeeDates(updates: { id: number; fee_date: string }[], user: IJwtStaffPayload, changedBy: string = 'system') {
         if (updates.length === 0) return [];
+        await this.assertFeeHeadsVisible(user, updates.map((u) => u.id));
 
         const before = await this.prisma.student_fees.findMany({
             where: { id: { in: updates.map((u) => u.id) } },
@@ -1185,8 +1258,9 @@ export class StudentFeesService {
         return result;
     }
 
-    async createBundle(dto: CreateBundleDto, changedBy: string = 'system') {
+    async createBundle(dto: CreateBundleDto, user: IJwtStaffPayload, changedBy: string = 'system') {
         const { student_id, bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
+        await this.assertStudentsVisible(user, [student_id]);
 
         // Build a lookup: fee_id → new fee_date (for fees that had their date changed in the UI)
         const dateOverrideMap = new Map<number, Date>(
@@ -1253,13 +1327,14 @@ export class StudentFeesService {
         return bundle;
     }
 
-    async updateBundle(id: number, dto: Partial<CreateBundleDto>, changedBy: string = 'system') {
+    async updateBundle(id: number, dto: Partial<CreateBundleDto>, user: IJwtStaffPayload, changedBy: string = 'system') {
         const { bundle_name, total_amount, academic_year, fee_ids, target_month, fee_date_overrides } = dto;
 
         const before = await this.prisma.student_fee_bundles.findUnique({ where: { id } });
         if (!before) {
             throw new NotFoundException(`Bundle #${id} not found`);
         }
+        await this.assertStudentsVisible(user, [before.student_id]);
 
         const dateOverrideMap = new Map<number, Date>(
             (fee_date_overrides ?? []).map(({ id: fid, fee_date }) => [fid, new Date(fee_date)])
@@ -1340,7 +1415,7 @@ export class StudentFeesService {
         return bundle;
     }
 
-    async deleteBundle(id: number, changedBy: string = 'system') {
+    async deleteBundle(id: number, user: IJwtStaffPayload, changedBy: string = 'system') {
         const before = await this.prisma.student_fee_bundles.findUnique({
             where: { id },
             include: { student_fees: { select: { id: true } } },
@@ -1348,6 +1423,7 @@ export class StudentFeesService {
         if (!before) {
             throw new NotFoundException(`Bundle #${id} not found`);
         }
+        await this.assertStudentsVisible(user, [before.student_id]);
 
         await this.prisma.$transaction(async (tx) => {
             // Revert member fees' month to their target_month (original period)
@@ -1372,7 +1448,8 @@ export class StudentFeesService {
         });
     }
 
-    async getBundlesByStudent(studentId: number) {
+    async getBundlesByStudent(studentId: number, user: IJwtStaffPayload) {
+        await this.assertStudentsVisible(user, [studentId]);
         return this.prisma.student_fee_bundles.findMany({
             where: { student_id: studentId },
             include: {
@@ -1385,14 +1462,35 @@ export class StudentFeesService {
 
     // ─── Bulk Operations Helpers ──────────────────────────────────────────────
 
-    private async getStudentsInScope(campusId: number, classId?: number, sectionId?: number) {
+    /**
+     * The student set every bulk operation works over.
+     *
+     * The caller picks a campus/class/section; the universal scope fragment
+     * ANDs on top, so a campus-scoped user asking for another campus gets an
+     * empty set rather than somebody else's students. The assertions above it
+     * turn that empty set into an explicit refusal, which is the honest answer
+     * for a picker the UI should not have offered in the first place.
+     */
+    private async getStudentsInScope(user: IJwtStaffPayload, campusId: number, classId?: number, sectionId?: number) {
+        this.scope.assertCampus(user, campusId);
+        if (classId) this.scope.assertClass(user, classId);
+        if (sectionId) this.scope.assertSection(user, sectionId);
+
+        // AND-ed, not spread: the scope fragment and the caller's filters both
+        // key on campus_id / class_id / section_id, and a spread would let the
+        // caller's value silently overwrite the scope's.
         return this.prisma.students.findMany({
             where: {
-                campus_id: campusId,
-                ...(classId ? { class_id: classId } : {}),
-                ...(sectionId ? { section_id: sectionId } : {}),
-                deleted_at: null,
-                status: { in: ['ENROLLED', 'SOFT_ADMISSION'] },
+                AND: [
+                    this.scope.whereForStudents(user),
+                    {
+                        campus_id: campusId,
+                        ...(classId ? { class_id: classId } : {}),
+                        ...(sectionId ? { section_id: sectionId } : {}),
+                        deleted_at: null,
+                        status: { in: ['ENROLLED', 'SOFT_ADMISSION'] as any },
+                    },
+                ],
             },
             select: {
                 cc: true,
@@ -1458,9 +1556,9 @@ export class StudentFeesService {
         academic_year: string;
         fee_type_id: number;
         fee_date: string;
-    }) {
+    }, user: IJwtStaffPayload) {
         const { campus_id, class_id, section_id, academic_year, fee_type_id, fee_date } = params;
-        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const students = await this.getStudentsInScope(user, campus_id, class_id, section_id);
 
         if (students.length === 0) {
             return { students: [], total: 0, will_add: 0, already_exists: 0 };
@@ -1495,8 +1593,9 @@ export class StudentFeesService {
 
     // ─── Tab 1: Confirm ───────────────────────────────────────────────────────
 
-    async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto, changedBy: string = 'system') {
+    async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto, user: IJwtStaffPayload, changedBy: string = 'system') {
         const { academic_year, fee_type_id, month, fee_date, amount, student_ids } = dto;
+        await this.assertStudentsVisible(user, student_ids);
         const targetDate = new Date(fee_date);
         const { termByStudent } = await this.resolveTermsForStudents(student_ids);
 
@@ -1545,9 +1644,9 @@ export class StudentFeesService {
         start_month: number;
         end_month: number;
         day: number;
-    }) {
+    }, user: IJwtStaffPayload) {
         const { campus_id, class_id, section_id, academic_year, fee_type_id, start_month, end_month, day } = params;
-        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const students = await this.getStudentsInScope(user, campus_id, class_id, section_id);
         const studentIds = students.map(s => s.cc);
 
         const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
@@ -1606,8 +1705,9 @@ export class StudentFeesService {
 
     // ─── Tab 2: Confirm ───────────────────────────────────────────────────────
 
-    async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto, changedBy: string = 'system') {
+    async bulkAddRange(dto: import('./dto/bulk-add-range.dto').BulkAddRangeDto, user: IJwtStaffPayload, changedBy: string = 'system') {
         const { academic_year, fee_type_id, start_month, end_month, day, amount, student_ids } = dto;
+        await this.assertStudentsVisible(user, student_ids);
 
         const monthSummary: any[] = [];
         let totalAddedNum = 0;
@@ -1683,9 +1783,9 @@ export class StudentFeesService {
         academic_year: string;
         fee_date: string;
         fee_type_id?: number;
-    }) {
+    }, user: IJwtStaffPayload) {
         const { campus_id, class_id, section_id, academic_year, fee_date, fee_type_id } = params;
-        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const students = await this.getStudentsInScope(user, campus_id, class_id, section_id);
 
         if (students.length === 0) return { rows: [], total: 0, can_delete: 0, blocked: 0 };
 
@@ -1745,9 +1845,9 @@ export class StudentFeesService {
         end_month: number;
         day: number;
         fee_type_id?: number;
-    }) {
+    }, user: IJwtStaffPayload) {
         const { campus_id, class_id, section_id, academic_year, start_month, end_month, day, fee_type_id } = params;
-        const students = await this.getStudentsInScope(campus_id, class_id, section_id);
+        const students = await this.getStudentsInScope(user, campus_id, class_id, section_id);
         const studentIds = students.map(s => s.cc);
 
         const ACADEMIC_ORDER = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7];
@@ -1820,8 +1920,9 @@ export class StudentFeesService {
 
     // ─── Tabs 3 & 4: Confirm Delete ───────────────────────────────────────────
 
-    async bulkDelete(dto: import('./dto/bulk-delete.dto').BulkDeleteDto, changedBy?: string) {
+    async bulkDelete(dto: import('./dto/bulk-delete.dto').BulkDeleteDto, user: IJwtStaffPayload, changedBy?: string) {
         const { student_fee_ids } = dto;
+        await this.assertFeeHeadsVisible(user, student_fee_ids);
 
         // Re-validate — check if any voucher was added since preview
         const fees = await this.prisma.student_fees.findMany({
@@ -2000,8 +2101,9 @@ export class StudentFeesService {
         student_fee_ids: number[];
         target_academic_year: string;
         target_term_start_month: number;
-    }) {
+    }, user: IJwtStaffPayload) {
         const { student_fee_ids, target_academic_year, target_term_start_month } = params;
+        await this.assertFeeHeadsVisible(user, student_fee_ids);
         if (!student_fee_ids.length) {
             throw new BadRequestException('student_fee_ids is required.');
         }
@@ -2035,9 +2137,11 @@ export class StudentFeesService {
      */
     async transferHeads(
         dto: import('./dto/transfer-heads.dto').TransferHeadsDto,
+        user: IJwtStaffPayload,
         changedBy?: string,
     ) {
         const { student_fee_ids, target_academic_year, target_term_start_month } = dto;
+        await this.assertFeeHeadsVisible(user, student_fee_ids);
 
         if (!dto.acknowledgement) {
             throw new BadRequestException('acknowledgement is required to transfer fee heads.');
@@ -2129,7 +2233,8 @@ export class StudentFeesService {
         fee_date?: string;
         target_month: number;
         academic_year: string;
-    }, changedBy: string = 'system') {
+    }, user: IJwtStaffPayload, changedBy: string = 'system') {
+        await this.assertStudentsVisible(user, [dto.student_id]);
         const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
         if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
 
@@ -2211,7 +2316,8 @@ export class StudentFeesService {
         scholarship_percentage: number;
         scholarship_type_id?: number | null;
         custom_title?: string;
-    }, changedBy: string = 'system') {
+    }, user: IJwtStaffPayload, changedBy: string = 'system') {
+        await this.assertStudentsVisible(user, [dto.student_id]);
         const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
         if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
 
@@ -2286,7 +2392,8 @@ export class StudentFeesService {
      * across all academic years — used to surface a caution fee taken years ago
      * (e.g. at O-3 admission) that won't show in the current year's schedule.
      */
-    async getCautionFeeHistory(studentId: number) {
+    async getCautionFeeHistory(studentId: number, user: IJwtStaffPayload) {
+        await this.assertStudentsVisible(user, [studentId]);
         return this.prisma.student_fees.findMany({
             where: { student_id: studentId, fee_type_id: 3, is_discount: false },
             select: { id: true, amount: true, amount_paid: true, fee_date: true, academic_year: true, status: true },
@@ -2301,7 +2408,8 @@ export class StudentFeesService {
      *   3. Reset every student_fee back to NOT_ISSUED (status, dates, amount_paid)
      * Runs inside a single transaction so either everything rolls back or everything commits.
      */
-    async resetAllHeads(studentId: number, changedBy: string = 'system') {
+    async resetAllHeads(studentId: number, user: IJwtStaffPayload, changedBy: string = 'system') {
+        await this.assertStudentsVisible(user, [studentId]);
         const student = await this.prisma.students.findUnique({ where: { cc: studentId }, select: { cc: true, full_name: true } });
         if (!student) throw new NotFoundException(`Student #${studentId} not found`);
 
@@ -2363,7 +2471,8 @@ export class StudentFeesService {
      * Delete a discount row. Discount rows are safe to delete unless they appear
      * on a non-VOID voucher (same protection as regular fee rows).
      */
-    async deleteDiscount(id: number, changedBy: string = 'system') {
+    async deleteDiscount(id: number, user: IJwtStaffPayload, changedBy: string = 'system') {
+        await this.assertFeeHeadsVisible(user, [id]);
         const fee = await this.prisma.student_fees.findUnique({
             where: { id },
             include: {
@@ -2409,9 +2518,10 @@ export class StudentFeesService {
      *
      * Reversible via unwaiveHeads().
      */
-    async waiveHeads(studentFeeIds: number[], reason: string | undefined, changedBy: string = 'system') {
+    async waiveHeads(studentFeeIds: number[], reason: string | undefined, user: IJwtStaffPayload, changedBy: string = 'system') {
         const ids = [...new Set(studentFeeIds)].filter((n) => Number.isInteger(n) && n > 0);
         if (ids.length === 0) throw new BadRequestException('No fee head ids provided.');
+        await this.assertFeeHeadsVisible(user, ids);
 
         const fees = await this.prisma.student_fees.findMany({
             where: { id: { in: ids } },
@@ -2488,9 +2598,10 @@ export class StudentFeesService {
     }
 
     /** Reverse a loose-head waiver — heads return to NOT_ISSUED, waived_* cleared. */
-    async unwaiveHeads(studentFeeIds: number[], changedBy: string = 'system') {
+    async unwaiveHeads(studentFeeIds: number[], user: IJwtStaffPayload, changedBy: string = 'system') {
         const ids = [...new Set(studentFeeIds)].filter((n) => Number.isInteger(n) && n > 0);
         if (ids.length === 0) throw new BadRequestException('No fee head ids provided.');
+        await this.assertFeeHeadsVisible(user, ids);
 
         const fees = await this.prisma.student_fees.findMany({
             where: { id: { in: ids } },

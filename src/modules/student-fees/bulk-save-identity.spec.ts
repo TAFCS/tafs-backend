@@ -9,6 +9,12 @@ import { Prisma } from '@prisma/client';
 import { StudentFeesService } from './student-fees.service';
 import { resetClassTermMapCache } from '../../common/utils/class-terms.util';
 
+// Scope is exercised in src/common/scope; here it is stubbed exempt so these
+// specs keep testing the fee logic and not the scope helper.
+const SCOPE: any = { isExempt: () => true, whereForStudents: () => ({}) };
+const USER: any = { userType: 'STAFF', role: 'SUPER_ADMIN' };
+
+
 /**
  * Row identity in the studentwise-fees bulk save.
  *
@@ -113,7 +119,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
         };
         const auditLogs: any = { log: jest.fn(), logGroup: jest.fn() };
-        const service = new StudentFeesService(prisma, auditLogs, {} as any);
+        const service = new StudentFeesService(prisma, auditLogs, {} as any, SCOPE);
         return { service, updates, creates, deletes };
     };
 
@@ -129,7 +135,7 @@ describe('StudentFeesService bulkSave row identity', () => {
                 item(PARTIAL),
                 item(BALANCE, { fee_date: '2026-09-01' }),
             ],
-        } as any);
+        } as any, USER);
 
         // The whole bug: no second MONTHLY TUITION FEE row, nothing deleted.
         expect(creates).toEqual([]);
@@ -151,7 +157,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             student_id: 4051,
             academic_year: YEAR,
             items: [item(PARTIAL), item(BALANCE)],
-        } as any);
+        } as any, USER);
 
         // Under key-matching both halves resolved to one id and raced on it.
         expect(updates.map((u) => u.id).sort()).toEqual([8411, 8412]);
@@ -165,7 +171,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             student_id: 4051,
             academic_year: YEAR,
             items: [item(PARTIAL)],
-        } as any);
+        } as any, USER);
 
         expect(deletes).toEqual([BALANCE.id]);
         expect(creates).toEqual([]);
@@ -182,7 +188,7 @@ describe('StudentFeesService bulkSave row identity', () => {
                 // A row the user just added: no id yet.
                 { fee_type_id: 4, month: 10, target_month: 10, amount: 5000, amount_before_discount: 5000, academic_year: YEAR, fee_date: '2026-10-01' },
             ],
-        } as any);
+        } as any, USER);
 
         expect(deletes).toEqual([]);
         expect(updates.map((u) => u.id)).toEqual([BALANCE.id]);
@@ -200,7 +206,7 @@ describe('StudentFeesService bulkSave row identity', () => {
                 item(PARTIAL, { amount: 12000 }),   // PARTIAL is still voucher-linked
                 item(BALANCE),
             ],
-        } as any)).rejects.toThrow(BadRequestException);
+        } as any, USER)).rejects.toThrow(BadRequestException);
     });
 
     it('still saves a voucher-linked head that was resent unchanged', async () => {
@@ -210,7 +216,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             student_id: 4051,
             academic_year: YEAR,
             items: [item(PARTIAL), item(BALANCE)],
-        } as any);
+        } as any, USER);
 
         expect(updates).toHaveLength(2);
         expect(creates).toEqual([]);
@@ -229,7 +235,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             student_id: 4051,
             academic_year: YEAR,
             items: [item(BALANCE, { fee_type_id: 4 })],
-        } as any);
+        } as any, USER);
 
         expect(creates).toEqual([]);
         expect(deletes).toEqual([]);
@@ -244,7 +250,7 @@ describe('StudentFeesService bulkSave row identity', () => {
             student_id: 4051,
             academic_year: YEAR,
             items: [item(BALANCE, { id: undefined })],
-        } as any);
+        } as any, USER);
 
         expect(creates).toEqual([]);
         expect(updates.map((u) => u.id)).toEqual([BALANCE.id]);

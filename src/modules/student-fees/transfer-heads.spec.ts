@@ -7,6 +7,12 @@ jest.mock('../voucher-pdf/voucher-pdf.service', () => ({
 import { StudentFeesService } from './student-fees.service';
 import { resetClassTermMapCache } from '../../common/utils/class-terms.util';
 
+// Scope is exercised in src/common/scope; here it is stubbed exempt so these
+// specs keep testing the fee logic and not the scope helper.
+const SCOPE: any = { isExempt: () => true, whereForStudents: () => ({}) };
+const USER: any = { userType: 'STAFF', role: 'SUPER_ADMIN' };
+
+
 /**
  * The fee-head year transfer.
  *
@@ -58,7 +64,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             $transaction: jest.fn().mockResolvedValue([{ count: ids.length }]),
         };
         const auditLogs: any = { log: jest.fn(), logGroup: jest.fn() };
-        const service = new StudentFeesService(prisma, auditLogs, {} as any);
+        const service = new StudentFeesService(prisma, auditLogs, {} as any, SCOPE);
         return { service, prisma, auditLogs, ids };
     };
 
@@ -71,7 +77,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: ids,
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
-        });
+        }, USER);
 
         // The schedule renders these through class 18 (Apr-Mar) and lands a year
         // early; the transfer is what corrects them.
@@ -91,7 +97,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: ids,
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
-        });
+        }, USER);
 
         // Class 11 (Aug-Jul) issued these, so the voucher already reads Apr 26
         // while the schedule reads Apr 25 — the two surfaces disagree today.
@@ -106,7 +112,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: ids,
             target_academic_year: '2026-2027',
             target_term_start_month: 8,
-        });
+        }, USER);
 
         // This is the trap the DTO exists to prevent: April of an Aug-Jul
         // 2026-2027 term is Apr 2027, a year past where the head belongs.
@@ -121,7 +127,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: ids,
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
-        });
+        }, USER);
 
         expect(res.on_paid_voucher).toBe(3);
         expect(res.rows.every((r: any) => r.flags.on_voucher && r.flags.on_paid_voucher)).toBe(true);
@@ -141,7 +147,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: [2549],
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
-        });
+        }, USER);
 
         expect(res.frozen_receipts).toBe(1);
         expect(res.rows[0].flags.frozen_receipt).toBe(true);
@@ -157,7 +163,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             student_fee_ids: [2549],
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
-        });
+        }, USER);
 
         expect(res.collisions).toBe(1);
         expect(res.rows[0].collision_with_fee_id).toBe(9522);
@@ -171,7 +177,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
             acknowledgement: true,
-        });
+        }, USER);
 
         expect(prisma.student_fees.updateMany).toHaveBeenCalledWith({
             where: { id: { in: ids } },
@@ -188,7 +194,7 @@ describe('StudentFeesService fee-head year transfer', () => {
                 target_academic_year: '2026-2027',
                 target_term_start_month: 4,
                 acknowledgement: false,
-            }),
+            }, USER),
         ).rejects.toThrow(/acknowledgement/i);
         expect(prisma.student_fees.updateMany).not.toHaveBeenCalled();
     });
@@ -201,7 +207,7 @@ describe('StudentFeesService fee-head year transfer', () => {
                 student_fee_ids: ids,
                 target_academic_year: '2026-2027',
                 target_term_start_month: 6,
-            }),
+            }, USER),
         ).rejects.toThrow(/must be 4 .*or 8/i);
     });
 
@@ -213,7 +219,7 @@ describe('StudentFeesService fee-head year transfer', () => {
             target_academic_year: '2026-2027',
             target_term_start_month: 4,
             acknowledgement: true,
-        });
+        }, USER);
 
         expect(auditLogs.logGroup).toHaveBeenCalled();
         const [parent, children] = auditLogs.logGroup.mock.calls[0];

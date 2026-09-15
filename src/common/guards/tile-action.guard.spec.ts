@@ -69,6 +69,21 @@ describe('TileActionGuard', () => {
     expect(() => guard.canActivate(contextFor(parent))).toThrow(ForbiddenException);
   });
 
+  it('accepts tile#* as every action of that tile', () => {
+    // The compacted claim shape — see compactActionKeys. Both modes must see
+    // through it, or a bridge holder loses everything the moment the JWT is
+    // compacted.
+    const all = guardWith({ mode: 'all', actionKeys: ['t#a', 't#b'] });
+    expect(all.canActivate(contextFor(staff(['t#*'])))).toBe(true);
+    const any = guardWith({ mode: 'any', actionKeys: ['t#a'] });
+    expect(any.canActivate(contextFor(staff(['t#*'])))).toBe(true);
+  });
+
+  it('does not let one tile\'s wildcard cover another tile', () => {
+    const guard = guardWith({ mode: 'all', actionKeys: ['other#a'] });
+    expect(() => guard.canActivate(contextFor(staff(['t#*'])))).toThrow(ForbiddenException);
+  });
+
   it('denies a session whose token predates actions', () => {
     const guard = guardWith({ mode: 'all', actionKeys: ['t#a'] });
     const legacy = { ...staff([]), actions: undefined };

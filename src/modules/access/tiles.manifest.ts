@@ -72,6 +72,38 @@ const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'export', label: 'Export to Excel', implies: ['view'] },
 ];
 
+/**
+ * Sub-permissions for Student Overrides (/studentwise-fees).
+ *
+ * Route-shaped, like the Student Directory: the page has no multi-tab write,
+ * it has one grid plus a ring of side operations, and each of those operations
+ * is a different amount of money someone can move. Reading a student's
+ * schedule, writing off a head, and wiping every head for a student were all
+ * one permission before this.
+ *
+ * The three at the bottom are the danger zone -- they rewrite or destroy heads
+ * that may already be paid and receipted.
+ */
+const STUDENT_OVERRIDES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open student fees', description: 'Search a student and read their fee schedule, discounts, installments and bundles', default: true },
+
+  { id: 'schedule.edit', label: 'Edit the fee schedule', description: 'Add, edit and remove fee heads in the grid and save them', implies: ['view'] },
+  { id: 'discount.manage', label: 'Manage discounts', description: 'Add and remove custom discount rows', implies: ['view'] },
+  { id: 'scholarship.manage', label: 'Set scholarship', description: 'Set one scholarship percentage across every MTF row for a year', implies: ['view'] },
+  { id: 'bundle.manage', label: 'Manage bundles', description: 'Bundle heads together and dissolve bundles', implies: ['view'] },
+  { id: 'installment.manage', label: 'Manage installment plans', description: 'Create, edit and delete installment plans', implies: ['view'] },
+  { id: 'waive', label: 'Waive a fee head', description: 'Write off a head or its voucher, and reverse a waiver', implies: ['view'] },
+  { id: 'flags.edit', label: 'Edit fee concession flags', description: 'Complementary and fee-endowment flags on the student', implies: ['view'] },
+  { id: 'audit.view', label: 'Open the finance audit log', implies: ['view'] },
+
+  { id: 'bulk_ops.view', label: 'Open bulk operations', description: 'Preview what a bulk add or delete would do, without running it', implies: ['view'] },
+  { id: 'bulk_ops.add', label: 'Bulk add fee heads', description: 'Add a head, or a range of months, to a whole class or section', implies: ['bulk_ops.view'] },
+  { id: 'bulk_ops.delete', label: 'Bulk delete fee heads', implies: ['bulk_ops.view'] },
+
+  { id: 'transfer', label: 'Transfer heads to another year', description: 'Danger zone: rewrites heads that may already be paid', implies: ['view'] },
+  { id: 'reset', label: 'Reset every head for a student', description: 'Danger zone: deletes the student\'s whole schedule', implies: ['view'] },
+];
+
 const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the employee list and open a record', default: true },
 
@@ -137,7 +169,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ?? Finance ??????????????????????????????????????????????????????????????
   { id: 'finance.financial_reports', module: 'finance', label: 'Financial Reports', description: 'Fee heads (accrual), deposits (cash), a student x month fee matrix, and the defaulters list, with filters and exports', href: '/financial-reports', capabilities: ['system.analytics.view'] },
   { id: 'finance.class_fee_schedule', module: 'finance', label: 'Class Fee Schedule', description: 'Per-class fee configuration', href: '/classwise-fees-schedule', capabilities: ['fee_admin.classwise_schedule.view'] },
-  { id: 'finance.student_overrides', module: 'finance', label: 'Student Overrides', description: 'Individual fee adjustments', href: '/studentwise-fees', capabilities: ['fee_admin.studentwise_schedule.view'] },
+  { id: 'finance.student_overrides', module: 'finance', label: 'Student Overrides', description: 'Individual fee adjustments', href: '/studentwise-fees', capabilities: ['fee_admin.studentwise_schedule.view'], actions: STUDENT_OVERRIDES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.studentwise_schedule.edit'] },
   { id: 'finance.single_voucher', module: 'finance', label: 'Single Voucher Issuance', description: 'Print individual fee slips', href: '/fee-challan', capabilities: ['finance.vouchers.view'] },
   { id: 'finance.bulk_voucher', module: 'finance', label: 'Bulk Voucher Issuance', description: 'Generate multiple vouchers', href: '/bulk-voucher', capabilities: ['finance.vouchers.generate_bulk'] },
   { id: 'finance.vouchers', module: 'finance', label: 'Vouchers', description: 'All issued vouchers', href: '/vouchers', capabilities: ['finance.vouchers.view'] },
@@ -208,6 +240,67 @@ export const MANIFEST_TILE_IDS = new Set(TILES_MANIFEST.map((t) => t.id));
 /** Global address of a sub-permission. */
 export function actionKey(tileId: string, actionId: string): string {
   return `${tileId}#${actionId}`;
+}
+
+/**
+ * Stands for "every action of this tile" inside an `actions` claim.
+ *
+ * Why it exists: `actions` rides on the JWT, the JWT rides in the `tafs_access`
+ * cookie, and browsers drop a cookie over 4096 bytes silently -- the user then
+ * looks logged out with nothing in the logs. A user holding a tile's legacy
+ * bridge holds every one of its actions, and spelling all 28 of them out cost
+ * ~1KB on its own. One wildcard says the same thing in 24 bytes.
+ *
+ * Only the two READERS of the claim understand it (TileActionGuard and the
+ * webapp's useTileAccess). Everything that reasons about individual actions --
+ * computeEffectiveAccess, the access catalog, the People & Access editor --
+ * keeps working with the expanded list.
+ */
+export const ALL_ACTIONS_WILDCARD = '*';
+
+/**
+ * Losslessly shrinks an expanded action list for transport on the JWT: a tile
+ * whose every manifest action is present collapses to `tileId#*`.
+ *
+ * Lossless because the wildcard is only emitted when the holder really does
+ * have all of them, so `holds(tile#x)` gives the same answer either way.
+ */
+export function compactActionKeys(actionKeys: string[]): string[] {
+  const held = new Set(actionKeys);
+  const out: string[] = [];
+  const collapsed = new Set<string>();
+
+  for (const tile of TILES_MANIFEST) {
+    const actions = tile.actions ?? [];
+    if (actions.length < 2) continue; // nothing to save
+    if (actions.every((a) => held.has(actionKey(tile.id, a.id)))) {
+      out.push(actionKey(tile.id, ALL_ACTIONS_WILDCARD));
+      collapsed.add(tile.id);
+    }
+  }
+
+  for (const key of actionKeys) {
+    const parsed = parseActionKey(key);
+    // An unparseable or unknown key is passed through untouched rather than
+    // dropped: this function must never be the thing that revokes access.
+    if (parsed && collapsed.has(parsed.tileId)) continue;
+    out.push(key);
+  }
+  return out;
+}
+
+/**
+ * True when `held` (an actions claim, compacted or not) covers `wanted`.
+ *
+ * The one place the wildcard is interpreted on the server. Tokens issued
+ * before compaction shipped carry expanded lists and still match on the first
+ * check, so both shapes work for the 90 days they overlap.
+ */
+export function actionsCover(held: Set<string> | readonly string[], wanted: string): boolean {
+  const set = held instanceof Set ? held : new Set(held);
+  if (set.has(wanted)) return true;
+  const parsed = parseActionKey(wanted);
+  return parsed != null && set.has(actionKey(parsed.tileId, ALL_ACTIONS_WILDCARD));
 }
 
 export function parseActionKey(key: string): { tileId: string; actionId: string } | null {
