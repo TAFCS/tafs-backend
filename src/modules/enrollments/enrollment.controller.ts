@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, HttpStatus, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, HttpStatus, Query, UseGuards, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { EnrollmentService } from './enrollment.service';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -109,6 +110,28 @@ export class EnrollmentController {
       HttpStatus.OK,
       'Leaving certificate data retrieved successfully'
     );
+  }
+
+  /**
+   * TAFSAL only. Returns the leaving certificate already stamped onto the
+   * school's pre-printed blank, as PDF bytes — the other segments render their
+   * certificate in the browser instead. The body carries whatever the operator
+   * has on the form, so edits made there are what print.
+   */
+  @Post(':cc/leaving-certificate/tafsal-pdf')
+  @ApiOperation({ summary: 'Render the TAFSAL leaving certificate onto its pre-printed blank' })
+  async getTafsalLeavingCertificatePdf(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Body() body: Record<string, any>,
+    @Res() res: Response,
+  ) {
+    const pdfBytes = await this.enrollmentService.renderTafsalLeavingCertificate(cc, body ?? {});
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="TAFSAL_Leaving_Certificate_${cc}.pdf"`,
+    );
+    res.end(Buffer.from(pdfBytes));
   }
 
   @Post(':cc/log-certificate-generation')

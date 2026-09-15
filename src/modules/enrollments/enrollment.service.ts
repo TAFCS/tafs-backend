@@ -6,6 +6,10 @@ import { StudentAllocationService } from '../student-allocation/student-allocati
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ProgressionHistoryService } from '../students/progression-history.service';
 import { computeNextGrNumber, checkIsALevel } from '../../common/utils/gr-number.util';
+import {
+  fillTafsalLeavingCertificate,
+  type TafsalCertificateData,
+} from './slc-tafsal-template';
 
 @Injectable()
 export class EnrollmentService {
@@ -1118,6 +1122,54 @@ export class EnrollmentService {
       campus_name: student.campuses?.campus_name || '',
       campus_address: student.campuses?.address || 'C-61 - 65, Block # 13, Gulistan-e-Jauhar, Karachi, Pakistan.',
     };
+  }
+
+  /**
+   * Renders the TAFSAL leaving certificate onto the school's own pre-printed
+   * blank (`slc-formats/slc-tafsal.pdf`) instead of drawing one from scratch.
+   *
+   * Every other segment still renders client-side through
+   * `LeavingCertificatePDF`; TAFSAL has a finished artwork that the certificate
+   * must come out as, so the fill happens here where pdf-lib and the template
+   * both live. The caller passes the values it is actually showing on screen —
+   * the operator may have edited any of them — rather than a CC we re-read, so
+   * what prints is what was on the form.
+   */
+  async renderTafsalLeavingCertificate(
+    cc: number,
+    overrides: Partial<TafsalCertificateData> = {},
+  ): Promise<Uint8Array> {
+    const base = await this.getLeavingCertificateData(cc);
+    const merged = { ...base, ...overrides } as TafsalCertificateData & {
+      photograph_url?: string | null;
+    };
+    // The photograph is fetched here rather than posted up as base64: a student
+    // portrait is comfortably past express's 100kb default body limit, and the
+    // caller would have to be handed a raised limit on this route to send one.
+    // The CDN URL is already on the record, so the bytes are collected here and
+    // the request body stays as small as the text fields it carries.
+    if (!merged.photograph_base64 && merged.photograph_url) {
+      merged.photograph_base64 = await this.fetchPhotographBase64(merged.photograph_url);
+    }
+    return fillTafsalLeavingCertificate(merged);
+  }
+
+  /**
+   * Reads a student photo off the assets CDN for embedding. Never throws — a
+   * certificate without the picture is still a valid certificate, whereas a
+   * failed download that takes the whole request with it is not.
+   */
+  private async fetchPhotographBase64(url: string): Promise<string | null> {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const contentType = response.headers.get('content-type') ?? '';
+      const isPng = contentType.includes('png') || url.toLowerCase().endsWith('.png');
+      return `data:image/${isPng ? 'png' : 'jpeg'};base64,${buffer.toString('base64')}`;
+    } catch {
+      return null;
+    }
   }
 
   async getAllHouses() {
