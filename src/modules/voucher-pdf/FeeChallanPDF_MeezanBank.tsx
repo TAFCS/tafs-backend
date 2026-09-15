@@ -169,6 +169,7 @@ const styles = StyleSheet.create({
         fontSize: 7,
         fontWeight: 'bold',
         color: '#1a1a1a',
+        textTransform: 'uppercase',
     },
     datesSection: {
         flexDirection: 'row',
@@ -546,11 +547,11 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             <View style={styles.studentCol}>
                 <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Student Name</Text>
-                    <Text style={styles.value}>{student.student_full_name}</Text>
+                    <Text style={styles.value}>{student.student_full_name ? String(student.student_full_name).toUpperCase() : ''}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>Gender</Text>
-                    <Text style={styles.value}>{student.gender || 'N/A'}</Text>
+                    <Text style={styles.value}>{student.gender ? String(student.gender).toUpperCase() : 'N/A'}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>CC#</Text>
@@ -564,11 +565,11 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             <View style={styles.studentCol}>
                 <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Father's Name</Text>
-                    <Text style={styles.value}>{student.father_name || 'N/A'}</Text>
+                    <Text style={styles.value}>{student.father_name ? String(student.father_name).toUpperCase() : 'N/A'}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>House</Text>
-                    <Text style={styles.value}>{student.house_name || 'N/A'}</Text>
+                    <Text style={styles.value}>{student.house_name ? String(student.house_name).toUpperCase() : 'N/A'}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>GR#</Text>
@@ -586,11 +587,11 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>Level</Text>
-                    <Text style={styles.value}>{student.className}</Text>
+                    <Text style={styles.value}>{student.className ? String(student.className).toUpperCase() : ''}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>Section</Text>
-                    <Text style={styles.value}>{student.sectionName}</Text>
+                    <Text style={styles.value}>{student.sectionName ? String(student.sectionName).toUpperCase() : ''}</Text>
                 </View>
                 <View style={{ flex: 0.95, alignItems: 'flex-end' }}>
                     <Text style={[styles.label, { textAlign: 'right', color: '#d97706' }]}>Validity</Text>
@@ -1005,9 +1006,9 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                     <View key={idx} style={styles.historyTableRow}>
                                         <Text style={styles.historyTableCell}>{s.cc}</Text>
                                         <Text style={styles.historyTableCell}>{s.gr_number}</Text>
-                                        <Text style={styles.historyTableCell}>{s.className}</Text>
-                                        <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name}</Text>
-                                        <Text style={styles.historyTableCell}>{s.status || 'Active'}</Text>
+                                        <Text style={styles.historyTableCell}>{s.className ? String(s.className).toUpperCase() : ''}</Text>
+                                        <Text style={[styles.historyTableCell, { flex: 2.2 }]}>{s.full_name ? String(s.full_name).toUpperCase() : ''}</Text>
+                                        <Text style={styles.historyTableCell}>{(s.status || 'Active').toUpperCase()}</Text>
                                     </View>
                                 ))
                             ) : (

@@ -2183,24 +2183,26 @@ export class VouchersService {
                 voucherNumber: (voucher as any).voucher_number ?? voucher.id.toString(),
                 student: {
                     cc: voucher.students.cc,
-                    fullName: voucher.students.full_name,
-                    fatherName: (voucher.students?.student_guardians || []).find((sg: any) => isFatherRelationship(sg.relationship))?.guardians?.full_name
+                    fullName: (voucher.students.full_name || '').toUpperCase(),
+                    fatherName: (
+                        (voucher.students?.student_guardians || []).find((sg: any) => isFatherRelationship(sg.relationship))?.guardians?.full_name
                         || voucher.students?.student_guardians?.[0]?.guardians?.full_name
-                        || 'N/A',
-                    gender: voucher.students?.gender || 'N/A',
+                        || 'N/A'
+                    ).toUpperCase(),
+                    gender: (voucher.students?.gender || 'N/A').toUpperCase(),
                     grNumber: voucher.students.gr_number || 'N/A',
-                    className: voucher.classes?.description || 'N/A',
-                    sectionName: voucher.sections?.description || 'N/A',
-                    houseName: voucher.students?.houses?.house_color || voucher.students?.houses?.house_name || 'N/A',
+                    className: (voucher.classes?.description || 'N/A').toUpperCase(),
+                    sectionName: (voucher.sections?.description || 'N/A').toUpperCase(),
+                    houseName: (voucher.students?.houses?.house_color || voucher.students?.houses?.house_name || 'N/A').toUpperCase(),
                     classId: voucher.class_id,
-                    group: studentGroup,
+                    group: studentGroup ? String(studentGroup).toUpperCase() : undefined,
                 },
                 siblings: siblings.filter(s => s.cc !== voucher.student_id).map(s => ({
                     cc: s.cc,
-                    fullName: s.full_name,
+                    fullName: (s.full_name || '').toUpperCase(),
                     grNumber: s.gr_number || 'N/A',
-                    className: s.classes?.description || 'N/A',
-                    sectionName: s.sections?.description || 'N/A',
+                    className: (s.classes?.description || 'N/A').toUpperCase(),
+                    sectionName: (s.sections?.description || 'N/A').toUpperCase(),
                 })),
                 campusName: voucher.campuses?.campus_name || 'Main Campus',
                 // Same rule as create: uniform head years win so regenerating a PDF for a

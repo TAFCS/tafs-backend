@@ -14,6 +14,13 @@ const CAMPUS_PREFIX_BY_ID: Record<number, string> = {
   3: 'NNN',
 };
 
+export function normalizeCampusPrefix(prefix: string | null | undefined): string | null {
+  if (!prefix) return null;
+  const upper = prefix.trim().toUpperCase();
+  if (upper === 'JHR') return 'GEJ';
+  return upper;
+}
+
 export function campusPrefixForId(campusId: number | null | undefined): string | null {
   if (campusId == null) return null;
   return CAMPUS_PREFIX_BY_ID[campusId] ?? null;
@@ -25,7 +32,7 @@ export function parseEmployeeCode(code: string | null | undefined): EmployeeCode
   const raw = code.trim().toUpperCase();
   const prefixed = raw.match(PREFIXED_CODE_RE);
   if (prefixed) {
-    return { campusPrefix: prefixed[1], dep: prefixed[2], number: prefixed[3] };
+    return { campusPrefix: normalizeCampusPrefix(prefixed[1]), dep: prefixed[2], number: prefixed[3] };
   }
   const match = raw.match(SPLIT_CODE_RE);
   if (!match) return null;
@@ -41,7 +48,7 @@ export function composeEmployeeCode(
   const normalizedDep = dep.trim().padStart(2, '0');
   const normalizedNumber = number.trim();
   const body = `${normalizedDep}-${normalizedNumber}`;
-  const prefix = campusPrefix?.trim().toUpperCase();
+  const prefix = normalizeCampusPrefix(campusPrefix);
   return prefix ? `${prefix}-${body}` : body;
 }
 
@@ -64,7 +71,7 @@ export function resolveEmployeeCodeFields(input: {
 }): ResolvedEmployeeCode {
   const dep = input.employee_code_dep?.trim() ?? '';
   const number = input.employee_code_number?.trim() ?? '';
-  const campusPrefix = input.campusPrefix?.trim().toUpperCase() || null;
+  const campusPrefix = normalizeCampusPrefix(input.campusPrefix);
 
   if (dep && number) {
     return {
@@ -89,8 +96,11 @@ export function resolveEmployeeCodeFields(input: {
     };
   }
 
+  const upperRaw = rawCode.toUpperCase();
+  const normalizedRaw = upperRaw.startsWith('JHR-') ? `GEJ-${upperRaw.slice(4)}` : upperRaw;
+
   return {
-    employee_code: rawCode.toUpperCase(),
+    employee_code: normalizedRaw,
     employee_code_dep: null,
     employee_code_number: null,
   };
