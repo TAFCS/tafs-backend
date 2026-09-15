@@ -61,8 +61,10 @@ change makes one false, the change is wrong, not the rule.
    permanent write-off: excluded from arrears, deposits rejected, never
    re-billed (`create()` issues a fully-waived challan as a WAIVED voucher
    rather than billing it; supersession never scans/absorbs a waived voucher).
-   `normalizeVoucher` treats `WAIVED` as terminal like `VOID/PAID/EXPIRED`.
-   Un-waive is the only way back. See **Rule C** for the full lifecycle.
+   `normalizeVoucher` treats a `WAIVED` *voucher* as terminal like
+   `VOID/PAID/EXPIRED`, and drops a waived *head* from a mixed voucher's totals
+   the way it drops discount rows. Un-waive is the only way back. See **Rule C**
+   for the lifecycle and **Rule D** for how the two waiver shapes present.
 10. **Bulk issuance shares `create()`** — single + bulk both call
     `VouchersService.create()`; `splitPartiallyPaid()` is a hand-maintained
     duplicate. Any issuance-behaviour change lands in both. **PAY IMMEDIATELY**
@@ -222,6 +224,58 @@ already durable, so a render failure logs and the next `generatePdf()` mints it.
 4. Re-waive → a **fresh** artifact is minted; the first one is not resurrected.
 5. A PAID voucher still resolves to `paid_pdf_url`, never `waived_pdf_url`.
 6. `npm test -- waived-pdf-freeze paid-pdf-freeze` green.
+
+---
+
+## Rule D — a wholly waived voucher and a partially waived one look nothing alike
+
+**Invariant.** How a written-off head is *presented* depends entirely on whether
+the rest of the voucher is written off too. There are exactly two presentations
+and they must never be mixed up. The discriminator is `wholeVoucherWaived` in
+`prepareVoucherPdfData` (`waived || voucher.status === 'WAIVED'`) and
+`wholeVoucherWaived` in the deposit page's `DepositModal`.
+
+| | Wholly waived | Partially waived |
+|---|---|---|
+| How it got there | `waiveVoucher()` after issue, **or** `create()` with every non-discount head already `WAIVED` (`issueAsWaived`) | some heads `WAIVED`, the rest billed normally |
+| `vouchers.status` | `WAIVED` | `UNPAID` / `OVERDUE` / … — unchanged |
+| Diagonal WAIVED stamp | **yes** — it carries the whole message | **no** — most of the voucher is payable |
+| Fee-head lines | **printed normally**, full amounts, consolidated into month ranges like any other challan | the waived line is **struck through** and tagged `WAIVED` |
+| Total | the real total, as if nothing were waived | excludes the waived heads |
+| `feeHeads[].isWaived` | **never set** — the heads fall through to ordinary rendering | set, with `waivedAmount` |
+| Deposit modal | opens **read-only** (View button on the row): stamp, banner, no amount box, no Record Deposit | ordinary deposit form; the struck rows take no distribution |
+
+**The two routes into WAIVED must agree.** Waive-after-issue and
+issue-already-waived are the same write-off and must print and list identically.
+`waiveVoucher()` leaves `total_payable_before_due` / `_after_due` at the heads'
+original face value, so `create()`'s `issueAsWaived` stores
+`totalWaivedDecimal` — the heads' face value — rather than zero. Nothing bills
+off these columns: a WAIVED voucher is skipped on its **status** alone by
+`normalizeVoucher`, `computeArrears` and `recordDeposit`.
+
+**A waived head is excluded by value, not just by display.** On a mixed voucher
+`student_fees` still holds the full charge with `amount_paid = 0`, so anything
+that derives a balance from it must skip the head explicitly:
+
+- `normalizeVoucher` skips it exactly as it skips discount rows. Left in, it
+  inflates `total_balance` **and** makes `allHeadsPaid` unreachable, so the
+  voucher can never settle to `PAID` however much is collected.
+- `recordDeposit` rejects a **non-zero** distribution to a `voucher_heads.waived`
+  row, the same way it rejects one to a waived surcharge. Zero entries must keep
+  passing — the deposit UI sends a `0` for every head it renders.
+- The deposit modal's `sfBalance()` returns 0 for a struck-out head, which is
+  what keeps auto-fill from pouring money into it.
+
+**Check after any change here:**
+
+1. Waive an issued voucher → challan prints its heads normally under the stamp;
+   the deposit row's View button opens a read-only modal with the same numbers.
+2. Waive loose heads, then generate a voucher for exactly those heads → byte-for-
+   byte the same presentation as (1), same total, not zero.
+3. Generate a voucher mixing one waived head with payable ones → no stamp, the
+   waived line struck through, the total excludes it, and paying the rest in full
+   moves the voucher to `PAID`.
+4. `npm test -- waived-head-totals waived-pdf-freeze` green.
 
 ---
 

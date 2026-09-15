@@ -215,6 +215,10 @@ const styles = StyleSheet.create({
         borderTopColor: '#333333',
     },
     colDesc: { flex: 3, fontSize: 6.5 },
+    // A waived head on a mixed voucher — struck through, and tagged so the
+    // strikethrough reads as a deliberate write-off rather than a misprint.
+    waivedStrike: { textDecoration: 'line-through', color: '#9ca3af' },
+    waivedTag: { color: '#16a34a', fontSize: 6.5 },
     colAmount: { flex: 1, textAlign: 'right', fontSize: 6.5 },
     sectionLabelRow: {
         backgroundColor: '#f8fafc',
@@ -621,23 +625,24 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                         const effectiveNet = fee.netAmount ?? fee.amount;
                         const isMTF = fee.description.toLowerCase().includes('tuition');
 
-                        // Waived head: a permanent write-off. Show the original charge,
-                        // then a green "WAIVED" credit line that cancels it — the AMOUNT
-                        // column still reconciles to 0 for this head.
+                        // Waived head on a MIXED voucher: a permanent write-off sitting
+                        // among heads that are still payable. Struck through at its
+                        // original amount so the reader can see what was written off,
+                        // while contributing nothing to the AMOUNT total.
+                        // A WHOLLY waived voucher never sets isWaived on its heads (see
+                        // wholeVoucherWaived in prepareVoucherPdfData): there every line
+                        // prints normally and the diagonal WAIVED stamp does the talking.
                         if (fee.isWaived) {
                             const fmtW = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
                             const w = Number(fee.waivedAmount ?? fee.amount ?? 0);
                             return (
-                                <React.Fragment key={i}>
-                                    <View style={[styles.tableRow, { borderBottomWidth: 0, paddingBottom: 0.5 }]}>
-                                        <Text style={styles.colDesc}>{fee.description}</Text>
-                                        <Text style={styles.colAmount}>{fmtW(w)}</Text>
-                                    </View>
-                                    <View style={styles.tableRow}>
-                                        <Text style={[styles.colDesc, { color: '#16a34a' }]}>{`WAIVED — ${fee.description}`}</Text>
-                                        <Text style={[styles.colAmount, { color: '#16a34a' }]}>-{fmtW(w)}</Text>
-                                    </View>
-                                </React.Fragment>
+                                <View style={styles.tableRow} key={i}>
+                                    <Text style={styles.colDesc}>
+                                        <Text style={styles.waivedStrike}>{fee.description}</Text>
+                                        <Text style={styles.waivedTag}>{'   WAIVED'}</Text>
+                                    </Text>
+                                    <Text style={[styles.colAmount, styles.waivedStrike]}>{fmtW(w)}</Text>
+                                </View>
                             );
                         }
 

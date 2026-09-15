@@ -766,6 +766,11 @@ export class VouchersService {
 
             let totalBeforeDueDecimal = new Prisma.Decimal(0);
             let totalArrearsDecimal = new Prisma.Decimal(0);
+            // Sum of every written-off head. Kept out of totalBeforeDueDecimal —
+            // a waived head is never billed — but a WHOLLY waived challan still
+            // prints and lists its original face value (see waivedPatch below),
+            // so it needs its own running total.
+            let totalWaivedDecimal = new Prisma.Decimal(0);
 
             const voucherHeadsData: {
                 voucher_id: number;
@@ -827,6 +832,7 @@ export class VouchersService {
                         scholarship_label: null,
                         waived: true,
                     });
+                    totalWaivedDecimal = totalWaivedDecimal.add(waivedAmt);
                     continue;
                 }
 
@@ -963,9 +969,19 @@ export class VouchersService {
             const totalBeforeDueWithSurcharge = totalBeforeDueDecimal.add(activeSurchargeTotal).add(reprintFeeVal);
             const totalAfterDueDecimal = totalBeforeDueWithSurcharge.add(lateFeeVal);
 
-            // Fully-waived challan: written-off record — nothing payable, status
-            // WAIVED (drives the diagonal WAIVED watermark), surcharge waived for
-            // parity with waiveVoucher(). Reversible via unwaiveVoucher().
+            // Fully-waived challan: written-off record — status WAIVED (drives the
+            // diagonal WAIVED watermark), surcharge waived for parity with
+            // waiveVoucher(). Reversible via unwaiveVoucher().
+            //
+            // The totals stay at the heads' original face value rather than 0.
+            // waiveVoucher() leaves total_payable_* untouched when it writes off an
+            // already-issued voucher, so zeroing them here made the two routes to a
+            // WAIVED voucher — waive-after-issue vs issue-already-waived — print and
+            // list differently for the same write-off. Both now read the same: the
+            // heads at their full amounts, the real total, and the WAIVED stamp as
+            // the one thing that says none of it is collectable. Nothing bills off
+            // these columns; a WAIVED voucher is skipped by normalizeVoucher,
+            // computeArrears and recordDeposit on its status alone.
             const waivedPatch = issueAsWaived
                 ? {
                     status: 'WAIVED',
@@ -979,8 +995,8 @@ export class VouchersService {
             const updatedVoucher = await tx.vouchers.update({
                 where: { id: newVoucher.id },
                 data: {
-                    total_payable_before_due: issueAsWaived ? new Prisma.Decimal(0) : totalBeforeDueWithSurcharge,
-                    total_payable_after_due: issueAsWaived ? new Prisma.Decimal(0) : totalAfterDueDecimal,
+                    total_payable_before_due: issueAsWaived ? totalWaivedDecimal : totalBeforeDueWithSurcharge,
+                    total_payable_after_due: issueAsWaived ? totalWaivedDecimal : totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
                     voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
                     reprint_fee_amount: dto.reprint_fee_charge ? new Prisma.Decimal(reprintFeeVal) : null,
@@ -1521,6 +1537,23 @@ export class VouchersService {
         // answer. A PAID receipt or WAIVED challan never carries it.
         const payImmediate = voucher.pay_immediately === true && !paidStamp && !waived;
 
+        // Is EVERY head on this voucher written off, or only some of them? The two
+        // read completely differently on the challan and must not be conflated:
+        //
+        //   whole voucher waived  — the stamp already says the entire challan is a
+        //     write-off, so each head prints as an ordinary line at its full amount
+        //     and the total is the real total. Striking out every single line under
+        //     a WAIVED stamp is noise. Both routes into this state land here: waived
+        //     after issue (waiveVoucher) and issued already waived (issueAsWaived).
+        //
+        //   mixed voucher — no stamp, because most of it IS payable. The waived head
+        //     is the exception on the page, so it is struck through and contributes
+        //     nothing to the total.
+        //
+        // Derived from the row as well as the flag: every caller that renders a
+        // WAIVED voucher passes waived=true, but the status is the real authority.
+        const wholeVoucherWaived = waived || voucher.status === 'WAIVED';
+
         // 0. Term resolution.
         //
         // Every month label and every chronological sort below needs to know where
@@ -1690,16 +1723,21 @@ export class VouchersService {
             let description = prefixStr + feeTypeDesc + monthSuffix;
             let baseDescription = prefixStr + feeTypeDesc;
 
-            // ── Waived head ────────────────────────────────────────────────
+            // ── Waived head on a MIXED voucher ─────────────────────────────
             // A permanent write-off (voucher_heads.waived / student_fees.status
-            // = 'WAIVED'). It is on the voucher for the record only: nothing is
-            // payable, so netAmount/balance are 0 and it is left OUT of every
-            // total (totalAmount comes from voucher.total_payable_before_due,
-            // which create() built without it). The challan shows it as a green
-            // "WAIVED" credit line via `waivedAmount`. Skip the installment,
-            // arrear, gross/discount and scholarship machinery below — none of
-            // it applies to a zero-balance display row.
-            if (h.waived === true || sf?.status === 'WAIVED') {
+            // = 'WAIVED') sitting among heads that are still payable. It is on
+            // the voucher for the record only: nothing is payable, so
+            // netAmount/balance are 0 and it is left OUT of every total
+            // (totalAmount comes from voucher.total_payable_before_due, which
+            // create() built without it). The challan strikes it through via
+            // `isWaived`/`waivedAmount`. Skip the installment, arrear,
+            // gross/discount and scholarship machinery below — none of it
+            // applies to a zero-balance display row.
+            //
+            // A WHOLLY waived voucher deliberately does NOT come through here:
+            // see wholeVoucherWaived above. Its heads print as ordinary lines at
+            // full value and the diagonal WAIVED stamp carries the whole message.
+            if ((h.waived === true || sf?.status === 'WAIVED') && !wholeVoucherWaived) {
                 const waivedAmount = Number(
                     sf?.amount ?? sf?.amount_before_discount ?? h.net_amount ?? 0,
                 );
@@ -2783,11 +2821,22 @@ export class VouchersService {
             voucher.voucher_heads.map((h) => [h.id, h]),
         );
 
-        for (const { headId } of parsedDistributions) {
+        for (const { headId, amount } of parsedDistributions) {
             const head = voucherHeadMap.get(headId);
             if (!head) {
                 throw new BadRequestException(
                     `Voucher head #${headId} does not belong to voucher #${voucherId}.`,
+                );
+            }
+            // A written-off head on a mixed voucher takes no money — the same rule
+            // waived surcharges get below. The wholly-waived case is already caught
+            // by the status check above; this is the per-head half of it, which was
+            // missing: student_fees still carries the full charge with amount_paid
+            // at 0, so nothing downstream would have refused the allocation.
+            // Zero entries pass — the deposit UI sends a 0 for every head it shows.
+            if (head.waived === true && amount.gt(0)) {
+                throw new BadRequestException(
+                    `Voucher head #${headId} has been waived and cannot receive a payment.`,
                 );
             }
         }
@@ -5929,6 +5978,29 @@ export class VouchersService {
                 continue;
             }
 
+            // Waived rows are a permanent write-off riding on a *mixed* voucher
+            // (some heads charged, some written off — a wholly-waived voucher
+            // never reaches this loop, it takes the status early-return above).
+            // student_fees.amount is still the full charge and amount_paid is 0,
+            // so the generic branch below would bill it: the head would carry its
+            // whole amount into totalRemHeads, inflating total_balance AND making
+            // allHeadsPaid unreachable, so the voucher could never settle to PAID
+            // no matter how much was collected against the heads that are real.
+            // Excluded here exactly as discount rows are, and reported at zero.
+            if (h.waived === true || fee.status === 'WAIVED') {
+                updatedHeads.push({
+                    ...h,
+                    balance: '0',
+                    isArrear: false,
+                    is_arrear: false,
+                    isSurcharge: false,
+                    is_surcharge: false,
+                    is_installment: false,
+                    has_installment_merged: false,
+                });
+                continue;
+            }
+
             // student_fees is the SINGLE SOURCE OF TRUTH for amounts and paid state.
             const canonicalAmount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
             const totalPaidOnFee = new Prisma.Decimal(fee.amount_paid ?? 0);
@@ -5994,8 +6066,10 @@ export class VouchersService {
         // ── sf totals (for frontend display) ────────────────────────────────────
         // For discount heads net_amount is already negative (stored as -discountAmount),
         // so using it directly gives the correct sign for every row.
+        const isWrittenOff = (head: any) =>
+            head.waived === true || head.student_fees?.status === 'WAIVED';
         const sfNetTotal = originalHeads.reduce(
-            (sum, head) => sum.add(
+            (sum, head) => isWrittenOff(head) ? sum : sum.add(
                 head.student_fees?.is_discount
                     ? new Prisma.Decimal(head.net_amount ?? 0)
                     : new Prisma.Decimal(head.student_fees?.amount ?? head.net_amount ?? 0)
@@ -6003,8 +6077,8 @@ export class VouchersService {
             new Prisma.Decimal(0),
         );
         const sfGrossTotal = originalHeads.reduce(
-            (sum, head) => head.student_fees?.is_discount
-                ? sum  // discount rows are not part of gross fees
+            (sum, head) => head.student_fees?.is_discount || isWrittenOff(head)
+                ? sum  // discount rows are not part of gross fees; waived rows are written off
                 : sum.add(new Prisma.Decimal(head.student_fees?.amount_before_discount ?? head.student_fees?.amount ?? head.net_amount ?? 0)),
             new Prisma.Decimal(0),
         );
