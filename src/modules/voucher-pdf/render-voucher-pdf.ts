@@ -29,17 +29,17 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
     const props = {
         student: {
             cc: data.student.cc,
-            student_full_name: data.student.fullName,
+            student_full_name: (data.student.fullName || '').toUpperCase(),
             gr_number: data.student.grNumber,
-            campus: data.campusName,
+            campus: (data.campusName || 'Main Campus').toUpperCase(),
             class_id: data.student.classId,
-            className: data.student.className,
-            sectionName: data.student.sectionName,
-            grade_and_section: `${data.student.className} - ${data.student.sectionName}`,
-            gender: data.student.gender,
-            father_name: data.student.fatherName,
-            house_name: data.student.houseName || 'N/A',
-            group: data.student.group,
+            className: (data.student.className || '').toUpperCase(),
+            sectionName: (data.student.sectionName || '').toUpperCase(),
+            grade_and_section: `${data.student.className || ''} - ${data.student.sectionName || ''}`.toUpperCase(),
+            gender: (data.student.gender || 'N/A').toUpperCase(),
+            father_name: (data.student.fatherName || 'N/A').toUpperCase(),
+            house_name: (data.student.houseName || 'N/A').toUpperCase(),
+            group: data.student.group ? String(data.student.group).toUpperCase() : undefined,
         },
         details: {
             month: data.month,
@@ -99,11 +99,11 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
         siblings: data.siblings
             ?.filter((s) => s.cc !== data.student.cc)
             .map((s) => ({
-                full_name: s.fullName,
+                full_name: (s.fullName || '').toUpperCase(),
                 cc: s.cc,
                 gr_number: s.grNumber,
-                className: s.className,
-                sectionName: s.sectionName,
+                className: (s.className || '').toUpperCase(),
+                sectionName: (s.sectionName || '').toUpperCase(),
             })),
         qrUrl: data.qrUrl,
         arrearsHistory: data.arrearsHistory,
