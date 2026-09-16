@@ -10,7 +10,12 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
-import { composeEmployeeCode, parseEmployeeCode, resolveEmployeeCodeFields, campusPrefixForId, normalizeCampusPrefix } from './employee-code.util';
+import {
+  composeEmployeeCode,
+  parseEmployeeCode,
+  resolveEmployeeCodeFields,
+  resolveEmployeeCampusPrefix,
+} from './employee-code.util';
 import { buildMasterEmployeesExcelBuffer } from './master-employee-excel.util';
 import { encryptSecret, decryptSecret } from '../../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credentials.util';
@@ -765,16 +770,14 @@ export class EmployeesService {
     return null;
   }
 
-  /** Employee codes only — uses campuses.campus_prefix (not campus_code / not student G.R.). */
+  /** Employee HR prefix — never student G.R. (KF-A / A-N on campuses.campus_prefix). */
   private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
     if (campusId == null) return null;
     const campus = await this.prisma.campuses.findUnique({
       where: { id: campusId },
       select: { campus_prefix: true },
     });
-    const fromDb = normalizeCampusPrefix(campus?.campus_prefix);
-    if (fromDb) return fromDb;
-    return campusPrefixForId(campusId);
+    return resolveEmployeeCampusPrefix(campusId, campus?.campus_prefix);
   }
 
   /** Throws ConflictException if employee_code is already taken by another record */
