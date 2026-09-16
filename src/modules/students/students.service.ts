@@ -1858,6 +1858,7 @@ export class StudentsService {
         campus_id: true,
         academic_year: true,
         gr_number: true,
+        campuses: { select: { campus_name: true } },
       },
     });
 
@@ -1906,7 +1907,22 @@ export class StudentsService {
       if (!nextHouseId) {
         throw new BadRequestException('A house is required to readmit a student');
       }
-      await this.enrollment.validateGrNumber(student.campus_id, id, nextGrNumber);
+      let isALevel = false;
+      if (nextClassId != null) {
+        const cls = await this.prisma.classes.findUnique({
+          where: { id: nextClassId },
+          select: { academic_system: true, description: true, class_code: true },
+        });
+        isALevel = checkIsALevel(
+          cls?.academic_system,
+          cls?.description ?? cls?.class_code,
+          false,
+        );
+      }
+      await this.enrollment.validateGrNumber(student.campus_id, id, nextGrNumber, {
+        campusName: student.campuses?.campus_name,
+        isALevel,
+      });
     }
 
     const updateData: Prisma.studentsUpdateInput | any = {

@@ -1,10 +1,65 @@
 import { PrismaService } from '../../../prisma/prisma.service';
 
+/** Employee HR codes use campuses.campus_prefix (GEJ, GKF, …) — never for student G.R. */
+const EMPLOYEE_CAMPUS_PREFIXES = new Set(['GEJ', 'GKF', 'NNN', 'JHR']);
+
 function getPrefixByCampusName(name: string, campusId: number): string {
   const uname = name.toUpperCase();
   if (uname.includes('KANEEZ FATIMA') || campusId === 2) return 'KF-A';
   if (uname.includes('NORTH NAZIMABAD') || campusId === 3) return 'A-N';
   return '';
+}
+
+/**
+ * Student G.R. prefix from campus name/id only (sync). Not employee `campus_prefix`.
+ */
+export function studentGrPrefixForCampus(
+  campusName: string | undefined | null,
+  campusId: number | null | undefined,
+  isALevel = false,
+): string {
+  if (isALevel) return 'A-';
+  if (!campusName || campusId == null) return '';
+  return getPrefixByCampusName(campusName, campusId);
+}
+
+/** Returns a user-facing error, or null if the GR fits this campus's student series. */
+export function studentGrFormatError(
+  grNumber: string,
+  campusName: string | undefined | null,
+  campusId: number | null | undefined,
+  isALevel: boolean,
+): string | null {
+  const gr = grNumber.trim();
+  if (!gr) return 'GR number is required';
+
+  const prefix = studentGrPrefixForCampus(campusName, campusId, isALevel);
+
+  if (isALevel) {
+    if (/^A-\d+$/i.test(gr)) return null;
+    if (/^\d+$/.test(gr)) return null;
+    return 'A-Level GR must be A-<number> or digits only (formatted as A-<number>).';
+  }
+
+  if (prefix === '') {
+    if (/^\d+$/.test(gr)) return null;
+    const letters = gr.replace(/[\d-]/g, '').toUpperCase();
+    if (EMPLOYEE_CAMPUS_PREFIXES.has(letters) || /^GEJ/i.test(gr)) {
+      return 'This looks like an employee code prefix (GEJ). Johar campus student GR is numeric only (e.g. 6581).';
+    }
+    return 'This campus uses numeric GR numbers only (no letter prefix).';
+  }
+
+  const cleanPrefix = prefix.replace(/[-\s]/g, '').toUpperCase();
+  const cleanGr = gr.replace(/[-\s]/g, '').toUpperCase();
+  if (!cleanGr.startsWith(cleanPrefix)) {
+    return `GR must start with ${prefix} for this campus.`;
+  }
+  const tail = cleanGr.slice(cleanPrefix.length);
+  if (!/^\d+$/.test(tail)) {
+    return `GR must be ${prefix} followed by digits.`;
+  }
+  return null;
 }
 
 /**
@@ -117,6 +172,16 @@ function resolveDefaultPrefix(
   if (isALevel) return 'A-';
   if (!campus) return '';
   return getPrefixByCampusName(campus.campus_name, campusId);
+}
+
+export function grNumericInSeries(
+  gr: string,
+  campusName: string | undefined | null,
+  campusId: number | null | undefined,
+  isALevel: boolean,
+): number | null {
+  const defaultPrefix = studentGrPrefixForCampus(campusName, campusId, isALevel);
+  return parseMatchingGrNumber(gr, defaultPrefix, isALevel);
 }
 
 function parseMatchingGrNumber(
@@ -239,4 +304,31 @@ export async function allocateSequentialGrNumbers(
   }
 
   return result;
+}
+
+/** Lowest GR in the campus/level series (ignores employee-prefixed mistaken rows). */
+export async function computeMinGrInSeries(
+  prisma: PrismaService,
+  campusId: number | null,
+  isALevel = false,
+): Promise<string | null> {
+  if (!campusId) return null;
+
+  const { defaultPrefix } = await loadCampusGrSeries(prisma, campusId, isALevel);
+  const students = await prisma.students.findMany({
+    where: { campus_id: campusId, gr_number: { not: null }, deleted_at: null },
+    select: { gr_number: true },
+  });
+
+  let minNum = Infinity;
+  let minGrStr: string | null = null;
+  for (const s of students) {
+    if (!s.gr_number) continue;
+    const num = parseMatchingGrNumber(s.gr_number, defaultPrefix, isALevel);
+    if (num != null && num < minNum) {
+      minNum = num;
+      minGrStr = s.gr_number;
+    }
+  }
+  return minGrStr;
 }

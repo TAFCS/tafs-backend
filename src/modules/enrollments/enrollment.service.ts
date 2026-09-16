@@ -5,7 +5,13 @@ import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ProgressionHistoryService } from '../students/progression-history.service';
-import { computeNextGrNumber, checkIsALevel } from '../../common/utils/gr-number.util';
+import {
+  computeNextGrNumber,
+  checkIsALevel,
+  computeMinGrInSeries,
+  studentGrFormatError,
+  grNumericInSeries,
+} from '../../common/utils/gr-number.util';
 import {
   fillTafsalLeavingCertificate,
   type TafsalCertificateData,
@@ -137,7 +143,7 @@ export class EnrollmentService {
       computeNextGrNumber(this.prisma, student.campus_id, isALevel),
       this.computeBalancedHouseDetails(resolvedClassId, targetSectionId, student.campus_id),
       this.computeBalancedSection(student.campus_id, resolvedClassId),
-      this.computeMinGr(student.campus_id),
+      computeMinGrInSeries(this.prisma, student.campus_id, isALevel),
     ]);
 
     let suggested_section = balanced_section;
@@ -259,31 +265,6 @@ export class EnrollmentService {
         commerceCount: commerceCount,
       } : null
     };
-  }
-
-  private async computeMinGr(campusId: number | null): Promise<string | null> {
-    if (!campusId) return null;
-    const campusStudents = await this.prisma.students.findMany({
-      where: { campus_id: campusId, gr_number: { not: null } },
-      select: { gr_number: true },
-    });
-    if (campusStudents.length === 0) return null;
-
-    let minNum = Infinity;
-    let minGrStr: string | null = null;
-
-    for (const s of campusStudents) {
-      if (!s.gr_number) continue;
-      const m = s.gr_number.match(/^(.*?)([0-9]+)$/);
-      if (m) {
-        const n = parseInt(m[2], 10);
-        if (n < minNum) {
-          minNum = n;
-          minGrStr = s.gr_number;
-        }
-      }
-    }
-    return minGrStr;
   }
 
   async logCertificateGeneration(
@@ -580,7 +561,22 @@ export class EnrollmentService {
    *  1. the GR must not already belong to another student in the campus, and
    *  2. it must not fall below the lowest GR sequence already in use there.
    */
-  async validateGrNumber(campusId: number | null, cc: number, grNumber: string): Promise<void> {
+  async validateGrNumber(
+    campusId: number | null,
+    cc: number,
+    grNumber: string,
+    opts?: { campusName?: string | null; isALevel?: boolean },
+  ): Promise<void> {
+    const formatErr = studentGrFormatError(
+      grNumber,
+      opts?.campusName,
+      campusId,
+      opts?.isALevel ?? false,
+    );
+    if (formatErr) {
+      throw new BadRequestException(formatErr);
+    }
+
     const existingGr = await this.prisma.students.findFirst({
       where: {
         campus_id: campusId,
@@ -593,28 +589,17 @@ export class EnrollmentService {
       throw new BadRequestException(`GR Number ${grNumber} is already assigned to another student in this campus`);
     }
 
-    const matchNew = grNumber.match(/^(.*?)([0-9]+)$/);
-    if (!matchNew) return;
-    const newNum = parseInt(matchNew[2], 10);
+    const isALevel = opts?.isALevel ?? false;
+    const newNum = grNumericInSeries(grNumber, opts?.campusName, campusId, isALevel);
+    if (newNum == null) return;
 
-    // Find the minimum numeric GR currently in the campus
-    const campusStudents = await this.prisma.students.findMany({
-      where: { campus_id: campusId, gr_number: { not: null } },
-      select: { gr_number: true },
-    });
-
-    let minNum = Infinity;
-    for (const s of campusStudents) {
-      if (!s.gr_number) continue;
-      const m = s.gr_number.match(/^(.*?)([0-9]+)$/);
-      if (m) {
-        const n = parseInt(m[2], 10);
-        if (n < minNum) minNum = n;
-      }
-    }
-
-    if (minNum !== Infinity && newNum < minNum) {
-      throw new BadRequestException(`GR Number ${grNumber} is less than the lowest sequence in this campus (Starting from ${minNum})`);
+    const minGr = await computeMinGrInSeries(this.prisma, campusId, isALevel);
+    if (!minGr) return;
+    const minNum = grNumericInSeries(minGr, opts?.campusName, campusId, isALevel);
+    if (minNum != null && newNum < minNum) {
+      throw new BadRequestException(
+        `GR Number ${grNumber} is less than the lowest sequence in this campus (starting from ${minGr})`,
+      );
     }
   }
 
@@ -622,10 +607,11 @@ export class EnrollmentService {
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
+        campuses: { select: { campus_name: true } },
         student_admissions: {
           orderBy: { application_date: 'desc' },
           take: 1,
-          select: { requested_grade: true },
+          select: { requested_grade: true, academic_system: true },
         },
       },
     });
@@ -634,7 +620,16 @@ export class EnrollmentService {
       throw new BadRequestException(`Student #${cc} is not eligible for enrollment`);
     }
 
-    await this.validateGrNumber(student.campus_id, cc, dto.gr_number);
+    const admission = student.student_admissions?.[0];
+    const isALevel = checkIsALevel(
+      admission?.academic_system,
+      admission?.requested_grade,
+      false,
+    );
+    await this.validateGrNumber(student.campus_id, cc, dto.gr_number, {
+      campusName: student.campuses?.campus_name,
+      isALevel,
+    });
 
     // Persist the resolved class_id on the student record during enrollment
     let resolvedClassId = student.class_id;

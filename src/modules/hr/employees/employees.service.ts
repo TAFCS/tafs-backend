@@ -765,14 +765,14 @@ export class EmployeesService {
     return null;
   }
 
-  /** Prefer DB campus_prefix / campus_code; fall back to hardcoded id map. Always maps JHR -> GEJ. */
+  /** Employee codes only — uses campuses.campus_prefix (not campus_code / not student G.R.). */
   private async resolveCampusPrefix(campusId: number | null | undefined): Promise<string | null> {
     if (campusId == null) return null;
     const campus = await this.prisma.campuses.findUnique({
       where: { id: campusId },
-      select: { campus_prefix: true, campus_code: true },
+      select: { campus_prefix: true },
     });
-    const fromDb = normalizeCampusPrefix(campus?.campus_prefix || campus?.campus_code);
+    const fromDb = normalizeCampusPrefix(campus?.campus_prefix);
     if (fromDb) return fromDb;
     return campusPrefixForId(campusId);
   }
