@@ -60,6 +60,11 @@ const permissionsList = [
     { key: 'hr.employees.edit', module: 'HR & Attendance', description: 'Manage employee profiles' },
     { key: 'hr.policies.manage', module: 'HR & Attendance', description: 'Manage HR policies and calendar' },
     { key: 'hr.leave.apply', module: 'HR & Attendance', description: 'Apply for leave' },
+    // TAFS Staff App self-service tabs — referenced by the staff_app access
+    // tiles, so AccessSync will not boot on a database missing them.
+    { key: 'attendance.self.view', module: 'HR & Attendance', description: 'View own attendance records' },
+    { key: 'payroll.self.view', module: 'HR & Attendance', description: 'View own payroll run lines' },
+    { key: 'hr.timetable.self_view', module: 'HR & Attendance', description: 'View own timetable in the Staff App' },
     { key: 'hr.leave.approve', module: 'HR & Attendance', description: 'Approve leave requests' },
     { key: 'hr.payroll.view', module: 'HR & Attendance', description: 'View payroll runs' },
     { key: 'hr.payroll.manage', module: 'HR & Attendance', description: 'Generate and finalize payroll runs' },

@@ -29,6 +29,14 @@ import {
   EMPLOYEE_FIELD_TAB_MAP,
 } from './employee-field-tabs';
 import { AccessService } from '../../access/access.service';
+import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
+
+/**
+ * Inactive system user that scripts and migrations attribute automated grants
+ * to (scripts/grant-employee-self-service.ts creates it). Used only when an
+ * employee is saved without a caller.
+ */
+const SEED_ACTOR_ID = '00000000-0000-0000-0000-000000000001';
 import { TileGrantDto } from '../../access/dto/access.dto';
 
 export class ClassSectionAssignmentDto {
@@ -481,6 +489,41 @@ export class EmployeesService {
     department_id: true,
     staff_category_id: true,
   } as const;
+
+  /**
+   * Gives a freshly linked employee login the Staff App tabs every employee
+   * gets (attendance, timetable, payroll, leave) via the "Employee
+   * self-service" system pack — the same pack migration 20260916130000
+   * backfilled onto every existing employee login.
+   *
+   * Only on a NEW link, never on an ordinary edit: an admin who took the pack
+   * away from someone must not see it come back because the record was saved.
+   *
+   * Never allowed to fail the employee save. It runs inside the caller's
+   * transaction, where any error would abort everything, so each thing that
+   * could fail is checked first and the grant is skipped instead.
+   */
+  private async grantStaffAppSelfService(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    caller?: IJwtStaffPayload,
+  ) {
+    const pack = await tx.access_packs.findUnique({
+      where: { name: EMPLOYEE_SELF_SERVICE_PACK },
+      select: { id: true },
+    });
+    if (!pack) return;
+
+    const actorId = caller?.sub ?? SEED_ACTOR_ID;
+    const actor = await tx.users.findUnique({ where: { id: actorId }, select: { id: true } });
+    if (!actor) return;
+
+    await tx.user_access_packs.upsert({
+      where: { user_id_pack_id: { user_id: userId, pack_id: pack.id } },
+      update: {},
+      create: { user_id: userId, pack_id: pack.id, assigned_by: actor.id },
+    });
+  }
 
   /**
    * Loads an employee and confirms the caller may touch it.
@@ -986,6 +1029,10 @@ export class EmployeesService {
           include: includeRelations,
         });
 
+        if (userId) {
+          await this.grantStaffAppSelfService(tx, userId, caller);
+        }
+
         await this.employeeProgression.recordProgressionChange(tx, {
           employeeId: created.id,
           ...this.progressionSnapshotFrom(created),
@@ -1285,6 +1332,10 @@ export class EmployeesService {
           },
           include: includeRelations
         });
+
+        if (userId && userId !== existing.user_id) {
+          await this.grantStaffAppSelfService(tx, userId, caller);
+        }
 
         const priorSnapshot = this.progressionSnapshotFrom(existing);
         const nextSnapshot = this.progressionSnapshotFrom(updated);

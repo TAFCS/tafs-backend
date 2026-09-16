@@ -21,6 +21,16 @@ export type TileManifestEntry = {
   description: string;
   href: string;
   group?: string;
+  /**
+   * Where the tile is used. Omitted means the web ERP.
+   *
+   * `staff_app` tiles are tabs in the TAFS Staff App (Flutter). They are
+   * granted, packed and denied exactly like web tiles, but the web launcher
+   * never renders them (mergeNavModules only maps modules it knows) and the
+   * People & Access panel draws them in their own Staff App section. `href`
+   * on these is a `staff-app://` label, not a web route.
+   */
+  surface?: 'web' | 'staff_app';
   capabilities: string[];
   /**
    * Omit entirely and the tile behaves exactly as it did before
@@ -224,6 +234,18 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'] },
   { id: 'school-setup.banks', module: 'school-setup', label: 'Banks', description: 'Banking relationships', href: '/banks', capabilities: ['finance.banks.view'] },
 
+  // ?? TAFS Staff App ???????????????????????????????????????????????????????
+  // One tile per permission-gated tab. The app checks the capability keys
+  // directly (tafs-staff-app employee_portal_access.dart), so these ids are
+  // for granting and display only -- renaming the KEYS would break the app.
+  // Allowed for every employee through the "Employee self-service" system pack
+  // (migration 20260916130000), and assigned automatically when an employee
+  // profile gets a login.
+  { id: 'staff_app.attendance', module: 'staff_app', surface: 'staff_app', label: 'Attendance', description: 'Own attendance calendar, day details and objections', href: 'staff-app://attendance', capabilities: ['attendance.self.view'] },
+  { id: 'staff_app.timetable', module: 'staff_app', surface: 'staff_app', label: 'Timetable', description: 'Own weekly class schedule', href: 'staff-app://timetable', capabilities: ['hr.timetable.self_view'] },
+  { id: 'staff_app.payroll', module: 'staff_app', surface: 'staff_app', label: 'Payroll', description: 'Own payslips (also needs payroll enabled on the employee)', href: 'staff-app://payroll', capabilities: ['payroll.self.view'] },
+  { id: 'staff_app.leave', module: 'staff_app', surface: 'staff_app', label: 'Apply for Leave', description: 'Submit and track own leave requests', href: 'staff-app://leave', capabilities: ['hr.leave.apply'] },
+
   // ?? System ???????????????????????????????????????????????????????????????
   { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'] },
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'] },
@@ -234,6 +256,9 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
 
 /** Exported so employee-field-tab-map.spec.ts can assert the map lines up. */
 export const EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST = EMPLOYEE_DIRECTORY_ACTIONS;
+
+/** The system pack that carries every staff_app tile for all employees. */
+export const EMPLOYEE_SELF_SERVICE_PACK = 'Employee self-service';
 
 export const MANIFEST_TILE_IDS = new Set(TILES_MANIFEST.map((t) => t.id));
 
@@ -341,6 +366,7 @@ export function catalogFromManifest() {
         description: t.description,
         href: t.href,
         group: t.group ?? null,
+        surface: t.surface ?? 'web',
         sort_order: t.sort_order,
         capabilities: t.capabilities,
         actions: (t.actions ?? []).map((a, i) => ({
