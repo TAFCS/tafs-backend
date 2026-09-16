@@ -184,10 +184,10 @@ export class ZkLogsController {
       throw new ForbiddenException('Only super admins can view ZK device logs');
     }
 
-    const [logs, devices] = await Promise.all([
-      this.zkPushService.getLogs(query.sn),
+    const [{ logs, nextCursor }, devices] = await Promise.all([
+      this.zkPushService.getLogs(query.sn, query.cursor, query.limit),
       this.zkPushService.getDistinctDevices(),
     ]);
-    return { logs, devices };
+    return { logs, devices, nextCursor };
   }
 }

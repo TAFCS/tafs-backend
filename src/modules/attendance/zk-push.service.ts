@@ -22,12 +22,18 @@ export class ZkPushService {
     }
   }
 
-  async getLogs(sn?: string) {
-    return this.prisma.zk_push_logs.findMany({
-      where: sn ? { sn } : undefined,
-      orderBy: { received_at: 'desc' },
-      take: 200,
+  async getLogs(sn?: string, cursor?: number, limit = 50) {
+    const logs = await this.prisma.zk_push_logs.findMany({
+      where: {
+        ...(sn ? { sn } : undefined),
+        ...(cursor ? { id: { lt: cursor } } : undefined),
+      },
+      orderBy: { id: 'desc' },
+      take: limit + 1,
     });
+    const hasMore = logs.length > limit;
+    const page = hasMore ? logs.slice(0, limit) : logs;
+    return { logs: page, nextCursor: hasMore ? page[page.length - 1].id : null };
   }
 
   async getDistinctDevices() {

@@ -1,4 +1,5 @@
-import { IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsOptional, IsString } from 'class-validator';
 
 export class ZkPushDto {
   @IsString()
@@ -41,4 +42,14 @@ export class GetZkLogsQueryDto {
   @IsOptional()
   @IsString()
   sn?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  cursor?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  limit?: number;
 }
