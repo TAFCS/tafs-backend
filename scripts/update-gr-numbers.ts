@@ -27,14 +27,11 @@ async function main() {
     let newGrNumber = gr_number;
 
     const campus = campus_id ? (campusMap.get(campus_id) as any) : null;
-    let prefix = campus?.campus_prefix || '';
-
-    // If no prefix is set in database for campus, fall back to old hardcoded rules
-    if (!prefix && campus_id) {
-      if (campus_id === 1) {
-        if (class_id === 21 || class_id === 22) {
-          prefix = 'A-';
-        }
+    // Student G.R. prefixes — not campuses.campus_prefix (employee codes like GEJ).
+    let prefix = '';
+    if (campus_id) {
+      if (class_id === 21 || class_id === 22) {
+        prefix = 'A-';
       } else if (campus_id === 2) {
         prefix = 'KF-A';
       } else if (campus_id === 3) {

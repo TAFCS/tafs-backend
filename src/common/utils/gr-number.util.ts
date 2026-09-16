@@ -39,7 +39,10 @@ export function checkIsALevel(
   return false;
 }
 
-/** Non-A-Level or A-Level GR prefix for a campus (KF-A / A-N / A- / '' for Johar). */
+/**
+ * Student G.R. prefix for a campus (KF-A / A-N / A- / '' for Johar).
+ * Do not use `campuses.campus_prefix` here — that field is for employee codes (e.g. GEJ).
+ */
 export async function resolveCampusGrPrefix(
   prisma: any,
   campusId: number | null,
@@ -49,10 +52,10 @@ export async function resolveCampusGrPrefix(
   if (isALevel) return 'A-';
   const campus = await prisma.campuses.findUnique({
     where: { id: campusId },
-    select: { campus_name: true, campus_prefix: true },
+    select: { campus_name: true },
   });
   if (!campus) return '';
-  return campus.campus_prefix || getPrefixByCampusName(campus.campus_name, campusId);
+  return getPrefixByCampusName(campus.campus_name, campusId);
 }
 
 /**
@@ -108,12 +111,12 @@ export async function formatGrNumberWithPrefix(
 
 function resolveDefaultPrefix(
   isALevel: boolean,
-  campus: { campus_name: string; campus_prefix: string | null } | null,
+  campus: { campus_name: string } | null,
   campusId: number,
 ): string {
   if (isALevel) return 'A-';
   if (!campus) return '';
-  return campus.campus_prefix || getPrefixByCampusName(campus.campus_name, campusId);
+  return getPrefixByCampusName(campus.campus_name, campusId);
 }
 
 function parseMatchingGrNumber(
@@ -147,7 +150,7 @@ async function loadCampusGrSeries(
 ): Promise<{ defaultPrefix: string; maxNum: number; existing: Set<string> }> {
   const campus = await prisma.campuses.findUnique({
     where: { id: campusId },
-    select: { campus_name: true, campus_prefix: true },
+    select: { campus_name: true },
   });
   const defaultPrefix = resolveDefaultPrefix(isALevel, campus, campusId);
 
