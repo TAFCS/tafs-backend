@@ -1,18 +1,65 @@
-import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateInstallmentDto } from './dto/create-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
 import { getClassTermMap, termStartMonthForClass } from '../../common/utils/class-terms.util';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class InstallmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async create(dto: CreateInstallmentDto, userId: string) {
+  // ─── Universal scope ───────────────────────────────────────────────────────
+  //
+  // Installment plans hang off /studentwise-fees, so they are scoped by the
+  // student they belong to. Every assertion below runs OUTSIDE the try/catch
+  // blocks in this file — a NotFoundException raised inside one would be
+  // swallowed and re-thrown as a 500.
+
+  /** Out-of-scope students are 404s, never 403s: a 403 confirms the CC exists. */
+  private async assertStudentVisible(user: IJwtStaffPayload, cc: number | null | undefined) {
+    // An empty fragment means unrestricted on every student dimension, so the
+    // lookup below could only ever come back visible. Skip it.
+    if (cc == null || Object.keys(this.scope.whereForStudents(user)).length === 0) return;
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: {
+        campus_id: true,
+        class_id: true,
+        section_id: true,
+        classes: { select: { segment_id: true } },
+      },
+    });
+    if (!student) return; // the caller reports a missing student in its own words
+    const visible = this.scope.canSeeStudent(user, {
+      campus_id: student.campus_id,
+      class_id: student.class_id,
+      section_id: student.section_id,
+      segment_id: student.classes?.segment_id ?? null,
+    });
+    if (!visible) {
+      throw new NotFoundException(`Student with CC number ${cc} not found`);
+    }
+  }
+
+  private async assertPlanVisible(user: IJwtStaffPayload, planId: number) {
+    if (Object.keys(this.scope.whereForStudents(user)).length === 0) return;
+    const plan = await this.prisma.student_fee_installments.findUnique({
+      where: { id: planId },
+      select: { student_id: true },
+    });
+    if (!plan) return;
+    await this.assertStudentVisible(user, plan.student_id);
+  }
+
+  async create(dto: CreateInstallmentDto, userId: string, user: IJwtStaffPayload) {
+    await this.assertStudentVisible(user, dto.student_id);
     try {
       // Term stamped on the heads this plan creates, from the student's current
       // class. Resolved before the transaction so it costs no transaction time.
@@ -116,7 +163,8 @@ export class InstallmentsService {
     }
   }
 
-  async findByStudent(studentId: number, academicYear?: string) {
+  async findByStudent(studentId: number, user: IJwtStaffPayload, academicYear?: string) {
+    await this.assertStudentVisible(user, studentId);
     const plans = await this.prisma.student_fee_installments.findMany({
       where: {
         student_id: studentId,
@@ -165,7 +213,8 @@ export class InstallmentsService {
     }));
   }
 
-  async update(id: number, dto: UpdateInstallmentDto, changedBy: string) {
+  async update(id: number, dto: UpdateInstallmentDto, changedBy: string, user: IJwtStaffPayload) {
+    await this.assertPlanVisible(user, id);
     try {
       const existingPlan = await this.prisma.student_fee_installments.findUnique({
         where: { id },
@@ -226,7 +275,8 @@ export class InstallmentsService {
     }
   }
 
-  async removeHead(planId: number, headId: number, changedBy: string) {
+  async removeHead(planId: number, headId: number, changedBy: string, user: IJwtStaffPayload) {
+    await this.assertPlanVisible(user, planId);
     try {
       const planStudent = await this.prisma.student_fee_installments.findUnique({
         where: { id: planId },
@@ -292,7 +342,8 @@ export class InstallmentsService {
     }
   }
 
-  async remove(id: number, changedBy: string) {
+  async remove(id: number, changedBy: string, user: IJwtStaffPayload) {
+    await this.assertPlanVisible(user, id);
     try {
       const existingPlan = await this.prisma.student_fee_installments.findUnique({
         where: { id },

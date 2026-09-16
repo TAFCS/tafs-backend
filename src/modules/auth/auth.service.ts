@@ -18,6 +18,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { EMPTY_SCOPE } from '../../common/scope/scope.types';
+import { compactActionKeys } from '../access/tiles.manifest';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -125,7 +126,11 @@ export class AuthService {
       // Omit the 60+ permission/action strings from the JWT to prevent exceeding
       // the browser 4KB cookie limit (which causes browser to silently drop tafs_access).
       permissions: isSuperAdmin ? [] : permissions,
-      actions: isSuperAdmin ? [] : effectiveActions,
+      // Compacted (`tile#*` for a tile the user holds in full) for the same
+      // 4KB reason as the SUPER_ADMIN omission above: spelling out all 49
+      // actions costs ~1.9KB and put a fully-privileged CAMPUS_ADMIN token
+      // over the cookie limit. TileActionGuard and useTileAccess expand it.
+      actions: isSuperAdmin ? [] : compactActionKeys(effectiveActions),
       scope: isSuperAdmin ? EMPTY_SCOPE : scope,
     };
 

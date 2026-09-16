@@ -170,6 +170,48 @@ export class ScopeService {
     }
   }
 
+  /**
+   * Asserts every dimension a student record carries. Use on any `:id` /
+   * `:cc` route that acts on one student.
+   *
+   * SEGMENT rides on the student's class, so pass `segment_id` from
+   * `classes.segment_id` when the caller has it -- omitting it on a
+   * segment-scoped user would let the record through.
+   */
+  assertStudent(
+    user: Parameters<ScopeService['assertDimension']>[0],
+    student: {
+      campus_id?: number | null;
+      class_id?: number | null;
+      section_id?: number | null;
+      segment_id?: number | null;
+    },
+  ) {
+    if (this.isExempt(user)) return;
+    this.assertCampus(user, student.campus_id);
+    this.assertClass(user, student.class_id);
+    this.assertSection(user, student.section_id);
+    this.assertSegment(user, student.segment_id);
+  }
+
+  /** Non-throwing counterpart, for turning a 403 into a 404 on lookups. */
+  canSeeStudent(
+    user: Parameters<ScopeService['assertDimension']>[0],
+    student: {
+      campus_id?: number | null;
+      class_id?: number | null;
+      section_id?: number | null;
+      segment_id?: number | null;
+    },
+  ): boolean {
+    try {
+      this.assertStudent(user, student);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ─── Query fragments ───────────────────────────────────────────────────────
 
   whereForEmployees(user: Parameters<ScopeService['assertDimension']>[0]) {
