@@ -23,10 +23,10 @@ import { PDFDocument, PDFPage, StandardFonts, rgb } from 'pdf-lib';
  * and the labels are real text runs, so each field's line is known exactly.
  * They are all expressed as `yTop` — distance DOWN from the top edge, the way
  * the extraction reports them — and converted to pdf-lib's bottom-left origin
- * in one place (`onRule` / `inBox`). The three TAFSAL blanks share one layout
- * to the hundredth of a point; the TAFSS blank re-typesets a few labels
- * (LEVEL → CLASS, TAFSAL → TAFSS) and its rules start slightly differently, so
- * it carries its own overrides. If the artwork is ever re-exported, re-measure
+ * in one place (`onRule` / `inBox`, both of which centre the value). The three
+ * TAFSAL blanks share one layout to the hundredth of a point; the TAFSS blank
+ * re-typesets a few labels (LEVEL → CLASS, TAFSAL → TAFSS) and its rules start
+ * slightly differently, so it carries its own overrides. If the artwork is ever re-exported, re-measure
  * rather than nudging these by eye.
  */
 
@@ -363,14 +363,21 @@ export async function fillLeavingCertificate(
     return s;
   };
 
-  /** Writes a value sitting on an underlined blank, left-aligned to its rule. */
+  /**
+   * Writes a value centred on its underlined blank. The captions under the
+   * rules (LAST / FIRST / MIDDLE, MONTH / DAY / YEAR, COUNTRY …) are centred, and
+   * a short value like "JR-I" left-aligned on a long rule reads as sitting off to
+   * one side, so every rule is filled centred. `RULE_INDENT` on both ends still
+   * keeps a value that fills the whole rule clear of its label.
+   */
   const onRule = (rule: Rule, value: unknown, size = DEFAULT_SIZE) => {
     const text = clean(value);
     if (!text) return;
     const width = rule.x1 - rule.x0;
-    const fontSize = fit(text, width - RULE_INDENT, size);
+    const fontSize = fit(text, width - 2 * RULE_INDENT, size);
+    const textWidth = font.widthOfTextAtSize(text, fontSize);
     page.drawText(text, {
-      x: rule.x0 + RULE_INDENT,
+      x: rule.x0 + (width - textWidth) / 2,
       y: PAGE_HEIGHT - rule.y + RULE_CLEARANCE,
       size: fontSize,
       font,
