@@ -345,9 +345,9 @@ export async function fillLeavingCertificate(
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.load(readFileSync(resolveTemplatePath(template.file)));
   const page = pdfDoc.getPage(0);
-  // Helvetica-Bold against the template's Times labels: a filled value should
-  // read as filled in, not as more of the pre-printed form.
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  // Times-Bold, the same serif family as the blank's own labels, so the filled
+  // values read as part of the certificate rather than stamped on top of it.
+  const font = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const { rules: RULE, boxes: BOX } = template;
 
   const ink = rgb(0, 0, 0);
