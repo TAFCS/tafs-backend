@@ -3,23 +3,31 @@ import { join } from 'path';
 import { PDFDocument, PDFPage, StandardFonts, rgb } from 'pdf-lib';
 
 /**
- * TAFSAL Leaving Certificate — fills the school's own pre-printed blank.
+ * Leaving Certificate — fills the school's own pre-printed blanks.
  *
- * Every other segment's SLC is drawn from scratch by the webapp's
- * `LeavingCertificatePDF` component. TAFSAL is different: the school supplied a
- * finished A4 artwork (`slc-formats/slc-tafsal.pdf`) with its header, crests,
- * rules, boxes and footer already on the page, and the certificate must come out
- * as that exact sheet with the data typed onto it. So nothing is re-drawn here —
- * the template is loaded and values are stamped at the coordinates of its own
- * rules and boxes.
+ * The school supplied finished A4 artwork for the certificate
+ * (`slc-formats/slc-*.pdf`), one sheet per campus / segment, each with its
+ * header, crests, rules, boxes and campus footer already on the page. The
+ * certificate must come out as that exact sheet with the data typed onto it, so
+ * nothing is re-drawn here — the blank is loaded and values are stamped at the
+ * coordinates of its own rules and boxes.
  *
- * COORDINATES. Every number below was measured off the template's content
- * stream, not eyeballed: the horizontal rules and box borders are real vector
- * segments and the labels are real text runs, so each field's line is known
- * exactly. They are all expressed as `yTop` — distance DOWN from the top edge,
- * the way the extraction reports them — and converted to pdf-lib's
- * bottom-left origin in one place (`baselineOnRule` / `centreInBox`). If the
- * artwork is ever re-exported, re-measure rather than nudging these by eye.
+ * WHICH BLANK. `resolveSlcTemplate` — campus first, then class:
+ *   - Kaneez Fatima campus, any class  → slc-tafsal-kaneez-fatima.pdf
+ *   - North Nazimabad campus, any class → slc-tafsal-north-nazimabad.pdf
+ *   - classes 15–19 (VI–X, Secondary)   → slc-tafss-jauhar.pdf
+ *   - everyone else                      → slc-tafsal-jauhar.pdf
+ *
+ * COORDINATES. Every number below was measured off the blanks' content streams,
+ * not eyeballed: the horizontal rules and box borders are real vector segments
+ * and the labels are real text runs, so each field's line is known exactly.
+ * They are all expressed as `yTop` — distance DOWN from the top edge, the way
+ * the extraction reports them — and converted to pdf-lib's bottom-left origin
+ * in one place (`onRule` / `inBox`). The three TAFSAL blanks share one layout
+ * to the hundredth of a point; the TAFSS blank re-typesets a few labels
+ * (LEVEL → CLASS, TAFSAL → TAFSS) and its rules start slightly differently, so
+ * it carries its own overrides. If the artwork is ever re-exported, re-measure
+ * rather than nudging these by eye.
  */
 
 export const PAGE_HEIGHT = 841.8898;
@@ -53,25 +61,7 @@ interface Box {
   x1: number;
 }
 
-/**
- * The blank ships with a literal "-" typed into six places (three sidebar
- * boxes, the father's middle-name blank, identification marks and last school
- * attended). They are placeholders on an empty form, not separators, so they
- * are painted out before the real values land on top.
- *
- * The COMPUTER CODE box's dash is deliberately NOT in this list — there the
- * template reads "TAFSAL  -" and the dash separates the prefix from the code.
- */
-const PLACEHOLDER_DASHES: { x0: number; x1: number; top: number; bottom: number }[] = [
-  { x0: 112.0, x1: 121.0, top: 111.0, bottom: 127.5 }, // REGISTRATION # box
-  { x0: 108.5, x1: 116.8, top: 389.0, bottom: 405.0 }, // G. R. # box
-  { x0: 108.3, x1: 116.6, top: 540.8, bottom: 557.0 }, // S. L. C. # box
-  { x0: 495.5, x1: 501.6, top: 121.6, bottom: 130.6 }, // FATHER'S NAME — MIDDLE
-  { x0: 412.8, x1: 418.8, top: 291.1, bottom: 300.4 }, // MARK (S) OF IDENTIFICATION
-  { x0: 411.5, x1: 417.4, top: 315.7, bottom: 324.0 }, // LAST SCHOOL ATTENDED
-];
-
-/** Underlined blanks, keyed by the field that is written on them. */
+/** Underlined blanks on the TAFSAL layout, keyed by the field written on them. */
 export const RULES = {
   nameLast:        { y: 102.09, x0: 268.81, x1: 340.28 },
   nameFirst:       { y: 102.09, x0: 361.38, x1: 432.85 },
@@ -127,13 +117,13 @@ export const RULES = {
   date:            { y: 767.34, x0: 347.81, x1: 528.32 },
 } satisfies Record<string, Rule>;
 
-/** Bordered boxes. */
+/** Bordered boxes on the TAFSAL layout. */
 export const BOXES = {
-  registration:      { top: 105.39, bottom: 130.04, x0: 71.40, x1: 178.56 },
-  computerCode:      { top: 247.82, bottom: 272.47, x0: 71.40, x1: 178.56 },
-  grNumber:          { top: 383.06, bottom: 407.72, x0: 71.40, x1: 178.56 },
-  slcNumber:         { top: 534.26, bottom: 558.92, x0: 71.40, x1: 178.56 },
-  photo:             { top: 651.85, bottom: 790.69, x0: 65.84, x1: 184.91 },
+  registration:      { top: 105.39, bottom: 130.04, x0: 57.00, x1: 164.16 },
+  computerCode:      { top: 247.82, bottom: 272.47, x0: 57.00, x1: 164.16 },
+  grNumber:          { top: 383.06, bottom: 407.72, x0: 57.00, x1: 164.16 },
+  slcNumber:         { top: 534.26, bottom: 558.92, x0: 57.00, x1: 164.16 },
+  photo:             { top: 651.85, bottom: 790.69, x0: 51.44, x1: 170.51 },
 
   admittedYearFrom:  { top: 375.64, bottom: 387.78, x0: 277.77, x1: 299.37 },
   admittedYearTo:    { top: 375.64, bottom: 387.78, x0: 310.27, x1: 331.87 },
@@ -154,64 +144,159 @@ export const BOXES = {
 } satisfies Record<string, Box>;
 
 /**
- * The blank arrives with MALE and MUSLIM already ticked — convenient for the
- * common case and wrong for everyone else, and a tick cannot be un-drawn. Both
- * pre-printed ticks are therefore always painted out, their boxes re-stroked,
- * and the correct tick drawn from scratch. The tick artwork overhangs the top
- * of its box, so these cover a taller band than the box itself.
+ * Where the TAFSS blank differs from the TAFSAL layout. Everything not listed
+ * here sits exactly where it does on the TAFSAL sheets.
  */
-const PRINTED_TICKS = [
-  { x0: 264.8, x1: 292.2, top: 233.8, bottom: 257.2, box: BOXES.sexMale },
-  { x0: 264.8, x1: 292.2, top: 258.4, bottom: 281.6, box: BOXES.religionMuslim },
-];
+const TAFSS_RULES: typeof RULES = {
+  ...RULES,
+  fatherLast:     { y: 131.21, x0: 324.18, x1: 388.74 },
+  lastSchool:     { y: 324.99, x0: 302.25, x1: 528.36 },
+  admissionMonth: { y: 349.75, x0: 283.12, x1: 351.98 },
+  section:        { y: 432.89, x0: 417.75, x1: 528.36 },
+  promotedLevel:  { y: 573.53, x0: 331.50, x1: 359.81 },
+  resitSubjects:  { y: 598.00, x0: 444.33, x1: 528.36 },
+  remarks:        { y: 694.86, x0: 235.84, x1: 526.11 },
+  preparedBy:     { y: 719.11, x0: 259.17, x1: 310.91 },
+  recheckedBy:    { y: 719.11, x0: 383.25, x1: 430.87 },
+  postedBy:       { y: 719.11, x0: 483.00, x1: 528.36 },
+  leadTeacher:    { y: 743.21, x0: 269.20, x1: 345.23 },
+  directress:     { y: 743.07, x0: 462.75, x1: 528.36 },
+  day:            { y: 767.34, x0: 218.81, x1: 315.97 },
+  date:           { y: 767.34, x0: 349.81, x1: 528.32 },
+};
 
-export interface TafsalNameParts {
+const TAFSS_BOXES: typeof BOXES = {
+  ...BOXES,
+  presentYearFrom: { top: 447.12, bottom: 459.26, x0: 284.97, x1: 306.57 },
+  presentYearTo:   { top: 447.12, bottom: 459.26, x0: 317.47, x1: 339.07 },
+};
+
+export type SlcTemplateId =
+  | 'tafsal-jauhar'
+  | 'tafsal-kaneez-fatima'
+  | 'tafsal-north-nazimabad'
+  | 'tafss-jauhar';
+
+export interface SlcTemplate {
+  id: SlcTemplateId;
+  /** File name inside `slc-formats/`. */
+  file: string;
+  /** The segment the blank is printed for — its title and COMPUTER CODE prefix. */
+  prefix: 'TAFSAL' | 'TAFSS';
+  /**
+   * Right edge of the prefix pre-printed in the COMPUTER CODE box. The blank
+   * prints only "TAFSAL" / "TAFSS"; the dash and the code are written after it.
+   */
+  codePrefixEnd: number;
+  rules: typeof RULES;
+  boxes: typeof BOXES;
+}
+
+export const SLC_TEMPLATES: Record<SlcTemplateId, SlcTemplate> = {
+  'tafsal-jauhar': {
+    id: 'tafsal-jauhar',
+    file: 'slc-tafsal-jauhar.pdf',
+    prefix: 'TAFSAL',
+    codePrefixEnd: 106.16,
+    rules: RULES,
+    boxes: BOXES,
+  },
+  'tafsal-kaneez-fatima': {
+    id: 'tafsal-kaneez-fatima',
+    file: 'slc-tafsal-kaneez-fatima.pdf',
+    prefix: 'TAFSAL',
+    codePrefixEnd: 106.16,
+    rules: RULES,
+    boxes: BOXES,
+  },
+  'tafsal-north-nazimabad': {
+    id: 'tafsal-north-nazimabad',
+    file: 'slc-tafsal-north-nazimabad.pdf',
+    prefix: 'TAFSAL',
+    codePrefixEnd: 106.16,
+    rules: RULES,
+    boxes: BOXES,
+  },
+  'tafss-jauhar': {
+    id: 'tafss-jauhar',
+    file: 'slc-tafss-jauhar.pdf',
+    prefix: 'TAFSS',
+    codePrefixEnd: 96.8,
+    rules: TAFSS_RULES,
+    boxes: TAFSS_BOXES,
+  },
+};
+
+/** `campuses.id` — KNF and NNZ. Gulistan-e-Jauhar (GEJ, id 1) is the default. */
+const KANEEZ_FATIMA_CAMPUS_ID = 2;
+const NORTH_NAZIMABAD_CAMPUS_ID = 3;
+/** `classes.id` 15–19 — VI, VII, VIII, IX, X (Secondary). */
+const TAFSS_CLASS_IDS = new Set([15, 16, 17, 18, 19]);
+
+/**
+ * Picks the blank a student's certificate is printed on. Campus wins over
+ * class: a secondary student at Kaneez Fatima or North Nazimabad still gets
+ * that campus's sheet, because the campus footer is what the blank is for.
+ */
+export function resolveSlcTemplate(student: {
+  campus_id?: number | null;
+  class_id?: number | null;
+}): SlcTemplate {
+  if (student.campus_id === KANEEZ_FATIMA_CAMPUS_ID) return SLC_TEMPLATES['tafsal-kaneez-fatima'];
+  if (student.campus_id === NORTH_NAZIMABAD_CAMPUS_ID) return SLC_TEMPLATES['tafsal-north-nazimabad'];
+  if (student.class_id != null && TAFSS_CLASS_IDS.has(student.class_id)) {
+    return SLC_TEMPLATES['tafss-jauhar'];
+  }
+  return SLC_TEMPLATES['tafsal-jauhar'];
+}
+
+export interface SlcNameParts {
   last?: string | null;
   first?: string | null;
   middle?: string | null;
 }
 
-export interface TafsalDateParts {
+export interface SlcDateParts {
   month?: string | null;
   day?: string | null;
   year?: string | null;
 }
 
-export interface TafsalYearParts {
+export interface SlcYearParts {
   from?: string | null;
   to?: string | null;
 }
 
 /** Exactly the payload `getLeavingCertificateData` returns, plus the two
  *  fields only the operator can supply. */
-export interface TafsalCertificateData {
+export interface SlcCertificateData {
   registration_number?: string | null;
   cc?: number | string | null;
   gr_number?: string | null;
   slc_number?: string | null;
-  name?: TafsalNameParts;
-  father_name?: TafsalNameParts;
-  dob?: TafsalDateParts;
+  name?: SlcNameParts;
+  father_name?: SlcNameParts;
+  dob?: SlcDateParts;
   place_of_birth?: { country?: string | null; province?: string | null; city?: string | null };
   nationality?: string | null;
   gender?: string | null;
   religion?: string | null;
   identification_marks?: string | null;
   last_school_attended?: string | null;
-  date_of_admission?: TafsalDateParts;
-  scholastic_year_admitted?: TafsalYearParts;
+  date_of_admission?: SlcDateParts;
+  scholastic_year_admitted?: SlcYearParts;
   class_admitted?: string | null;
   present_level?: string | null;
   section?: string | null;
-  scholastic_year_present?: TafsalYearParts;
-  last_date_of_attendance?: TafsalDateParts;
+  scholastic_year_present?: SlcYearParts;
+  last_date_of_attendance?: SlcDateParts;
   reason_for_leaving?: string | null;
-  result_scholastic_year?: TafsalYearParts;
+  result_scholastic_year?: SlcYearParts;
   passed_promoted_level?: string | null;
-  passed_promoted_year?: TafsalYearParts;
+  passed_promoted_year?: SlcYearParts;
   resit_subjects?: string | null;
   detained_level?: string | null;
-  detained_year?: TafsalYearParts;
+  detained_year?: SlcYearParts;
   school_dues?: string | null;
   remarks?: string | null;
   prepared_by?: string | null;
@@ -234,12 +319,12 @@ const clean = (value: unknown): string => {
   return s === '—' || s === '-' || s === 'N/A' ? '' : s;
 };
 
-const resolveTemplatePath = (): string => {
+const resolveTemplatePath = (file: string): string => {
   // process.cwd() is the repo root under `nest start` and on the deployed box
   // alike; the __dirname hop is the fallback for a build run from elsewhere.
   const candidates = [
-    join(process.cwd(), 'slc-formats', 'slc-tafsal.pdf'),
-    join(__dirname, '..', '..', '..', 'slc-formats', 'slc-tafsal.pdf'),
+    join(process.cwd(), 'slc-formats', file),
+    join(__dirname, '..', '..', '..', 'slc-formats', file),
   ];
   for (const path of candidates) {
     try {
@@ -250,32 +335,22 @@ const resolveTemplatePath = (): string => {
     }
   }
   throw new Error(
-    `TAFSAL leaving-certificate template not found. Looked in: ${candidates.join(', ')}`,
+    `Leaving-certificate template ${file} not found. Looked in: ${candidates.join(', ')}`,
   );
 };
 
-export async function fillTafsalLeavingCertificate(
-  data: TafsalCertificateData,
+export async function fillLeavingCertificate(
+  data: SlcCertificateData,
+  template: SlcTemplate,
 ): Promise<Uint8Array> {
-  const pdfDoc = await PDFDocument.load(readFileSync(resolveTemplatePath()));
+  const pdfDoc = await PDFDocument.load(readFileSync(resolveTemplatePath(template.file)));
   const page = pdfDoc.getPage(0);
   // Helvetica-Bold against the template's Times labels: a filled value should
   // read as filled in, not as more of the pre-printed form.
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const { rules: RULE, boxes: BOX } = template;
 
-  const white = rgb(1, 1, 1);
   const ink = rgb(0, 0, 0);
-
-  const cover = (r: { x0: number; x1: number; top: number; bottom: number }) =>
-    page.drawRectangle({
-      x: r.x0,
-      y: PAGE_HEIGHT - r.bottom,
-      width: r.x1 - r.x0,
-      height: r.bottom - r.top,
-      color: white,
-    });
-
-  PLACEHOLDER_DASHES.forEach(cover);
 
   /**
    * Shrinks a value until it fits its blank. Names, remarks and a reason for
@@ -342,18 +417,22 @@ export async function fillTafsalLeavingCertificate(
   };
 
   // ── Sidebar boxes ────────────────────────────────────────────────────────
-  inBox(BOXES.registration, data.registration_number, 11);
-  inBox(BOXES.grNumber, data.gr_number, 11);
-  inBox(BOXES.slcNumber, data.slc_number, 11);
-  // The template already prints "TAFSAL  -" in this box; only the code itself
-  // is missing, so it is written after the dash rather than centred.
+  inBox(BOX.registration, data.registration_number, 11);
+  inBox(BOX.grNumber, data.gr_number, 11);
+  inBox(BOX.slcNumber, data.slc_number, 11);
+  // The blank prints only the segment prefix ("TAFSAL" / "TAFSS") in this box;
+  // the separating dash and the code itself are written after it.
   const computerCode = clean(data.cc);
   if (computerCode) {
-    const codeX = 148;
-    const codeSize = fit(computerCode, BOXES.computerCode.x1 - codeX - 4, 11);
+    // The printed prefix's baseline (its text box bottom, less the descender).
+    const baseline = PAGE_HEIGHT - 264.7;
+    const dashX = template.codePrefixEnd + 5;
+    page.drawText('-', { x: dashX, y: baseline, size: 11, font, color: ink });
+    const codeX = dashX + font.widthOfTextAtSize('-', 11) + 5;
+    const codeSize = fit(computerCode, BOX.computerCode.x1 - codeX - 4, 11);
     page.drawText(computerCode, {
       x: codeX,
-      y: PAGE_HEIGHT - 266.8,
+      y: baseline,
       size: codeSize,
       font,
       color: ink,
@@ -361,108 +440,97 @@ export async function fillTafsalLeavingCertificate(
   }
 
   // ── Identity ─────────────────────────────────────────────────────────────
-  onRule(RULES.nameLast, data.name?.last);
-  onRule(RULES.nameFirst, data.name?.first);
-  onRule(RULES.nameMiddle, data.name?.middle);
+  onRule(RULE.nameLast, data.name?.last);
+  onRule(RULE.nameFirst, data.name?.first);
+  onRule(RULE.nameMiddle, data.name?.middle);
 
-  onRule(RULES.fatherLast, data.father_name?.last);
-  onRule(RULES.fatherFirst, data.father_name?.first);
-  onRule(RULES.fatherMiddle, data.father_name?.middle);
+  onRule(RULE.fatherLast, data.father_name?.last);
+  onRule(RULE.fatherFirst, data.father_name?.first);
+  onRule(RULE.fatherMiddle, data.father_name?.middle);
 
-  onRule(RULES.dobMonth, data.dob?.month);
-  onRule(RULES.dobDay, data.dob?.day);
-  onRule(RULES.dobYear, data.dob?.year);
+  onRule(RULE.dobMonth, data.dob?.month);
+  onRule(RULE.dobDay, data.dob?.day);
+  onRule(RULE.dobYear, data.dob?.year);
 
-  onRule(RULES.pobCountry, data.place_of_birth?.country);
-  onRule(RULES.pobProvince, data.place_of_birth?.province);
-  onRule(RULES.pobCity, data.place_of_birth?.city);
+  onRule(RULE.pobCountry, data.place_of_birth?.country);
+  onRule(RULE.pobProvince, data.place_of_birth?.province);
+  onRule(RULE.pobCity, data.place_of_birth?.city);
 
-  onRule(RULES.nationality, data.nationality);
+  onRule(RULE.nationality, data.nationality);
 
   // ── Sex / religion ───────────────────────────────────────────────────────
-  for (const printed of PRINTED_TICKS) {
-    cover(printed);
-    page.drawRectangle({
-      x: printed.box.x0,
-      y: PAGE_HEIGHT - printed.box.bottom,
-      width: printed.box.x1 - printed.box.x0,
-      height: printed.box.bottom - printed.box.top,
-      borderColor: ink,
-      borderWidth: 0.9,
-    });
-  }
-
+  // The blanks ship with every box empty, so exactly one tick is drawn per row.
   const gender = clean(data.gender).toUpperCase();
-  tick(gender.startsWith('F') ? BOXES.sexFemale : BOXES.sexMale);
+  tick(gender.startsWith('F') ? BOX.sexFemale : BOX.sexMale);
 
   const religion = clean(data.religion).toUpperCase();
   if (religion.startsWith('CHRIST')) {
-    tick(BOXES.religionChristian);
+    tick(BOX.religionChristian);
   } else if (!religion || religion.startsWith('MUSLIM') || religion.startsWith('ISLAM')) {
-    tick(BOXES.religionMuslim);
+    tick(BOX.religionMuslim);
   } else {
     // Anything else belongs on the OTHERS blank, with neither box ticked.
-    onRule(RULES.religionOthers, religion);
+    onRule(RULE.religionOthers, religion);
   }
 
-  onRule(RULES.identification, data.identification_marks);
-  onRule(RULES.lastSchool, data.last_school_attended);
+  onRule(RULE.identification, data.identification_marks);
+  onRule(RULE.lastSchool, data.last_school_attended);
 
   // ── Admission ────────────────────────────────────────────────────────────
-  onRule(RULES.admissionMonth, data.date_of_admission?.month);
-  onRule(RULES.admissionDay, data.date_of_admission?.day);
-  onRule(RULES.admissionYear, data.date_of_admission?.year);
+  onRule(RULE.admissionMonth, data.date_of_admission?.month);
+  onRule(RULE.admissionDay, data.date_of_admission?.day);
+  onRule(RULE.admissionYear, data.date_of_admission?.year);
 
-  inBox(BOXES.admittedYearFrom, data.scholastic_year_admitted?.from, 7);
-  inBox(BOXES.admittedYearTo, data.scholastic_year_admitted?.to, 7);
-  inBox(BOXES.levelAdmitted, data.class_admitted, 7);
+  inBox(BOX.admittedYearFrom, data.scholastic_year_admitted?.from, 7);
+  inBox(BOX.admittedYearTo, data.scholastic_year_admitted?.to, 7);
+  inBox(BOX.levelAdmitted, data.class_admitted, 7);
 
-  onRule(RULES.presentLevel, data.present_level);
-  onRule(RULES.section, data.section);
-  inBox(BOXES.presentYearFrom, data.scholastic_year_present?.from, 7);
-  inBox(BOXES.presentYearTo, data.scholastic_year_present?.to, 7);
+  onRule(RULE.presentLevel, data.present_level);
+  onRule(RULE.section, data.section);
+  inBox(BOX.presentYearFrom, data.scholastic_year_present?.from, 7);
+  inBox(BOX.presentYearTo, data.scholastic_year_present?.to, 7);
 
   // ── Leaving ──────────────────────────────────────────────────────────────
-  onRule(RULES.attendanceMonth, data.last_date_of_attendance?.month);
-  onRule(RULES.attendanceDay, data.last_date_of_attendance?.day);
-  onRule(RULES.attendanceYear, data.last_date_of_attendance?.year);
+  onRule(RULE.attendanceMonth, data.last_date_of_attendance?.month);
+  onRule(RULE.attendanceDay, data.last_date_of_attendance?.day);
+  onRule(RULE.attendanceYear, data.last_date_of_attendance?.year);
 
-  onRule(RULES.reasonLeaving, data.reason_for_leaving);
+  onRule(RULE.reasonLeaving, data.reason_for_leaving);
 
-  inBox(BOXES.resultYearFrom, data.result_scholastic_year?.from, 7);
-  inBox(BOXES.resultYearTo, data.result_scholastic_year?.to, 7);
+  inBox(BOX.resultYearFrom, data.result_scholastic_year?.from, 7);
+  inBox(BOX.resultYearTo, data.result_scholastic_year?.to, 7);
 
-  onRule(RULES.promotedLevel, data.passed_promoted_level, 7);
-  inBox(BOXES.promotedYearFrom, data.passed_promoted_year?.from, 7);
-  inBox(BOXES.promotedYearTo, data.passed_promoted_year?.to, 7);
+  onRule(RULE.promotedLevel, data.passed_promoted_level, 7);
+  inBox(BOX.promotedYearFrom, data.passed_promoted_year?.from, 7);
+  inBox(BOX.promotedYearTo, data.passed_promoted_year?.to, 7);
 
   // The form gives resit subjects a short tail after its label and a full-width
   // second line; a long list uses the wide line rather than being squeezed.
   const resit = clean(data.resit_subjects);
   if (resit) {
-    if (font.widthOfTextAtSize(resit, DEFAULT_SIZE) <= RULES.resitSubjects.x1 - RULES.resitSubjects.x0) {
-      onRule(RULES.resitSubjects, resit);
+    if (font.widthOfTextAtSize(resit, DEFAULT_SIZE) <= RULE.resitSubjects.x1 - RULE.resitSubjects.x0) {
+      onRule(RULE.resitSubjects, resit);
     } else {
-      onRule(RULES.resitOverflow, resit);
+      onRule(RULE.resitOverflow, resit);
     }
   }
 
-  onRule(RULES.detainedLevel, data.detained_level, 7);
-  inBox(BOXES.detainedYearFrom, data.detained_year?.from, 7);
-  inBox(BOXES.detainedYearTo, data.detained_year?.to, 7);
+  onRule(RULE.detainedLevel, data.detained_level, 7);
+  inBox(BOX.detainedYearFrom, data.detained_year?.from, 7);
+  inBox(BOX.detainedYearTo, data.detained_year?.to, 7);
 
   // ── Footer ───────────────────────────────────────────────────────────────
-  onRule(RULES.dues, data.school_dues);
-  onRule(RULES.remarks, data.remarks);
-  onRule(RULES.preparedBy, data.prepared_by, 7);
-  onRule(RULES.recheckedBy, data.rechecked_by, 7);
-  onRule(RULES.postedBy, data.posted_by, 7);
-  onRule(RULES.leadTeacher, data.class_teacher, 7);
-  onRule(RULES.directress, data.programme_directress, 7);
-  onRule(RULES.day, data.day);
-  onRule(RULES.date, data.date);
+  onRule(RULE.dues, data.school_dues);
+  onRule(RULE.remarks, data.remarks);
+  onRule(RULE.preparedBy, data.prepared_by, 7);
+  onRule(RULE.recheckedBy, data.rechecked_by, 7);
+  onRule(RULE.postedBy, data.posted_by, 7);
+  onRule(RULE.leadTeacher, data.class_teacher, 7);
+  onRule(RULE.directress, data.programme_directress, 7);
+  onRule(RULE.day, data.day);
+  onRule(RULE.date, data.date);
 
-  await drawPhotograph(pdfDoc, page, data.photograph_base64);
+  await drawPhotograph(pdfDoc, page, BOX.photo, data.photograph_base64);
 
   return pdfDoc.save();
 }
@@ -475,6 +543,7 @@ export async function fillTafsalLeavingCertificate(
 async function drawPhotograph(
   pdfDoc: PDFDocument,
   page: PDFPage,
+  box: Box,
   base64: string | null | undefined,
 ): Promise<void> {
   if (!base64) return;
@@ -484,7 +553,6 @@ async function drawPhotograph(
     const bytes = Buffer.from(payload, 'base64');
     const image = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
 
-    const box = BOXES.photo;
     const maxW = box.x1 - box.x0 - 6;
     const maxH = box.bottom - box.top - 6;
     const scale = Math.min(maxW / image.width, maxH / image.height);

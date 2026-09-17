@@ -113,25 +113,26 @@ export class EnrollmentController {
   }
 
   /**
-   * TAFSAL only. Returns the leaving certificate already stamped onto the
-   * school's pre-printed blank, as PDF bytes — the other segments render their
-   * certificate in the browser instead. The body carries whatever the operator
-   * has on the form, so edits made there are what print.
+   * Returns the leaving certificate already stamped onto the school's
+   * pre-printed blank for the student's campus / class, as PDF bytes. The body
+   * carries whatever the operator has on the form, so edits made there are what
+   * print. `tafsal-pdf` is the route's old name, kept so a webapp still on the
+   * previous build keeps working through a deploy.
    */
-  @Post(':cc/leaving-certificate/tafsal-pdf')
-  @ApiOperation({ summary: 'Render the TAFSAL leaving certificate onto its pre-printed blank' })
-  async getTafsalLeavingCertificatePdf(
+  @Post([':cc/leaving-certificate/pdf', ':cc/leaving-certificate/tafsal-pdf'])
+  @ApiOperation({ summary: 'Render the leaving certificate onto its pre-printed blank' })
+  async getLeavingCertificatePdf(
     @Param('cc', ParseIntPipe) cc: number,
     @Body() body: Record<string, any>,
     @Res() res: Response,
   ) {
-    const pdfBytes = await this.enrollmentService.renderTafsalLeavingCertificate(cc, body ?? {});
+    const { pdf, prefix } = await this.enrollmentService.renderLeavingCertificate(cc, body ?? {});
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="TAFSAL_Leaving_Certificate_${cc}.pdf"`,
+      `attachment; filename="${prefix}_Leaving_Certificate_${cc}.pdf"`,
     );
-    res.end(Buffer.from(pdfBytes));
+    res.end(Buffer.from(pdf));
   }
 
   @Post(':cc/log-certificate-generation')

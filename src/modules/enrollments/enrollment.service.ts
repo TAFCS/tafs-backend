@@ -13,9 +13,12 @@ import {
   grNumericInSeries,
 } from '../../common/utils/gr-number.util';
 import {
-  fillTafsalLeavingCertificate,
-  type TafsalCertificateData,
-} from './slc-tafsal-template';
+  fillLeavingCertificate,
+  resolveSlcTemplate,
+  SLC_TEMPLATES,
+  type SlcCertificateData,
+  type SlcTemplateId,
+} from './slc-template';
 
 @Injectable()
 export class EnrollmentService {
@@ -1062,10 +1065,14 @@ export class EnrollmentService {
 
     const headerPrefix = resolvePrefix();
     const headerTitle = `${headerPrefix} LEAVING CERTIFICATE`;
+    const slcTemplate = resolveSlcTemplate(student);
 
     return {
       header_title: headerTitle,
       header_prefix: headerPrefix,
+      /** The pre-printed blank this student's certificate is filled onto. */
+      slc_template: slcTemplate.id,
+      slc_template_prefix: slcTemplate.prefix,
       slc_number: String(slcNumber),
       cc: student.cc,
       gr_number: student.gr_number || '—',
@@ -1120,22 +1127,24 @@ export class EnrollmentService {
   }
 
   /**
-   * Renders the TAFSAL leaving certificate onto the school's own pre-printed
-   * blank (`slc-formats/slc-tafsal.pdf`) instead of drawing one from scratch.
+   * Renders the leaving certificate onto the school's own pre-printed blank
+   * (`slc-formats/slc-*.pdf`, chosen by `resolveSlcTemplate` from the student's
+   * campus and class) instead of drawing one from scratch.
    *
-   * Every other segment still renders client-side through
-   * `LeavingCertificatePDF`; TAFSAL has a finished artwork that the certificate
-   * must come out as, so the fill happens here where pdf-lib and the template
-   * both live. The caller passes the values it is actually showing on screen —
-   * the operator may have edited any of them — rather than a CC we re-read, so
-   * what prints is what was on the form.
+   * The school supplied finished artwork that the certificate must come out as,
+   * so the fill happens here where pdf-lib and the blanks both live. The caller
+   * passes the values it is actually showing on screen — the operator may have
+   * edited any of them — rather than a CC we re-read, so what prints is what was
+   * on the form. The blank itself is NOT taken from the body: it follows the
+   * student record.
    */
-  async renderTafsalLeavingCertificate(
+  async renderLeavingCertificate(
     cc: number,
-    overrides: Partial<TafsalCertificateData> = {},
-  ): Promise<Uint8Array> {
+    overrides: Partial<SlcCertificateData> = {},
+  ): Promise<{ pdf: Uint8Array; prefix: string }> {
     const base = await this.getLeavingCertificateData(cc);
-    const merged = { ...base, ...overrides } as TafsalCertificateData & {
+    const template = SLC_TEMPLATES[base.slc_template as SlcTemplateId];
+    const merged = { ...base, ...overrides } as SlcCertificateData & {
       photograph_url?: string | null;
     };
     // The photograph is fetched here rather than posted up as base64: a student
@@ -1146,7 +1155,7 @@ export class EnrollmentService {
     if (!merged.photograph_base64 && merged.photograph_url) {
       merged.photograph_base64 = await this.fetchPhotographBase64(merged.photograph_url);
     }
-    return fillTafsalLeavingCertificate(merged);
+    return { pdf: await fillLeavingCertificate(merged, template), prefix: template.prefix };
   }
 
   /**
