@@ -117,14 +117,29 @@ export class ZkDeviceController {
     res.send('OK\n');
   }
 
-  // Device polls this for pending commands — just acknowledge
+  /**
+   * Device polls this for pending commands. Plain "OK" means nothing to do.
+   * A queued command goes out as `C:<id>:<command>`; the device reports the
+   * result to POST devicecmd. Command lookup must never break the poll — on any
+   * failure the device just gets "OK", exactly as before commands existed.
+   */
   @Get('getrequest')
   @HttpCode(HttpStatus.OK)
   getRequest(@Query() query: Record<string, string>, @Res() res: Response) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
     this.logger.debug(`GET getrequest: SN=${sn}`);
+    let reply = 'OK\n';
+    try {
+      const pending = this.zkPushService.takeDeviceCommand(sn);
+      if (pending) {
+        reply = `C:${pending.id}:${pending.command}\n`;
+        this.logger.log(`Sent device command C:${pending.id} to SN=${sn}`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Device command lookup failed for SN=${sn}: ${err.message}`);
+    }
     res.setHeader('Content-Type', 'text/plain');
-    res.send('OK\n');
+    res.send(reply);
   }
 
   /**
@@ -152,17 +167,40 @@ export class ZkDeviceController {
   /**
    * POST /iclock/devicecmd — newer ADMS v2 firmware sends command-execution
    * acknowledgements here instead of (or in addition to) getrequest.
-   * Just acknowledge so the device doesn't retry.
+   * Body looks like `ID=123&Return=0&CMD=DATA` (Return 0 = success).
+   * Logged to zk_push_logs so command results are visible in the raw logs tab;
+   * handlePush never throws, so the device always gets its OK.
    */
   @Post('devicecmd')
   @HttpCode(HttpStatus.OK)
-  postDeviceCmd(
+  async postDeviceCmd(
     @Query() query: Record<string, string>,
     @Body() rawBody: string,
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
-    this.logger.debug(`devicecmd ack from SN=${sn}: ${(rawBody ?? '').slice(0, 200)}`);
+    this.logger.log(`devicecmd ack from SN=${sn}: ${(rawBody ?? '').slice(0, 200)}`);
+    await this.zkPushService.handlePush({ sn, query, body: `DEVICECMD ${(rawBody ?? '').slice(0, 2000)}` });
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('OK\n');
+  }
+
+  /**
+   * POST /iclock/querydata — some Push v3 firmware answers a DATA QUERY here
+   * instead of through POST cdata. Logged raw only (not processed) until we have
+   * seen a real payload and know its format; returning OK stops the device
+   * retrying against a 404.
+   */
+  @Post('querydata')
+  @HttpCode(HttpStatus.OK)
+  async postQueryData(
+    @Query() query: Record<string, string>,
+    @Body() rawBody: string,
+    @Res() res: Response,
+  ) {
+    const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.logger.log(`querydata from SN=${sn}: ${JSON.stringify(query)} body=${(rawBody ?? '').slice(0, 200)}`);
+    await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
     res.setHeader('Content-Type', 'text/plain');
     res.send('OK\n');
   }

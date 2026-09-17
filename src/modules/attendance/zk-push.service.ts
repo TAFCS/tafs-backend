@@ -2,11 +2,47 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 
+/** A server→device command waiting for the device's next GET /iclock/getrequest. */
+export interface PendingDeviceCommand {
+  id: number;
+  command: string;
+  queuedAt: Date;
+}
+
 @Injectable()
 export class ZkPushService {
   private readonly logger = new Logger(ZkPushService.name);
 
+  /**
+   * TRIAL — deliberately in memory, not a table, so this ships with no migration
+   * (CLAUDE.md rule 11). At most ONE pending command per device: a newer one
+   * replaces an older one that was never picked up, so a device that stays
+   * offline for days gets one command on reconnect, not a pile. A restart drops
+   * whatever is queued, which is acceptable while we find out whether the
+   * firmware honours the command at all.
+   */
+  private readonly pendingCommands = new Map<string, PendingDeviceCommand>();
+  private nextCommandId = Math.floor(Date.now() / 1000) % 1_000_000;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  queueDeviceCommand(sn: string, command: string): PendingDeviceCommand {
+    const pending = { id: this.nextCommandId++, command, queuedAt: new Date() };
+    const replaced = this.pendingCommands.get(sn);
+    this.pendingCommands.set(sn, pending);
+    this.logger.log(
+      `Queued device command C:${pending.id} for SN=${sn}: ${command.replace(/\t/g, ' ')}` +
+        (replaced ? ` (replaced unsent C:${replaced.id})` : ''),
+    );
+    return pending;
+  }
+
+  /** Removes and returns the device's pending command, if any. */
+  takeDeviceCommand(sn: string): PendingDeviceCommand | undefined {
+    const pending = this.pendingCommands.get(sn);
+    if (pending) this.pendingCommands.delete(sn);
+    return pending;
+  }
 
   async handlePush(payload: { sn: string; query: Record<string, string>; body: string }) {
     try {

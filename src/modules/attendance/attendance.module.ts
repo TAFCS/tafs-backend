@@ -35,6 +35,7 @@ import { ClassCheckInScheduleController } from './class-check-in-schedule.contro
 import { RecomputeLateController } from './recompute-late.controller';
 import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
 import { Coral9SchedulerService } from './coral9-scheduler.service';
+import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.service';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { Coral9SchedulerService } from './coral9-scheduler.service';
     ClassCheckInScheduleService,
     Coral9AttendanceWriterService,
     Coral9SchedulerService,
+    ZkDeviceResendSchedulerService,
   ],
   exports: [
     RollSessionsService,
