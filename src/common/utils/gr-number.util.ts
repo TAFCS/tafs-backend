@@ -1,7 +1,7 @@
 import { PrismaService } from '../../../prisma/prisma.service';
 
 /** Employee HR codes use campuses.campus_prefix (GEJ, GKF, …) — never for student G.R. */
-const EMPLOYEE_CAMPUS_PREFIXES = new Set(['GEJ', 'GKF', 'NNN', 'JHR']);
+const EMPLOYEE_CAMPUS_PREFIXES = new Set(['GEJ', 'GKF', 'NNN']);
 
 function getPrefixByCampusName(name: string, campusId: number): string {
   const uname = name.toUpperCase();

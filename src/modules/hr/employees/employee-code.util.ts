@@ -44,9 +44,7 @@ export function resolveEmployeeCampusPrefix(
 
 export function normalizeCampusPrefix(prefix: string | null | undefined): string | null {
   if (!prefix) return null;
-  const upper = prefix.trim().toUpperCase();
-  if (upper === 'JHR') return 'GEJ';
-  return upper;
+  return prefix.trim().toUpperCase();
 }
 
 export function campusPrefixForId(campusId: number | null | undefined): string | null {
@@ -132,11 +130,8 @@ export function resolveEmployeeCodeFields(input: {
     };
   }
 
-  const upperRaw = rawCode.toUpperCase();
-  const normalizedRaw = upperRaw.startsWith('JHR-') ? `GEJ-${upperRaw.slice(4)}` : upperRaw;
-
   return {
-    employee_code: normalizedRaw,
+    employee_code: rawCode.toUpperCase(),
     employee_code_dep: null,
     employee_code_number: null,
   };

@@ -17,20 +17,20 @@ const INLINE_RESOLVE_SCAN_LIMIT = 2000;
  * Which campus (and, for segment-locked devices, which academic segments) a
  * STUDENT pin may be mapped to on a given device. Derived from actual scan
  * history per device, not its on-box label — devices named "Campus 3 ..." are
- * physically at the JHR campus, so the label alone can't be trusted.
+ * physically at the Johar (GEJ) campus, so the label alone can't be trusted.
  * Devices not listed here (test rigs, staff-only units) get no such check.
  */
 const DEVICE_SEGMENT_RULES: Record<string, { campusCode: string; segmentCodes: string[] }> = {
-  NYU7261205128: { campusCode: 'JHR', segmentCodes: ['PRE_PRIMARY'] }, // Campus 3 Device 2 Pre-Primary
-  NYU7261205142: { campusCode: 'JHR', segmentCodes: ['JUNIOR_CAMBRIDGE'] }, // Campus 3 Device 1 Junior Cambridge
-  NYU7261205221: { campusCode: 'JHR', segmentCodes: ['SECONDARY'] }, // Campus 2 Device 1 Secondary
-  NYU7261205141: { campusCode: 'JHR', segmentCodes: ['SENIOR_CAMBRIDGE'] }, // Campus 2 Device 2 Senior Cambridge
-  NYU7261205172: { campusCode: 'JHR', segmentCodes: ['OLEVELS_CAMBRIDGE', 'ALEVELS_CAMBRIDGE'] }, // TAFSAL
+  NYU7261205128: { campusCode: 'GEJ', segmentCodes: ['PRE_PRIMARY'] }, // Campus 3 Device 2 Pre-Primary
+  NYU7261205142: { campusCode: 'GEJ', segmentCodes: ['JUNIOR_CAMBRIDGE'] }, // Campus 3 Device 1 Junior Cambridge
+  NYU7261205221: { campusCode: 'GEJ', segmentCodes: ['SECONDARY'] }, // Campus 2 Device 1 Secondary
+  NYU7261205141: { campusCode: 'GEJ', segmentCodes: ['SENIOR_CAMBRIDGE'] }, // Campus 2 Device 2 Senior Cambridge
+  NYU7261205172: { campusCode: 'GEJ', segmentCodes: ['OLEVELS_CAMBRIDGE', 'ALEVELS_CAMBRIDGE'] }, // TAFSAL
 };
 
 /** Faculty devices: any segment, as long as the student belongs to this campus. */
 const DEVICE_CAMPUS_ONLY_RULES: Record<string, string> = {
-  NYU7251000240: 'JHR', // Johar Faculty
+  NYU7251000240: 'GEJ', // Johar Faculty
   NYU7261205040: 'KNF', // GKF Faculty
   NYU7261000023: 'NNZ', // NNN Faculty
 };
