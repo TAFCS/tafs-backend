@@ -372,4 +372,65 @@ describe('VouchersService — supersession by fee date', () => {
       expect(auditEvents.some((e) => e.entity_id === '42' && e.new_value === 'OVERDUE')).toBe(true);
     });
   });
+
+  // ── The reactivation gate in remove() ──────────────────────────────────────
+  // Regression: EXPIRED used to be lumped in with VOID here, so deleting an
+  // expired voucher reactivated nothing and stranded its predecessor as VOID
+  // permanently — the predecessor's superseded_by_voucher_id kept pointing at
+  // the deleted row (no FK backs that column) and STEP 1 only ever searches by
+  // the id being deleted, so no later delete could ever find it again.
+  //
+  // EXPIRED is a LIVE voucher whose validity window merely closed (the cron
+  // promotes UNPAID/OVERDUE -> EXPIRED); it never superseded anything, so it
+  // must reactivate. VOID is the only status that must not: something newer is
+  // still standing in its place, and reactivating its predecessors would
+  // double-bill the same heads.
+  describe('remove() — which deletions reactivate the superseded predecessor', () => {
+    const buildRemove = (status: string) => {
+      const destroy = jest.fn().mockResolvedValue({ id: 500 });
+      const prisma: any = {
+        vouchers: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 500,
+            student_id: 7000,
+            voucher_number: 'V500',
+            status,
+            voucher_heads: [],
+          }),
+          // remove() refuses anything but the student's most recent voucher
+          findFirst: jest.fn().mockResolvedValue({ id: 500 }),
+        },
+        $transaction: (fn: any) => fn({} as any),
+      };
+      const auditLogs: any = { log: jest.fn().mockResolvedValue(1) };
+      const service = new VouchersService(
+        prisma,
+        {} as any,
+        {} as any,
+        {} as any,
+        auditLogs,
+        {} as any,
+      );
+      (service as any)._destroyVoucherInTx = destroy;
+      return { service, destroy };
+    };
+
+    // _destroyVoucherInTx(id, voucher, tx, reactivate, auditEvents)
+    const reactivateArg = (destroy: jest.Mock) => destroy.mock.calls[0][3];
+
+    it.each(['UNPAID', 'OVERDUE', 'EXPIRED'])(
+      'reactivates the predecessor when deleting a %s voucher',
+      async (status) => {
+        const { service, destroy } = buildRemove(status);
+        await service.remove(500, 'tester');
+        expect(reactivateArg(destroy)).toBe(true);
+      },
+    );
+
+    it('does NOT reactivate when deleting a VOID voucher — a newer voucher still supersedes its predecessors', async () => {
+      const { service, destroy } = buildRemove('VOID');
+      await service.remove(500, 'tester');
+      expect(reactivateArg(destroy)).toBe(false);
+    });
+  });
 });

@@ -6370,7 +6370,9 @@ export class VouchersService {
      * (e.g. clearing deposit allocations before calling this).
      *
      * @param reactivate - Whether to reactivate superseded VOID vouchers.
-     *   Pass true for UNPAID/OVERDUE/PAID deletions; false for VOID cleanup.
+     *   Pass true for UNPAID/OVERDUE/EXPIRED/PAID deletions; false ONLY for VOID
+     *   cleanup (a VOID voucher's own predecessors belong to the voucher that
+     *   superseded IT, which is still standing — reactivating them would double-bill).
      */
     private async _destroyVoucherInTx(id: number, voucher: any, tx: any, reactivate: boolean, auditEvents?: VoucherAuditEvent[]): Promise<any> {
         const heads: any[] = voucher.voucher_heads || [];
@@ -6766,7 +6768,7 @@ export class VouchersService {
             action: 'DELETED',
             student_id: voucher.student_id,
             note: [
-                `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) ${reactivate ? 'deleted' : 'deleted (void/expired cleanup)'}.`,
+                `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) ${reactivate ? 'deleted' : 'deleted (void cleanup)'}.`,
                 `Prior status: ${voucher.status ?? 'N/A'}`,
                 voucher.total_payable_before_due != null ? `Amount: ${this.fmtMoney(voucher.total_payable_before_due)}` : null,
                 resetCurrentFeeIds.length > 0
@@ -7122,7 +7124,16 @@ export class VouchersService {
 
         const auditEvents: VoucherAuditEvent[] = [];
         const result = await this.prisma.$transaction(
-            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID' && voucher.status !== 'EXPIRED', auditEvents),
+            // Reactivate unless THIS voucher was itself superseded (VOID) — see
+            // _destroyVoucherInTx STEP 1/7. EXPIRED must NOT be lumped in with VOID:
+            // it is a live voucher whose validity window merely closed (the cron sets
+            // it from UNPAID/OVERDUE, see vouchers-scheduler), it never replaced
+            // anything, and deleting it must still restore the predecessor IT
+            // superseded. Lumping the two together stranded that predecessor as VOID
+            // permanently: its superseded_by_voucher_id kept pointing at this
+            // now-deleted row (no FK backs that column) and STEP 1 only ever searches
+            // by the id being deleted, so nothing could ever find it again.
+            (tx) => this._destroyVoucherInTx(id, voucher, tx, voucher.status !== 'VOID', auditEvents),
             { maxWait: 5000, timeout: 15000 },
         );
 
