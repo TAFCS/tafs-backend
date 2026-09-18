@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Body,
   Param,
@@ -14,6 +15,7 @@ import {
 import { SegmentsService } from './segments.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
+import { SetCampusSegmentsDto } from './dto/set-campus-segments.dto';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -40,6 +42,26 @@ export class SegmentsController {
       isNaN(parsedCampusId as number) ? undefined : parsedCampusId,
     );
     return createApiResponse(data, HttpStatus.OK, 'Segments retrieved successfully');
+  }
+
+  @Get('campus-map')
+  @CheckPolicies(
+    (ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Class'),
+  )
+  async listCampusSegments() {
+    const data = await this.segmentsService.listCampusSegments();
+    return createApiResponse(data, HttpStatus.OK, 'Campus segment map retrieved successfully');
+  }
+
+  @Put('campus-map/:campusId')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  async setCampusSegments(
+    @Param('campusId', ParseIntPipe) campusId: number,
+    @Body() dto: SetCampusSegmentsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.segmentsService.setCampusSegments(campusId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Campus segments updated successfully');
   }
 
   @Get('classes-available')

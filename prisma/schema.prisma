@@ -102,6 +102,19 @@ model campus_sections {
   @@index([campus_id], map: "idx_campus_sections_campus")
 }
 
+model campus_segments {
+  id         Int      @id @default(autoincrement())
+  campus_id  Int
+  segment_id Int
+  is_active  Boolean  @default(true)
+  campuses   campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  segments   segments @relation(fields: [segment_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([campus_id, segment_id], map: "campus_segments_unique")
+  @@index([campus_id], map: "idx_campus_segments_campus")
+  @@index([segment_id], map: "idx_campus_segments_segment")
+}
+
 model campuses {
   id                            Int                             @id @default(autoincrement())
   campus_code                   String                          @unique @db.VarChar(10)
@@ -116,6 +129,7 @@ model campuses {
   calendar_notification_reports calendar_notification_reports[]
   campus_classes                campus_classes[]
   campus_sections               campus_sections[]
+  campus_segments               campus_segments[]
   class_check_in_schedules      class_check_in_schedules[]
   class_fee_schedule            class_fee_schedule[]
   class_timetable_periods       class_timetable_periods[]
@@ -181,6 +195,7 @@ model segments {
   name                         String                         @db.VarChar(50)
   display_order                Int                            @default(0)
   classes                      classes[]
+  campus_segments              campus_segments[]
   employee_profiles            employee_profiles[]
   employee_progression_periods employee_progression_periods[]
 }

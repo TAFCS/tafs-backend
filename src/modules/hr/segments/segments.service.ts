@@ -2,11 +2,13 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
+import { SetCampusSegmentsDto } from './dto/set-campus-segments.dto';
 
 @Injectable()
 export class SegmentsService {
@@ -15,7 +17,130 @@ export class SegmentsService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
+  /**
+   * Segment ids each campus runs, keyed by campus id.
+   *
+   * A campus with no rows at all is treated as unrestricted rather than as
+   * running nothing: a campus created before anyone configures its segments
+   * would otherwise have an unusable, silently empty Segment picker. Once a
+   * campus has any row, that row set is the whole truth for it.
+   */
+  async getCampusSegmentMap(): Promise<Map<number, Set<number>>> {
+    const rows = await this.prisma.campus_segments.findMany({
+      where: { is_active: true },
+      select: { campus_id: true, segment_id: true },
+    });
+    const map = new Map<number, Set<number>>();
+    for (const row of rows) {
+      if (!map.has(row.campus_id)) map.set(row.campus_id, new Set());
+      map.get(row.campus_id)!.add(row.segment_id);
+    }
+    return map;
+  }
+
+  /** The mapping in the shape the clients consume it. */
+  async listCampusSegments() {
+    const [campuses, map] = await Promise.all([
+      this.prisma.campuses.findMany({
+        where: { is_active: true },
+        select: { id: true, campus_code: true, campus_name: true },
+        orderBy: { id: 'asc' },
+      }),
+      this.getCampusSegmentMap(),
+    ]);
+    return campuses.map((c) => ({
+      campus_id: c.id,
+      campus_code: c.campus_code,
+      campus_name: c.campus_name,
+      // null, not [], when nothing is configured — "unrestricted" and "runs no
+      // segment" are different answers and the client has to tell them apart.
+      segment_ids: map.has(c.id) ? Array.from(map.get(c.id)!).sort((a, b) => a - b) : null,
+    }));
+  }
+
+  /** True when `segmentId` may be assigned to someone posted at `campusId`. */
+  async isSegmentAllowedAtCampus(campusId: number | null, segmentId: number | null) {
+    if (!segmentId || !campusId) return true;
+    const map = await this.getCampusSegmentMap();
+    const allowed = map.get(campusId);
+    return !allowed || allowed.has(segmentId);
+  }
+
+  async assertSegmentAllowedAtCampus(campusId: number | null, segmentId: number | null) {
+    if (await this.isSegmentAllowedAtCampus(campusId, segmentId)) return;
+    const [campus, segment] = await Promise.all([
+      this.prisma.campuses.findUnique({
+        where: { id: campusId! },
+        select: { campus_name: true },
+      }),
+      this.prisma.segments.findUnique({
+        where: { id: segmentId! },
+        select: { name: true },
+      }),
+    ]);
+    throw new BadRequestException(
+      `${campus?.campus_name ?? `Campus ${campusId}`} does not run the ` +
+        `${segment?.name ?? `segment ${segmentId}`} segment.`,
+    );
+  }
+
+  async setCampusSegments(campusId: number, dto: SetCampusSegmentsDto, user?: any) {
+    const campus = await this.prisma.campuses.findUnique({
+      where: { id: campusId },
+      select: { id: true, campus_name: true },
+    });
+    if (!campus) {
+      throw new NotFoundException(`Campus with ID ${campusId} not found.`);
+    }
+
+    const segmentIds = Array.from(new Set(dto.segment_ids));
+    const found = await this.prisma.segments.findMany({
+      where: { id: { in: segmentIds } },
+      select: { id: true, name: true },
+      orderBy: { display_order: 'asc' },
+    });
+    if (found.length !== segmentIds.length) {
+      const missing = segmentIds.filter((id) => !found.some((s) => s.id === id));
+      throw new BadRequestException(`Unknown segment ids: ${missing.join(', ')}`);
+    }
+
+    const before = await this.prisma.campus_segments.findMany({
+      where: { campus_id: campusId },
+      select: { segment_id: true, segments: { select: { name: true } } },
+    });
+
+    await this.prisma.$transaction([
+      this.prisma.campus_segments.deleteMany({
+        where: { campus_id: campusId, segment_id: { notIn: segmentIds } },
+      }),
+      ...segmentIds.map((segment_id) =>
+        this.prisma.campus_segments.upsert({
+          where: { campus_id_segment_id: { campus_id: campusId, segment_id } },
+          create: { campus_id: campusId, segment_id },
+          update: { is_active: true },
+        }),
+      ),
+    ]);
+
+    const actorName = user?.fullName || user?.username || 'system';
+    this.auditLogs.log({
+      entity_type: 'CAMPUS_SEGMENTS',
+      entity_id: String(campusId),
+      action: 'UPDATED',
+      section: 'hr',
+      old_value: before.map((r) => r.segments.name).sort().join(', ') || '(none)',
+      new_value: found.map((s) => s.name).join(', ') || '(none)',
+      note: `Segments run by ${campus.campus_name}`,
+      changed_by: actorName,
+    });
+
+    return this.listCampusSegments();
+  }
+
   async findAll(campusId?: number) {
+    const campusSegmentMap = await this.getCampusSegmentMap();
+    const allowedAtCampus = campusId ? campusSegmentMap.get(campusId) : undefined;
+
     const segments = await this.prisma.segments.findMany({
       orderBy: [{ display_order: 'asc' }, { name: 'asc' }],
       include: {
@@ -94,8 +219,14 @@ export class SegmentsService {
       }),
     ]);
 
-    // Build segments response with filtered classes and allocated staff
-    return segments.map((seg) => {
+    // Build segments response with filtered classes and allocated staff.
+    // When a campus is asked for and it has a configured segment set, segments
+    // it does not run drop out entirely — not just their classes.
+    const visibleSegments = allowedAtCampus
+      ? segments.filter((seg) => allowedAtCampus.has(seg.id))
+      : segments;
+
+    return visibleSegments.map((seg) => {
       // Filter classes if campusId is provided
       const filteredClasses = campusId
         ? seg.classes.filter((c) =>
@@ -167,6 +298,12 @@ export class SegmentsService {
         code: seg.code,
         name: seg.name,
         display_order: seg.display_order,
+        // Which campuses run this segment, so a client that loaded the full
+        // list once can narrow it as the user switches campus without a refetch.
+        campus_ids: Array.from(campusSegmentMap.entries())
+          .filter(([, segIds]) => segIds.has(seg.id))
+          .map(([cid]) => cid)
+          .sort((a, b) => a - b),
         classes: filteredClasses.map((c) => ({
           id: c.id,
           description: c.description,
