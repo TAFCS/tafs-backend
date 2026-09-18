@@ -23,6 +23,7 @@ import { CaslAbilityFactory } from '../../auth/casl/casl-ability.factory';
 import { Action } from '../../auth/casl/actions';
 import { v4 as uuidv4 } from 'uuid';
 import { ScopeService } from '../../../common/scope/scope.service';
+import { SegmentsService } from '../segments/segments.service';
 import {
   EMPLOYEE_DIRECTORY_TILE_ID,
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
@@ -475,6 +476,7 @@ export class EmployeesService {
     private readonly accessService: AccessService,
     private readonly employeeProgression: EmployeeProgressionService,
     private readonly scope: ScopeService,
+    private readonly segments: SegmentsService,
   ) { }
 
   /**
@@ -902,6 +904,12 @@ export class EmployeesService {
       department_id: dto.department_id ?? null,
       staff_category_id: dto.staff_category_id ?? null,
     });
+    // A campus only runs some segments (campus_segments). The form narrows the
+    // picker, but the rule has to hold for direct API callers too.
+    await this.segments.assertSegmentAllowedAtCampus(
+      dto.campus_id ?? null,
+      dto.segment_id ?? null,
+    );
     const {
       class_section_assignments,
       employment_status,
@@ -1177,6 +1185,16 @@ export class EmployeesService {
       ...(dto.staff_category_id !== undefined ? { staff_category_id: dto.staff_category_id } : {}),
     });
     const existing = await this.findOne(id);
+
+    // Check the pair the employee ends up with, not just the fields in the
+    // patch: moving someone to a campus that does not run their current
+    // segment is as wrong as picking a bad segment outright.
+    if (dto.campus_id !== undefined || dto.segment_id !== undefined) {
+      await this.segments.assertSegmentAllowedAtCampus(
+        dto.campus_id !== undefined ? dto.campus_id : existing.campus_id,
+        dto.segment_id !== undefined ? dto.segment_id : existing.segment_id,
+      );
+    }
 
     const {
       class_section_assignments,

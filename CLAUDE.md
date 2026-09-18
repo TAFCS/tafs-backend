@@ -26,10 +26,16 @@ change makes one false, the change is wrong, not the rule.
    `status IN (PAID, DISCOUNT, WAIVED)` and `is_arrear_surcharge` /
    `is_discount` rows. The two legacy definitions (`students.service.ts`,
    `analytics.service.ts` `due_date < today`) are known-wrong and must not be
-   reintroduced as the source of truth. `npm run -s ts-node scripts/verify-defaulters-vs-compute-arrears.ts`.
+   reintroduced as the source of truth. `npx ts-node scripts/verify-defaulters-vs-compute-arrears.ts` (read-only, but it
+   reads the **live** DB, so its six pinned students drift as vouchers get paid /
+   regenerated — hand-verify a 7291/7402/7403/7720 mismatch before calling it a
+   regression; 7570 and 7670 are the load-bearing ones).
 3. **Void-predecessor reactivation** — see Rule A below. Run
-   `npm test -- supersede-by-fee-date` and
-   `scripts/verify-split-deposit-reversal.ts`.
+   `npm test -- supersede-by-fee-date` (pure unit specs, always safe). The
+   end-to-end script is `VERIFY_SPLIT_REVERSAL=1 npm run verify:split-reversal`
+   — it **creates and deletes** voucher/fee/deposit rows (tagged
+   `academic_year='VERIFYX'`, torn down in a `finally`), so run it against a
+   dev/test DB only, never the shared remote one.
 4. **Descending-order deletes** — a voucher / deposit can only be
    deleted/reversed if it is the most recent for that student
    (`assertDepositIsLatest`, `remove()` latest check). Newer ones first.
@@ -101,6 +107,27 @@ STEP 7 flips them to `OVERDUE`/`UNPAID` and clears the link. Already-`VOID`
 predecessors are never re-stamped, so a chain V1→V2→V3 keeps V1 pointing at V2
 and only V2 reactivates when V3 is deleted.
 
+**Which deletions reactivate (fixed 2026-09-18).** `remove()` passes
+`reactivate = voucher.status !== 'VOID'`. `UNPAID` / `OVERDUE` / `EXPIRED`
+deletions all reactivate. `VOID` is the **only** status that must not: something
+newer is still standing in its place, and that successor owns the predecessors
+(the V1→V2→V3 chain above), so reactivating them would double-bill the same
+heads.
+
+**Never re-add `EXPIRED` to that exclusion.** `EXPIRED` is a *live* voucher whose
+validity window merely closed — `vouchers-scheduler.service.ts` promotes
+`UNPAID`/`OVERDUE` → `EXPIRED` on `validity_date`, and such a voucher never
+superseded anything. It was lumped in with `VOID` between `7b6dda5` (a sweep that
+added "and EXPIRED" beside `VOID` in ~8 places, correct in all but this one) and
+2026-09-18, and the result was silent and **irreversible**: deleting an expired
+voucher stranded its predecessor as `VOID` forever. `superseded_by_voucher_id` is
+a bare `Int?` with an index and **no FK** (`schema.prisma`), so the stranded row
+kept pointing at the deleted voucher, and STEP 1 only ever searches by the id
+being deleted — no later delete could find it again. Meanwhile STEP 6/7b still
+reset that voucher's heads to `NOT_ISSUED`, leaving a `VOID` voucher holding
+unbilled heads. Guarded by the `remove() — which deletions reactivate the
+superseded predecessor` tests in `supersede-by-fee-date.spec.ts`.
+
 **Why the old code broke:** STEP 1 used to guess from head-set containment
 ("every head of the VOID candidate is among the deleted voucher's heads"). But
 `_planFeeDateSupersession` only absorbs a predecessor's **outstanding,
@@ -121,8 +148,12 @@ containment heuristic is still run as a **fallback** for vouchers voided before
    remainder is owed on V1 again, not orphaned.
 3. Chain V1→V2→V3 (each fully absorbing the previous). Delete V3 → only V2
    reactivates; V1 stays `VOID` (V2 still carries its heads as arrears).
-4. `supersede-by-fee-date.spec.ts` (incl. the `_destroyVoucherInTx` reactivation
-   test) and any split reversal spec still green.
+4. Issue V1, issue V2 (V1 → `VOID`), then let V2 reach `EXPIRED` — either wait
+   for the validity-date cron or set the status by hand. Delete V2 → **V1 still
+   comes back**. An expired voucher deletes exactly like an overdue one.
+5. `supersede-by-fee-date.spec.ts` (incl. the `_destroyVoucherInTx` reactivation
+   test and the `remove()` status-gate tests) and any split reversal spec still
+   green.
 
 The link is authoritative. Never "fix" a reactivation miss by widening the
 fallback containment heuristic — fix why the link wasn't written.
@@ -291,3 +322,18 @@ Adding a value means auditing every `status IN (...)` / `notIn` / switch in
 `vouchers.service.ts`, `financial-reports.service.ts`, `analytics.service.ts`,
 `students.service.ts`, `bulk-voucher-logic.service.ts`, the schedulers, and the
 webapp status filters/badges.
+
+**A sweep is not a find-and-replace.** These statuses are terminal in different
+ways and a blanket "add X next to VOID everywhere" will be wrong somewhere. Judge
+each site on what it is actually asking:
+
+| The site is asking | `VOID` | `EXPIRED` | `WAIVED` |
+|---|---|---|---|
+| can it take a deposit? | no | no | no |
+| show it as the student's active voucher? | no | no | no |
+| was it replaced by a newer voucher? | **yes** | **NO** | **NO** |
+
+The first two rows are why `EXPIRED` belongs beside `VOID` in most places. The
+third row is the one that bites: it governs reactivation on delete, and `7b6dda5`
+got it wrong by treating a status sweep as mechanical. See **Rule A**,
+"Never re-add `EXPIRED` to that exclusion".
