@@ -303,8 +303,8 @@ export class AuthService {
 
           return {
             id: guardian.id,
-            name: guardian.full_name,
-            relationship: g.relationship,
+            name: guardian.full_name ? guardian.full_name.toUpperCase() : '',
+            relationship: g.relationship ? g.relationship.toUpperCase() : '',
             phone: phoneNum || null,
             phoneCountryCode: phoneCode,
             photographUrl: guardian.photo_url,
@@ -477,7 +477,7 @@ export class AuthService {
       exists: true,
       message: 'CNIC verified successfully',
       guardianId: guardian.id,
-      guardianName: guardian.full_name,
+      guardianName: guardian.full_name ? guardian.full_name.toUpperCase() : '',
     };
   }
 

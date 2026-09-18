@@ -680,17 +680,18 @@ export class StaffEditingService {
         // 2. Update/Create Father Info (diffs collected into same logGroup)
         if (father_name !== undefined || father_cnic !== undefined) {
           const fatherLink = allLinks.find(l => isFather(l.relationship));
+          const fName = typeof father_name === 'string' ? father_name.trim().toUpperCase() : father_name;
           const fCnic = typeof father_cnic === 'string' ? father_cnic.trim() : father_cnic;
           const fCnicNormalized = (!fCnic || fCnic === 'NULL' || fCnic === 'XXXXX-XXXXXXX-X') ? null : fCnic;
 
           if (fatherLink) {
             const guardianUpdate: any = {};
-            if (father_name !== undefined) guardianUpdate.full_name = father_name;
+            if (father_name !== undefined) guardianUpdate.full_name = fName;
             if (father_cnic !== undefined) guardianUpdate.cnic = fCnicNormalized;
 
             const existingFather = await tx.guardians.findUnique({ where: { id: fatherLink.guardian_id } });
             if (existingFather) {
-              if (father_name !== undefined && String(existingFather.full_name ?? '') !== String(father_name)) {
+              if (father_name !== undefined && String(existingFather.full_name ?? '') !== String(fName)) {
                 shouldInvalidateUnpaidPdfs = true;
                 fieldChanges.push({
                   entity_type: 'GUARDIAN',
@@ -698,7 +699,7 @@ export class StaffEditingService {
                   action: 'UPDATED',
                   field: 'guardian.full_name',
                   old_value: existingFather.full_name,
-                  new_value: father_name,
+                  new_value: fName,
                   student_id: cc,
                 });
               }
@@ -721,7 +722,7 @@ export class StaffEditingService {
             });
           } else if (father_name !== undefined || father_cnic !== undefined) {
             const guardianData: any = {
-              full_name: father_name || 'NOT PROVIDED',
+              full_name: fName || 'NOT PROVIDED',
               cnic: fCnicNormalized,
             };
             const guardian = guardianData.cnic
@@ -754,24 +755,25 @@ export class StaffEditingService {
         // 3. Update/Create Mother Info
         if (mother_name !== undefined || mother_cnic !== undefined) {
           const motherLink = allLinks.find(l => isMother(l.relationship));
+          const mName = typeof mother_name === 'string' ? mother_name.trim().toUpperCase() : mother_name;
           const mCnic = typeof mother_cnic === 'string' ? mother_cnic.trim() : mother_cnic;
           const mCnicNormalized = (!mCnic || mCnic === 'NULL' || mCnic === 'XXXXX-XXXXXXX-X') ? null : mCnic;
 
           if (motherLink) {
             const guardianUpdate: any = {};
-            if (mother_name !== undefined) guardianUpdate.full_name = mother_name;
+            if (mother_name !== undefined) guardianUpdate.full_name = mName;
             if (mother_cnic !== undefined) guardianUpdate.cnic = mCnicNormalized;
 
             const existingMother = await tx.guardians.findUnique({ where: { id: motherLink.guardian_id } });
             if (existingMother) {
-              if (mother_name !== undefined && String(existingMother.full_name ?? '') !== String(mother_name)) {
+              if (mother_name !== undefined && String(existingMother.full_name ?? '') !== String(mName)) {
                 fieldChanges.push({
                   entity_type: 'GUARDIAN',
                   entity_id: String(existingMother.id),
                   action: 'UPDATED',
                   field: 'guardian.full_name',
                   old_value: existingMother.full_name,
-                  new_value: mother_name,
+                  new_value: mName,
                   student_id: cc,
                 });
               }
@@ -794,7 +796,7 @@ export class StaffEditingService {
             });
           } else if (mother_name !== undefined || mother_cnic !== undefined) {
             const guardianData: any = {
-              full_name: mother_name || 'NOT PROVIDED',
+              full_name: mName || 'NOT PROVIDED',
               cnic: mCnicNormalized,
             };
             const guardian = guardianData.cnic
@@ -1033,6 +1035,9 @@ export class StaffEditingService {
 
     // Convert dob string to Date if present
     const guardianData: any = { ...guardianFields };
+    if (guardianData.full_name && typeof guardianData.full_name === 'string') {
+      guardianData.full_name = guardianData.full_name.trim().toUpperCase();
+    }
     if (guardianFields.email && !guardianFields.email_address) {
       guardianData.email_address = guardianFields.email;
       delete (guardianData as any).email;
@@ -1190,10 +1195,14 @@ export class StaffEditingService {
     });
     if (!existing) throw new NotFoundException(`Guardian #${id} not found`);
 
-    const { dob, cnic, ...rest } = dto;
+    const { dob, cnic, full_name, ...rest } = dto;
     const data: Record<string, unknown> = {
       ...rest,
     };
+
+    if (full_name !== undefined) {
+      data.full_name = typeof full_name === 'string' ? full_name.trim().toUpperCase() : full_name;
+    }
 
     if (cnic !== undefined) {
       data.cnic = (cnic && cnic !== "N/A") ? cnic : null;
@@ -1379,6 +1388,9 @@ export class StaffEditingService {
     if (is_emergency_contact !== undefined) relationshipData.is_emergency_contact = is_emergency_contact;
 
     const guardianData: Record<string, any> = { ...guardianFields };
+    if (guardianData.full_name && typeof guardianData.full_name === 'string') {
+      guardianData.full_name = guardianData.full_name.trim().toUpperCase();
+    }
     if (dto.email && !dto.email_address) {
       guardianData.email_address = dto.email;
       delete guardianData.email;

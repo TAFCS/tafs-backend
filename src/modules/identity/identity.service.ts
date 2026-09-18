@@ -976,7 +976,7 @@ export class IdentityService {
    * This ensures siblings share the same guardian records.
    */
   private async upsertGuardian(tx: TxClient, data: GuardianDto) {
-    const guardianFullName = (data.full_name?.trim() === "N/A" || !data.full_name?.trim()) ? null : data.full_name.trim();
+    const guardianFullName = (data.full_name?.trim() === "N/A" || !data.full_name?.trim()) ? null : data.full_name.trim().toUpperCase();
 
     const cnic = (data.cnic && data.cnic !== "N/A") ? data.cnic : null;
     const primaryPhone = (data.primary_phone && data.primary_phone !== "N/A") ? data.primary_phone : null;
