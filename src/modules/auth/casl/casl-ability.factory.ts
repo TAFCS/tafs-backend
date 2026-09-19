@@ -42,6 +42,10 @@ export class CaslAbilityFactory {
         if (parts[1] === 'send_announcements') {
           can(Action.Manage, 'Chat');
         }
+        if (parts[1] === 'send_employee_announcements') {
+          can(Action.Manage, 'EmployeeNotice');
+          can(Action.Read, 'EmployeeNotice');
+        }
         return;
       }
       

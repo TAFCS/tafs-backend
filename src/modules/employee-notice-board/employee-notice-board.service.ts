@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { ScopeService } from '../../common/scope/scope.service';
 import { Prisma, StaffRole } from '@prisma/client';
 import { CreateEmployeeNoticeDto } from './dto/create-employee-notice.dto';
 import { UpdateEmployeeNoticeDto } from './dto/update-employee-notice.dto';
@@ -14,7 +15,23 @@ export class EmployeeNoticeBoardService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly fcmService: FcmService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /**
+   * A scoped caller may only target campuses within their own scope, and may
+   * never leave campus_ids empty — empty means "every campus" (see
+   * getFeedForUser's isEmpty-OR clause), which would let a campus-scoped
+   * admin broadcast org-wide.
+   */
+  private assertTargetCampuses(user: IJwtStaffPayload, campusIds: number[] | undefined): void {
+    if (this.scope.isExempt(user)) return;
+    const requested = campusIds ?? [];
+    if (requested.length === 0) {
+      throw new ForbiddenException('Only an unrestricted admin may send a notice with no campus targeting — it would reach every campus.');
+    }
+    requested.forEach((id) => this.scope.assertCampus(user, id));
+  }
 
   // ── Employee-facing ──────────────────────────────────────────────────────
 
@@ -130,6 +147,7 @@ export class EmployeeNoticeBoardService {
   }
 
   async createPost(dto: CreateEmployeeNoticeDto, user: IJwtStaffPayload, changedBy?: string) {
+    this.assertTargetCampuses(user, dto.campus_ids);
     const post = await this.prisma.employee_notice_posts.create({
       data: {
         posted_by: user.sub,
@@ -163,11 +181,14 @@ export class EmployeeNoticeBoardService {
     return post;
   }
 
-  async updatePost(id: number, dto: UpdateEmployeeNoticeDto, changedBy?: string) {
+  async updatePost(id: number, dto: UpdateEmployeeNoticeDto, changedBy?: string, user?: IJwtStaffPayload) {
     const post = await this.prisma.employee_notice_posts.findFirst({
       where: { id, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Employee notice not found');
+    if (dto.campus_ids !== undefined && user) {
+      this.assertTargetCampuses(user, dto.campus_ids);
+    }
 
     const updated = await this.prisma.employee_notice_posts.update({
       where: { id },
