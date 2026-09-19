@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { UpsertSlotDto } from './dto/timetables.dto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -20,12 +21,16 @@ export class TimetablesService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly classPeriods: ClassPeriodsService,
+    private readonly scope: ScopeService,
   ) {}
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private async assertCampusSection(
@@ -86,6 +91,7 @@ export class TimetablesService {
     if (!group) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, group.campus_id);
     assertClassInScope(user, group.class_id);
+    this.scope.assertClass(user, group.class_id);
     return group;
   }
 
@@ -204,6 +210,7 @@ export class TimetablesService {
     if (user) {
       this.assertCampusAccess(user, campusId);
       assertClassInScope(user, classId);
+      this.scope.assertClass(user, classId);
     }
     await this.assertCampusSection(campusId, classId, sectionId);
 
@@ -266,6 +273,7 @@ export class TimetablesService {
     if (user) {
       this.assertCampusAccess(user, group.campus_id);
       assertClassInScope(user, group.class_id);
+      this.scope.assertClass(user, group.class_id);
     }
 
     const date = new Date(dateStr);
@@ -331,6 +339,7 @@ export class TimetablesService {
   ) {
     this.assertCampusAccess(user, campusId);
     assertClassInScope(user, classId);
+    this.scope.assertClass(user, classId);
     await this.assertCampusSection(campusId, classId, sectionId);
 
     const [blocks, timetable] = await Promise.all([
@@ -364,6 +373,7 @@ export class TimetablesService {
   ) {
     this.assertCampusAccess(user, campusId);
     assertClassInScope(user, classId);
+    this.scope.assertClass(user, classId);
     await this.assertCampusSection(campusId, classId, sectionId);
 
     const existing = await this.prisma.timetables.findUnique({
@@ -414,6 +424,7 @@ export class TimetablesService {
 
     this.assertCampusAccess(user, timetable.campus_id);
     assertClassInScope(user, timetable.class_id);
+    this.scope.assertClass(user, timetable.class_id);
 
     const subject = await this.prisma.subjects.findFirst({
       where: { id: dto.subject_id, is_active: true },
@@ -629,6 +640,7 @@ export class TimetablesService {
 
     this.assertCampusAccess(user, slot.timetables.campus_id);
     assertClassInScope(user, slot.timetables.class_id);
+    this.scope.assertClass(user, slot.timetables.class_id);
 
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const dayLabel = dayNames[slot.day_of_week] ?? `Day ${slot.day_of_week}`;

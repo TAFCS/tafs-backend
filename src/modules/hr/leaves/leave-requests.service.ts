@@ -18,6 +18,7 @@ import {
   RevokeLeaveRequestDto,
 } from './dto/leave-requests.dto';
 import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 
 const LEAVE_INCLUDE = {
   leave_types: { select: { id: true, code: true, name: true, is_paid: true } },
@@ -27,6 +28,9 @@ const LEAVE_INCLUDE = {
       full_name: true,
       employee_code: true,
       campus_id: true,
+      segment_id: true,
+      department_id: true,
+      staff_category_id: true,
       is_permanent_employee: true,
       join_date: true,
       campuses: { select: { id: true, campus_name: true } },
@@ -43,6 +47,7 @@ export class LeaveRequestsService {
     private readonly attendanceSync: LeaveAttendanceSyncService,
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   async create(userId: string, dto: CreateLeaveRequestDto, changedBy?: string) {
@@ -156,12 +161,27 @@ export class LeaveRequestsService {
 
     const campusIds = this.resolveCampusFilter(query.campusId, user);
 
+    // campus_id is pulled out and intersected, not spread, so it never
+    // silently overwrites (or gets overwritten by) the campusIds filter
+    // below. See the scope-sweep handoff.
+    const { campus_id: universalCampusFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalCampusIds = universalCampusFilter?.in;
+    const effectiveCampusIds = universalCampusIds
+      ? campusIds?.length
+        ? campusIds.filter((id) => universalCampusIds.includes(id))
+        : universalCampusIds
+      : campusIds;
+
     const where: Prisma.leave_requestsWhereInput = {
       ...(query.status?.length ? { status: { in: query.status } } : {}),
       ...(query.leaveTypeCode?.length
         ? { leave_types: { code: { in: query.leaveTypeCode.map((c) => c.toUpperCase()) } } }
         : {}),
-      ...(campusIds?.length ? { employee_profiles: { campus_id: { in: campusIds } } } : {}),
+      employee_profiles: {
+        ...(effectiveCampusIds !== undefined ? { campus_id: { in: effectiveCampusIds } } : {}),
+        ...restUniversalScope,
+      },
       ...(query.fromDate || query.toDate
         ? {
             AND: [
@@ -187,6 +207,8 @@ export class LeaveRequestsService {
     });
     if (!request) throw new NotFoundException('Leave request not found');
     this.assertCampusAccess(user, request.employee_profiles.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, request.employee_profiles);
     return request;
   }
 
@@ -398,11 +420,14 @@ export class LeaveRequestsService {
     return queryCampusIds;
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (user.campusId && employeeCampusId && user.campusId !== employeeCampusId) {
       throw new ForbiddenException('You do not have access to this leave request');
     }
+    this.scope.assertCampus(user, employeeCampusId);
   }
 
   private employeeLabel(profile: { full_name: string | null; employee_code: string | null }): string {

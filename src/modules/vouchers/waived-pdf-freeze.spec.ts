@@ -48,6 +48,7 @@ describe('VouchersService waived PDF freeze', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ScopeService — not exercised by these tests
     );
 
     return { service, prisma, storage, pdfService };

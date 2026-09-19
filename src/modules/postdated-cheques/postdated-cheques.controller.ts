@@ -15,6 +15,7 @@ import {
 import type { Request } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { SuperAdminOnlyGuard } from '../../common/guards/super-admin-only.guard';
 import { createApiResponse } from '../../utils/serializer.util';
 import {
   CreatePostdatedChequeDto,
@@ -23,9 +24,15 @@ import {
 } from './postdated-cheques.service';
 import { ListPostdatedChequesQueryDto } from './dto/list-postdated-cheques.dto';
 
+// No permission infrastructure exists for this feature at all (no capability
+// key, no CASL subject) — deliberately locked to SUPER_ADMIN only until that
+// infrastructure is built and a real capability is created for the person
+// running this to grant to a specific role/employee. See the scope/
+// tile-permission handoff and SuperAdminOnlyGuard's own comment for why an
+// ability-based check isn't a safe substitute here.
 @ApiTags('postdated-cheques')
 @Controller('postdated-cheques')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, SuperAdminOnlyGuard)
 export class PostdatedChequesController {
   constructor(private readonly svc: PostdatedChequesService) {}
 

@@ -45,6 +45,7 @@ describe('VouchersService paid PDF freeze', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ScopeService — not exercised by these tests
     );
 
     return { service, prisma, storage, pdfService };
@@ -176,6 +177,7 @@ describe('VouchersService unpaid PDF freeze', () => {
       {} as any,
       {} as any,
       voucherNotificationService,
+      {} as any, // ScopeService — not exercised by these tests
     );
     return { service, prisma, storage, pdfService, voucherNotificationService };
   };

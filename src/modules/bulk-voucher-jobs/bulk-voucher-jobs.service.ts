@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     Logger,
     NotFoundException,
@@ -15,6 +16,8 @@ import { deriveAcademicYear } from '../../common/utils/academic-labels';
 import { BulkVoucherLogicService } from '../vouchers/bulk-voucher-logic.service';
 import { getMonthlyFeeDates } from './utils/bulk-date.utils';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -49,11 +52,40 @@ export class BulkVoucherJobsService {
         private readonly storage: StorageService,
         private readonly bulkLogic: BulkVoucherLogicService,
         private readonly auditLogs: AuditLogsService,
+        private readonly scope: ScopeService,
     ) {}
+
+    /**
+     * Confirms every cc is inside the caller's own scope, or throws — the
+     * `student_ccs` path bypasses the campus/class/section query filters
+     * entirely, so it needs its own check rather than a where-fragment.
+     */
+    private async assertStudentsInScope(user: IJwtStaffPayload, ccs: number[]): Promise<void> {
+        if (this.scope.isExempt(user) || ccs.length === 0) return;
+        const universal = this.scope.whereForStudents(user);
+        if (Object.keys(universal).length === 0) return;
+        const students = await this.prisma.students.findMany({
+            where: { cc: { in: ccs } },
+            select: { cc: true, campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+        });
+        const byCc = new Map(students.map((s) => [s.cc, s]));
+        const outOfScope = ccs.filter((cc) => {
+            const s = byCc.get(cc);
+            return !s || !this.scope.canSeeStudent(user, {
+                campus_id: s.campus_id,
+                class_id: s.class_id,
+                section_id: s.section_id,
+                segment_id: s.classes?.segment_id ?? null,
+            });
+        });
+        if (outOfScope.length > 0) {
+            throw new ForbiddenException(`Outside your scope: student CC ${outOfScope.join(', ')}.`);
+        }
+    }
 
     // ── Preview ─────────────────────────────────────────────────────────────
 
-    async preview(dto: PreviewBulkRequestDto): Promise<BulkStudentPreview[]> {
+    async preview(dto: PreviewBulkRequestDto, user: IJwtStaffPayload): Promise<BulkStudentPreview[]> {
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
 
         // 0. Normalize singular IDs into plural arrays for internal logic
@@ -61,18 +93,29 @@ export class BulkVoucherJobsService {
         const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
         const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
 
+        if (dto.student_ccs?.length) {
+            await this.assertStudentsInScope(user, dto.student_ccs);
+        }
+
         // 1. Fetch matching student records
+        // Query filters and the universal scope fragment are ANDed, not
+        // spread into one object — both can key on campus_id/class_id, and a
+        // spread would let one silently overwrite the other.
+        const queryFilter = dto.student_ccs?.length
+            ? { cc: { in: dto.student_ccs } }
+            : {
+                ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
+                ...(classIds.length ? { class_id: { in: classIds } } : {}),
+                ...(sectionIds.length ? { section_id: { in: sectionIds } } : {}),
+            };
+        const universalScope = this.scope.whereForStudents(user);
         const students = await this.prisma.students.findMany({
             where: {
                 deleted_at: null,
                 status: 'ENROLLED',
-                ...(dto.student_ccs?.length
-                    ? { cc: { in: dto.student_ccs } }
-                    : {
-                        ...(campusIds.length ? { campus_id: { in: campusIds } } : {}),
-                        ...(classIds.length ? { class_id: { in: classIds } } : {}),
-                        ...(sectionIds.length ? { section_id: { in: sectionIds } } : {}),
-                    } as any),
+                ...(Object.keys(universalScope).length > 0
+                    ? { AND: [queryFilter, universalScope] }
+                    : queryFilter) as any,
             },
             select: {
                 cc: true,
@@ -155,11 +198,13 @@ export class BulkVoucherJobsService {
     async startJob(
         dto: StartBulkJobDto,
         createdBy: string,
-        createdByDisplayName?: string,
+        createdByDisplayName: string | undefined,
+        user: IJwtStaffPayload,
     ): Promise<{ job_id: number }> {
         if (!dto.student_ccs || dto.student_ccs.length === 0) {
             throw new BadRequestException('student_ccs cannot be empty.');
         }
+        await this.assertStudentsInScope(user, dto.student_ccs);
 
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
 
@@ -248,9 +293,31 @@ export class BulkVoucherJobsService {
         return { job_id: job.id };
     }
 
+    /**
+     * A job created against specific students (`student_ccs`, the only path
+     * `startJob` supports) may carry no campus_ids label at all — in that
+     * case scope falls back to "you started it, or you're unrestricted"
+     * rather than blocking every viewer. When campus_ids IS present, the
+     * caller must be able to see every one of them.
+     */
+    private canSeeJob(user: IJwtStaffPayload, job: { campus_ids: number[]; created_by: string }): boolean {
+        if (this.scope.isExempt(user)) return true;
+        if (job.campus_ids.length > 0) {
+            return job.campus_ids.every((id) => {
+                try {
+                    this.scope.assertCampus(user, id);
+                    return true;
+                } catch {
+                    return false;
+                }
+            });
+        }
+        return job.created_by === (user.username ?? user.sub);
+    }
+
     // ── Job Status ──────────────────────────────────────────────────────────
 
-    async getJobStatus(jobId: number) {
+    async getJobStatus(jobId: number, user: IJwtStaffPayload) {
         const job = await this.prisma.bulk_voucher_jobs.findUnique({
             where: { id: jobId },
             select: {
@@ -263,6 +330,7 @@ export class BulkVoucherJobsService {
                 merged_pdf_url: true,
                 created_at: true,
                 updated_at: true,
+                created_by: true,
                 campus_ids: true,
                 class_ids: true,
                 section_ids: true,
@@ -270,7 +338,9 @@ export class BulkVoucherJobsService {
             },
         });
 
-        if (!job) throw new NotFoundException(`Job #${jobId} not found.`);
+        if (!job || !this.canSeeJob(user, job)) {
+            throw new NotFoundException(`Job #${jobId} not found.`);
+        }
 
         // Fetch campus names for display
         const campusList = job.campus_ids.length > 0 
@@ -285,10 +355,25 @@ export class BulkVoucherJobsService {
 
     // ── Job History ─────────────────────────────────────────────────────────
 
-    async listJobs(campusIds?: number[]) {
+    async listJobs(campusIds: number[] | undefined, user: IJwtStaffPayload) {
+        // The caller's own scope is ANDed onto the requested campusIds
+        // filter (never replacing it), same floor-beneath-the-query-filter
+        // rule as everywhere else. A scoped user also always sees their own
+        // jobs, even ones with no campus_ids label (student_ccs-only jobs).
+        const requestedFilter = campusIds?.length ? { campus_ids: { hasSome: campusIds } } : {};
+        const scopeCampuses = this.scope.isExempt(user) ? null : this.scope.scopeOf(user).campuses;
+        const scopeFilter = scopeCampuses && scopeCampuses.length > 0
+            ? {
+                OR: [
+                    { campus_ids: { hasSome: scopeCampuses } },
+                    { created_by: user.username ?? user.sub },
+                ],
+            }
+            : {};
         const jobs = await this.prisma.bulk_voucher_jobs.findMany({
             where: {
-                ...(campusIds?.length ? { campus_ids: { hasSome: campusIds } } : {}),
+                ...requestedFilter,
+                ...(Object.keys(scopeFilter).length > 0 ? { AND: [scopeFilter] } : {}),
             },
             orderBy: { created_at: 'desc' },
             take: 50,

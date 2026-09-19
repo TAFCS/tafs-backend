@@ -62,6 +62,21 @@ describe('ClassSessionReschedulesService', () => {
       formatDateLabel: (d: Date) => d.toISOString().slice(0, 10),
     };
 
+    // Permissive stand-in for ScopeService: test users carry no `.scope`, which
+    // the real service also resolves as unrestricted, so this never throws.
+    const scope = {
+      assertCampus: jest.fn(),
+      assertClass: jest.fn(),
+      scopeOf: jest.fn().mockReturnValue({
+        campuses: [],
+        segments: [],
+        classes: [],
+        sections: [],
+        departments: [],
+        staffCategories: [],
+      }),
+    };
+
     const service = new ClassSessionReschedulesService(
       prisma as any,
       rollSessions as any,
@@ -69,9 +84,10 @@ describe('ClassSessionReschedulesService', () => {
       { log: jest.fn() } as any,
       { resolveStudentDay: jest.fn() } as any,
       staffLessonExcuse as any,
+      scope as any,
     );
 
-    return { service, prisma, rollSessions, staffLessonExcuse };
+    return { service, prisma, rollSessions, staffLessonExcuse, scope };
   };
 
   describe('completeOnMakeupSubmit', () => {

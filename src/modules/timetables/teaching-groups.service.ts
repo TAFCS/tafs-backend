@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { BulkEnrollDto, CreateTeachingGroupDto, UpdateTeachingGroupDto } from './dto/teaching-groups.dto';
@@ -20,12 +21,16 @@ export class TeachingGroupsService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly classPeriods: ClassPeriodsService,
+    private readonly scope: ScopeService,
   ) {}
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private groupInclude() {
@@ -41,6 +46,7 @@ export class TeachingGroupsService {
   async list(campusId: number, classId: number, academicYear: string, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, campusId);
     assertClassInScope(user, classId);
+    this.scope.assertClass(user, classId);
 
     return this.prisma.teaching_groups.findMany({
       where: { campus_id: campusId, class_id: classId, academic_year: academicYear },
@@ -52,6 +58,7 @@ export class TeachingGroupsService {
   async create(dto: CreateTeachingGroupDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
+    this.scope.assertClass(user, dto.class_id);
 
     const [subject, employee, campusClass] = await Promise.all([
       this.prisma.subjects.findFirst({ where: { id: dto.subject_id, is_active: true } }),
@@ -92,6 +99,7 @@ export class TeachingGroupsService {
     if (!existing) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, existing.campus_id);
     assertClassInScope(user, existing.class_id);
+    this.scope.assertClass(user, existing.class_id);
 
     if (dto.employee_id != null) {
       const employee = await this.prisma.employee_profiles.findUnique({
@@ -131,6 +139,7 @@ export class TeachingGroupsService {
     if (!existing) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, existing.campus_id);
     assertClassInScope(user, existing.class_id);
+    this.scope.assertClass(user, existing.class_id);
 
     const hasDependents =
       existing._count.student_subject_enrollments > 0 || existing._count.timetables > 0;
@@ -166,6 +175,7 @@ export class TeachingGroupsService {
     if (!group) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, group.campus_id);
     assertClassInScope(user, group.class_id);
+    this.scope.assertClass(user, group.class_id);
     return group;
   }
 

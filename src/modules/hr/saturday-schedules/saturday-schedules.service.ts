@@ -11,6 +11,7 @@ import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
+import { ScopeService } from '../../../common/scope/scope.service';
 import {
   CreateSaturdayScheduleDto,
   ListSaturdaySchedulesQueryDto,
@@ -66,6 +67,7 @@ export class SaturdaySchedulesService {
     private readonly noticeBoard: EmployeeNoticeBoardService,
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   async create(dto: CreateSaturdayScheduleDto, user: IJwtStaffPayload) {
@@ -100,7 +102,15 @@ export class SaturdaySchedulesService {
 
     const employees = await this.prisma.employee_profiles.findMany({
       where: { id: { in: dto.employeeIds } },
-      select: { id: true, full_name: true, campus_id: true, user_id: true },
+      select: {
+        id: true,
+        full_name: true,
+        campus_id: true,
+        segment_id: true,
+        department_id: true,
+        staff_category_id: true,
+        user_id: true,
+      },
     });
 
     if (employees.length !== dto.employeeIds.length) {
@@ -109,6 +119,8 @@ export class SaturdaySchedulesService {
 
     for (const employee of employees) {
       this.assertCampusAccess(user, employee.campus_id);
+      // Covers segment/department/category, which the legacy campus-only check never did.
+      this.scope.assertEmployee(user, employee);
     }
 
     const existingRows = await this.prisma.teacher_saturday_schedules.findMany({
@@ -360,8 +372,20 @@ export class SaturdaySchedulesService {
       }
     }
 
-    const employeeFilter: Prisma.employee_profilesWhereInput = {};
-    if (campusIds?.length) employeeFilter.campus_id = { in: campusIds };
+    // campus_id is pulled out and intersected, not spread, so it never
+    // silently overwrites (or gets overwritten by) the legacy campusIds
+    // filter below. See the scope-sweep handoff.
+    const { campus_id: universalCampusFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalCampusIds = universalCampusFilter?.in;
+    const effectiveCampusIds = universalCampusIds
+      ? campusIds?.length
+        ? campusIds.filter((id) => universalCampusIds.includes(id))
+        : universalCampusIds
+      : campusIds;
+
+    const employeeFilter: Prisma.employee_profilesWhereInput = { ...restUniversalScope };
+    if (effectiveCampusIds !== undefined) employeeFilter.campus_id = { in: effectiveCampusIds };
     if (query.sectionId != null) {
       employeeFilter.employee_class_section_assignments = {
         some: { section_id: query.sectionId },
@@ -390,13 +414,22 @@ export class SaturdaySchedulesService {
       where: { id },
       include: {
         employee_profiles: {
-          select: { campus_id: true, full_name: true, user_id: true },
+          select: {
+            campus_id: true,
+            segment_id: true,
+            department_id: true,
+            staff_category_id: true,
+            full_name: true,
+            user_id: true,
+          },
         },
       },
     });
     if (!existing) throw new NotFoundException('Saturday schedule not found');
 
     this.assertCampusAccess(user, existing.employee_profiles.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, existing.employee_profiles);
     await this.prisma.teacher_saturday_schedules.delete({ where: { id } });
 
     void this.auditLogs.log({
@@ -437,6 +470,8 @@ export class SaturdaySchedulesService {
     }
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(
     user: IJwtStaffPayload,
     employeeCampusId: number | null,
@@ -448,6 +483,7 @@ export class SaturdaySchedulesService {
     if (user.campusId && user.campusId !== employeeCampusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, employeeCampusId);
   }
 
   private dateKey(date: Date): string {

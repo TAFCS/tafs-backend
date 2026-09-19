@@ -238,6 +238,124 @@ const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
   { id: 'create', label: 'Create a person', implies: ['view'] },
 ];
 
+// Route-shaped, single tile — no other tile shares any route on
+// FinancialReportsController. The real fix here was scope, not actions:
+// buildStudentWhere/buildMatrixStudentWhere only ever applied the legacy
+// single-campus check (applyStudentScope); a caller's own segment/department/
+// staff-category-adjacent restrictions were never enforced, and a client
+// could simply omit campus_id from the query to bypass even that. Both
+// helpers now AND the universal scope fragment on top, same pattern as
+// students.service.ts.
+const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View reports', default: true },
+
+  { id: 'export', label: 'Export a report to Excel', implies: ['view'] },
+  { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['view'] },
+  { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['view'] },
+];
+
+// GET /by-class is shared with Student Overrides (default-fee suggestions)
+// and deliberately left undecorated — see class-fee-schedule.controller.ts.
+// A null campus_id row is a genuine global default, not unassigned data, so
+// it stays visible to everyone rather than being hidden by scope; a scoped
+// caller may also never create/move a row TO campus_id null (that would let
+// them affect every campus). See ClassFeeScheduleService.
+const CLASS_FEE_SCHEDULE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View class fee schedules', default: true },
+
+  { id: 'create', label: 'Add a fee schedule entry', implies: ['view'] },
+  { id: 'edit', label: 'Edit fee schedule entries', implies: ['view'] },
+  { id: 'delete', label: 'Delete a fee schedule entry', implies: ['view'] },
+  { id: 'copy_history', label: 'Copy a year\'s schedule forward', implies: ['view'] },
+];
+
+// `create` (POST /vouchers, bare) is confirmed exclusive to the Single
+// Voucher Issuance page — no other tile's page calls it, unlike generate-pdf/
+// arrears/by-student on the same controller, which stay undecorated because
+// they ARE shared with Vouchers and Receive Deposit. The real fix was scope:
+// create() had no target-student check at all; VouchersService.
+// assertCanIssueFor() closes it without touching create() itself, since
+// create() is also called in-process by the bulk pipeline's async job.
+const SINGLE_VOUCHER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Single Voucher Issuance', default: true },
+
+  { id: 'create', label: 'Issue a voucher', implies: ['view'] },
+];
+
+// `startJob` is ALSO reachable from POST /vouchers/batch-issue
+// (vouchers.controller.ts) — that route uses @RequireAnyAction across this
+// tile and finance.vouchers#edit, so a Vouchers-only holder using the
+// existing-voucher batch-reissue flow isn't locked out. The real gap fixed
+// here was scope, not just actions: preview/startJob had NO campus/student
+// scope enforcement at all — a client could request/generate vouchers for
+// any campus, or any student cc directly, bypassing campus_ids entirely.
+const BULK_VOUCHER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View bulk voucher jobs', default: true },
+
+  { id: 'start', label: 'Start a bulk voucher job', implies: ['view'] },
+];
+
+// VouchersController is shared by at least 6 tiles (Vouchers, Fee Challan,
+// Receive Deposit, Student Overrides, Payment History, and a Transfers form)
+// with no clean per-route ownership — see the scope/tile-permission handoff.
+// Deliberately minimal: only the routes exclusive to (or safely assignable
+// to) the Vouchers directory itself are covered. Every shared route (waive,
+// split, generate-pdf, deposit, clear-deposit, create, arrears, by-student,
+// the batch-* and pending-release/* routes) is left undecorated, same as any
+// other not-yet-rolled-out tile — decorating them here would lock out users
+// of the OTHER tiles that depend on them without giving them an equivalent
+// grant. Widen this only alongside a matching rollout of those other tiles.
+const VOUCHERS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open vouchers', description: 'See the voucher list and open a record', default: true },
+
+  { id: 'edit', label: 'Edit a voucher', description: 'Issue date, due date, validity, status, late fee, bank account, section', implies: ['view'] },
+  { id: 'delete', label: 'Delete a voucher', description: 'Single or bulk', implies: ['view'] },
+];
+
+// Standalone — no other tile shares any pending-release route. The real fix
+// here was scope: findPendingRelease/releaseVouchers/releaseByBulkJobId had
+// NO campus/class/section enforcement at all, so a scoped user could
+// release (make visible to parents) a voucher at any campus by id. Now the
+// list is floor-scoped and release silently skips out-of-scope candidates,
+// the same way it already silently skips already-released ones.
+const PENDING_RELEASE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View held vouchers', default: true },
+
+  { id: 'release', label: 'Release a voucher to parents', implies: ['view'] },
+];
+
+// This tile owns NO route of its own — GET /students/:id/payment-history is
+// the Student Directory's own route (student.directory#payment_history.view,
+// already shipped), widened here with @RequireAnyAction so a Payment History
+// holder who never got the Student Directory tile can still use it.
+// clear-deposit IS confirmed exclusive to this page (no other tile calls it,
+// unlike deposit/waive/generate-pdf on the same controller) so it gets its
+// own action directly. Real scope fix alongside: getPaymentHistory had no
+// scope check at all — any campus's student payment history was readable by
+// id; now 404 not 403, same as everywhere else.
+const PAYMENT_HISTORY_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View payment history', default: true },
+
+  { id: 'clear_deposit', label: 'Clear a deposit', implies: ['view'] },
+];
+
+// bank-accounts.controller.ts previously had NO capability check at all
+// (JwtStaffGuard only) — any logged-in staff could create/edit/delete a bank
+// account. `finance.banks.edit` was in the permission catalog but assigned to
+// no role, so the real check now locks writes to SUPER_ADMIN until it's
+// deliberately granted (decided over silently seeding it onto whatever roles
+// happened to hold `finance.banks.view`, which was never actually checked).
+// GET /bank-accounts (list) is deliberately left uncovered here — it's read
+// by fee-challan, the deposit page and the Vouchers page just to populate a
+// bank picker, unrelated to who may administer bank accounts.
+const BANKS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View bank accounts', default: true },
+
+  { id: 'create', label: 'Add a bank account', implies: ['view'] },
+  { id: 'edit', label: 'Edit a bank account', implies: ['view'] },
+  { id: 'delete', label: 'Delete a bank account', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -259,14 +377,14 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
 
   // ?? Finance ??????????????????????????????????????????????????????????????
-  { id: 'finance.financial_reports', module: 'finance', label: 'Financial Reports', description: 'Fee heads (accrual), deposits (cash), a student x month fee matrix, and the defaulters list, with filters and exports', href: '/financial-reports', capabilities: ['system.analytics.view'] },
-  { id: 'finance.class_fee_schedule', module: 'finance', label: 'Class Fee Schedule', description: 'Per-class fee configuration', href: '/classwise-fees-schedule', capabilities: ['fee_admin.classwise_schedule.view'] },
+  { id: 'finance.financial_reports', module: 'finance', label: 'Financial Reports', description: 'Fee heads (accrual), deposits (cash), a student x month fee matrix, and the defaulters list, with filters and exports', href: '/financial-reports', capabilities: ['system.analytics.view'], actions: FINANCIAL_REPORTS_ACTIONS, legacyFullAccessCapabilities: ['system.analytics.finalize'] },
+  { id: 'finance.class_fee_schedule', module: 'finance', label: 'Class Fee Schedule', description: 'Per-class fee configuration', href: '/classwise-fees-schedule', capabilities: ['fee_admin.classwise_schedule.view'], actions: CLASS_FEE_SCHEDULE_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.classwise_schedule.edit'] },
   { id: 'finance.student_overrides', module: 'finance', label: 'Student Overrides', description: 'Individual fee adjustments', href: '/studentwise-fees', capabilities: ['fee_admin.studentwise_schedule.view'], actions: STUDENT_OVERRIDES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.studentwise_schedule.edit'] },
-  { id: 'finance.single_voucher', module: 'finance', label: 'Single Voucher Issuance', description: 'Print individual fee slips', href: '/fee-challan', capabilities: ['finance.vouchers.view'] },
-  { id: 'finance.bulk_voucher', module: 'finance', label: 'Bulk Voucher Issuance', description: 'Generate multiple vouchers', href: '/bulk-voucher', capabilities: ['finance.vouchers.generate_bulk'] },
-  { id: 'finance.vouchers', module: 'finance', label: 'Vouchers', description: 'All issued vouchers', href: '/vouchers', capabilities: ['finance.vouchers.view'] },
-  { id: 'finance.pending_release', module: 'finance', label: 'Pending Release', description: 'Held vouchers awaiting parent visibility', href: '/pending-release', capabilities: ['finance.vouchers.release'] },
-  { id: 'finance.payment_history', module: 'finance', label: 'Payment History', description: 'Payment transaction log', href: '/payment-history', capabilities: ['finance.vouchers.view'] },
+  { id: 'finance.single_voucher', module: 'finance', label: 'Single Voucher Issuance', description: 'Print individual fee slips', href: '/fee-challan', capabilities: ['finance.vouchers.view'], actions: SINGLE_VOUCHER_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.generate_single'] },
+  { id: 'finance.bulk_voucher', module: 'finance', label: 'Bulk Voucher Issuance', description: 'Generate multiple vouchers', href: '/bulk-voucher', capabilities: ['finance.vouchers.generate_bulk'], actions: BULK_VOUCHER_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.generate_bulk'] },
+  { id: 'finance.vouchers', module: 'finance', label: 'Vouchers', description: 'All issued vouchers', href: '/vouchers', capabilities: ['finance.vouchers.view'], actions: VOUCHERS_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 'finance.vouchers.download', 'finance.vouchers.split_partial'] },
+  { id: 'finance.pending_release', module: 'finance', label: 'Pending Release', description: 'Held vouchers awaiting parent visibility', href: '/pending-release', capabilities: ['finance.vouchers.release'], actions: PENDING_RELEASE_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.release'] },
+  { id: 'finance.payment_history', module: 'finance', label: 'Payment History', description: 'Payment transaction log', href: '/payment-history', capabilities: ['finance.vouchers.view'], actions: PAYMENT_HISTORY_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.download'] },
   { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'] },
   { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.vouchers.view'] },
 
@@ -314,7 +432,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
   { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'], actions: FEE_TYPES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
   { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'], actions: DISCOUNT_PRESETS_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
-  { id: 'school-setup.banks', module: 'school-setup', label: 'Banks', description: 'Banking relationships', href: '/banks', capabilities: ['finance.banks.view'] },
+  { id: 'school-setup.banks', module: 'school-setup', label: 'Banks', description: 'Banking relationships', href: '/banks', capabilities: ['finance.banks.view'], actions: BANKS_ACTIONS, legacyFullAccessCapabilities: ['finance.banks.edit'] },
 
   // ?? TAFS Staff App ???????????????????????????????????????????????????????
   // One tile per permission-gated tab. The app checks the capability keys

@@ -15,7 +15,7 @@ import { StudentReturnMode } from '../../constants/student-return-mode.constant'
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
@@ -121,14 +121,16 @@ export class StudentsController {
 
   @Get(':id/payment-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAction('student.directory#payment_history.view')
+  @RequireAnyAction('student.directory#payment_history.view', 'finance.payment_history#view')
   async getPaymentHistory(
     @Param('id', ParseIntPipe) id: number,
     @Query() query: PaymentHistoryQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
     const history = await this.studentsService.getPaymentHistory(
       id,
       query.academic_year,
+      user,
     );
     return createApiResponse(
       history,
