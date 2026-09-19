@@ -213,6 +213,37 @@ const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a preset', implies: ['view'] },
 ];
 
+// The admin routes had JwtStaffGuard only — any logged-in staff member could
+// post to every family. Now gated by communication.send_announcements (already
+// wired into CASL as 'Chat', held only by SUPER_ADMIN and CAMPUS_ADMIN per the
+// foundation's roleMappings — nothing widened). Scope: a scoped poster can no
+// longer leave a restricted targeting dimension empty (empty = whole school),
+// address specific students outside their scope, or edit/delete/inspect a post
+// (or holiday notice) aimed outside it — 404, never 403.
+const NOTICE_BOARD_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View posts and read stats', default: true },
+
+  { id: 'create', label: 'Post a notice (incl. media upload)', implies: ['view'] },
+  { id: 'edit', label: 'Edit or pin a notice', implies: ['view'] },
+  { id: 'delete', label: 'Delete a notice', implies: ['view'] },
+];
+
+// The admin broadcast routes here had NO authorization at all — no
+// PoliciesGuard, no @CheckPolicies — and the capability that was supposed to
+// gate them (communication.send_employee_announcements, already correctly
+// excluded from CAMPUS_ADMIN's blanket grant in the foundation) was never
+// actually wired into CASL, so it did nothing either way. Wired up a real
+// 'EmployeeNotice' subject for it (subjects.ts, casl-ability.factory.ts) and
+// added scope: a scoped admin can no longer send an org-wide notice (empty
+// campus_ids = every campus) or target a campus outside their own.
+const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View sent notices', default: true },
+
+  { id: 'create', label: 'Send a notice', implies: ['view'] },
+  { id: 'edit', label: 'Edit a notice', implies: ['view'] },
+  { id: 'delete', label: 'Delete a notice', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -246,7 +277,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.vouchers.view'] },
 
   // ?? Communications ???????????????????????????????????????????????????????
-  { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'] },
+  { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },
   { id: 'communication.support_tickets', module: 'communication', label: 'Support Tickets', description: 'Issue tracking and resolution', href: '/support-tickets', capabilities: ['communication.support_tickets.view'] },
   { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['system.permissions.manage'] },
 
@@ -259,7 +290,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'hr.security_deposits', module: 'hr', label: 'Security Deposits', description: 'Caution money plans across employees', href: '/hr/security-deposits', capabilities: ['hr.employees.view'] },
   { id: 'hr.employee_loans', module: 'hr', label: 'Employee Loans', description: 'Salary advance loans across employees', href: '/hr/employee-loans', capabilities: ['hr.employees.view'] },
   { id: 'hr.salary_increments', module: 'hr', label: 'Salary Increments', description: 'Plan, review and apply salary increases in bulk', href: '/hr/salary-increments', capabilities: ['hr.employees.view'] },
-  { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'] },
+  { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'], actions: EMPLOYEE_NOTICES_ACTIONS, legacyFullAccessCapabilities: ['communication.send_employee_announcements'] },
 
   // ?? Attendance ???????????????????????????????????????????????????????????
   { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'] },

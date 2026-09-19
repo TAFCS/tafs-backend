@@ -26,4 +26,5 @@ export type AppSubjects =
   | 'Chat'
   | 'Timetable'
   | 'VoucherRelease'
+  | 'EmployeeNotice'
   | 'all';
