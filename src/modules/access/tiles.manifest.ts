@@ -213,6 +213,31 @@ const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a preset', implies: ['view'] },
 ];
 
+// Tab-shaped, like Employee/Student Directory: PUT /users/:id and
+// PUT /users/:id/access each write fields belonging to more than one tab
+// through one route, so both are field-partitioned (UsersService.updateUser
+// against USER_FIELD_TAB_MAP; AccessService.setUserAccess by DTO key) rather
+// than carrying a single @RequireAction. `role` is a field neither tab-action
+// covers — changing it requires the actor to BE SUPER_ADMIN, not merely hold
+// an action, since the generic CASL mapper turns almost any granted
+// capability into full Manage and role is how SUPER_ADMIN itself is granted.
+// A campus-scoped holder of this tile is also restricted to managing users
+// within, and granting scope no wider than, their own scope — see
+// AccessService.assertCanManageUser/assertGrantableScope and the
+// scope/tile-permission handoff §8, which left this as an open decision.
+const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record', default: true },
+
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, password, active status', implies: ['view'] },
+  { id: 'job.edit', label: 'Edit job assignment', description: 'Legacy campus/class fields', implies: ['view'] },
+  { id: 'reveal_password', label: 'Reveal a stored password', implies: ['view'] },
+
+  { id: 'access.edit', label: 'Edit access', description: 'Packs, tiles, and sub-permission grants', implies: ['view'] },
+  { id: 'scope.edit', label: 'Edit data scope', implies: ['view'] },
+
+  { id: 'create', label: 'Create a person', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -304,7 +329,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'staff_app.leave', module: 'staff_app', surface: 'staff_app', label: 'Apply for Leave', description: 'Submit and track own leave requests', href: 'staff-app://leave', capabilities: ['hr.leave.apply'] },
 
   // ?? System ???????????????????????????????????????????????????????????????
-  { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'] },
+  { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'], actions: PEOPLE_ACCESS_ACTIONS, legacyFullAccessCapabilities: ['system.users.edit', 'system.permissions.manage'] },
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'] },
   { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'] },
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'] },
@@ -439,3 +464,4 @@ export function catalogFromManifest() {
     })),
   };
 }
+export const PEOPLE_ACCESS_ACTIONS_FOR_TEST = PEOPLE_ACCESS_ACTIONS;

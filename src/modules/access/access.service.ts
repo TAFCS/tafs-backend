@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import { ScopeService } from '../../common/scope/scope.service';
@@ -18,6 +20,7 @@ import {
   MANIFEST_TILE_IDS,
 } from './tiles.manifest';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
+import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
 
 @Injectable()
 export class AccessService {
@@ -26,6 +29,92 @@ export class AccessService {
     private readonly auditLogs: AuditLogsService,
     private readonly scopeService: ScopeService,
   ) {}
+
+  /**
+   * Restricts a campus-scoped admin (holds this tile + a non-empty campus
+   * scope of their own) to managing access for users within that same scope.
+   * An admin unrestricted on campus (including SUPER_ADMIN, whose scope
+   * always resolves empty) is unaffected. This was an explicit open decision
+   * in the scope/tile-permission handoff §8 — resolved here to close the
+   * escalation path it named ("should a campus-scoped admin be able to grant
+   * access outside their own scope? Currently yes.").
+   */
+  // Throws NotFoundException, not Forbidden — a 403 here would confirm a real
+  // user exists outside the caller's scope and turn this route into an
+  // enumerator, exactly the anti-pattern the scope/tile-permission handoff
+  // warns against for :id lookups.
+  private assertCanManageUser(actingUser: IJwtStaffPayload, targetCampusId: number | null, userId: string) {
+    const adminScope = this.scopeService.scopeOf(actingUser);
+    if (adminScope.campuses.length === 0) return;
+    if (targetCampusId == null || !adminScope.campuses.includes(targetCampusId)) {
+      throw new NotFoundException(`User ${userId} not found`);
+    }
+  }
+
+  /**
+   * The other half of the same restriction: a campus-scoped admin may not
+   * grant a target user scope values wider than their own, dimension by
+   * dimension. An admin unrestricted on a given dimension imposes no bound
+   * on that dimension.
+   */
+  private assertGrantableScope(actingUser: IJwtStaffPayload, granted: Partial<UserScope>) {
+    const adminScope = this.scopeService.scopeOf(actingUser);
+    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
+      if (adminScope[field].length === 0) continue;
+      const requested = granted[field] ?? [];
+      const outOfBounds = requested.filter((id) => !adminScope[field].includes(id));
+      if (outOfBounds.length > 0) {
+        throw new ForbiddenException(
+          `You may not grant ${field} outside your own scope: ${outOfBounds.join(', ')}.`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Field-partitions setUserAccess between the Access tab (packIds,
+   * tileGrants, tileActionGrants -> access.edit) and the Scope tab
+   * (scope -> scope.edit).
+   *
+   * packIds and tileGrants are NOT optional on SetUserAccessDto — the
+   * webapp's single saveAccess() handler always sends both, on every save
+   * from either tab (see the People & Access page). So "the field is
+   * present" cannot mean "the caller intends to change it" the way it does
+   * for UpdateUserDto; a scope-only editor must be able to resave scope
+   * without incidentally needing access.edit just because packIds/tileGrants
+   * rode along unchanged. Compared against the persisted state instead.
+   *
+   * A caller whose session predates sub-permissions (no `actions`) is left
+   * alone, same rationale as UsersService.assertFieldsEditable.
+   */
+  private assertUserAccessFieldsEditable(
+    actingUser: IJwtStaffPayload,
+    dto: SetUserAccessDto,
+    packIds: string[],
+    grants: { tileId: string; allow: boolean }[],
+    existingPacks: { pack_id: string }[],
+    existingGrants: { tile_id: string; allow: boolean }[],
+  ) {
+    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
+    if (actingUser.actions === undefined) return;
+
+    const packsChanged =
+      JSON.stringify([...packIds].sort()) !==
+      JSON.stringify(existingPacks.map((p) => p.pack_id).sort());
+    const grantsChanged =
+      JSON.stringify([...grants].map((g) => [g.tileId, g.allow]).sort()) !==
+      JSON.stringify(existingGrants.map((g) => [g.tile_id, g.allow]).sort());
+    const touchesAccess = packsChanged || grantsChanged || dto.tileActionGrants !== undefined;
+    const touchesScope = dto.scope !== undefined;
+
+    const held = new Set(actingUser.actions);
+    if (touchesAccess && !held.has(`${PEOPLE_ACCESS_TILE_ID}#access.edit`)) {
+      throw new ForbiddenException('You do not have permission to edit access grants.');
+    }
+    if (touchesScope && !held.has(`${PEOPLE_ACCESS_TILE_ID}#scope.edit`)) {
+      throw new ForbiddenException('You do not have permission to edit data scope.');
+    }
+  }
 
   /**
    * Everything a scope picker can offer. Small, stable reference data -- the
@@ -165,12 +254,13 @@ export class AccessService {
     }
   }
 
-  async getUserAccess(userId: string) {
+  async getUserAccess(userId: string, actingUser: IJwtStaffPayload) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, role: true },
+      select: { id: true, username: true, role: true, campus_id: true },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
+    this.assertCanManageUser(actingUser, user.campus_id, userId);
 
     const [packs, assigned, grants, rolePerms, actionGrants] = await Promise.all([
       this.prisma.access_packs.findMany({
@@ -259,12 +349,22 @@ export class AccessService {
     };
   }
 
-  async setUserAccess(userId: string, dto: SetUserAccessDto, actorId: string, actorLabel?: string) {
+  async setUserAccess(
+    userId: string,
+    dto: SetUserAccessDto,
+    actorId: string,
+    actorLabel: string | undefined,
+    actingUser: IJwtStaffPayload,
+  ) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true },
+      select: { id: true, username: true, campus_id: true },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
+    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    if (dto.scope !== undefined) {
+      this.assertGrantableScope(actingUser, dto.scope);
+    }
 
     const packIds = [...new Set(dto.packIds ?? [])];
     const grants = dto.tileGrants ?? [];
@@ -292,6 +392,7 @@ export class AccessService {
       where: { user_id: userId },
       select: { tile_id: true, allow: true },
     });
+    this.assertUserAccessFieldsEditable(actingUser, dto, packIds, grants, existingPacks, existingGrants);
     const existingActionGrants = await readUntilMigrated(
       () =>
         this.prisma.user_tile_action_grants.findMany({
@@ -455,7 +556,7 @@ export class AccessService {
       }
     }
 
-    return this.getUserAccess(userId);
+    return this.getUserAccess(userId, actingUser);
   }
 
   async listPacks() {
