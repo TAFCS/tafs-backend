@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { applyStudentScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
 import {
@@ -309,6 +310,7 @@ export class FinancialReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   async listFeeHeads(query: ListFeeHeadsQueryDto, user: IJwtStaffPayload) {
@@ -3063,10 +3065,13 @@ export class FinancialReportsService {
       }),
       ...(graduationConditions.length && { AND: graduationConditions }),
     };
-    return applyStudentScope(user, studentWhere, {
-      campus_id: query.campus_id,
-      class_id: query.class_id,
-    });
+    return this.andUniversalScope(
+      applyStudentScope(user, studentWhere, {
+        campus_id: query.campus_id,
+        class_id: query.class_id,
+      }),
+      user,
+    );
   }
 
   /**
@@ -3110,10 +3115,28 @@ export class FinancialReportsService {
       }),
       ...(graduationConditions.length && { AND: graduationConditions }),
     };
-    return applyStudentScope(user, studentWhere, {
-      campus_id: query.campus_id,
-      class_id: query.class_id,
-    });
+    return this.andUniversalScope(
+      applyStudentScope(user, studentWhere, {
+        campus_id: query.campus_id,
+        class_id: query.class_id,
+      }),
+      user,
+    );
+  }
+
+  /**
+   * ANDs the universal scope fragment on top of the legacy applyStudentScope
+   * result, never replacing it — the legacy check stays live for the 90-day
+   * token window (see the scope/tile-permission handoff §5b). Empty when the
+   * caller has no restricting universal scope, so unrestricted users pay no
+   * extra query cost.
+   */
+  private andUniversalScope(
+    legacy: Prisma.studentsWhereInput,
+    user: IJwtStaffPayload,
+  ): Prisma.studentsWhereInput {
+    const universal = this.scope.whereForStudents(user);
+    return Object.keys(universal).length === 0 ? legacy : { AND: [legacy, universal] };
   }
 
   /**

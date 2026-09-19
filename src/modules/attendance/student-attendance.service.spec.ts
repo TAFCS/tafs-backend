@@ -25,15 +25,32 @@ describe('StudentAttendanceService.bulkManualMark', () => {
       logGroup: jest.fn().mockResolvedValue(1),
     };
 
+    // Permissive stand-in for ScopeService: test users carry no `.scope`, which
+    // the real service also resolves as unrestricted, so this never throws.
+    const scope = {
+      assertCampus: jest.fn(),
+      assertClass: jest.fn(),
+      assertSection: jest.fn(),
+      scopeOf: jest.fn().mockReturnValue({
+        campuses: [],
+        segments: [],
+        classes: [],
+        sections: [],
+        departments: [],
+        staffCategories: [],
+      }),
+    };
+
     const service = new StudentAttendanceService(
       { ...prisma, ...overrides.prisma } as any,
       { ...calendarResolver, ...overrides.calendarResolver } as any,
       {} as any, // AttendancePolicyResolverService
       { ...auditLogs, ...(overrides.auditLogs ?? {}) } as any,
       {} as any, // ZkAttendanceProcessorService
+      scope as any,
     );
 
-    return { service, prisma, calendarResolver, auditLogs };
+    return { service, prisma, calendarResolver, auditLogs, scope };
   };
 
   it('throws if trying to mark PRESENT on a non-working day (only EXCUSED allowed)', async () => {

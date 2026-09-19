@@ -16,6 +16,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
+import { ScopeService } from '../../common/scope/scope.service';
 import {
   CreateAttendanceObjectionDto,
   ListAttendanceObjectionsQueryDto,
@@ -29,6 +30,7 @@ export class AttendanceObjectionsService {
     private readonly employeeResolver: EmployeeProfileResolverService,
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -38,10 +40,15 @@ export class AttendanceObjectionsService {
     return d;
   }
 
+  // Legacy single-campus check, kept standing per the scope-sweep handoff:
+  // deleting it before 90-day-old tokens rotate would silently widen access
+  // for anyone whose session predates universal scope. this.scope.assertCampus
+  // is ANDed alongside it — both must agree.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   async create(userId: string, dto: CreateAttendanceObjectionDto) {
@@ -99,10 +106,25 @@ export class AttendanceObjectionsService {
       }
     }
 
+    // campus_id is pulled out and intersected, not spread, so it never
+    // silently overwrites (or gets overwritten by) the campusIds filter
+    // below. See the scope-sweep handoff.
+    const { campus_id: universalCampusFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalCampusIds = universalCampusFilter?.in;
+    const effectiveCampusIds = universalCampusIds
+      ? campusIds?.length
+        ? campusIds.filter((id) => universalCampusIds.includes(id))
+        : universalCampusIds
+      : campusIds;
+
     return this.prisma.attendance_objections.findMany({
       where: {
         ...(query.status?.length ? { status: { in: query.status } } : {}),
-        ...(campusIds?.length ? { employee: { campus_id: { in: campusIds } } } : {}),
+        employee: {
+          ...(effectiveCampusIds !== undefined ? { campus_id: { in: effectiveCampusIds } } : {}),
+          ...restUniversalScope,
+        },
       },
       include: {
         employee: {
@@ -130,6 +152,9 @@ export class AttendanceObjectionsService {
           select: {
             id: true,
             campus_id: true,
+            segment_id: true,
+            department_id: true,
+            staff_category_id: true,
             user_id: true,
             full_name: true,
             employee_code: true,
@@ -144,6 +169,8 @@ export class AttendanceObjectionsService {
     if (existing.employee.campus_id) {
       this.assertCampusAccess(user, existing.employee.campus_id);
     }
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, existing.employee);
 
     const updated = await this.prisma.attendance_objections.update({
       where: { id },
@@ -317,10 +344,21 @@ export class AttendanceObjectionsService {
 
   async countPending(user: IJwtStaffPayload): Promise<{ count: number }> {
     const campusIds = user.campusId != null ? [user.campusId] : undefined;
+    const { campus_id: universalCampusFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalCampusIds = universalCampusFilter?.in;
+    const effectiveCampusIds = universalCampusIds
+      ? campusIds?.length
+        ? campusIds.filter((id) => universalCampusIds.includes(id))
+        : universalCampusIds
+      : campusIds;
     const count = await this.prisma.attendance_objections.count({
       where: {
         status: AttendanceObjectionStatus.PENDING,
-        ...(campusIds?.length ? { employee: { campus_id: { in: campusIds } } } : {}),
+        employee: {
+          ...(effectiveCampusIds !== undefined ? { campus_id: { in: effectiveCampusIds } } : {}),
+          ...restUniversalScope,
+        },
       },
     });
     return { count };

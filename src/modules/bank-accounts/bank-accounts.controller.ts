@@ -6,16 +6,31 @@ import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { Action } from '../auth/casl/actions';
 
+// GET routes (findAll/findOne/dependencies) are deliberately undecorated —
+// they previously had no check at all, and findAll specifically is read by
+// fee-challan, the vouchers deposit page and the Vouchers page just to
+// populate a bank picker, unrelated to who may administer bank accounts.
+// Adding a check there would lock those unrelated flows out. Only the writes
+// (create/update/remove), which had the exact same "any logged-in staff" gap
+// but carry real risk (redirecting where money is recorded), are gated here —
+// see the scope/tile-permission handoff and tiles.manifest.ts on this tile.
 @ApiTags('Bank Accounts')
 @Controller('bank-accounts')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class BankAccountsController {
     constructor(private readonly bankAccountsService: BankAccountsService) { }
 
     @Post()
     @ApiOperation({ summary: 'Create a new bank account' })
     @ApiResponse({ status: 201, description: 'The bank account has been successfully created.' })
+    @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
+    @RequireAction('school-setup.banks#create')
     async create(@Body() createBankAccountDto: CreateBankAccountDto, @Req() req: Request) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const bankAccount = await this.bankAccountsService.create(createBankAccountDto, changedBy);
@@ -44,6 +59,8 @@ export class BankAccountsController {
 
     @Patch(':id')
     @ApiOperation({ summary: 'Update a bank account by ID' })
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Fee'))
+    @RequireAction('school-setup.banks#edit')
     async update(@Param('id', ParseIntPipe) id: number, @Body() updateBankAccountDto: UpdateBankAccountDto, @Req() req: Request) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const bankAccount = await this.bankAccountsService.update(id, updateBankAccountDto, changedBy);
@@ -52,6 +69,8 @@ export class BankAccountsController {
 
     @Delete(':id')
     @ApiOperation({ summary: 'Delete a bank account by ID' })
+    @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee'))
+    @RequireAction('school-setup.banks#delete')
     async remove(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         await this.bankAccountsService.remove(id, changedBy);

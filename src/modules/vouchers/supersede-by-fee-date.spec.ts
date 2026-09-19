@@ -25,6 +25,7 @@ describe('VouchersService — supersession by fee date', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ScopeService — not exercised by these tests
     );
 
   const sf = (over: Partial<any> = {}) => ({
@@ -267,6 +268,7 @@ describe('VouchersService — supersession by fee date', () => {
         {} as any,
         auditLogs,
         notifier,
+        {} as any, // ScopeService — not exercised by these tests
       );
 
       jest

@@ -43,14 +43,29 @@ describe('TimetablesService - deleteSlot', () => {
     };
 
     const classPeriods = {} as any;
+    // Permissive stand-in for ScopeService: test users carry no `.scope`, which
+    // the real service also resolves as unrestricted, so this never throws.
+    const scope = {
+      assertCampus: jest.fn(),
+      assertClass: jest.fn(),
+      scopeOf: jest.fn().mockReturnValue({
+        campuses: [],
+        segments: [],
+        classes: [],
+        sections: [],
+        departments: [],
+        staffCategories: [],
+      }),
+    };
 
     const service = new TimetablesService(
       prisma as any,
       auditLogs as any,
       classPeriods,
+      scope as any,
     );
 
-    return { service, prisma, tx, auditLogs };
+    return { service, prisma, tx, auditLogs, scope };
   };
 
   const user = {
