@@ -10,6 +10,7 @@ import { Prisma, RollSessionKind, RollSessionStatus, student_status } from '@pri
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import {
   CreateRollSessionDto,
   ListRollSessionsQueryDto,
@@ -38,6 +39,7 @@ export class RollSessionsService {
     private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => ClassSessionReschedulesService))
     private readonly reschedules: ClassSessionReschedulesService,
+    private readonly scope: ScopeService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -49,10 +51,13 @@ export class RollSessionsService {
     return d;
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private async assertRollCallClass(classId: number) {
@@ -178,16 +183,31 @@ export class RollSessionsService {
     this.assertCampusAccess(user, campusId);
     if (query.class_id) {
       assertClassInScope(user, query.class_id);
+      this.scope.assertClass(user, query.class_id);
     }
 
     const allowed = user.allowedClassIds ?? [];
+    // Universal class scope ANDed with the legacy allowedClassIds list: intersect
+    // when both restrict, defer to whichever one actually restricts otherwise.
+    // See the scope-sweep handoff before removing `allowed`.
+    const universalClasses = this.scope.scopeOf(user).classes;
+    const effectiveAllowed =
+      universalClasses.length > 0
+        ? allowed.length > 0
+          ? allowed.filter((id) => universalClasses.includes(id))
+          : universalClasses
+        : allowed;
+    // Whether EITHER axis restricts, not whether the intersection is
+    // non-empty — an empty intersection (legacy and universal scope disagree
+    // entirely) must still deny, not silently fall through to unrestricted.
+    const classIsRestricted = allowed.length > 0 || universalClasses.length > 0;
     const where: Prisma.attendance_roll_sessionsWhereInput = {
       session_date: sessionDate,
       campus_id: campusId,
       ...(query.class_id
         ? { class_id: query.class_id }
-        : allowed.length > 0
-          ? { class_id: { in: allowed } }
+        : classIsRestricted
+          ? { class_id: { in: effectiveAllowed } }
           : {}),
       ...(query.section_id ? { section_id: query.section_id } : {}),
       ...(query.period ? { period: query.period } : {}),
@@ -217,6 +237,7 @@ export class RollSessionsService {
     }
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
+    this.scope.assertClass(user, session.class_id);
     const reopened = await this.reopenSkippedMakeupSession(session);
     return this.enrichWithRoster(reopened);
   }
@@ -368,6 +389,7 @@ export class RollSessionsService {
   ) {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
+    this.scope.assertClass(user, dto.class_id);
     await this.assertRollCallClass(dto.class_id);
 
     if (!dto.section_id && !dto.teaching_group_id) {
@@ -546,6 +568,7 @@ export class RollSessionsService {
     }
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
+    this.scope.assertClass(user, session.class_id);
 
     if (session.status === 'SUBMITTED' && !canEditLocked) {
       throw new ForbiddenException(
@@ -697,6 +720,7 @@ export class RollSessionsService {
     }
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
+    this.scope.assertClass(user, session.class_id);
 
     if (session.status !== RollSessionStatus.SUBMITTED) {
       throw new BadRequestException('Only submitted roll sessions can be reverted');
@@ -749,6 +773,7 @@ export class RollSessionsService {
     }
     this.assertCampusAccess(user, session.campus_id);
     assertClassInScope(user, session.class_id);
+    this.scope.assertClass(user, session.class_id);
 
     if (session.status === 'SUBMITTED') {
       throw new BadRequestException('Cannot skip a submitted roll session');

@@ -20,6 +20,7 @@ import {
   parsePayrollPeriod,
 } from '../hr/payroll/payroll-period.util';
 import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
+import { ScopeService } from '../../common/scope/scope.service';
 
 @Injectable()
 export class StaffAttendanceService {
@@ -30,6 +31,7 @@ export class StaffAttendanceService {
     private readonly employeeResolver: EmployeeProfileResolverService,
     private readonly expectedTimes: EmployeeExpectedTimesService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -39,10 +41,13 @@ export class StaffAttendanceService {
     return d;
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private empCampusId(
@@ -66,10 +71,22 @@ export class StaffAttendanceService {
 
     await Promise.all(campusIds.map((id) => this.holidaySync.syncCampusForDate(id, date)));
 
+    // department_id pulled out and intersected, not spread, so it never
+    // silently overwrites query.department_id. See the scope-sweep handoff.
+    const { department_id: universalDeptFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalDeptIds = universalDeptFilter?.in;
+    const effectiveDeptIds = universalDeptIds
+      ? query.department_id?.length
+        ? query.department_id.filter((id) => universalDeptIds.includes(id))
+        : universalDeptIds
+      : query.department_id;
+
     const employees = await this.prisma.employee_profiles.findMany({
       where: {
         users: { campus_id: { in: campusIds }, is_active: true, deleted_at: null },
-        ...(query.department_id?.length ? { department_id: { in: query.department_id } } : {}),
+        ...(effectiveDeptIds !== undefined ? { department_id: { in: effectiveDeptIds } } : {}),
+        ...restUniversalScope,
       },
       include: {
         users: { select: { id: true, full_name: true, role: true, email: true, campus_id: true } },
@@ -106,11 +123,29 @@ export class StaffAttendanceService {
 
   // Shared employee scope lookup for the summary/dashboard endpoints — same
   // campus + department filtering as getRegister().
-  private async getEmployeesInScope(campusIds: number[], departmentIds?: number[]) {
+  private async getEmployeesInScope(
+    campusIds: number[],
+    departmentIds: number[] | undefined,
+    user: IJwtStaffPayload,
+  ) {
+    // Universal scope ANDed alongside the legacy campusIds/departmentIds filters
+    // below. department_id is pulled out and intersected rather than spread
+    // directly, so it never silently overwrites the caller's own department
+    // filter. See the scope-sweep handoff.
+    const { department_id: universalDeptFilter, ...restUniversalScope } =
+      this.scope.whereForEmployees(user);
+    const universalDeptIds = universalDeptFilter?.in;
+    const effectiveDeptIds = universalDeptIds
+      ? departmentIds?.length
+        ? departmentIds.filter((id) => universalDeptIds.includes(id))
+        : universalDeptIds
+      : departmentIds;
+
     return this.prisma.employee_profiles.findMany({
       where: {
         users: { campus_id: { in: campusIds }, is_active: true, deleted_at: null },
-        ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
+        ...(effectiveDeptIds !== undefined ? { department_id: { in: effectiveDeptIds } } : {}),
+        ...restUniversalScope,
       },
       include: {
         users: { select: { id: true, full_name: true, role: true, email: true, campus_id: true } },
@@ -211,8 +246,13 @@ export class StaffAttendanceService {
     return offDayIds;
   }
 
-  private async getCountsForDate(campusIds: number[], departmentIds: number[] | undefined, date: Date) {
-    const employees = await this.getEmployeesInScope(campusIds, departmentIds);
+  private async getCountsForDate(
+    campusIds: number[],
+    departmentIds: number[] | undefined,
+    date: Date,
+    user: IJwtStaffPayload,
+  ) {
+    const employees = await this.getEmployeesInScope(campusIds, departmentIds, user);
     if (employees.length === 0) {
       return { onTime: 0, late: 0, early: 0, absent: 0, noClockIn: 0, noClockOut: 0, dayOff: 0 };
     }
@@ -274,8 +314,8 @@ export class StaffAttendanceService {
     previousDate.setUTCDate(previousDate.getUTCDate() - 1);
 
     const [today, yesterday] = await Promise.all([
-      this.getCountsForDate(campusIds, query.department_id, date),
-      this.getCountsForDate(campusIds, query.department_id, previousDate),
+      this.getCountsForDate(campusIds, query.department_id, date, user),
+      this.getCountsForDate(campusIds, query.department_id, previousDate, user),
     ]);
 
     const card = (key: keyof typeof today) => ({ count: today[key], delta: today[key] - yesterday[key] });
@@ -318,7 +358,7 @@ export class StaffAttendanceService {
     if (!campusIds.length) throw new BadRequestException('campus_id is required');
     for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
-    const employees = await this.getEmployeesInScope(campusIds, query.department_id);
+    const employees = await this.getEmployeesInScope(campusIds, query.department_id, user);
     if (employees.length === 0) return [];
 
     const records = await this.prisma.attendance_staff_daily.findMany({
@@ -646,10 +686,19 @@ export class StaffAttendanceService {
   async getTimeline(employeeId: number, query: GetStaffTimelineQueryDto, user: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true, full_name: true, campus_id: true },
+      select: {
+        id: true,
+        full_name: true,
+        campus_id: true,
+        segment_id: true,
+        department_id: true,
+        staff_category_id: true,
+      },
     });
     if (!employee) throw new NotFoundException('Employee not found');
     if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, employee);
 
     const dateFrom = this.parseDate(query.date_from);
     const dateTo = this.parseDate(query.date_to);
