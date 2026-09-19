@@ -465,6 +465,44 @@ const PAYMENT_HISTORY_ACTIONS: TileAction[] = [
   { id: 'clear_deposit', label: 'Clear a deposit', implies: ['view'] },
 ];
 
+// Receive Deposit shares most of its routes with other tiles, so each action
+// maps to the routes it can safely own:
+//   record       POST /vouchers/:id/deposit and GET /vouchers/:id/split-preview
+//                are called by this page and no other tile.
+//   waive        POST /vouchers/:id/waive|unwaive are also called by Student
+//                Overrides -> @RequireAnyAction with finance.student_overrides#waive.
+//   split        POST /vouchers/:id/split-partially-paid is also called by
+//                Vouchers and Single Voucher -> @RequireAnyAction across all three.
+//   print        POST /vouchers/:id/generate-pdf, same three-way share.
+//   main_receipt POST /vouchers/:id/generate-main-column-receipt is also called by
+//                Vouchers -> @RequireAnyAction with finance.vouchers#edit.
+// Bridged from finance.deposits.record, the capability that already opens this
+// tile, so everyone who holds the tile today keeps every action.
+const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Receive Deposit', description: 'Search a student and see their vouchers and deposits', default: true },
+
+  { id: 'record', label: 'Record a deposit', description: 'Cash or cheque against a voucher', implies: ['view'] },
+  { id: 'waive', label: 'Waive or reverse a waiver on a voucher', implies: ['view'] },
+  { id: 'split', label: 'Split a partially paid voucher', implies: ['view'] },
+  { id: 'print', label: 'Print or regenerate a voucher PDF', implies: ['view'] },
+  { id: 'main_receipt', label: 'Print the main-column receipt', description: 'Special admin workflow', implies: ['view'] },
+];
+
+// Post-dated Cheques had no permission infrastructure at all: it borrowed
+// finance.vouchers.view, which every voucher viewer holds, and was later locked
+// to SUPER_ADMIN outright. It now has its own capability
+// (finance.postdated_cheques.view, seeded but mapped to no role) and its own
+// actions, so a SUPER_ADMIN can hand it to a role or a person in People &
+// Access. There is deliberately NO legacyFullAccessCapabilities bridge: nobody
+// held a dedicated permission before, so nobody inherits any of this.
+const POSTDATED_CHEQUES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Post-dated Cheques', description: 'See the cheque list, due and overdue alerts, and a student\'s cheques', default: true },
+
+  { id: 'create', label: 'Record a cheque', implies: ['view'] },
+  { id: 'update_status', label: 'Mark a cheque cashed, bounced, returned or cancelled', implies: ['view'] },
+  { id: 'delete', label: 'Delete a cheque record', implies: ['view'] },
+];
+
 // bank-accounts.controller.ts previously had NO capability check at all
 // (JwtStaffGuard only) — any logged-in staff could create/edit/delete a bank
 // account. `finance.banks.edit` was in the permission catalog but assigned to
@@ -511,8 +549,8 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'finance.vouchers', module: 'finance', label: 'Vouchers', description: 'All issued vouchers', href: '/vouchers', capabilities: ['finance.vouchers.view'], actions: VOUCHERS_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.generate_single', 'finance.vouchers.generate_bulk', 'finance.vouchers.download', 'finance.vouchers.split_partial'] },
   { id: 'finance.pending_release', module: 'finance', label: 'Pending Release', description: 'Held vouchers awaiting parent visibility', href: '/pending-release', capabilities: ['finance.vouchers.release'], actions: PENDING_RELEASE_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.release'] },
   { id: 'finance.payment_history', module: 'finance', label: 'Payment History', description: 'Payment transaction log', href: '/payment-history', capabilities: ['finance.vouchers.view'], actions: PAYMENT_HISTORY_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.download'] },
-  { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'] },
-  { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.vouchers.view'] },
+  { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'], actions: RECEIVE_DEPOSIT_ACTIONS, legacyFullAccessCapabilities: ['finance.deposits.record'] },
+  { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.postdated_cheques.view'], actions: POSTDATED_CHEQUES_ACTIONS },
 
   // ?? Communications ???????????????????????????????????????????????????????
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

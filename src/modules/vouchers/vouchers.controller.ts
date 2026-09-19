@@ -248,7 +248,8 @@ export class VouchersController {
 
     /** Generate (or regenerate) the voucher PDF server-side, store it, and return the URL. */
     @Post(':id/generate-pdf')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#print', 'finance.vouchers#edit', 'finance.single_voucher#create')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -287,7 +288,8 @@ export class VouchersController {
      * (arrear) heads; everything else 400s with a specific reason.
      */
     @Post(':id/generate-main-column-receipt')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#main_receipt', 'finance.vouchers#edit')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -308,7 +310,8 @@ export class VouchersController {
     }
 
     @Post(':id/deposit')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAction('finance.receive_deposit#record')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -331,7 +334,8 @@ export class VouchersController {
     }
 
     @Post(':id/waive')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#waive', 'finance.student_overrides#waive')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -359,7 +363,8 @@ export class VouchersController {
     }
 
     @Post(':id/unwaive')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#waive', 'finance.student_overrides#waive')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
@@ -442,7 +447,8 @@ export class VouchersController {
      * modal prefill the dates the split itself will enforce.
      */
     @Get(':id/split-preview')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAction('finance.receive_deposit#split')
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Create, 'Voucher') ||
@@ -459,7 +465,8 @@ export class VouchersController {
     }
 
     @Post(':id/split-partially-paid')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#split', 'finance.vouchers#edit', 'finance.single_voucher#create')
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies(
         (ability) =>

@@ -45,6 +45,10 @@ const permissionsList = [
     { key: 'finance.deposits.view', module: 'Finance Operations', description: 'View deposit history' },
     { key: 'finance.banks.view', module: 'Finance Operations', description: 'View bank accounts' },
     { key: 'finance.banks.edit', module: 'Finance Operations', description: 'Manage bank accounts' },
+    // Deliberately in NO roleMappings entry below: nobody holds it by default.
+    // A SUPER_ADMIN grants the Post-dated Cheques tile (and its actions) per
+    // role or person in People & Access.
+    { key: 'finance.postdated_cheques.view', module: 'Finance Operations', description: 'Open Post-dated Cheques' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },
