@@ -26,6 +26,7 @@ describe('VouchersService.buildDepositsPanel', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // ScopeService — not exercised by these tests
     );
     return { service, findMany };
   };

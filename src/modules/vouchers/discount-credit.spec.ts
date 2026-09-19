@@ -48,7 +48,7 @@ describe('VouchersService.applyDiscountCreditInTx', () => {
     return { tx: tx as any, allocations };
   };
 
-  const svc = () => new VouchersService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+  const svc = () => new VouchersService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
   it('closes an untouched head when the discount settles the voucher (#10691)', async () => {
     // Month 6 got 11,316 of cash (short 16,974); month 7 got none (short 28,290).

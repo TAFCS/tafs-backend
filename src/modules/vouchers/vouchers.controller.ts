@@ -40,7 +40,11 @@ import { BulkVoucherJobsService } from '../bulk-voucher-jobs/bulk-voucher-jobs.s
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Action } from '../auth/casl/actions';
 
 @Controller('vouchers')
@@ -52,19 +56,22 @@ export class VouchersController {
     ) {}
 
     @Post()
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
+    @RequireAction('finance.single_voucher#create')
     @UseInterceptors(FileInterceptor('pdf'))
     async create(
         @Body() dto: CreateVoucherDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
         @UploadedFile() pdf?: Express.Multer.File,
     ) {
+        await this.vouchersService.assertCanIssueFor(user, dto.student_id);
         if (dto.waive_surcharge && !dto.waived_by) {
             dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
         }
@@ -103,13 +110,14 @@ export class VouchersController {
     }
 
     @Get()
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findAll(@Query() query: FilterVouchersDto) {
+    @RequireAction('finance.vouchers#view')
+    async findAll(@Query() query: FilterVouchersDto, @CurrentUser() user: IJwtStaffPayload) {
         const vouchers = await this.vouchersService.findAll(
             query.student_id,
             query.campus_id,
@@ -129,6 +137,7 @@ export class VouchersController {
             query.student_status,
             query.graduated_from_class_id,
             query.graduated_year_range,
+            user,
         );
         return {
             success: true,
@@ -154,13 +163,14 @@ export class VouchersController {
     }
 
     @Get('pending-release')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Manage, 'VoucherRelease') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findPendingRelease(@Query() query: FilterPendingReleaseVouchersDto) {
+    @RequireAction('finance.pending_release#view')
+    async findPendingRelease(@Query() query: FilterPendingReleaseVouchersDto, @CurrentUser() user: IJwtStaffPayload) {
         const data = await this.vouchersService.findPendingRelease({
             campus_id: query.campus_id,
             class_id: query.class_id,
@@ -169,7 +179,7 @@ export class VouchersController {
             gr: query.gr,
             page: query.page,
             limit: query.limit,
-        });
+        }, user);
         return {
             success: true,
             message: 'Pending-release vouchers retrieved successfully',
@@ -178,16 +188,17 @@ export class VouchersController {
     }
 
     @Post('pending-release/release')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Manage, 'VoucherRelease') ||
             ability.can(Action.Manage, 'all'),
     )
-    async releaseVouchers(@Body() dto: ReleaseVouchersDto, @Req() req: any) {
+    @RequireAction('finance.pending_release#release')
+    async releaseVouchers(@Body() dto: ReleaseVouchersDto, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const result = await this.vouchersService.releaseVouchers(dto.ids, changedBy);
+        const result = await this.vouchersService.releaseVouchers(dto.ids, changedBy, user);
         return {
             success: true,
             message: `${result.released} voucher(s) released to parents`,
@@ -196,19 +207,21 @@ export class VouchersController {
     }
 
     @Post('pending-release/release-job/:jobId')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Manage, 'VoucherRelease') ||
             ability.can(Action.Manage, 'all'),
     )
+    @RequireAction('finance.pending_release#release')
     async releaseByBulkJob(
         @Param('jobId', ParseIntPipe) jobId: number,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const result = await this.vouchersService.releaseByBulkJobId(jobId, changedBy);
+        const result = await this.vouchersService.releaseByBulkJobId(jobId, changedBy, user);
         return {
             success: true,
             message: `${result.released} voucher(s) released to parents`,
@@ -217,14 +230,15 @@ export class VouchersController {
     }
 
     @Get(':id')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findOne(@Param('id', ParseIntPipe) id: number) {
-        const voucher = await this.vouchersService.findOne(id);
+    @RequireAction('finance.vouchers#view')
+    async findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        const voucher = await this.vouchersService.findOne(id, user);
         return {
             success: true,
             message: 'Voucher retrieved successfully',
@@ -305,9 +319,10 @@ export class VouchersController {
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: RecordVoucherDepositDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher = await this.vouchersService.recordDeposit(id, dto, changedBy);
+        const voucher = await this.vouchersService.recordDeposit(id, dto, changedBy, user);
         return {
             success: true,
             message: 'Voucher deposit recorded successfully',
@@ -327,9 +342,10 @@ export class VouchersController {
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: WaiveVoucherDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher: any = await this.vouchersService.waiveVoucher(id, dto.reason, changedBy);
+        const voucher: any = await this.vouchersService.waiveVoucher(id, dto.reason, changedBy, user);
         return {
             success: true,
             message: 'Voucher waived — fee heads written off.',
@@ -353,9 +369,10 @@ export class VouchersController {
     async unwaiveVoucher(
         @Param('id', ParseIntPipe) id: number,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher = await this.vouchersService.unwaiveVoucher(id, changedBy);
+        const voucher = await this.vouchersService.unwaiveVoucher(id, changedBy, user);
         return {
             success: true,
             message: 'Voucher waiver reversed — fee heads restored.',
@@ -364,20 +381,22 @@ export class VouchersController {
     }
 
     @Post(':id/clear-deposit')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Update, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
+    @RequireAction('finance.payment_history#clear_deposit')
     async clearDeposit(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: ClearDepositDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher = await this.vouchersService.clearDeposit(id, dto.depositId, changedBy);
+        const voucher = await this.vouchersService.clearDeposit(id, dto.depositId, changedBy, user);
         return {
             success: true,
             message: voucher === null
@@ -389,19 +408,21 @@ export class VouchersController {
     }
 
     @Patch(':id')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Update, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
+    @RequireAction('finance.vouchers#edit')
     async update(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: UpdateVoucherDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const voucher = await this.vouchersService.update(id, dto, changedBy);
+        const voucher = await this.vouchersService.update(id, dto, changedBy, user);
         return {
             success: true,
             message: 'Voucher updated successfully',
@@ -580,15 +601,17 @@ export class VouchersController {
     }
 
     @Post('batch-issue')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.ACCEPTED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchIssue(@Body() dto: StartBulkJobDto, @Req() req: any) {
+    @RequireAnyAction('finance.bulk_voucher#start', 'finance.vouchers#edit')
+    async batchIssue(@Body() dto: StartBulkJobDto, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const createdBy: string = req?.user?.username ?? req?.user?.sub ?? 'system';
         const result = await this.bulkJobsService.startJob(
             dto,
             createdBy,
             req?.user?.fullName,
+            user,
         );
         return {
             success: true,
@@ -598,11 +621,12 @@ export class VouchersController {
     }
 
     @Delete('bulk')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async bulkRemove(@Body() dto: BulkDeleteVouchersDto, @Req() req: any) {
+    @RequireAction('finance.vouchers#delete')
+    async bulkRemove(@Body() dto: BulkDeleteVouchersDto, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false, changedBy);
+        const results = await this.vouchersService.bulkRemove(dto.ids, dto.force ?? false, changedBy, user);
         return {
             success: true,
             message: `${results.deleted} deleted, ${results.skipped} skipped.`,
@@ -611,15 +635,16 @@ export class VouchersController {
     }
 
     @Delete(':id')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Delete, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    @RequireAction('finance.vouchers#delete')
+    async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = req.user?.username || req.user?.id || 'system';
-        const result = await this.vouchersService.remove(id, changedBy);
+        const result = await this.vouchersService.remove(id, changedBy, user);
         return {
             success: true,
             message: 'Voucher deleted and fee heads reset successfully.',
