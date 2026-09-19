@@ -1,10 +1,12 @@
-import { Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { ScopeService } from '../../common/scope/scope.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
@@ -18,7 +20,62 @@ export class NoticeBoardService {
     private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
+    private readonly scope: ScopeService,
   ) {}
+
+  /**
+   * A scoped poster may only address families inside their own scope, and may
+   * never leave a restricted dimension empty — empty targeting means "the
+   * whole school" (see getPostsForFamily's isEmpty-OR clauses), which would
+   * let a campus-scoped user broadcast to every family. Specific student_ccs
+   * are checked one by one instead, since they bypass the campus/class/
+   * section lists entirely.
+   */
+  private async assertTargetingInScope(
+    user: IJwtStaffPayload,
+    t: { campus_ids?: number[]; class_ids?: number[]; section_ids?: number[]; student_ccs?: number[] },
+  ): Promise<void> {
+    if (this.scope.isExempt(user)) return;
+    const s = this.scope.scopeOf(user);
+    const restricted = s.campuses.length + s.classes.length + s.sections.length + s.segments.length > 0;
+    if (!restricted) return;
+
+    const ccs = t.student_ccs ?? [];
+    if (ccs.length > 0) {
+      const rows = await this.prisma.students.findMany({
+        where: { cc: { in: ccs } },
+        select: { cc: true, campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+      });
+      const byCc = new Map(rows.map((r) => [r.cc, r]));
+      const outside = ccs.filter((cc) => {
+        const r = byCc.get(cc);
+        return !r || !this.scope.canSeeStudent(user, {
+          campus_id: r.campus_id, class_id: r.class_id, section_id: r.section_id,
+          segment_id: r.classes?.segment_id ?? null,
+        });
+      });
+      if (outside.length > 0) {
+        throw new ForbiddenException(`Outside your scope: student CC ${outside.join(', ')}.`);
+      }
+      return;
+    }
+
+    const c = t.campus_ids ?? [];
+    const cl = t.class_ids ?? [];
+    const se = t.section_ids ?? [];
+    const leaves = (restrictedDim: boolean, list: number[]) => restrictedDim && list.length === 0;
+    if (
+      leaves(s.campuses.length > 0, c) ||
+      leaves(s.classes.length > 0, cl) ||
+      leaves(s.sections.length > 0, se) ||
+      (s.segments.length > 0 && c.length + cl.length + se.length === 0)
+    ) {
+      throw new ForbiddenException('Only an unrestricted admin may post without targeting — it would reach families outside your scope.');
+    }
+    c.forEach((id) => this.scope.assertCampus(user, id));
+    cl.forEach((id) => this.scope.assertClass(user, id));
+    se.forEach((id) => this.scope.assertSection(user, id));
+  }
 
   // ── Family-facing ────────────────────────────────────────────────────────
 
@@ -110,8 +167,8 @@ export class NoticeBoardService {
 
   // ── Admin-facing ─────────────────────────────────────────────────────────
 
-  async getAllPosts(cursor?: number) {
-    const posts = await this.prisma.notice_board_posts.findMany({
+  async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload) {
+    const fetched = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
         ...(cursor ? { id: { lt: cursor } } : {}),
@@ -123,6 +180,19 @@ export class NoticeBoardService {
       },
       take: 30,
     });
+
+    // A scoped caller only sees posts whose audience is inside their scope.
+    // Filtered after the page is fetched, so a page may come back short — the
+    // cursor (last visible id) still moves forward correctly.
+    const posts: typeof fetched = [];
+    for (const p of fetched) {
+      try {
+        await this.assertCanManagePost(user, p);
+        posts.push(p);
+      } catch {
+        /* outside this caller's scope — omitted */
+      }
+    }
 
     const allStudentCcs = [...new Set(posts.flatMap((p) => p.student_ccs || []))];
     const students = allStudentCcs.length
@@ -171,7 +241,7 @@ export class NoticeBoardService {
       }),
     );
 
-    const holidays = await this.prisma.academic_calendar_days.findMany({
+    const allHolidays = await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
         day_type: { in: ['HOLIDAY', 'WORKDAY'] },
@@ -179,6 +249,20 @@ export class NoticeBoardService {
       orderBy: { date: 'desc' },
       take: 30,
     });
+    // Same rule as posts: a scoped caller only sees holiday notices whose own
+    // campus/class/section is inside their scope.
+    const holidays = this.scope.isExempt(user)
+      ? allHolidays
+      : allHolidays.filter((h) => {
+          try {
+            this.scope.assertCampus(user, h.campus_id);
+            if (h.class_id != null) this.scope.assertClass(user, h.class_id);
+            if (h.section_id != null) this.scope.assertSection(user, h.section_id);
+            return true;
+          } catch {
+            return false;
+          }
+        });
 
     const userIds = holidays.map((h) => h.created_by).filter((cb): cb is string => !!cb);
     const creators = userIds.length
@@ -241,7 +325,11 @@ export class NoticeBoardService {
     return merged;
   }
 
-  async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string) {
+  // `user` is omitted by in-process callers that post a system notice on
+  // someone's behalf (e.g. ParentChangeRequestsService) — only the admin HTTP
+  // route threads a caller through, so only it is scope-checked here.
+  async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string, user?: IJwtStaffPayload) {
+    if (user) await this.assertTargetingInScope(user, dto);
     // Student targeting is exclusive in the feed — strip campus/class/section so
     // the stored post can't look school-/campus-scoped while only listing kids.
     const studentCcs = dto.student_ccs ?? [];
@@ -416,9 +504,48 @@ export class NoticeBoardService {
     return families.map((f) => f.id);
   }
 
-  async updatePost(id: string | number, dto: UpdatePostDto, changedBy?: string) {
+  /**
+   * A scoped caller may only edit/delete/inspect a post whose stored audience
+   * is inside their own scope — 404, never 403, so this can't be used to
+   * enumerate posts aimed at other campuses.
+   */
+  private async assertCanManagePost(
+    user: IJwtStaffPayload,
+    post: { campus_ids: unknown; class_ids: unknown; section_ids: unknown; student_ccs: unknown },
+  ): Promise<void> {
+    try {
+      await this.assertTargetingInScope(user, {
+        campus_ids: post.campus_ids as number[],
+        class_ids: post.class_ids as number[],
+        section_ids: post.section_ids as number[],
+        student_ccs: post.student_ccs as number[],
+      });
+    } catch {
+      throw new NotFoundException('Post not found');
+    }
+  }
+
+  /** Holiday notices carry their own campus/class/section — same 404 rule. */
+  private async assertCanManageHoliday(user: IJwtStaffPayload, holidayId: number): Promise<void> {
+    if (this.scope.isExempt(user)) return;
+    const h = await this.prisma.academic_calendar_days.findUnique({
+      where: { id: holidayId },
+      select: { campus_id: true, class_id: true, section_id: true },
+    });
+    try {
+      if (!h) throw new Error('missing');
+      this.scope.assertCampus(user, h.campus_id);
+      if (h.class_id != null) this.scope.assertClass(user, h.class_id);
+      if (h.section_id != null) this.scope.assertSection(user, h.section_id);
+    } catch {
+      throw new NotFoundException('Holiday not found');
+    }
+  }
+
+  async updatePost(id: string | number, dto: UpdatePostDto, changedBy: string | undefined, user: IJwtStaffPayload) {
     if (String(id).startsWith('holiday-')) {
       const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
+      await this.assertCanManageHoliday(user, holidayId);
       const h = await this.prisma.academic_calendar_days.findUnique({ where: { id: holidayId } });
       if (!h) throw new NotFoundException('Holiday not found');
 
@@ -463,6 +590,7 @@ export class NoticeBoardService {
       where: { id: numericId, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Post not found');
+    await this.assertCanManagePost(user, post);
 
     const updated = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
@@ -508,9 +636,10 @@ export class NoticeBoardService {
     return updated;
   }
 
-  async deletePost(id: string | number, deletedBy?: string) {
+  async deletePost(id: string | number, deletedBy: string | undefined, user: IJwtStaffPayload) {
     if (String(id).startsWith('holiday-')) {
       const holidayId = parseInt(String(id).replace('holiday-', ''), 10);
+      await this.assertCanManageHoliday(user, holidayId);
       const deleted = await this.prisma.academic_calendar_days.delete({
         where: { id: holidayId },
       });
@@ -546,6 +675,7 @@ export class NoticeBoardService {
       where: { id: numericId, deleted_at: null },
     });
     if (!post) throw new NotFoundException('Post not found');
+    await this.assertCanManagePost(user, post);
 
     const result = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
@@ -567,13 +697,14 @@ export class NoticeBoardService {
     return result;
   }
 
-  async getReadStats(postId: string | number) {
+  async getReadStats(postId: string | number, user: IJwtStaffPayload) {
     if (String(postId).startsWith('holiday-')) {
       const holidayId = parseInt(String(postId).replace('holiday-', ''), 10);
       const holiday = await this.prisma.academic_calendar_days.findUnique({
         where: { id: holidayId },
       });
       if (!holiday) throw new NotFoundException('Holiday not found');
+      await this.assertCanManageHoliday(user, holidayId);
 
       const [total_reached, total_read] = await Promise.all([
         this._countAudienceFamilies(this._holidayAudience(holiday)),
@@ -603,6 +734,7 @@ export class NoticeBoardService {
       },
     });
     if (!post) throw new NotFoundException('Post not found');
+    await this.assertCanManagePost(user, post);
 
     const reachedCount = await this._countAudienceFamilies(post);
     const studentCcs = post.student_ccs as number[];
