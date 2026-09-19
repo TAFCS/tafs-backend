@@ -15,13 +15,19 @@ import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
+// POST /vouchers/batch-issue (vouchers.controller.ts) ALSO calls
+// bulkVoucherJobsService.startJob directly — decorated there with
+// @RequireAnyAction across finance.bulk_voucher and finance.vouchers so
+// neither tile's holders lock the other out. See tiles.manifest.ts.
 @Controller('bulk-voucher-jobs')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class BulkVoucherJobsController {
     constructor(private readonly bulkVoucherJobsService: BulkVoucherJobsService) {}
 
@@ -38,8 +44,9 @@ export class BulkVoucherJobsController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async preview(@Body() dto: PreviewBulkRequestDto) {
-        const students = await this.bulkVoucherJobsService.preview(dto);
+    @RequireAction('finance.bulk_voucher#view')
+    async preview(@Body() dto: PreviewBulkRequestDto, @CurrentUser() user: IJwtStaffPayload) {
+        const students = await this.bulkVoucherJobsService.preview(dto, user);
         return {
             success: true,
             message: 'Preview generated successfully',
@@ -60,6 +67,7 @@ export class BulkVoucherJobsController {
             ability.can(Action.Create, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
+    @RequireAction('finance.bulk_voucher#start')
     async startJob(
         @Body() dto: StartBulkJobDto,
         @CurrentUser() user: IJwtStaffPayload,
@@ -69,6 +77,7 @@ export class BulkVoucherJobsController {
             dto,
             createdBy,
             user.fullName,
+            user,
         );
         return {
             success: true,
@@ -88,8 +97,9 @@ export class BulkVoucherJobsController {
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async getJobStatus(@Param('id', ParseIntPipe) id: number) {
-        const job = await this.bulkVoucherJobsService.getJobStatus(id);
+    @RequireAction('finance.bulk_voucher#view')
+    async getJobStatus(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        const job = await this.bulkVoucherJobsService.getJobStatus(id, user);
         return {
             success: true,
             message: 'Job status retrieved',
@@ -108,7 +118,8 @@ export class BulkVoucherJobsController {
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async listJobs(@Query('campus_id') campusId?: string) {
+    @RequireAction('finance.bulk_voucher#view')
+    async listJobs(@Query('campus_id') campusId: string | undefined, @CurrentUser() user: IJwtStaffPayload) {
         const campusIds = campusId
             ? campusId
                   .split(',')
@@ -117,6 +128,7 @@ export class BulkVoucherJobsController {
             : undefined;
         const jobs = await this.bulkVoucherJobsService.listJobs(
             campusIds?.length ? campusIds : undefined,
+            user,
         );
         return {
             success: true,

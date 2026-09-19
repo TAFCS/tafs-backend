@@ -480,6 +480,9 @@ export class StudentsService {
 
     if (class_id?.length || section_id?.length || house_id?.length || auditType) return null;
     if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
+    // A user restricted only via universal scope (not the legacy field) must
+    // bail the same way — this shortcut has no class filter of its own.
+    if (user && this.scope.scopeOf(user).classes.length > 0) return null;
     if (query.had_quick_admission === 'false') return null;
 
     const where: Prisma.unconfirmed_admissionsWhereInput = {};
@@ -3466,17 +3469,28 @@ export class StudentsService {
     return [...results, ...others];
   }
 
-  async getPaymentHistory(studentId: number, academicYear: string) {
+  async getPaymentHistory(studentId: number, academicYear: string, user?: IJwtStaffPayload) {
     const student = await this.prisma.students.findUnique({
       where: { cc: studentId },
       include: {
         campuses: { select: { campus_name: true, campus_code: true } },
-        classes: { select: { description: true, class_code: true } },
+        classes: { select: { description: true, class_code: true, segment_id: true } },
         sections: { select: { description: true } },
       },
     });
 
-    if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+    // Missing and out-of-scope both 404 — a 403 would confirm a real
+    // student exists at a campus outside the caller's scope. `user` optional
+    // and omitted skips the check (ScopeService.canSeeStudent does not
+    // itself tolerate an undefined caller).
+    if (!student || (user && !this.scope.canSeeStudent(user, {
+      campus_id: student.campus_id,
+      class_id: student.class_id,
+      section_id: student.section_id,
+      segment_id: student.classes?.segment_id ?? null,
+    }))) {
+      throw new NotFoundException(`Student #${studentId} not found`);
+    }
 
     // Fetch data for the specified academic year
     const [fees, vouchers, allDeposits] = await Promise.all([
