@@ -39,7 +39,7 @@ describe('FinancialReportsService — Fee Heads discounts', () => {
     students: { count: jest.fn(async () => 1) },
   });
 
-  const svc = (prisma: any) => new FinancialReportsService(prisma, { log: async () => null } as any);
+  const svc = (prisma: any) => new FinancialReportsService(prisma, { log: async () => null } as any, { whereForStudents: () => ({}) } as any);
   const query = { from_date: '2026-06-01', to_date: '2026-06-30', view: 'fee_date' as const };
   const user = { campusId: null } as any;
 
