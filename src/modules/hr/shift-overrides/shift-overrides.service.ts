@@ -5,6 +5,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
+import { ScopeService } from '../../../common/scope/scope.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { CreateShiftOverridesDto, ListShiftOverridesQueryDto } from './dto/shift-overrides.dto';
 
@@ -83,6 +84,7 @@ export class ShiftOverridesService {
     private readonly auditLogs: AuditLogsService,
     private readonly noticeBoard: EmployeeNoticeBoardService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly scope: ScopeService,
   ) {}
 
   async bulkCreate(dto: CreateShiftOverridesDto, user: IJwtStaffPayload) {
@@ -99,6 +101,7 @@ export class ShiftOverridesService {
         id: true,
         full_name: true,
         campus_id: true,
+        segment_id: true,
         department_id: true,
         staff_category_id: true,
         days_per_week: true,
@@ -111,6 +114,8 @@ export class ShiftOverridesService {
     }
     for (const employee of employees) {
       this.assertCampusAccess(user, employee.campus_id);
+      // Covers segment/department/category, which the legacy campus-only check never did.
+      this.scope.assertEmployee(user, employee);
     }
 
     const startTime = toTime(dto.override_start_time);
@@ -184,12 +189,29 @@ export class ShiftOverridesService {
     if (query.employee_id != null) {
       const employee = await this.prisma.employee_profiles.findUnique({
         where: { id: query.employee_id },
-        select: { campus_id: true },
+        select: { campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
       });
-      if (employee) this.assertCampusAccess(user, employee.campus_id);
+      if (employee) {
+        this.assertCampusAccess(user, employee.campus_id);
+        // Covers segment/department/category, which the legacy campus-only check never did.
+        this.scope.assertEmployee(user, employee);
+      }
       where.employee_id = query.employee_id;
-    } else if (user.role !== StaffRole.SUPER_ADMIN && user.campusId) {
-      where.employee_profiles = { campus_id: user.campusId };
+    } else {
+      // campus_id is pulled out and intersected, not spread, so it never
+      // silently overwrites (or gets overwritten by) the legacy campusId
+      // filter below. See the scope-sweep handoff — this branch previously
+      // applied no filter at all for a user unrestricted by the legacy
+      // single campusId but still carrying a universal multi-campus scope.
+      const { campus_id: universalCampusFilter, ...restUniversalScope } =
+        this.scope.whereForEmployees(user);
+      const employeeFilter: Prisma.employee_profilesWhereInput = { ...restUniversalScope };
+      if (user.role !== StaffRole.SUPER_ADMIN && user.campusId) {
+        employeeFilter.campus_id = user.campusId;
+      } else if (universalCampusFilter) {
+        employeeFilter.campus_id = universalCampusFilter;
+      }
+      if (Object.keys(employeeFilter).length > 0) where.employee_profiles = employeeFilter;
     }
 
     if (query.date_from || query.date_to) {
@@ -209,12 +231,25 @@ export class ShiftOverridesService {
   async remove(id: number, user: IJwtStaffPayload) {
     const existing = await this.prisma.employee_shift_overrides.findUnique({
       where: { id },
-      include: { employee_profiles: { select: { campus_id: true, full_name: true, user_id: true } } },
+      include: {
+        employee_profiles: {
+          select: {
+            campus_id: true,
+            segment_id: true,
+            department_id: true,
+            staff_category_id: true,
+            full_name: true,
+            user_id: true,
+          },
+        },
+      },
     });
     if (!existing) throw new NotFoundException('Shift override not found');
 
     this.assertCanManage(user);
     this.assertCampusAccess(user, existing.employee_profiles.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, existing.employee_profiles);
     await this.prisma.employee_shift_overrides.delete({ where: { id } });
 
     void this.auditLogs.log({
@@ -245,6 +280,8 @@ export class ShiftOverridesService {
     }
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (employeeCampusId == null) {
@@ -253,6 +290,7 @@ export class ShiftOverridesService {
     if (user.campusId && user.campusId !== employeeCampusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, employeeCampusId);
   }
 
   private dateKey(date: Date): string {

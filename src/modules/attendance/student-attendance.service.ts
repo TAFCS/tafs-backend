@@ -5,6 +5,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { MAX_MATRIX_DAYS, type DayBreakdownEntry } from '../hr/payroll/payroll.service';
@@ -52,6 +53,7 @@ export class StudentAttendanceService {
     private readonly policyResolver: AttendancePolicyResolverService,
     private readonly auditLogs: AuditLogsService,
     private readonly processor: ZkAttendanceProcessorService,
+    private readonly scope: ScopeService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -71,10 +73,13 @@ export class StudentAttendanceService {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private async getStudentsInScope(
@@ -85,19 +90,43 @@ export class StudentAttendanceService {
   ) {
     if (classId) {
       assertClassInScope(user, classId);
+      this.scope.assertClass(user, classId);
     }
     const allowed = user.allowedClassIds ?? [];
+    // Universal scope ANDed with the legacy campus/allowedClassIds filters
+    // below. class_id is intersected rather than spread, so it never silently
+    // overwrites the legacy allowedClassIds list. See the scope-sweep handoff
+    // before removing `allowed`.
+    const universalScope = this.scope.scopeOf(user);
+    const effectiveAllowed =
+      universalScope.classes.length > 0
+        ? allowed.length > 0
+          ? allowed.filter((id) => universalScope.classes.includes(id))
+          : universalScope.classes
+        : allowed;
 
+    // Whether EITHER axis restricts, not whether the intersection is
+    // non-empty — an empty intersection (legacy and universal scope disagree
+    // entirely) must still deny, not silently fall through to unrestricted.
+    const classIsRestricted = allowed.length > 0 || universalScope.classes.length > 0;
     const where: Prisma.studentsWhereInput = {
       campus_id: campusId,
       status: 'ENROLLED',
       deleted_at: null,
       ...(classId
         ? { class_id: classId }
-        : allowed.length > 0
-          ? { class_id: { in: allowed } }
+        : classIsRestricted
+          ? { class_id: { in: effectiveAllowed } }
           : {}),
-      ...(sectionId ? { section_id: sectionId } : {}),
+      ...(sectionId
+        ? { section_id: sectionId }
+        : universalScope.sections.length > 0
+          ? { section_id: { in: universalScope.sections } }
+          : {}),
+      // Segment scope, which the legacy campus+class checks never had.
+      ...(universalScope.segments.length > 0
+        ? { classes: { segment_id: { in: universalScope.segments } } }
+        : {}),
     };
 
     return this.prisma.students.findMany({
@@ -352,6 +381,9 @@ export class StudentAttendanceService {
     });
     if (!student) throw new NotFoundException('Student not found');
     if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
+    // Covers class/section, which the legacy campus-only check never did.
+    this.scope.assertClass(user, student.class_id);
+    this.scope.assertSection(user, student.section_id);
 
     const dateFrom = this.parseDate(query.date_from);
     const dateTo = this.parseDate(query.date_to);
@@ -513,6 +545,11 @@ export class StudentAttendanceService {
       return [requestedCampusId];
     }
     if (user.campusId != null) return [user.campusId];
+    // A user unrestricted by the legacy single campusId may still carry a
+    // universal multi-campus scope — an export is exactly the hole the
+    // scope-sweep handoff warns gets forgotten, so it's checked here too.
+    const universalCampuses = this.scope.scopeOf(user).campuses;
+    if (universalCampuses.length > 0) return universalCampuses;
     const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });
     return campuses.map((c) => c.id);
   }
@@ -790,6 +827,9 @@ export class StudentAttendanceService {
     if (!student) throw new NotFoundException('Student not found');
     if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
     if (student.class_id) assertClassInScope(user, student.class_id);
+    // Covers class/section, which the legacy checks above never fully did.
+    this.scope.assertClass(user, student.class_id);
+    this.scope.assertSection(user, student.section_id);
 
     const date = this.parseDate(getTodayKeyKarachi());
     const day = student.campus_id
@@ -880,6 +920,9 @@ export class StudentAttendanceService {
     });
     if (!student) throw new NotFoundException('Student not found');
     if (student.campus_id) this.assertCampusAccess(user, student.campus_id);
+    // Covers class/section, which the legacy campus-only check never did.
+    this.scope.assertClass(user, student.class_id);
+    this.scope.assertSection(user, student.section_id);
 
     const date = this.parseDate(dto.date);
     const resolved = await this.calendarResolver.resolveStudentDay(

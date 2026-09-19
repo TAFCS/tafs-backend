@@ -2,6 +2,21 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { StaffLessonExcuseService } from './staff-lesson-excuse.service';
 import { StaffLessonReschedulesService } from './staff-lesson-reschedules.service';
 
+const SCOPE_STUB = {
+  assertCampus: jest.fn(),
+  assertClass: jest.fn(),
+  assertEmployee: jest.fn(),
+  scopeOf: jest.fn().mockReturnValue({
+    campuses: [],
+    segments: [],
+    classes: [],
+    sections: [],
+    departments: [],
+    staffCategories: [],
+  }),
+  whereForEmployees: jest.fn().mockReturnValue({}),
+} as any;
+
 describe('StaffLessonExcuseService', () => {
   const makeService = () => {
     const prisma = {
@@ -112,6 +127,7 @@ describe('StaffLessonReschedulesService', () => {
         endBatch: jest.fn(),
         resolveStudentDay: jest.fn(),
       } as any,
+      SCOPE_STUB,
     );
 
     const user = { sub: 'u1', role: 'SUPER_ADMIN' } as any;
@@ -172,6 +188,7 @@ describe('StaffLessonReschedulesService.reverse', () => {
       {} as any,
       { log: jest.fn() } as any,
       {} as any,
+      SCOPE_STUB,
     );
 
     jest.spyOn(service, 'findOne').mockResolvedValue({
@@ -271,6 +288,7 @@ describe('StaffLessonReschedulesService.getTeacherHoldStatus', () => {
       {} as any,
       { log: jest.fn() } as any,
       calendarResolver as any,
+      SCOPE_STUB,
     );
     return { service, prisma, calendarResolver };
   };

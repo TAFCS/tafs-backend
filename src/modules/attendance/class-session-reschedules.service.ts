@@ -17,6 +17,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
+import { ScopeService } from '../../common/scope/scope.service';
 import {
   CreateClassRescheduleDto,
   EligibleSlotsQueryDto,
@@ -88,6 +89,7 @@ export class ClassSessionReschedulesService {
     private readonly auditLogs: AuditLogsService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly staffLessonExcuse: StaffLessonExcuseService,
+    private readonly scope: ScopeService,
   ) {}
 
   /** Same Saturday exception as roll-sessions.service — A-Level roll call runs Sat. */
@@ -167,10 +169,13 @@ export class ClassSessionReschedulesService {
     return updated;
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   /** Most recent calendar date for `weekday` strictly before `before`. */
@@ -204,6 +209,7 @@ export class ClassSessionReschedulesService {
     if (!group) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, group.campus_id);
     assertClassInScope(user, group.class_id);
+    this.scope.assertClass(user, group.class_id);
 
     const academicYear = this.deriveAcademicYear(makeupDate);
     const timetable = await this.prisma.timetables.findFirst({
@@ -395,6 +401,7 @@ export class ClassSessionReschedulesService {
     if (!group) throw new NotFoundException('Teaching group not found');
     this.assertCampusAccess(user, group.campus_id);
     assertClassInScope(user, group.class_id);
+    this.scope.assertClass(user, group.class_id);
 
     const slots = await this.prisma.timetable_slots.findMany({
       where: { id: { in: slotIds } },
@@ -741,8 +748,19 @@ export class ClassSessionReschedulesService {
         ...(query.to ? { lte: this.parseDate(query.to) } : {}),
       };
     }
-    if (campusId) {
-      where.teaching_groups = { campus_id: campusId };
+    // Universal scope (campus + class) merged alongside the legacy single-value
+    // campusId filter above — AND'd, never replacing it. See the scope-sweep handoff.
+    const universalScope = this.scope.scopeOf(user);
+    const teachingGroupsFilter: Record<string, unknown> = {};
+    if (campusId) teachingGroupsFilter.campus_id = campusId;
+    else if (universalScope.campuses.length > 0) {
+      teachingGroupsFilter.campus_id = { in: universalScope.campuses };
+    }
+    if (universalScope.classes.length > 0) {
+      teachingGroupsFilter.class_id = { in: universalScope.classes };
+    }
+    if (Object.keys(teachingGroupsFilter).length > 0) {
+      where.teaching_groups = teachingGroupsFilter;
     }
 
     const rows = await this.prisma.class_session_reschedules.findMany({
@@ -777,6 +795,7 @@ export class ClassSessionReschedulesService {
   async create(dto: CreateClassRescheduleDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
+    this.scope.assertClass(user, dto.class_id);
 
     const sources =
       dto.sources?.length
@@ -1048,6 +1067,7 @@ export class ClassSessionReschedulesService {
     if (!row) throw new NotFoundException('Reschedule not found');
     this.assertCampusAccess(user, row.teaching_groups.campus_id);
     assertClassInScope(user, row.teaching_groups.class_id);
+    this.scope.assertClass(user, row.teaching_groups.class_id);
     return {
       ...row,
       source_day_label: WEEKDAY_NAMES[row.source_timetable_slot.day_of_week],

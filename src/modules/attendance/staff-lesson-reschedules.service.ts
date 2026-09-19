@@ -16,6 +16,7 @@ import { assertClassInScope } from '../../common/staff-scope';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { ClassPeriodsService } from '../timetables/class-periods.service';
+import { ScopeService } from '../../common/scope/scope.service';
 import { StaffLessonExcuseService } from './staff-lesson-excuse.service';
 import {
   CalendarDayResolverService,
@@ -60,6 +61,7 @@ export class StaffLessonReschedulesService {
     private readonly staffExcuse: StaffLessonExcuseService,
     private readonly auditLogs: AuditLogsService,
     private readonly calendarResolver: CalendarDayResolverService,
+    private readonly scope: ScopeService,
   ) {}
 
   private isWorkingDay(
@@ -74,11 +76,14 @@ export class StaffLessonReschedulesService {
     );
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.role === 'SUPER_ADMIN') return;
     if (user.campusId != null && user.campusId !== campusId) {
       throw new ForbiddenException('Campus out of scope');
     }
+    this.scope.assertCampus(user, campusId);
   }
 
   private parseDate(dateStr: string): Date {
@@ -283,10 +288,20 @@ export class StaffLessonReschedulesService {
   ) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true, campus_id: true, check_in_source: true, employment_status: true },
+      select: {
+        id: true,
+        campus_id: true,
+        segment_id: true,
+        department_id: true,
+        staff_category_id: true,
+        check_in_source: true,
+        employment_status: true,
+      },
     });
     if (!employee) throw new NotFoundException('Employee not found');
     if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, employee);
     if (employee.check_in_source !== CheckInSource.TIMETABLE) {
       throw new BadRequestException('Employee is not on timetable payroll');
     }
@@ -393,6 +408,7 @@ export class StaffLessonReschedulesService {
     }
     this.assertCampusAccess(user, slot.timetables.campus_id);
     assertClassInScope(user, slot.timetables.class_id);
+    this.scope.assertClass(user, slot.timetables.class_id);
 
     const staffRow = await this.prisma.attendance_staff_daily.findUnique({
       where: {
@@ -416,10 +432,19 @@ export class StaffLessonReschedulesService {
   ): Promise<{ dates: TeacherHoldStatusRow[] }> {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true, campus_id: true, check_in_source: true },
+      select: {
+        id: true,
+        campus_id: true,
+        segment_id: true,
+        department_id: true,
+        staff_category_id: true,
+        check_in_source: true,
+      },
     });
     if (!employee) throw new NotFoundException('Employee not found');
     if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+    // Covers segment/department/category, which the legacy campus-only check never did.
+    this.scope.assertEmployee(user, employee);
     if (employee.check_in_source !== CheckInSource.TIMETABLE) {
       throw new BadRequestException('Employee is not on timetable payroll');
     }
@@ -667,12 +692,14 @@ export class StaffLessonReschedulesService {
     if (!row) throw new NotFoundException('Staff lesson reschedule not found');
     this.assertCampusAccess(user, row.campus_id);
     assertClassInScope(user, row.class_id);
+    this.scope.assertClass(user, row.class_id);
     return row;
   }
 
   async create(dto: CreateStaffLessonRescheduleDto, user: IJwtStaffPayload) {
     this.assertCampusAccess(user, dto.campus_id);
     assertClassInScope(user, dto.class_id);
+    this.scope.assertClass(user, dto.class_id);
 
     const sourceDate = this.parseDate(dto.source_date);
     const makeupDate = this.parseDate(dto.makeup_date);
