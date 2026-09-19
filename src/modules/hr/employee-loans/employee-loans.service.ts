@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } from '../payroll/payroll-period.util';
@@ -44,10 +45,11 @@ export class EmployeeLoansService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly securityDeposits: SecurityDepositsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async getForEmployee(employeeId: number) {
-    await this.assertEmployee(employeeId);
+  async getForEmployee(employeeId: number, user?: IJwtStaffPayload) {
+    await this.assertEmployee(employeeId, user);
     const loans = await this.prisma.employee_loans.findMany({
       where: { employee_id: employeeId },
       include: {
@@ -79,8 +81,21 @@ export class EmployeeLoansService {
     const where: Prisma.employee_loansWhereInput = {
       status: { in: statuses },
     };
+    // Legacy single-campus check stays — ANDed with the universal scope
+    // fragment (via a real AND, not a shallow merge — both may key on
+    // campus_id, and a merge would let one silently overwrite the other
+    // instead of intersecting), never replaced, so an unrotated token isn't
+    // widened by this change. See the scope/tile-permission handoff §5b.
+    const employeeProfileClauses: Prisma.employee_profilesWhereInput[] = [];
     if (user.campusId != null) {
-      where.employee_profiles = { campus_id: user.campusId };
+      employeeProfileClauses.push({ campus_id: user.campusId });
+    }
+    const universal = this.scope.whereForEmployees(user);
+    if (Object.keys(universal).length > 0) {
+      employeeProfileClauses.push(universal);
+    }
+    if (employeeProfileClauses.length > 0) {
+      where.employee_profiles = { AND: employeeProfileClauses };
     }
 
     const loans = await this.prisma.employee_loans.findMany({
@@ -101,7 +116,7 @@ export class EmployeeLoansService {
   }
 
   async create(employeeId: number, dto: CreateLoanDto, user: IJwtStaffPayload) {
-    await this.assertEmployee(employeeId);
+    await this.assertEmployee(employeeId, user);
     const open = await this.prisma.employee_loans.findFirst({
       where: { employee_id: employeeId, status: LoanStatus.ACTIVE },
     });
@@ -178,7 +193,7 @@ export class EmployeeLoansService {
 
   async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
-      await this.assertEmployee(employeeId, tx);
+      await this.assertEmployee(employeeId, user, tx);
       const loan = await tx.employee_loans.findFirst({
         where: { employee_id: employeeId, status: LoanStatus.ACTIVE },
       });
@@ -216,7 +231,7 @@ export class EmployeeLoansService {
   async repayLumpSum(employeeId: number, dto: LumpSumRepaymentDto, user: IJwtStaffPayload) {
     const amount = money(dto.amount);
     await this.prisma.$transaction(async (tx) => {
-      const loan = await this.requireOpenLoan(employeeId, tx);
+      const loan = await this.requireOpenLoan(employeeId, user, tx);
       const outstanding = this.outstandingBalance(loan);
       if (amount.gt(outstanding)) {
         throw new BadRequestException(`Lump-sum repayment cannot exceed the outstanding balance of ${outstanding.toFixed(2)}.`);
@@ -262,7 +277,7 @@ export class EmployeeLoansService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const loan = await this.requireOpenLoan(employeeId, tx);
+      const loan = await this.requireOpenLoan(employeeId, user, tx);
       const outstanding = this.outstandingBalance(loan);
       if (amount.gt(outstanding)) {
         throw new BadRequestException(`Write-off cannot exceed the outstanding balance of ${outstanding.toFixed(2)}.`);
@@ -302,7 +317,7 @@ export class EmployeeLoansService {
 
   async cancel(employeeId: number, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
-      const loan = await this.requireOpenLoan(employeeId, tx);
+      const loan = await this.requireOpenLoan(employeeId, user, tx);
       const hasActivity =
         money(loan.amount_repaid_opening).gt(0) ||
         money(loan.recovered_amount).gt(0) ||
@@ -328,6 +343,7 @@ export class EmployeeLoansService {
 
   async markOutstanding(employeeId: number, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
+      await this.assertEmployee(employeeId, user, tx);
       const loan = await tx.employee_loans.findFirst({
         where: { employee_id: employeeId, status: LoanStatus.ACTIVE },
       });
@@ -556,8 +572,8 @@ export class EmployeeLoansService {
     });
   }
 
-  private async requireOpenLoan(employeeId: number, tx: Tx): Promise<employee_loans> {
-    await this.assertEmployee(employeeId, tx);
+  private async requireOpenLoan(employeeId: number, user: IJwtStaffPayload | undefined, tx: Tx): Promise<employee_loans> {
+    await this.assertEmployee(employeeId, user, tx);
     const loan = await tx.employee_loans.findFirst({
       where: { employee_id: employeeId, status: { in: OPEN_STATUSES } },
     });
@@ -567,12 +583,16 @@ export class EmployeeLoansService {
     return loan;
   }
 
-  private async assertEmployee(employeeId: number, tx: Tx = this.prisma) {
+  // Missing and out-of-scope both 404 — a 403 would confirm a real employee
+  // exists at a campus outside the caller's scope.
+  private async assertEmployee(employeeId: number, user?: IJwtStaffPayload, tx: Tx = this.prisma) {
     const employee = await tx.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true },
+      select: { id: true, campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
     });
-    if (!employee) throw new NotFoundException(`Employee ${employeeId} not found`);
+    if (!employee || (user && !this.scope.canSeeEmployee(user, employee))) {
+      throw new NotFoundException(`Employee ${employeeId} not found`);
+    }
   }
 
   private serializeListRow(loan: employee_loans & {

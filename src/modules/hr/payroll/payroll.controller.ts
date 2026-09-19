@@ -3,7 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
+import { RequireAction } from '../../../decorators/require-action.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -15,12 +17,13 @@ import { DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, Se
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
 @Controller('hr/payroll/runs')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAction('hr.payroll#view')
   async list(@Query() query: ListPayrollRunsQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.listRuns(query, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll runs retrieved successfully');
@@ -28,6 +31,7 @@ export class PayrollController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#generate')
   async generate(@Body() dto: GeneratePayrollRunDto, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.generateRun(dto, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Payroll run generated successfully');
@@ -35,6 +39,7 @@ export class PayrollController {
 
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAction('hr.payroll#view')
   async getOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.getRun(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll run retrieved successfully');
@@ -42,6 +47,7 @@ export class PayrollController {
 
   @Get(':id/export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAction('hr.payroll#export')
   async exportRun(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload, @Res() res: Response) {
     const buffer = await this.payrollService.exportRun(id, user);
     res.set({
@@ -54,6 +60,7 @@ export class PayrollController {
 
   @Post(':id/finalize')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
   async finalize(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.finalizeRun(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll run finalized successfully');
@@ -61,6 +68,7 @@ export class PayrollController {
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#delete')
   async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.deleteRun(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll run deleted successfully');
@@ -68,6 +76,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/disburse')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#disburse')
   async disburseLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -80,6 +89,7 @@ export class PayrollController {
 
   @Post(':runId/disburse-all')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#disburse')
   async disburseAll(
     @Param('runId', ParseIntPipe) runId: number,
     @Body() dto: DisbursePayrollLineDto,
@@ -91,6 +101,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/regenerate')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
   async regenerateLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -102,6 +113,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/finalize')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
   async finalizeLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -113,6 +125,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/exclude')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
   async excludeLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -125,6 +138,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/include')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
   async includeLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -136,6 +150,7 @@ export class PayrollController {
 
   @Post(':runId/lines/:employeeId/settle')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
   async settleLine(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -148,6 +163,7 @@ export class PayrollController {
 
   @Patch(':runId/lines/:employeeId/flags/:flagId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#flag_review')
   async decideFlag(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -161,6 +177,7 @@ export class PayrollController {
 
   @Get(':runId/lines/:employeeId/payslip')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAction('hr.payroll#view')
   async getPayslip(
     @Param('runId', ParseIntPipe) runId: number,
     @Param('employeeId', ParseIntPipe) employeeId: number,

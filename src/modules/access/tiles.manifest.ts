@@ -213,6 +213,101 @@ const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a preset', implies: ['view'] },
 ];
 
+// Route-shaped, not tab-shaped — Payroll has no multi-field write to
+// field-partition, so actions follow the routes directly. See the
+// scope/tile-permission handoff §5b for why that's the right unit here.
+const PAYROLL_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open payroll', description: 'See runs, open a run, and view a payslip', default: true },
+
+  { id: 'generate', label: 'Generate a run', implies: ['view'] },
+  { id: 'line_manage', label: 'Regenerate, exclude, include, or settle a line', implies: ['view'] },
+  { id: 'finalize', label: 'Finalize a run or a line', implies: ['view'] },
+  { id: 'disburse', label: 'Disburse salaries', description: 'Single line or the whole run', implies: ['view'] },
+  { id: 'flag_review', label: 'Review a payroll flag', implies: ['view'] },
+  { id: 'delete', label: 'Delete a run', implies: ['view'] },
+  { id: 'export', label: 'Export a run to Excel', implies: ['view'] },
+];
+
+// Route-shaped, minimal CRUD. No scope step here — payroll_statutory_rules
+// carries no campus_id at all (EOBI/SESSI/income tax rates are organisation-
+// wide, not per-campus), and this tile shares no route with any other tile.
+const PAYROLL_RULES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View statutory rules', default: true },
+
+  { id: 'create', label: 'Add a rule version', implies: ['view'] },
+  { id: 'edit', label: 'Edit a rule version', implies: ['view'] },
+  { id: 'delete', label: 'Delete a rule version', implies: ['view'] },
+];
+
+// Route-shaped, same reasoning as EMPLOYEE_LOANS_ACTIONS just above: every
+// route here is ALSO reachable from EmployeeSecurityDepositTab.tsx inside the
+// Employee Directory (gated on hr.employee_directory#security_deposit.edit),
+// so write routes use @RequireAnyAction across both tiles.
+const SECURITY_DEPOSITS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View security deposits', description: 'See the open-plans list and a single employee\'s plan', default: true },
+
+  { id: 'create', label: 'Start a plan', implies: ['view'] },
+  { id: 'schedule.edit', label: 'Edit recovery schedule', implies: ['view'] },
+  { id: 'refund', label: 'Record a refund', implies: ['view'] },
+  { id: 'forfeit', label: 'Record a forfeiture', implies: ['view'] },
+  { id: 'cancel', label: 'Cancel a plan', implies: ['view'] },
+];
+
+// Route-shaped. Every one of these routes is ALSO reachable from inside the
+// Employee Directory's own Loan tab (EmployeeLoanTab.tsx, gated today on
+// hr.employee_directory#loan.edit) — controllers decorate each write route
+// with @RequireAnyAction(this tile's action, 'hr.employee_directory#loan.edit')
+// so a Directory-only holder isn't locked out of their own employee's loan.
+const EMPLOYEE_LOANS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View loans', description: 'See the open-loans list and a single employee\'s loan', default: true },
+
+  { id: 'create', label: 'Issue a loan', implies: ['view'] },
+  { id: 'schedule.edit', label: 'Edit recovery schedule', implies: ['view'] },
+  { id: 'repay', label: 'Record a lump-sum repayment', implies: ['view'] },
+  { id: 'write_off', label: 'Write off a loan', implies: ['view'] },
+  { id: 'cancel', label: 'Cancel a loan', implies: ['view'] },
+  { id: 'mark_outstanding', label: 'Mark a loan outstanding', implies: ['view'] },
+];
+
+// Route-shaped, bulk tool (settings/due-queue/analytics/preview/apply), not
+// per-employee CRUD like Loans/Deposits above. `settings` (read) and `apply`
+// are ALSO reachable from EmployeeSalaryIncrementSection.tsx inside the
+// Employee Directory (gated there on hr.employee_directory#schedule_pay.edit)
+// — those two use @RequireAnyAction; `due`/`analytics`/`preview`/settings-edit
+// are standalone-only.
+const SALARY_INCREMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View increment queue, analytics & settings', default: true },
+
+  { id: 'settings.edit', label: 'Edit increment settings', implies: ['view'] },
+  { id: 'apply', label: 'Apply an increment', implies: ['view'] },
+];
+
+// GET / and GET /:id stay undecorated — departments/staff-categories are
+// read by nearly every HR-adjacent page (People & Access, Salary Increments,
+// attendance boards, Staff Register, the Employee form) just to populate a
+// dropdown, unrelated to who administers the department list itself. No
+// scope step: departments carry no campus_id — organisation-wide, like
+// Payroll Rules.
+const DEPARTMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View departments', default: true },
+
+  { id: 'create', label: 'Add a department or staff category', implies: ['view'] },
+  { id: 'edit', label: 'Edit a department or staff category', implies: ['view'] },
+  { id: 'delete', label: 'Delete a department or staff category', implies: ['view'] },
+];
+
+// This tile owns no distinct feature at all — /hr/employees/new renders the
+// exact same EmployeeForm component and calls the exact same POST
+// /hr/employees route as Employee Directory's own `create` action. Widened
+// with @RequireAnyAction so someone granted only this narrower "can register
+// people" tile (e.g. a receptionist who shouldn't browse the whole
+// directory) doesn't need the full Employee Directory tile too.
+const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open registration form', default: true },
+
+  { id: 'create', label: 'Register an employee', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -252,13 +347,13 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
 
   // ?? HR & Payroll ?????????????????????????????????????????????????????????
   { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
-  { id: 'hr.register_employee', module: 'hr', label: 'Register a Employee', description: 'Create new employee profile', href: '/hr/employees/new', capabilities: ['hr.employees.view'] },
-  { id: 'hr.departments', module: 'hr', label: 'Departments', description: 'Departments and staff categories', href: '/hr/departments', capabilities: ['hr.employees.view'] },
-  { id: 'hr.payroll', module: 'hr', label: 'Payroll', description: 'Salary processing', href: '/hr/payroll', capabilities: ['hr.payroll.view'] },
-  { id: 'hr.payroll_rules', module: 'hr', label: 'Payroll Rules', description: 'EOBI, SESSI & income tax rates', href: '/hr/payroll/rules', capabilities: ['hr.payroll.view'] },
-  { id: 'hr.security_deposits', module: 'hr', label: 'Security Deposits', description: 'Caution money plans across employees', href: '/hr/security-deposits', capabilities: ['hr.employees.view'] },
-  { id: 'hr.employee_loans', module: 'hr', label: 'Employee Loans', description: 'Salary advance loans across employees', href: '/hr/employee-loans', capabilities: ['hr.employees.view'] },
-  { id: 'hr.salary_increments', module: 'hr', label: 'Salary Increments', description: 'Plan, review and apply salary increases in bulk', href: '/hr/salary-increments', capabilities: ['hr.employees.view'] },
+  { id: 'hr.register_employee', module: 'hr', label: 'Register a Employee', description: 'Create new employee profile', href: '/hr/employees/new', capabilities: ['hr.employees.view'], actions: REGISTER_EMPLOYEE_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+  { id: 'hr.departments', module: 'hr', label: 'Departments', description: 'Departments and staff categories', href: '/hr/departments', capabilities: ['hr.employees.view'], actions: DEPARTMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+  { id: 'hr.payroll', module: 'hr', label: 'Payroll', description: 'Salary processing', href: '/hr/payroll', capabilities: ['hr.payroll.view'], actions: PAYROLL_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage'] },
+  { id: 'hr.payroll_rules', module: 'hr', label: 'Payroll Rules', description: 'EOBI, SESSI & income tax rates', href: '/hr/payroll/rules', capabilities: ['hr.payroll.view'], actions: PAYROLL_RULES_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage'] },
+  { id: 'hr.security_deposits', module: 'hr', label: 'Security Deposits', description: 'Caution money plans across employees', href: '/hr/security-deposits', capabilities: ['hr.employees.view'], actions: SECURITY_DEPOSITS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+  { id: 'hr.employee_loans', module: 'hr', label: 'Employee Loans', description: 'Salary advance loans across employees', href: '/hr/employee-loans', capabilities: ['hr.employees.view'], actions: EMPLOYEE_LOANS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+  { id: 'hr.salary_increments', module: 'hr', label: 'Salary Increments', description: 'Plan, review and apply salary increases in bulk', href: '/hr/salary-increments', capabilities: ['hr.employees.view'], actions: SALARY_INCREMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'] },
 
   // ?? Attendance ???????????????????????????????????????????????????????????

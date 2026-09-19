@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } from '../payroll/payroll-period.util';
@@ -40,10 +41,11 @@ export class SecurityDepositsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async getForEmployee(employeeId: number) {
-    await this.assertEmployee(employeeId);
+  async getForEmployee(employeeId: number, user?: IJwtStaffPayload) {
+    await this.assertEmployee(employeeId, user);
     const plans = await this.prisma.employee_security_deposits.findMany({
       where: { employee_id: employeeId },
       include: {
@@ -75,8 +77,20 @@ export class SecurityDepositsService {
     const where: Prisma.employee_security_depositsWhereInput = {
       status: { in: statuses },
     };
+    // Legacy single-campus check stays — ANDed with the universal scope
+    // fragment via a real AND (not a shallow merge, which would let one
+    // silently overwrite the other on campus_id instead of intersecting).
+    // See the scope/tile-permission handoff §5b.
+    const employeeProfileClauses: Prisma.employee_profilesWhereInput[] = [];
     if (user.campusId != null) {
-      where.employee_profiles = { campus_id: user.campusId };
+      employeeProfileClauses.push({ campus_id: user.campusId });
+    }
+    const universal = this.scope.whereForEmployees(user);
+    if (Object.keys(universal).length > 0) {
+      employeeProfileClauses.push(universal);
+    }
+    if (employeeProfileClauses.length > 0) {
+      where.employee_profiles = { AND: employeeProfileClauses };
     }
 
     const plans = await this.prisma.employee_security_deposits.findMany({
@@ -97,7 +111,7 @@ export class SecurityDepositsService {
   }
 
   async create(employeeId: number, dto: CreateSecurityDepositDto, user: IJwtStaffPayload) {
-    await this.assertEmployee(employeeId);
+    await this.assertEmployee(employeeId, user);
     const open = await this.prisma.employee_security_deposits.findFirst({
       where: { employee_id: employeeId, status: { in: OPEN_STATUSES } },
     });
@@ -150,7 +164,7 @@ export class SecurityDepositsService {
 
   async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
-      await this.assertEmployee(employeeId, tx);
+      await this.assertEmployee(employeeId, user, tx);
       const plan = await tx.employee_security_deposits.findFirst({
         where: { employee_id: employeeId, status: SecurityDepositStatus.ACTIVE },
       });
@@ -188,7 +202,7 @@ export class SecurityDepositsService {
   async refund(employeeId: number, dto: RefundSecurityDepositDto, user: IJwtStaffPayload) {
     const amount = money(dto.amount);
     await this.prisma.$transaction(async (tx) => {
-      const plan = await this.requireOpenPlan(employeeId, tx);
+      const plan = await this.requireOpenPlan(employeeId, user, tx);
       const held = this.heldAmount(plan);
       if (amount.gt(held)) {
         throw new BadRequestException(`Refund cannot exceed the held balance of ${held.toFixed(2)}.`);
@@ -234,7 +248,7 @@ export class SecurityDepositsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const plan = await this.requireOpenPlan(employeeId, tx);
+      const plan = await this.requireOpenPlan(employeeId, user, tx);
       const held = this.heldAmount(plan);
       if (amount.gt(held)) {
         throw new BadRequestException(`Forfeit cannot exceed the held balance of ${held.toFixed(2)}.`);
@@ -274,7 +288,7 @@ export class SecurityDepositsService {
 
   async cancel(employeeId: number, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
-      const plan = await this.requireOpenPlan(employeeId, tx);
+      const plan = await this.requireOpenPlan(employeeId, user, tx);
       if (money(plan.recovered_amount).gt(0)) {
         throw new BadRequestException('Cannot cancel a plan after payroll has recovered any amount. Refund or forfeit the held balance instead.');
       }
@@ -470,8 +484,8 @@ export class SecurityDepositsService {
     });
   }
 
-  private async requireOpenPlan(employeeId: number, tx: Tx): Promise<employee_security_deposits> {
-    await this.assertEmployee(employeeId, tx);
+  private async requireOpenPlan(employeeId: number, user: IJwtStaffPayload | undefined, tx: Tx): Promise<employee_security_deposits> {
+    await this.assertEmployee(employeeId, user, tx);
     const plan = await tx.employee_security_deposits.findFirst({
       where: { employee_id: employeeId, status: { in: OPEN_STATUSES } },
     });
@@ -481,12 +495,16 @@ export class SecurityDepositsService {
     return plan;
   }
 
-  private async assertEmployee(employeeId: number, tx: Tx = this.prisma) {
+  // Missing and out-of-scope both 404 — a 403 would confirm a real employee
+  // exists at a campus outside the caller's scope.
+  private async assertEmployee(employeeId: number, user?: IJwtStaffPayload, tx: Tx = this.prisma) {
     const employee = await tx.employee_profiles.findUnique({
       where: { id: employeeId },
-      select: { id: true },
+      select: { id: true, campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
     });
-    if (!employee) throw new NotFoundException(`Employee ${employeeId} not found`);
+    if (!employee || (user && !this.scope.canSeeEmployee(user, employee))) {
+      throw new NotFoundException(`Employee ${employeeId} not found`);
+    }
   }
 
   private serializeListRow(plan: employee_security_deposits & {
