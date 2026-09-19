@@ -17,7 +17,11 @@ import type { Request } from 'express';
 import { CampusesService } from './campuses.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Action } from '../auth/casl/actions';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
@@ -25,8 +29,12 @@ import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CAMPUSES_MESSAGES } from '../../constants/api-response/campuses.constant';
 
+// GET routes are read by nearly every page for campus dropdowns, and the
+// section-mapping PUT is also called by Student Overrides (studentwise-fees) —
+// those stay undecorated at the tile layer; scope is still enforced on every
+// write. Only routes exclusive to the Campuses page carry @RequireAction.
 @Controller('campuses')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class CampusesController {
     constructor(private readonly campusesService: CampusesService) { }
 
@@ -61,9 +69,10 @@ export class CampusesController {
     @Post()
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'Campus'))
-    async create(@Body() dto: CreateCampusDto, @Req() req: Request) {
+    @RequireAction('school-setup.campuses#create')
+    async create(@Body() dto: CreateCampusDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        const campus = await this.campusesService.create(dto, changedBy);
+        const campus = await this.campusesService.create(dto, changedBy, user);
         return createApiResponse(
             campus,
             HttpStatus.CREATED,
@@ -74,9 +83,10 @@ export class CampusesController {
     @Patch('bulk')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
-    async bulkUpdate(@Body() dto: BulkUpdateCampusesDto, @Req() req: Request) {
+    @RequireAction('school-setup.campuses#edit')
+    async bulkUpdate(@Body() dto: BulkUpdateCampusesDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        const updated = await this.campusesService.bulkUpdate(dto, changedBy);
+        const updated = await this.campusesService.bulkUpdate(dto, changedBy, user);
         return createApiResponse(
             updated,
             HttpStatus.OK,
@@ -87,9 +97,10 @@ export class CampusesController {
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Campus'))
-    async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    @RequireAction('school-setup.campuses#delete')
+    async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        await this.campusesService.delete(id, changedBy);
+        await this.campusesService.delete(id, changedBy, user);
         return createApiResponse(null, HttpStatus.OK, CAMPUSES_MESSAGES.DELETE_SUCCESS);
     }
 
@@ -98,27 +109,31 @@ export class CampusesController {
     @Put(':id/classes/:classId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    @RequireAction('school-setup.campuses#classes.manage')
     async upsertCampusClass(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
+        @CurrentUser() user: IJwtStaffPayload,
         @Body('is_active') isActive?: boolean,
         @Req() req?: Request,
     ) {
         const changedBy = (req?.user as any)?.username || (req?.user as any)?.id || 'system';
-        const campus = await this.campusesService.upsertCampusClass(id, classId, isActive, changedBy);
+        const campus = await this.campusesService.upsertCampusClass(id, classId, isActive, changedBy, user);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_UPDATED);
     }
 
     @Delete(':id/classes/:classId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Campus'))
+    @RequireAction('school-setup.campuses#classes.manage')
     async removeClassFromCampus(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Req() req: Request,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        const campus = await this.campusesService.removeClassFromCampus(id, classId, changedBy);
+        const campus = await this.campusesService.removeClassFromCampus(id, classId, changedBy, user);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.CLASS_REMOVED);
     }
 
@@ -133,23 +148,26 @@ export class CampusesController {
         @Param('sectionId', ParseIntPipe) sectionId: number,
         @Body() dto: UpsertCampusSectionDto,
         @Req() req: Request,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, dto, changedBy);
+        const campus = await this.campusesService.upsertCampusSection(id, classId, sectionId, dto, changedBy, user);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_UPDATED);
     }
 
     @Delete(':id/classes/:classId/sections/:sectionId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Campus'))
+    @RequireAction('school-setup.campuses#classes.manage')
     async removeSectionFromCampus(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,
         @Param('sectionId', ParseIntPipe) sectionId: number,
         @Req() req: Request,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
-        const campus = await this.campusesService.removeSectionFromCampus(id, classId, sectionId, changedBy);
+        const campus = await this.campusesService.removeSectionFromCampus(id, classId, sectionId, changedBy, user);
         return createApiResponse(campus, HttpStatus.OK, CAMPUSES_MESSAGES.SECTION_REMOVED);
     }
 }

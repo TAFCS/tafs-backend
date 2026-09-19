@@ -16,6 +16,8 @@ import type { Request } from 'express';
 import { SectionsService } from './sections.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateSectionDto } from './dto/create-section.dto';
@@ -24,7 +26,7 @@ import { createApiResponse } from '../../utils/serializer.util';
 import { SECTIONS_MESSAGES } from '../../constants/api-response/sections.constant';
 
 @Controller('sections')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class SectionsController {
   constructor(private readonly sectionsService: SectionsService) {}
 
@@ -42,6 +44,7 @@ export class SectionsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Section'))
+  @RequireAction('school-setup.sections#create')
   async create(@Body() dto: CreateSectionDto, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     const section = await this.sectionsService.create(dto, changedBy);
@@ -55,6 +58,7 @@ export class SectionsController {
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Section'))
+  @RequireAction('school-setup.sections#edit')
   async bulkUpdate(@Body() dto: BulkUpdateSectionsDto, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     const updated = await this.sectionsService.bulkUpdate(dto, changedBy);
@@ -74,6 +78,7 @@ export class SectionsController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Section'))
+  @RequireAction('school-setup.sections#delete')
   async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     await this.sectionsService.delete(id, changedBy);
