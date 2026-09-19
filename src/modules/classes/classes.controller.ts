@@ -3,13 +3,15 @@ import type { Request } from 'express';
 import { ClassesService } from './classes.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
 import { CreateClassDto } from './dto/create-class.dto';
 
 @Controller('classes')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class ClassesController {
   constructor(private readonly classesService: ClassesService) {}
 
@@ -27,6 +29,7 @@ export class ClassesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Class'))
+  @RequireAction('school-setup.classes#create')
   async create(@Body() dto: CreateClassDto, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     const created = await this.classesService.create(dto, changedBy);
@@ -40,6 +43,7 @@ export class ClassesController {
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Class'))
+  @RequireAction('school-setup.classes#edit')
   async bulkUpdate(@Body() dto: BulkUpdateClassesDto, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     const updated = await this.classesService.bulkUpdate(dto, changedBy);
@@ -59,6 +63,7 @@ export class ClassesController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Class'))
+  @RequireAction('school-setup.classes#delete')
   async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
     const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
     await this.classesService.delete(id, changedBy);

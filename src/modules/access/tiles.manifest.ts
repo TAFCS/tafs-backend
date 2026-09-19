@@ -156,6 +156,63 @@ const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'export', label: 'Export to Excel', description: 'Directory export and master export', implies: ['view'] },
 ];
 
+// School Setup master data. Reads (GET) stay undecorated: campuses, classes,
+// sections, fee types and segments feed dropdowns on nearly every page. Only
+// writes exclusive to each admin page carry an action. Campuses additionally
+// enforce scope on every write (a campus-scoped admin may only change their
+// own campus, and may not create one); the section-mapping PUT is shared with
+// Student Overrides, so it is scoped but carries no Campuses action.
+const CAMPUSES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View campuses', default: true },
+
+  { id: 'create', label: 'Add a campus', implies: ['view'] },
+  { id: 'edit', label: 'Edit campuses', implies: ['view'] },
+  { id: 'delete', label: 'Delete a campus', implies: ['view'] },
+  { id: 'classes.manage', label: 'Add/remove classes and sections at a campus', implies: ['view'] },
+];
+
+const CLASSES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View classes', default: true },
+
+  { id: 'create', label: 'Add a class', implies: ['view'] },
+  { id: 'edit', label: 'Edit classes', implies: ['view'] },
+  { id: 'delete', label: 'Delete a class', implies: ['view'] },
+];
+
+const SECTIONS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View sections', default: true },
+
+  { id: 'create', label: 'Add a section', implies: ['view'] },
+  { id: 'edit', label: 'Edit sections', implies: ['view'] },
+  { id: 'delete', label: 'Delete a section', implies: ['view'] },
+];
+
+// `edit` covers renaming a segment AND the campus-map (which segments run at
+// which campus — scoped: a campus-scoped admin may only map their own campus).
+const SEGMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View segments', default: true },
+
+  { id: 'create', label: 'Add a segment', implies: ['view'] },
+  { id: 'edit', label: 'Edit segments and the campus map', implies: ['view'] },
+  { id: 'delete', label: 'Delete a segment', implies: ['view'] },
+];
+
+const FEE_TYPES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View fee types', default: true },
+
+  { id: 'create', label: 'Add a fee type', implies: ['view'] },
+  { id: 'edit', label: 'Edit fee types', implies: ['view'] },
+  { id: 'delete', label: 'Delete a fee type', implies: ['view'] },
+];
+
+const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View discount presets', default: true },
+
+  { id: 'create', label: 'Add a discount preset', implies: ['view'] },
+  { id: 'edit', label: 'Edit or deactivate a preset', implies: ['view'] },
+  { id: 'delete', label: 'Delete a preset', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -224,14 +281,14 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.zk_device_logs', module: 'attendance', label: 'ZK Device Logs', description: 'Biometric device data', href: '/attendance/zk-device-logs', group: 'Configuration', capabilities: ['system.permissions.manage'] },
 
   // ?? School Setup ?????????????????????????????????????????????????????????
-  { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'] },
-  { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'] },
-  { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'] },
-  { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'] },
+  { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'], actions: CAMPUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
+  { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'], actions: CLASSES_ACTIONS, legacyFullAccessCapabilities: ['academic.classes.edit'] },
+  { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
+  { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
-  { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'] },
-  { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'] },
+  { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'], actions: FEE_TYPES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
+  { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'], actions: DISCOUNT_PRESETS_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
   { id: 'school-setup.banks', module: 'school-setup', label: 'Banks', description: 'Banking relationships', href: '/banks', capabilities: ['finance.banks.view'] },
 
   // ?? TAFS Staff App ???????????????????????????????????????????????????????

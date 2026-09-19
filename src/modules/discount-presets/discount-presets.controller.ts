@@ -15,6 +15,8 @@ import {
 import { DiscountPresetsService } from './discount-presets.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateDiscountPresetDto, UpdateDiscountPresetDto } from './dto/discount-presets.dto';
@@ -22,7 +24,7 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('discount-presets')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class DiscountPresetsController {
     constructor(private readonly discountPresetsService: DiscountPresetsService) {}
 
@@ -44,6 +46,7 @@ export class DiscountPresetsController {
     @Post()
     @HttpCode(HttpStatus.CREATED)
     @CheckPolicies((ability) => ability.can(Action.Create, 'Fee') || ability.can(Action.Manage, 'all'))
+    @RequireAction('school-setup.discount_presets#create')
     async create(@Body() dto: CreateDiscountPresetDto, @CurrentUser() user: IJwtStaffPayload) {
         const data = await this.discountPresetsService.create(dto, user.username);
         return { success: true, data };
@@ -51,6 +54,7 @@ export class DiscountPresetsController {
 
     @Patch(':id')
     @CheckPolicies((ability) => ability.can(Action.Update, 'Fee') || ability.can(Action.Manage, 'all'))
+    @RequireAction('school-setup.discount_presets#edit')
     async update(
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: UpdateDiscountPresetDto,
@@ -63,6 +67,7 @@ export class DiscountPresetsController {
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee') || ability.can(Action.Manage, 'all'))
+    @RequireAction('school-setup.discount_presets#delete')
     async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
         await this.discountPresetsService.remove(id, user.username);
         return { success: true, message: 'Discount preset deactivated' };

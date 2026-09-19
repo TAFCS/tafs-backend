@@ -18,6 +18,8 @@ import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SetCampusSegmentsDto } from './dto/set-campus-segments.dto';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
+import { RequireAction } from '../../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -28,7 +30,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 @ApiTags('HR Segments')
 @ApiBearerAuth()
 @Controller('hr/segments')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class SegmentsController {
   constructor(private readonly segmentsService: SegmentsService) {}
 
@@ -55,6 +57,7 @@ export class SegmentsController {
 
   @Put('campus-map/:campusId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('school-setup.segments#edit')
   async setCampusSegments(
     @Param('campusId', ParseIntPipe) campusId: number,
     @Body() dto: SetCampusSegmentsDto,
@@ -75,6 +78,7 @@ export class SegmentsController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('school-setup.segments#create')
   async create(@Body() dto: CreateSegmentDto, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.segmentsService.create(dto, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Segment created successfully');
@@ -82,6 +86,7 @@ export class SegmentsController {
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('school-setup.segments#edit')
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateSegmentDto,
@@ -93,6 +98,7 @@ export class SegmentsController {
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('school-setup.segments#delete')
   async remove(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,

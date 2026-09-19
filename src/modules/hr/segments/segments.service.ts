@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SetCampusSegmentsDto } from './dto/set-campus-segments.dto';
@@ -15,6 +16,7 @@ export class SegmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
   /**
@@ -85,6 +87,15 @@ export class SegmentsService {
   }
 
   async setCampusSegments(campusId: number, dto: SetCampusSegmentsDto, user?: any) {
+    // A campus-scoped admin may only change which segments run at their own
+    // campus — 404, never 403, so this can't enumerate campuses.
+    if (user && !this.scope.isExempt(user)) {
+      try {
+        this.scope.assertCampus(user, campusId);
+      } catch {
+        throw new NotFoundException(`Campus with ID ${campusId} not found.`);
+      }
+    }
     const campus = await this.prisma.campuses.findUnique({
       where: { id: campusId },
       select: { id: true, campus_name: true },

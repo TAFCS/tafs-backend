@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { SectionGenderMode } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
@@ -13,7 +15,30 @@ export class CampusesService {
         private readonly prisma: PrismaService,
         private readonly auditLogs: AuditLogsService,
         private readonly allocation: StudentAllocationService,
+        private readonly scope: ScopeService,
     ) { }
+
+    /**
+     * A campus-scoped caller may only change their own campus(es) — 404, never
+     * 403, so this can't enumerate campuses. `user` is optional: only the HTTP
+     * write routes thread a caller through.
+     */
+    private assertCanTouchCampus(user: IJwtStaffPayload | undefined, campusId: number): void {
+        if (!user || this.scope.isExempt(user)) return;
+        try {
+            this.scope.assertCampus(user, campusId);
+        } catch {
+            throw new NotFoundException(`Campus ${campusId} not found`);
+        }
+    }
+
+    /** Creating a campus reaches beyond any single campus — unrestricted callers only. */
+    private assertMayCreateCampus(user: IJwtStaffPayload | undefined): void {
+        if (!user || this.scope.isExempt(user)) return;
+        if (this.scope.scopeOf(user).campuses.length > 0) {
+            throw new ForbiddenException('A campus-scoped admin may not create a new campus.');
+        }
+    }
 
     private readonly campusIncludes = {
         campus_classes: {
@@ -151,7 +176,8 @@ export class CampusesService {
         return { students, staff, classes };
     }
 
-    async create(dto: CreateCampusDto, changedBy?: string) {
+    async create(dto: CreateCampusDto, changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertMayCreateCampus(user);
         const record = await this.prisma.campuses.create({
             data: {
                 campus_code: dto.campus_code,
@@ -164,9 +190,13 @@ export class CampusesService {
         return record;
     }
 
-    async bulkUpdate(dto: BulkUpdateCampusesDto, changedBy?: string) {
+    async bulkUpdate(dto: BulkUpdateCampusesDto, changedBy?: string, user?: IJwtStaffPayload) {
         if (!dto.items || dto.items.length === 0) {
             return [];
+        }
+        for (const item of dto.items) {
+            if (item.id) this.assertCanTouchCampus(user, item.id);
+            else this.assertMayCreateCampus(user);
         }
 
         const existingIds = dto.items.filter((i) => i.id).map((i) => i.id!);
@@ -277,7 +307,8 @@ export class CampusesService {
     }
 
 
-    async delete(id: number, changedBy?: string) {
+    async delete(id: number, changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, id);
         const campus = await this.prisma.campuses.findUnique({ where: { id }, select: { campus_name: true } });
         const record = await this.prisma.$transaction(async (tx) => {
             const studentCount = await tx.students.count({
@@ -317,7 +348,8 @@ export class CampusesService {
 
     // ─── Campus Classes ───────────────────────────────────────────────────────
 
-    async upsertCampusClass(campusId: number, classId: number, isActive: boolean = true, changedBy?: string) {
+    async upsertCampusClass(campusId: number, classId: number, isActive: boolean = true, changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, campusId);
         const [campus, cls, existing] = await Promise.all([
             this.prisma.campuses.findUnique({ where: { id: campusId }, select: { id: true, campus_name: true } }),
             this.prisma.classes.findUnique({ where: { id: classId }, select: { id: true, class_code: true, description: true } }),
@@ -364,7 +396,8 @@ export class CampusesService {
         return this.findOne(campusId);
     }
 
-    async removeClassFromCampus(campusId: number, classId: number, changedBy?: string) {
+    async removeClassFromCampus(campusId: number, classId: number, changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, campusId);
         const [campus, cls] = await Promise.all([
             this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
             this.prisma.classes.findUnique({ where: { id: classId }, select: { class_code: true, description: true } }),
@@ -418,7 +451,9 @@ export class CampusesService {
         sectionId: number,
         dto: UpsertCampusSectionDto = {},
         changedBy?: string,
+        user?: IJwtStaffPayload,
     ) {
+        this.assertCanTouchCampus(user, campusId);
         const isActive = dto.is_active ?? true;
         if (dto.student_capacity !== undefined && dto.student_capacity !== null && dto.student_capacity < 1) {
             throw new BadRequestException('student_capacity must be null (unlimited) or a positive integer');
@@ -521,7 +556,8 @@ export class CampusesService {
         return this.findOne(campusId);
     }
 
-    async removeSectionFromCampus(campusId: number, classId: number, sectionId: number, changedBy?: string) {
+    async removeSectionFromCampus(campusId: number, classId: number, sectionId: number, changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, campusId);
         const [campus, cls, section] = await Promise.all([
             this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
             this.prisma.classes.findUnique({ where: { id: classId }, select: { class_code: true } }),
