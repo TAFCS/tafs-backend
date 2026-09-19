@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { classifyDevice, ZK_DEVICES } from './zk-device-health.util';
 
 /** A server→device command waiting for the device's next GET /iclock/getrequest. */
 export interface PendingDeviceCommand {
@@ -24,7 +25,54 @@ export class ZkPushService {
   private readonly pendingCommands = new Map<string, PendingDeviceCommand>();
   private nextCommandId = Math.floor(Date.now() / 1000) % 1_000_000;
 
+  /**
+   * Last time each device hit any /iclock/* route, including the ~60s
+   * getrequest poll that is not written to zk_push_logs. In memory on purpose
+   * (no per-poll DB write); after a restart getDeviceHealth falls back to
+   * zk_push_logs until the next poll repopulates it.
+   */
+  private readonly lastContact = new Map<string, Date>();
+
   constructor(private readonly prisma: PrismaService) {}
+
+  touchDevice(sn: string) {
+    this.lastContact.set(sn, new Date());
+  }
+
+  /**
+   * Heartbeat per known device. `campusCode` limits to one campus (non
+   * super-admin users); omit for all.
+   */
+  async getDeviceHealth(campusCode?: string | null, now = new Date()) {
+    const sns = Object.keys(ZK_DEVICES).filter(
+      (sn) => !campusCode || ZK_DEVICES[sn].campusCode === campusCode,
+    );
+    const rows = sns.length
+      ? await this.prisma.zk_push_logs.groupBy({
+          by: ['sn'],
+          where: { sn: { in: sns } },
+          _max: { received_at: true },
+        })
+      : [];
+    const lastPush = new Map(rows.map((r) => [r.sn, r._max.received_at]));
+
+    return sns.map((sn) => {
+      const info = ZK_DEVICES[sn];
+      const candidates = [this.lastContact.get(sn), lastPush.get(sn)].filter(
+        (d): d is Date => !!d,
+      );
+      const last = candidates.length
+        ? new Date(Math.max(...candidates.map((d) => d.getTime())))
+        : null;
+      return {
+        sn,
+        name: info.name,
+        campus_code: info.campusCode,
+        last_contact_at: last ? last.toISOString() : null,
+        ...classifyDevice(now, last, info.activeOnSaturday),
+      };
+    });
+  }
 
   queueDeviceCommand(sn: string, command: string): PendingDeviceCommand {
     const pending = { id: this.nextCommandId++, command, queuedAt: new Date() };

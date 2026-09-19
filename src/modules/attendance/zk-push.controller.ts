@@ -15,11 +15,16 @@ import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { Action } from '../auth/casl/actions';
+import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { GetZkLogsQueryDto } from './dto/zk-push.dto';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkPushService } from './zk-push.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 
 /**
  * ZK device endpoints — lives at /api/v1/iclock/*.
@@ -60,6 +65,7 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     this.logger.log(`Device registry: SN=${sn} payload=${(rawBody ?? '').slice(0, 200)}`);
     // Log into the same zk_push_logs table so the device shows up in the admin UI.
     await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
@@ -81,6 +87,7 @@ export class ZkDeviceController {
   @HttpCode(HttpStatus.OK)
   getConfig(@Query() query: Record<string, string>, @Res() res: Response) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     const options = query['options'] ?? query['Options'] ?? '(none)';
     this.logger.debug(`GET cdata: SN=${sn} options=${options}`);
     res.setHeader('Content-Type', 'text/plain');
@@ -105,6 +112,7 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     const pushLog = await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
 
     // Don't await: a single push can contain thousands of backfill ATTLOG lines,
@@ -127,6 +135,7 @@ export class ZkDeviceController {
   @HttpCode(HttpStatus.OK)
   getRequest(@Query() query: Record<string, string>, @Res() res: Response) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     this.logger.debug(`GET getrequest: SN=${sn}`);
     let reply = 'OK\n';
     try {
@@ -157,6 +166,7 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     this.logger.log(`POST regstable: SN=${sn} body=${(rawBody ?? '').slice(0, 300)}`);
     await this.zkPushService.handlePush({ sn, query, body: `REGSTABLE ${(rawBody ?? '').slice(0, 200)}` });
     res.setHeader('Content-Type', 'text/plain');
@@ -179,6 +189,7 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     this.logger.log(`devicecmd ack from SN=${sn}: ${(rawBody ?? '').slice(0, 200)}`);
     await this.zkPushService.handlePush({ sn, query, body: `DEVICECMD ${(rawBody ?? '').slice(0, 2000)}` });
     res.setHeader('Content-Type', 'text/plain');
@@ -199,6 +210,7 @@ export class ZkDeviceController {
     @Res() res: Response,
   ) {
     const sn = query['SN'] ?? query['sn'] ?? 'unknown';
+    this.zkPushService.touchDevice(sn);
     this.logger.log(`querydata from SN=${sn}: ${JSON.stringify(query)} body=${(rawBody ?? '').slice(0, 200)}`);
     await this.zkPushService.handlePush({ sn, query, body: rawBody ?? '' });
     res.setHeader('Content-Type', 'text/plain');
@@ -214,7 +226,28 @@ export class ZkDeviceController {
 @Controller('attendance')
 @UseGuards(JwtStaffGuard)
 export class ZkLogsController {
-  constructor(private readonly zkPushService: ZkPushService) {}
+  constructor(
+    private readonly zkPushService: ZkPushService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /** Device heartbeat for the attendance dashboard. Campus users see only their campus's devices. */
+  @Get('zk-device-health')
+  @UseGuards(PoliciesGuard)
+  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  async getDeviceHealth(@CurrentUser() user: IJwtStaffPayload) {
+    let campusCode: string | null = null;
+    if (user.campusId) {
+      const campus = await this.prisma.campuses.findUnique({
+        where: { id: user.campusId },
+        select: { campus_code: true },
+      });
+      // A campus user with an unresolvable campus sees nothing rather than everything.
+      campusCode = campus?.campus_code ?? '__none__';
+    }
+    const data = await this.zkPushService.getDeviceHealth(campusCode);
+    return createApiResponse(data, HttpStatus.OK, 'Device health retrieved');
+  }
 
   @Get('zk-push-logs')
   async getLogs(@Query() query: GetZkLogsQueryDto, @CurrentUser() user: IJwtStaffPayload) {
