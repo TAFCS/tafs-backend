@@ -2,30 +2,38 @@ import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Post, UseGuards
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
+import { RequireAnyAction } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { SecurityDepositsService } from './security-deposits.service';
 import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
 
+// Every route here is ALSO reachable from EmployeeSecurityDepositTab.tsx
+// inside the Employee Directory (gated there on
+// hr.employee_directory#security_deposit.edit / .view) — @RequireAnyAction so
+// a holder of either tile can still use their own employee's plan.
 @ApiTags('HR Employee Security Deposits')
 @ApiBearerAuth()
 @Controller('hr/employees/:employeeId/security-deposit')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class SecurityDepositsController {
   constructor(private readonly securityDeposits: SecurityDepositsService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
-  async getOne(@Param('employeeId', ParseIntPipe) employeeId: number) {
-    const data = await this.securityDeposits.getForEmployee(employeeId);
+  @RequireAnyAction('hr.security_deposits#view', 'hr.employee_directory#security_deposit.view')
+  async getOne(@Param('employeeId', ParseIntPipe) employeeId: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.securityDeposits.getForEmployee(employeeId, user);
     return createApiResponse(data, HttpStatus.OK, 'Security deposit retrieved successfully');
   }
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#create', 'hr.employee_directory#security_deposit.edit')
   async create(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Body() dto: CreateSecurityDepositDto,
@@ -37,6 +45,7 @@ export class SecurityDepositsController {
 
   @Post('schedule')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#schedule.edit', 'hr.employee_directory#security_deposit.edit')
   async updateSchedule(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Body() dto: UpdateInstallmentScheduleDto,
@@ -48,6 +57,7 @@ export class SecurityDepositsController {
 
   @Post('refund')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#refund', 'hr.employee_directory#security_deposit.edit')
   async refund(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Body() dto: RefundSecurityDepositDto,
@@ -59,6 +69,7 @@ export class SecurityDepositsController {
 
   @Post('forfeit')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#forfeit', 'hr.employee_directory#security_deposit.edit')
   async forfeit(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Body() dto: ForfeitSecurityDepositDto,
@@ -70,6 +81,7 @@ export class SecurityDepositsController {
 
   @Post('cancel')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#cancel', 'hr.employee_directory#security_deposit.edit')
   async cancel(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @CurrentUser() user: IJwtStaffPayload,

@@ -4,7 +4,7 @@ import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeS
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
-import { RequireAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
@@ -179,17 +179,17 @@ export class EmployeesController {
   @Get(':id/salary-increment-status')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   @RequireAction('hr.employee_directory#schedule_pay.view')
-  async salaryIncrementStatus(@Param('id', ParseIntPipe) id: number) { return createApiResponse(await this.salaryIncrements.employeeStatus(id), HttpStatus.OK, 'Salary increment status retrieved'); }
+  async salaryIncrementStatus(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) { return createApiResponse(await this.salaryIncrements.employeeStatus(id, user), HttpStatus.OK, 'Salary increment status retrieved'); }
 
   @Get(':id/salary-increments')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   @RequireAction('hr.employee_directory#schedule_pay.view')
-  async salaryIncrementHistory(@Param('id', ParseIntPipe) id: number) { return createApiResponse(await this.salaryIncrements.history(id), HttpStatus.OK, 'Salary increment history retrieved'); }
+  async salaryIncrementHistory(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) { return createApiResponse(await this.salaryIncrements.history(id, user), HttpStatus.OK, 'Salary increment history retrieved'); }
 
   @Patch(':id/increment-cycle')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
   @RequireAction('hr.employee_directory#schedule_pay.edit')
-  async updateIncrementCycle(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeIncrementCycleDto) { return createApiResponse(await this.salaryIncrements.updateEmployeeCycle(id, dto.increment_cycle_months ?? null), HttpStatus.OK, 'Increment cycle updated'); }
+  async updateIncrementCycle(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEmployeeIncrementCycleDto, @CurrentUser() user: IJwtStaffPayload) { return createApiResponse(await this.salaryIncrements.updateEmployeeCycle(id, dto.increment_cycle_months ?? null, user), HttpStatus.OK, 'Increment cycle updated'); }
 
   @Post(':id/previous-employers')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
@@ -226,7 +226,7 @@ export class EmployeesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireAction('hr.employee_directory#create')
+  @RequireAnyAction('hr.employee_directory#create', 'hr.register_employee#create')
   async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: IJwtStaffPayload) {
     const changedBy = user?.username || user?.sub || 'system';
     const data = await this.employeesService.create(dto, changedBy, user);

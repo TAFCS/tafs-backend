@@ -6,7 +6,9 @@ import {
 } from './departments.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
+import { RequireAction } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
@@ -14,7 +16,7 @@ import { createApiResponse } from '../../../utils/serializer.util';
 @ApiTags('HR Departments')
 @ApiBearerAuth()
 @Controller('hr/departments')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class DepartmentsController {
   constructor(private readonly departmentsService: DepartmentsService) {}
 
@@ -34,6 +36,7 @@ export class DepartmentsController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#create')
   async create(@Body() dto: CreateDepartmentDto) {
     const data = await this.departmentsService.create(dto);
     return createApiResponse(data, HttpStatus.CREATED, 'Department created successfully');
@@ -41,6 +44,7 @@ export class DepartmentsController {
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#edit')
   async update(@Param('id', ParseIntPipe) id: number, @Body() dto: Partial<CreateDepartmentDto>) {
     const data = await this.departmentsService.update(id, dto);
     return createApiResponse(data, HttpStatus.OK, 'Department updated successfully');
@@ -48,6 +52,7 @@ export class DepartmentsController {
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#delete')
   async remove(@Param('id', ParseIntPipe) id: number) {
     const data = await this.departmentsService.remove(id);
     return createApiResponse(data, HttpStatus.OK, 'Department deleted successfully');
@@ -56,6 +61,7 @@ export class DepartmentsController {
   // Staff categories (subcategories)
   @Post(':id/staff-categories')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#create')
   async createStaffCategory(@Param('id', ParseIntPipe) id: number, @Body() dto: CreateStaffCategoryDto) {
     const data = await this.departmentsService.createStaffCategory(id, dto);
     return createApiResponse(data, HttpStatus.CREATED, 'Staff category created successfully');
@@ -63,6 +69,7 @@ export class DepartmentsController {
 
   @Patch(':id/staff-categories/:categoryId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#edit')
   async updateStaffCategory(
     @Param('id', ParseIntPipe) id: number,
     @Param('categoryId', ParseIntPipe) categoryId: number,
@@ -74,6 +81,7 @@ export class DepartmentsController {
 
   @Delete(':id/staff-categories/:categoryId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.departments#delete')
   async removeStaffCategory(
     @Param('id', ParseIntPipe) id: number,
     @Param('categoryId', ParseIntPipe) categoryId: number

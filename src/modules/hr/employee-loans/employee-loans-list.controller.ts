@@ -2,8 +2,10 @@ import { Controller, Get, HttpStatus, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
+import { RequireAction } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
@@ -13,12 +15,13 @@ import { EmployeeLoansService } from './employee-loans.service';
 @ApiTags('HR Employee Loans')
 @ApiBearerAuth()
 @Controller('hr/employee-loans')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class EmployeeLoansListController {
   constructor(private readonly employeeLoans: EmployeeLoansService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_loans#view')
   async list(
     @Query() query: ListLoansQueryDto,
     @CurrentUser() user: IJwtStaffPayload,

@@ -18,6 +18,7 @@ import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../payroll-rules/payroll-tax-calculator.util';
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
 import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -173,6 +174,7 @@ export class PayrollService {
     private readonly payrollRules: PayrollRulesService,
     private readonly securityDeposits: SecurityDepositsService,
     private readonly employeeLoans: EmployeeLoansService,
+    private readonly scope: ScopeService,
   ) {}
 
   /**
@@ -199,9 +201,27 @@ export class PayrollService {
     return computePayrollWindow(year, month);
   }
 
+  // Legacy check kept standing per the scope-sweep handoff (do not delete until
+  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside
+  // it. Payroll runs are campus-level entities with no segment/department/
+  // staff-category attribute of their own, so campus is the only dimension
+  // that applies here.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
     if (user.campusId && user.campusId !== campusId) {
       throw new ForbiddenException('You do not have access to this campus');
+    }
+    this.scope.assertCampus(user, campusId);
+  }
+
+  /** Non-throwing counterpart of assertCampusAccess, for turning a 403 into a
+   * 404 on :id lookups — a 403 would confirm the run exists at another campus
+   * and turn the route into an enumerator. */
+  private canSeeRun(user: IJwtStaffPayload, campusId: number): boolean {
+    try {
+      this.assertCampusAccess(user, campusId);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -806,8 +826,9 @@ export class PayrollService {
     user: IJwtStaffPayload,
   ) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const line = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -920,8 +941,9 @@ export class PayrollService {
    */
   async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
     if (run.is_test) {
       throw new BadRequestException('Test runs do not support per-employee regenerate — use "Generate Test Run" instead.');
     }
@@ -989,8 +1011,9 @@ export class PayrollService {
    */
   async finalizeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
     if (run.is_test) {
       throw new BadRequestException('Test runs do not support per-employee finalize — use "Finalize All" instead.');
     }
@@ -1063,8 +1086,9 @@ export class PayrollService {
    */
   async excludeLine(runId: number, employeeId: number, dto: ExcludePayrollLineDto, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
     if (run.is_test) {
       throw new BadRequestException('Test runs do not support excluding employees.');
     }
@@ -1106,8 +1130,9 @@ export class PayrollService {
   /** Reverses excludeLine — re-computes the employee's line and removes the exclusion record. */
   async includeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const exclusion = await this.prisma.payroll_run_exclusions.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -1336,6 +1361,11 @@ export class PayrollService {
       return [requestedCampusId];
     }
     if (user.campusId != null) return [user.campusId];
+    // A user unrestricted by the legacy single campusId may still carry a
+    // universal multi-campus scope — an export/matrix is exactly the hole the
+    // scope-sweep handoff warns gets forgotten, so it's checked here too.
+    const universalCampuses = this.scope.scopeOf(user).campuses;
+    if (universalCampuses.length > 0) return universalCampuses;
     const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });
     return campuses.map((c) => c.id);
   }
@@ -1516,9 +1546,17 @@ export class PayrollService {
   async listRuns(query: ListPayrollRunsQueryDto, user: IJwtStaffPayload) {
     const campusId = query.campus_id ?? user.campusId ?? undefined;
     if (campusId) this.assertCampusAccess(user, campusId);
+    // A user unrestricted by the legacy single campusId may still carry a
+    // universal multi-campus scope — the same hole resolveMatrixCampusIds had.
+    const universalCampuses = this.scope.scopeOf(user).campuses;
+    const campusFilter = campusId
+      ? { campus_id: campusId }
+      : universalCampuses.length > 0
+        ? { campus_id: { in: universalCampuses } }
+        : undefined;
 
     const runs = await this.prisma.payroll_runs.findMany({
-      where: campusId ? { campus_id: campusId } : undefined,
+      where: campusFilter,
       include: {
         campuses: { select: { id: true, campus_name: true } },
         _count: { select: { payroll_run_lines: true } },
@@ -1542,8 +1580,9 @@ export class PayrollService {
 
   async getRun(id: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id }, include: runInclude });
-    if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
     return this.attachDerivedFieldsToLines(run);
   }
 
@@ -1626,8 +1665,9 @@ export class PayrollService {
         },
       },
     });
-    if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
 
     const pendingLines = run.payroll_run_lines.filter((l) => !l.finalized_at);
     if (pendingLines.length === 0) {
@@ -1701,8 +1741,9 @@ export class PayrollService {
 
   async deleteRun(id: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
-    if (!run) throw new NotFoundException(`Payroll run ${id} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
     if (!run.is_test) {
       // payroll_runs.status can no longer be trusted alone here — it only
       // reads FINALIZED once every line is done, but a single finalized/
@@ -1880,8 +1921,9 @@ export class PayrollService {
 
   async disburseLine(runId: number, employeeId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const existingLine = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -1926,8 +1968,9 @@ export class PayrollService {
 
   async disburseAll(runId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const disbursedAt = dto.disbursed_at ? new Date(dto.disbursed_at) : new Date();
     if (Number.isNaN(disbursedAt.getTime())) {
@@ -1988,8 +2031,9 @@ export class PayrollService {
       where: { id: runId },
       include: { campuses: { select: { campus_name: true } } },
     });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const line = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -2147,8 +2191,9 @@ export class PayrollService {
   /** Returns the persisted payslip URL for an already-settled employee line. */
   async getPayslip(runId: number, employeeId: number, user: IJwtStaffPayload) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
-    if (!run) throw new NotFoundException(`Payroll run ${runId} not found`);
-    this.assertCampusAccess(user, run.campus_id);
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
 
     const line = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
