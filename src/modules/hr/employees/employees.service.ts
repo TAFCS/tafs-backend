@@ -1089,6 +1089,7 @@ export class EmployeesService {
         { packIds: packIds ?? [], tileGrants: tileGrants ?? [] },
         caller.sub,
         caller.username || changedBy,
+        caller,
       );
     }
 

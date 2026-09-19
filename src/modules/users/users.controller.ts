@@ -14,7 +14,9 @@ import {
 import { UsersService } from './users.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -26,17 +28,22 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { StaffRole } from '@prisma/client';
 
 @Controller('users')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
-  async listUsers() {
-    const users = await this.usersService.listUsers();
+  @RequireAction('system.people_access#view')
+  async listUsers(@CurrentUser() caller: IJwtStaffPayload) {
+    const users = await this.usersService.listUsers(caller);
     return createApiResponse(users, HttpStatus.OK, 'Users retrieved successfully');
   }
 
+  // Shared with the Employee Directory's own Portal Account tab (already
+  // rolled out, gated there by hr.employee_directory#portal.edit) — not
+  // decorated here, same as any other route this tile shares with another.
+  // See the scope/tile-permission handoff and the Vouchers rollout for why.
   @Get('check-username')
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   async checkUsername(@Query('username') username: string) {
@@ -46,43 +53,53 @@ export class UsersController {
 
   @Get(':id/reveal-password')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
+  @RequireAction('system.people_access#reveal_password')
   async revealPassword(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
-    const data = await this.usersService.revealPassword(id, caller.username || caller.sub);
+    const data = await this.usersService.revealPassword(id, caller.username || caller.sub, caller);
     return createApiResponse(data, HttpStatus.OK, 'Password revealed successfully');
   }
 
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
-  async findUser(@Param('id') id: string) {
-    const user = await this.usersService.findUserById(id);
+  @RequireAction('system.people_access#view')
+  async findUser(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
+    const user = await this.usersService.findUserById(id, caller);
     return createApiResponse(user, HttpStatus.OK, 'User details retrieved successfully');
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'User'))
+  @RequireAction('system.people_access#create')
   async createUser(@Body() dto: CreateUserDto, @CurrentUser() creator: IJwtStaffPayload) {
-    const user = await this.usersService.createUser(dto, creator.sub);
+    const user = await this.usersService.createUser(dto, creator.sub, creator);
     return createApiResponse(user, HttpStatus.CREATED, 'User created successfully');
   }
 
+  // Only `view` is required at the route: this PUT writes fields across both
+  // the Identity and Job tabs (plus role, which is its own, stricter check),
+  // so authorisation happens per field in UsersService.assertFieldsEditable
+  // against USER_FIELD_TAB_MAP.
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
+  @RequireAction('system.people_access#view')
   async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() editor: IJwtStaffPayload) {
-    const user = await this.usersService.updateUser(id, dto, editor.username || editor.sub);
+    const user = await this.usersService.updateUser(id, dto, editor.username || editor.sub, editor);
     return createApiResponse(user, HttpStatus.OK, 'User updated successfully');
   }
 
   @Get(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  async getUserPermissions(@Param('id') id: string) {
-    const user = await this.usersService.findUserById(id);
+  @RequireAction('system.people_access#access.edit')
+  async getUserPermissions(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
+    const user = await this.usersService.findUserById(id, caller);
     const permissions = await this.usersService.getUserPermissionState(id, user.role);
     return createApiResponse(permissions, HttpStatus.OK, 'User permissions retrieved successfully');
   }
 
   @Post(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.people_access#access.edit')
   async setPermission(
     @Param('id') id: string,
     @Body() dto: SetPermissionDto,
@@ -99,6 +116,7 @@ export class UsersController {
 
   @Delete(':id/permissions/:key')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.people_access#access.edit')
   async removePermissionOverride(
     @Param('id') id: string,
     @Param('key') key: string,
@@ -111,6 +129,11 @@ export class UsersController {
     );
     return createApiResponse(result, HttpStatus.OK, 'Permission override removed successfully');
   }
+
+  // permissions/all, roles/:role/permissions, and roles/permissions below
+  // belong to the separate Access Packs tile (system.access_packs, the
+  // /system/permissions page) — not decorated here. See the scope/
+  // tile-permission handoff on shared-controller tiles.
 
   @Get('permissions/all')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Permission'))
