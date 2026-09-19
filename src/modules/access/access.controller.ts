@@ -12,7 +12,9 @@ import {
 import { AccessService } from './access.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -20,10 +22,13 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 
 @Controller('access')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class AccessController {
   constructor(private readonly accessService: AccessService) {}
 
+  // Used by every logged-in staff session to render its own nav (see
+  // useAccessCatalog on the webapp) -- not specific to any one tile, and
+  // deliberately ungated beyond authentication.
   @Get('tiles')
   async getCatalog() {
     const catalog = await this.accessService.getCatalog();
@@ -32,11 +37,17 @@ export class AccessController {
 
   @Get('scope-options')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.people_access#view')
   async getScopeOptions() {
     const options = await this.accessService.getScopeOptions();
     return createApiResponse(options, HttpStatus.OK, 'Scope options retrieved successfully');
   }
 
+  // Shared with the separate Access Packs tile (system.access_packs, the
+  // /system/permissions page) -- read-only here, so left undecorated rather
+  // than requiring a system.people_access action for a page that isn't this
+  // one. The packs CRUD routes below belong to that tile entirely; not
+  // decorated here either.
   @Get('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async listPacks() {
@@ -71,13 +82,18 @@ export class AccessController {
 
   @Get('users/:id/access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  async getUserAccess(@Param('id') id: string) {
-    const access = await this.accessService.getUserAccess(id);
+  @RequireAction('system.people_access#view')
+  async getUserAccess(@Param('id') id: string, @CurrentUser() user: IJwtStaffPayload) {
+    const access = await this.accessService.getUserAccess(id, user);
     return createApiResponse(access, HttpStatus.OK, 'User access retrieved successfully');
   }
 
+  // Only `view` is required at the route: this PUT writes fields belonging to
+  // both the Access and Scope tabs, so authorisation happens per field in
+  // AccessService.assertUserAccessFieldsEditable.
   @Put('users/:id/access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.people_access#view')
   async setUserAccess(
     @Param('id') id: string,
     @Body() dto: SetUserAccessDto,
@@ -88,6 +104,7 @@ export class AccessController {
       dto,
       user.sub,
       user.username || user.sub,
+      user,
     );
     return createApiResponse(access, HttpStatus.OK, 'User access updated successfully');
   }

@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
   ConflictException,
@@ -6,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -15,13 +18,114 @@ import { v4 as uuidv4 } from 'uuid';
 import { StaffRole } from '@prisma/client';
 import { encryptSecret, decryptSecret } from '../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import {
+  PEOPLE_ACCESS_TILE_ID,
+  USER_FIELD_TAB_MAP,
+  USER_SUPER_ADMIN_ONLY_FIELDS,
+} from './user-field-tabs';
 
 @Injectable()
 export class UsersService {
   constructor(
     private prisma: PrismaService,
     private auditLogs: AuditLogsService,
+    private scope: ScopeService,
   ) {}
+
+  /**
+   * Scope where-fragment for a query over `users`. A user's dimensions come
+   * from their linked employee_profile when one exists (campus/segment/
+   * department/staff_category); accounts with no profile fall back to the
+   * legacy `users.campus_id` field on campus only, since that's the only
+   * dimension they carry. Campus never ORs both fields together — that could
+   * re-admit someone whose real (profile) campus is out of scope via a stale
+   * legacy value — it's profile-if-present, else the legacy field.
+   */
+  private whereForUsers(actingUser?: IJwtStaffPayload): Prisma.usersWhereInput {
+    if (!actingUser || this.scope.isExempt(actingUser)) return {};
+    const scope = this.scope.scopeOf(actingUser);
+    const clauses: Prisma.usersWhereInput[] = [];
+
+    if (scope.campuses.length > 0) {
+      clauses.push({
+        OR: [
+          { employee_profile: { campus_id: { in: scope.campuses } } },
+          { employee_profile: null, campus_id: { in: scope.campuses } },
+        ],
+      });
+    }
+    if (scope.segments.length > 0) {
+      clauses.push({ employee_profile: { segment_id: { in: scope.segments } } });
+    }
+    if (scope.departments.length > 0) {
+      clauses.push({ employee_profile: { department_id: { in: scope.departments } } });
+    }
+    if (scope.staffCategories.length > 0) {
+      clauses.push({ employee_profile: { staff_category_id: { in: scope.staffCategories } } });
+    }
+    return clauses.length > 0 ? { AND: clauses } : {};
+  }
+
+  /** Non-throwing counterpart, for turning a 403 into a 404 on `:id` lookups. */
+  private canSeeUser(
+    actingUser: IJwtStaffPayload | undefined,
+    target: {
+      campus_id: number | null;
+      employee_profile?: {
+        campus_id: number | null;
+        segment_id: number | null;
+        department_id: number | null;
+        staff_category_id: number | null;
+      } | null;
+    },
+  ): boolean {
+    if (!actingUser || this.scope.isExempt(actingUser)) return true;
+    return this.scope.canSeeEmployee(actingUser, {
+      campus_id: target.employee_profile ? target.employee_profile.campus_id : target.campus_id,
+      segment_id: target.employee_profile?.segment_id ?? null,
+      department_id: target.employee_profile?.department_id ?? null,
+      staff_category_id: target.employee_profile?.staff_category_id ?? null,
+    });
+  }
+
+  /**
+   * Authorises an edit field by field against `<tab>.edit`, mirroring
+   * EmployeesService.assertFieldsEditable. `role` is excluded from the
+   * generic map on purpose — see USER_SUPER_ADMIN_ONLY_FIELDS — and checked
+   * directly against the actor's own role instead.
+   *
+   * A caller whose session predates sub-permissions (no `actions`) is left
+   * alone: the coarse CASL check already gated them, and failing closed here
+   * would lock out every open session for 90 days until their token rotates.
+   * The route-level @RequireAction is the boundary that does fail closed.
+   */
+  private assertFieldsEditable(dto: UpdateUserDto, actingUser?: IJwtStaffPayload) {
+    if (USER_SUPER_ADMIN_ONLY_FIELDS.some((f) => (dto as Record<string, unknown>)[f] !== undefined)) {
+      if (!actingUser || actingUser.role !== StaffRole.SUPER_ADMIN) {
+        throw new ForbiddenException('Only a super admin may change a user\'s role.');
+      }
+    }
+
+    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
+    if (actingUser.actions === undefined) return;
+
+    const held = new Set(actingUser.actions);
+    const denied = Object.entries(dto)
+      .filter(([field, v]) => v !== undefined && !USER_SUPER_ADMIN_ONLY_FIELDS.includes(field))
+      .map(([field]) => field)
+      .filter((field) => {
+        const tab = USER_FIELD_TAB_MAP[field];
+        if (!tab) return false;
+        return !held.has(`${PEOPLE_ACCESS_TILE_ID}#${tab}.edit`);
+      });
+
+    if (denied.length > 0) {
+      throw new ForbiddenException(
+        `You do not have permission to edit: ${denied.join(', ')}.`,
+      );
+    }
+  }
 
   // ─── Auth helpers ────────────────────────────────────────────────────────────
 
@@ -56,8 +160,9 @@ export class UsersService {
     return !existing;
   }
 
-  async listUsers() {
+  async listUsers(actingUser?: IJwtStaffPayload) {
     return this.prisma.users.findMany({
+      where: this.whereForUsers(actingUser),
       orderBy: { created_at: 'asc' },
       select: {
         id: true,
@@ -99,7 +204,7 @@ export class UsersService {
     });
   }
 
-  async findUserById(id: string) {
+  async findUserById(id: string, actingUser?: IJwtStaffPayload) {
     const user = await this.prisma.users.findUnique({
       where: { id },
       select: {
@@ -125,6 +230,7 @@ export class UsersService {
           select: {
             id: true,
             campus_id: true,
+            segment_id: true,
             department_id: true,
             staff_category_id: true,
             job_title: true,
@@ -140,11 +246,16 @@ export class UsersService {
         },
       },
     });
-    if (!user) throw new NotFoundException(`User ${id} not found`);
+    // Missing and out-of-scope both 404 — a 403 here would confirm a real id
+    // exists outside the caller's scope and turn the route into an enumerator.
+    if (!user || !this.canSeeUser(actingUser, user)) {
+      throw new NotFoundException(`User ${id} not found`);
+    }
     return user;
   }
 
-  async revealPassword(id: string, revealedBy: string) {
+  async revealPassword(id: string, revealedBy: string, actingUser?: IJwtStaffPayload) {
+    await this.findUserById(id, actingUser);
     const user = await this.prisma.users.findUnique({
       where: { id },
       select: { username: true, password_reveal: true },
@@ -167,7 +278,7 @@ export class UsersService {
     return { username: user.username, password: decryptSecret(user.password_reveal) };
   }
 
-  async createUser(dto: CreateUserDto, createdById: string) {
+  async createUser(dto: CreateUserDto, createdById: string, actingUser?: IJwtStaffPayload) {
     if (isLegacyTafsEmailUsername(dto.username)) {
       throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
     }
@@ -176,6 +287,12 @@ export class UsersService {
       where: { username: dto.username },
     });
     if (existing) throw new ConflictException('Username already taken');
+
+    // Assert the TARGET campus is in scope, or a scoped admin could create a
+    // login reaching outside their own scope.
+    if (actingUser) {
+      this.scope.assertCampus(actingUser, dto.campus_id ? Number(dto.campus_id) : null);
+    }
 
     const hash = await bcrypt.hash(dto.password, 10);
     const now = new Date();
@@ -220,8 +337,14 @@ export class UsersService {
     return record;
   }
 
-  async updateUser(id: string, dto: UpdateUserDto, changedBy?: string) {
-    const existing = await this.findUserById(id);
+  async updateUser(id: string, dto: UpdateUserDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    const existing = await this.findUserById(id, actingUser);
+    this.assertFieldsEditable(dto, actingUser);
+    // Assert the TARGET campus is in scope too, or a scoped admin could move
+    // a user's campus outside their own reach.
+    if (dto.campus_id !== undefined && actingUser) {
+      this.scope.assertCampus(actingUser, dto.campus_id ? Number(dto.campus_id) : null);
+    }
 
     const data: any = { updated_at: new Date() };
     if (dto.full_name !== undefined) data.full_name = dto.full_name;
