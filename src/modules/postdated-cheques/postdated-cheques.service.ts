@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PostdatedChequeStatus } from '@prisma/client';
+import { PostdatedChequeStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { IsNotEmpty, IsString, IsOptional, IsNumber, IsInt, IsEnum } from 'class-validator';
 
 export class CreatePostdatedChequeDto {
@@ -87,9 +90,30 @@ export class PostdatedChequesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async create(dto: CreatePostdatedChequeDto, changedBy?: string) {
+  /**
+   * The caller's data scope, expressed against the cheque's student. Universal
+   * scope AND the legacy campus/class fields (tokens issued before universal
+   * scope still carry them), never one replacing the other. `user` omitted
+   * means an internal caller and applies no filter.
+   */
+  private studentsFilter(user?: IJwtStaffPayload): Prisma.studentsWhereInput {
+    if (!user) return {};
+    return { AND: [this.scope.whereForStudents(user), applyStudentScope(user, {})] };
+  }
+
+  async create(dto: CreatePostdatedChequeDto, changedBy?: string, user?: IJwtStaffPayload) {
+    // Missing and out-of-scope both 404: a 403 would confirm a student exists
+    // at a campus the caller cannot see.
+    if (user) {
+      const visible = await this.prisma.students.findFirst({
+        where: { AND: [{ cc: dto.student_id }, this.studentsFilter(user)] },
+        select: { cc: true },
+      });
+      if (!visible) throw new NotFoundException(`Student #${dto.student_id} not found`);
+    }
     const record = await this.prisma.postdated_cheques.create({
       data: {
         student_id: dto.student_id,
@@ -115,8 +139,9 @@ export class PostdatedChequesService {
     return record;
   }
 
-  async list(filters: ListPostdatedChequesFilter) {
+  async list(filters: ListPostdatedChequesFilter, user?: IJwtStaffPayload) {
     const where: any = {};
+    const studentClauses: Prisma.studentsWhereInput[] = [this.studentsFilter(user)];
 
     if (filters.status) {
       const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
@@ -125,10 +150,11 @@ export class PostdatedChequesService {
     if (filters.student_id) where.student_id = filters.student_id;
     if (filters.campus_id != null) {
       const campusIds = Array.isArray(filters.campus_id) ? filters.campus_id : [filters.campus_id];
-      where.students = {
+      studentClauses.push({
         campus_id: campusIds.length === 1 ? campusIds[0] : { in: campusIds },
-      };
+      });
     }
+    where.students = { AND: studentClauses };
 
     if (filters.from_date || filters.to_date) {
       where.cheque_date = {};
@@ -143,7 +169,7 @@ export class PostdatedChequesService {
     });
   }
 
-  async getDue() {
+  async getDue(user?: IJwtStaffPayload) {
     const today = new Date();
     today.setHours(23, 59, 59, 999);
 
@@ -151,31 +177,32 @@ export class PostdatedChequesService {
       where: {
         status: PostdatedChequeStatus.PENDING,
         cheque_date: { lte: today },
+        students: this.studentsFilter(user),
       },
       select: CHEQUE_SELECT,
       orderBy: { cheque_date: 'asc' },
     });
   }
 
-  async getByStudent(cc: number) {
+  async getByStudent(cc: number, user?: IJwtStaffPayload) {
     return this.prisma.postdated_cheques.findMany({
-      where: { student_id: cc },
+      where: { student_id: cc, students: this.studentsFilter(user) },
       select: CHEQUE_SELECT,
       orderBy: { cheque_date: 'asc' },
     });
   }
 
-  async findOne(id: number) {
-    const cheque = await this.prisma.postdated_cheques.findUnique({
-      where: { id },
+  async findOne(id: number, user?: IJwtStaffPayload) {
+    const cheque = await this.prisma.postdated_cheques.findFirst({
+      where: { id, students: this.studentsFilter(user) },
       select: CHEQUE_SELECT,
     });
     if (!cheque) throw new NotFoundException(`Cheque #${id} not found`);
     return cheque;
   }
 
-  async updateStatus(id: number, dto: UpdateStatusDto, changedBy?: string) {
-    const existing = await this.findOne(id);
+  async updateStatus(id: number, dto: UpdateStatusDto, changedBy?: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOne(id, user);
 
     const data: any = { status: dto.status };
     if (dto.notes !== undefined) data.notes = dto.notes;
@@ -204,8 +231,8 @@ export class PostdatedChequesService {
     return record;
   }
 
-  async remove(id: number, changedBy?: string) {
-    const existing = await this.findOne(id);
+  async remove(id: number, changedBy?: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOne(id, user);
     const record = await this.prisma.postdated_cheques.delete({ where: { id } });
     this.auditLogs.log({
       entity_type: 'CHEQUE',
