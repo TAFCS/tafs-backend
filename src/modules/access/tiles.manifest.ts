@@ -502,6 +502,20 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Registration (the full admission form). Both writes already carried a CASL
+// policy (Create / Update on Student), so the bridge preserves exactly who
+// could do them: every capability that the generic mapper turns into "manage
+// Student" (a registration.create, an enrollment.complete, or a
+// directory.edit). A role holding only students.registration.view keeps the
+// read-only side. by-cc and guardians/by-cnic are called only by the
+// registration and admission-form pages, so they take `view`.
+const REGISTRATION_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Registration', description: 'Look up an admission by CC and an existing guardian by CNIC', default: true },
+
+  { id: 'register', label: 'Register an admission', description: 'Create the student, guardians and family, or complete a quick admission', implies: ['view'] },
+  { id: 'admission_form', label: 'Submit the comprehensive admission form', implies: ['view'] },
+];
+
 // Quick Registration: creating a quick admission, reading it back and uploading
 // its photos were locked to SUPER_ADMIN by a raw role check in the controller,
 // so it could never be delegated. They now sit behind `create`, which no role
@@ -606,7 +620,7 @@ const PARENT_CHANGE_REQUESTS_ACTIONS: TileAction[] = [
 export const TILES_MANIFEST: TileManifestEntry[] = [
   // ── Student & Profiling ──────────────────────────────────────────────────
   { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'], actions: QUICK_REGISTRATION_ACTIONS },
-  { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'] },
+  { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'], actions: REGISTRATION_ACTIONS, legacyFullAccessCapabilities: ['students.registration.create', 'students.enrollment.complete', 'students.directory.edit'] },
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'], actions: FAMILIES_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },

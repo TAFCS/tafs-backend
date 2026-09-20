@@ -13,6 +13,8 @@ import { TransferController } from '../transfers/transfer.controller';
 import { TransferService } from '../transfers/transfer.service';
 import { UnconfirmedAdmissionsController } from '../unconfirmed-admissions/unconfirmed-admissions.controller';
 import { UnconfirmedAdmissionsService } from '../unconfirmed-admissions/unconfirmed-admissions.service';
+import { IdentityController } from '../identity/identity.controller';
+import { IdentityService } from '../identity/identity.service';
 import { EnrollmentController } from '../enrollments/enrollment.controller';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 import { HouseBalancerController } from '../house-balancer/house-balancer.controller';
@@ -617,5 +619,94 @@ describe('Quick Registration', () => {
   it('applies the campus scope to a leftover row from the legacy table too', async () => {
     const { s } = svc({ student: null, canSee: false, leftover: { id: 7, campus_id: 5 } });
     await expect(s.getByCC(7, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('Registration', () => {
+  const t = tile('student.registration');
+
+  it('is bridged from every capability that already meant "manage Student"', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual([
+      'students.registration.create',
+      'students.enrollment.complete',
+      'students.directory.edit',
+    ]);
+  });
+
+  it('keeps a registration.view-only role read-only, and every existing manager fully covered', () => {
+    const viewOnly = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, roleKeys: ['students.registration.view'] });
+    expect(viewOnly.actionIds.filter((k) => k.startsWith('student.registration#'))).toEqual([
+      actionKey('student.registration', 'view'),
+    ]);
+    for (const cap of t.legacyFullAccessCapabilities!) {
+      const r = computeEffectiveAccess({ ...base, role: StaffRole.PRINCIPAL, roleKeys: ['students.registration.view', cap] });
+      for (const a of t.actions!) expect(r.actionIds).toContain(actionKey('student.registration', a.id));
+    }
+  });
+
+  it('gates every route on its own action and keeps the policy check', () => {
+    const p = IdentityController.prototype;
+    expect(meta(p, 'register')?.actionKeys).toEqual([actionKey('student.registration', 'register')]);
+    expect(meta(p, 'submitAdmissionForm')?.actionKeys).toEqual([actionKey('student.registration', 'admission_form')]);
+    expect(meta(p, 'getByCC')?.actionKeys).toEqual([actionKey('student.registration', 'view')]);
+    expect(meta(p, 'getGuardianByCnic')?.actionKeys).toEqual([actionKey('student.registration', 'view')]);
+    keysExist(['student.registration#view', 'student.registration#register', 'student.registration#admission_form']);
+    const guards: unknown[] = Reflect.getMetadata('__guards__', IdentityController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+  });
+
+  function svc(opts: { student?: unknown; canSee?: boolean; campusThrows?: boolean; leftover?: unknown }) {
+    const prisma = {
+      students: {
+        findUnique: jest.fn().mockResolvedValue(opts.student ?? null),
+        findFirst: jest.fn().mockResolvedValue(opts.student ? { cc: 1 } : null),
+      },
+      unconfirmed_admissions: { findUnique: jest.fn().mockResolvedValue(opts.leftover ?? null) },
+      $transaction: jest.fn(),
+    };
+    const scope = {
+      canSeeStudent: jest.fn().mockReturnValue(opts.canSee ?? true),
+      assertCampus: jest.fn(() => {
+        if (opts.campusThrows) throw new ForbiddenException('nope');
+      }),
+      assertClass: jest.fn(),
+      assertSection: jest.fn(),
+    };
+    const s = new IdentityService(prisma as any, {} as any, {} as any, { log: jest.fn() } as any, scope as any);
+    return { s, prisma, scope };
+  }
+  const stu = { campus_id: 1, class_id: 3, section_id: 4, classes: { segment_id: 1 } };
+
+  it('refuses registering into a campus outside scope, or with no campus for a restricted caller, before any write', async () => {
+    const { s, prisma, scope } = svc({ campusThrows: true });
+    await expect(s.registerAdmission({ admission: { campus_id: 9 } } as any, 'u', scopedUser)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(s.registerAdmission({ admission: {} } as any, 'u', scopedUser)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(scope.assertCampus).toHaveBeenLastCalledWith(scopedUser, null);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a legacy campus-bound caller naming another campus', async () => {
+    const { s, prisma } = svc({});
+    const legacy = { ...scopedUser, campusId: 2 };
+    await expect(s.registerAdmission({ admission: { campus_id: 3 } } as any, 'u', legacy)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('checks the class and section it registers into, and the quick admission it completes', async () => {
+    const { s, scope } = svc({ student: stu, canSee: false });
+    await expect(
+      s.registerAdmission({ admission: { campus_id: 1, class_id: 5, section_id: 6 }, existing_cc: 1 } as any, 'u', scopedUser),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(scope.assertClass).toHaveBeenCalledWith(scopedUser, 5);
+    expect(scope.assertSection).toHaveBeenCalledWith(scopedUser, 6);
+  });
+
+  it('404s an out-of-scope student on the by-cc lookup and the admission form, and a leftover by campus', async () => {
+    const hidden = svc({ student: stu, canSee: false });
+    await expect(hidden.s.getAdmissionByCC(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(hidden.s.submitAdmissionForm({ cc: 1 } as any, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    expect(hidden.prisma.$transaction).not.toHaveBeenCalled();
+    const leftover = svc({ student: null, canSee: false, leftover: { campus_id: 5 } });
+    await expect(leftover.s.getAdmissionByCC(7, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
   });
 });

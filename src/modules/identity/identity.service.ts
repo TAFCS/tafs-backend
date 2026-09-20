@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
@@ -10,6 +10,9 @@ import { SubmitAdmissionFormDto } from './dto/submit-admission-form.dto';
 import { CcAllocatorService } from './cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { formatGrNumberWithPrefix, checkIsALevel } from '../../common/utils/gr-number.util';
 
 type TxClient = Prisma.TransactionClient;
@@ -21,9 +24,54 @@ export class IdentityService {
     private readonly flagsSvc: StudentFlagsService,
     private readonly ccAllocator: CcAllocatorService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) { }
 
-  async registerAdmission(dto: CreateAdmissionDto, changedBy: string) {
+  /**
+   * A student (or a leftover row in the legacy unconfirmed_admissions table)
+   * the caller cannot see 404s, same as a missing one: universal scope AND the
+   * legacy campus / class fields. A cc with no row at all is left to the
+   * caller's own not-found handling. `user` omitted means an internal caller.
+   */
+  private async assertCcVisible(cc: number, user?: IJwtStaffPayload) {
+    if (!user) return;
+    const notFound = () => new NotFoundException(`Student with CC ${cc} not found`);
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+    });
+    if (s) {
+      const ok =
+        this.scope.canSeeStudent(user, {
+          campus_id: s.campus_id,
+          class_id: s.class_id,
+          section_id: s.section_id,
+          segment_id: s.classes?.segment_id ?? null,
+        }) &&
+        !!(await this.prisma.students.findFirst({ where: applyStudentScope(user, { cc }), select: { cc: true } }));
+      if (!ok) throw notFound();
+      return;
+    }
+    const leftover = await this.prisma.unconfirmed_admissions.findUnique({
+      where: { id: cc },
+      select: { campus_id: true },
+    });
+    if (leftover && !this.scope.canSeeStudent(user, { campus_id: leftover.campus_id ?? null })) throw notFound();
+  }
+
+  async registerAdmission(dto: CreateAdmissionDto, changedBy: string, user?: IJwtStaffPayload) {
+    // The placement being registered into must be inside the caller's scope,
+    // and a caller with a restricted campus dimension must name a campus.
+    if (user) {
+      const a = dto.admission;
+      this.scope.assertCampus(user, a?.campus_id ?? null);
+      if (user.campusId != null && a?.campus_id != null && a.campus_id !== user.campusId) {
+        throw new ForbiddenException('You do not have access to this campus');
+      }
+      if (a?.class_id) this.scope.assertClass(user, a.class_id);
+      if (a?.section_id) this.scope.assertSection(user, a.section_id);
+      if (dto.existing_cc) await this.assertCcVisible(dto.existing_cc, user);
+    }
     const student = await this.prisma.$transaction(async (tx) => {
       // ── 0. If completing an existing Quick Admission, validate it ─────────
       let existingQuickStudent: { cc: number; family_id: number | null } | null = null;
@@ -253,6 +301,9 @@ export class IdentityService {
           classId = matchedClass.id;
         }
       }
+      // A class resolved from the requested grade is a placement the caller
+      // must be allowed to make too.
+      if (user && classId) this.scope.assertClass(user, classId);
 
       const studentData = {
         gr_number: legacyGr ?? dto.gr_number,
@@ -496,7 +547,8 @@ export class IdentityService {
     return student;
   }
 
-  async submitAdmissionForm(dto: SubmitAdmissionFormDto) {
+  async submitAdmissionForm(dto: SubmitAdmissionFormDto, user?: IJwtStaffPayload) {
+    await this.assertCcVisible(dto.cc, user);
     const student = await this.prisma.$transaction(
       async (tx) => {
         // 1. Find existing student (quick-reg now creates students with QUICK_ADMISSION)
@@ -763,10 +815,11 @@ export class IdentityService {
     return student;
   }
 
-  async getAdmissionByCC(cc: number) {
+  async getAdmissionByCC(cc: number, user?: IJwtStaffPayload) {
     if (!cc) {
       throw new NotFoundException('Admission not found for empty CC');
     }
+    await this.assertCcVisible(cc, user);
 
     const student = await this.prisma.students.findFirst({
       where: {
