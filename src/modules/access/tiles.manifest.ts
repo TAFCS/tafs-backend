@@ -568,6 +568,14 @@ const BANKS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a bank account', implies: ['view'] },
 ];
 
+const FAMILIES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Family Directory', description: 'See the family list, search it, view stats, and open family records', default: true },
+
+  { id: 'create', label: 'Create a family', description: 'Create a household manually or initialize from a student', implies: ['view'] },
+  { id: 'edit', label: 'Edit family details', description: 'Household name, primary address, email and parent portal password', implies: ['view'] },
+  { id: 'assign_student', label: 'Move / assign students', description: 'Assign or transfer students into a family household', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -576,12 +584,12 @@ const BANKS_ACTIONS: TileAction[] = [
  * without a frontend deploy.
  */
 export const TILES_MANIFEST: TileManifestEntry[] = [
-  // ?? Student & Profiling ??????????????????????????????????????????????????
+  // ── Student & Profiling ──────────────────────────────────────────────────
   { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'] },
   { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'] },
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
-  { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'] },
+  { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'], actions: FAMILIES_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'] },
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },
   { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'], actions: ACADEMIC_ACTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.bulk_promote.execute'] },

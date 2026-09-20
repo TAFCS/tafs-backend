@@ -11,7 +11,8 @@ import { CreateFamilyDto } from './dto/create-family.dto';
 import { UpdateFamilyDto } from './dto/update-family.dto';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
-
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 @Injectable()
@@ -19,17 +20,32 @@ export class FamiliesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) { }
 
-  // ── List (paginated + search) ─────────────────────────────────────────────
+  // ── List (paginated + search + scope) ─────────────────────────────────────
 
-  async listFamilies(query: QueryFamiliesDto) {
+  async listFamilies(query: QueryFamiliesDto, user?: IJwtStaffPayload) {
     const { page = 1, limit = 10, search } = query;
     const offset = calculateOffset(page, limit);
 
+    const studentScope = user ? this.scope.whereForStudents(user) : {};
+    const hasScope = Object.keys(studentScope).length > 0;
+    const scopeCondition = hasScope
+      ? {
+          students: {
+            some: {
+              deleted_at: null,
+              ...studentScope,
+            },
+          },
+        }
+      : {};
+
     const isNumeric = search && /^\d+$/.test(search);
-    const where = {
+    const where: any = {
       deleted_at: null,
+      ...(hasScope ? scopeCondition : {}),
       ...(search
         ? {
           OR: [
@@ -38,14 +54,15 @@ export class FamiliesService {
             { legacy_pid: { contains: search, mode: 'insensitive' as const } },
             ...(isNumeric ? [{ id: Number(search) }] : []),
             // Search by sibling CC (if numeric)
-            ...(isNumeric ? [{ students: { some: { cc: Number(search), deleted_at: null } } }] : []),
+            ...(isNumeric ? [{ students: { some: { cc: Number(search), deleted_at: null, ...(hasScope ? studentScope : {}) } } }] : []),
             // Search by sibling GR Number
-            { students: { some: { gr_number: { contains: search, mode: 'insensitive' as const }, deleted_at: null } } },
+            { students: { some: { gr_number: { contains: search, mode: 'insensitive' as const }, deleted_at: null, ...(hasScope ? studentScope : {}) } } },
             // Search by guardian CNIC  →  families → students → student_guardians → guardians
             {
               students: {
                 some: {
                   deleted_at: null,
+                  ...(hasScope ? studentScope : {}),
                   student_guardians: {
                     some: {
                       guardians: {
@@ -75,7 +92,7 @@ export class FamiliesService {
           legacy_pid: true,
           created_at: true,
           students: {
-            where: { deleted_at: null },
+            where: { deleted_at: null, ...(hasScope ? studentScope : {}) },
             select: {
               cc: true,
               full_name: true,
@@ -122,18 +139,31 @@ export class FamiliesService {
 
   // ── Stats ─────────────────────────────────────────────────────────────────
 
-  async getFamilyStats() {
+  async getFamilyStats(user?: IJwtStaffPayload) {
+    const studentScope = user ? this.scope.whereForStudents(user) : {};
+    const hasScope = Object.keys(studentScope).length > 0;
+    const scopeCondition = hasScope
+      ? {
+          students: {
+            some: {
+              deleted_at: null,
+              ...studentScope,
+            },
+          },
+        }
+      : {};
+
     const [total, activeWithChildren, withCredentials, kidsInCredentialedFamilies] =
       await this.prisma.$transaction([
         // Total non-deleted families
         this.prisma.families.count({
-          where: { deleted_at: null },
+          where: { deleted_at: null, ...scopeCondition },
         }),
         // Families with at least one currently-enrolled (active) child
         this.prisma.families.count({
           where: {
             deleted_at: null,
-            students: { some: { deleted_at: null, status: 'ENROLLED' } },
+            students: { some: { deleted_at: null, status: 'ENROLLED', ...(hasScope ? studentScope : {}) } },
           },
         }),
         // Families that have set both an email and an app password
@@ -142,6 +172,7 @@ export class FamiliesService {
             deleted_at: null,
             email: { not: null },
             password_hash: { not: null },
+            ...scopeCondition,
           },
         }),
         // Enrolled students belonging to families with credentials set
@@ -149,10 +180,12 @@ export class FamiliesService {
           where: {
             deleted_at: null,
             status: 'ENROLLED',
+            ...(hasScope ? studentScope : {}),
             families: {
               deleted_at: null,
               email: { not: null },
               password_hash: { not: null },
+              ...scopeCondition,
             },
           },
         }),
@@ -163,7 +196,7 @@ export class FamiliesService {
 
   // ── Get one (with students + guardians) ───────────────────────────────────
 
-  async getFamilyById(id: number) {
+  async getFamilyById(id: number, user?: IJwtStaffPayload) {
     const family = await this.prisma.families.findFirst({
       where: { id, deleted_at: null },
       include: {
@@ -175,6 +208,10 @@ export class FamiliesService {
             gr_number: true,
             status: true,
             photograph_url: true,
+            campus_id: true,
+            class_id: true,
+            section_id: true,
+            classes: { select: { segment_id: true } },
             campuses: { select: { campus_name: true, campus_code: true } },
           },
         },
@@ -183,6 +220,20 @@ export class FamiliesService {
     });
 
     if (!family) throw new NotFoundException(`Family #${id} not found`);
+
+    if (user && !this.scope.isExempt(user)) {
+      const canSee = family.students.length > 0 && family.students.some((s) =>
+        this.scope.canSeeStudent(user, {
+          campus_id: s.campus_id,
+          class_id: s.class_id,
+          section_id: s.section_id,
+          segment_id: s.classes?.segment_id,
+        }),
+      );
+      if (!canSee) {
+        throw new NotFoundException(`Family #${id} not found`);
+      }
+    }
 
     // Collect guardian info via student_guardians junction
     const studentIds = family.students.map((s) => s.cc);
@@ -237,7 +288,8 @@ export class FamiliesService {
 
   // ── Create ────────────────────────────────────────────────────────────────
 
-  async createFamily(dto: CreateFamilyDto, changedBy?: string) {
+  async createFamily(dto: CreateFamilyDto, user?: IJwtStaffPayload | string) {
+    const changedBy = typeof user === 'string' ? user : user?.username ?? 'system';
     const password_hash = dto.password
       ? await bcrypt.hash(dto.password, 10)
       : null;
@@ -272,7 +324,7 @@ export class FamiliesService {
       entity_id: String(family.id),
       action: 'CREATED',
       new_value: family.household_name,
-      changed_by: changedBy ?? 'system',
+      changed_by: changedBy,
       note: noteParts.join(' | '),
     });
 
@@ -281,8 +333,10 @@ export class FamiliesService {
 
   // ── Update ────────────────────────────────────────────────────────────────
 
-  async updateFamily(id: number, dto: UpdateFamilyDto, changedBy?: string) {
-    const before = await this._assertExists(id);
+  async updateFamily(id: number, dto: UpdateFamilyDto, user?: IJwtStaffPayload | string) {
+    const userPayload = typeof user === 'object' ? user : undefined;
+    const changedBy = typeof user === 'string' ? user : user?.username ?? 'system';
+    const before = await this._assertFamilyInScope(id, userPayload);
 
     let password_hash: string | null | undefined = undefined;
     if (dto.password !== undefined) {
@@ -339,7 +393,7 @@ export class FamiliesService {
       entity_type: 'FAMILY',
       entity_id: String(id),
       action: 'UPDATED',
-      changed_by: changedBy ?? 'system',
+      changed_by: changedBy,
       note: fieldChanges.length > 0
         ? `Family #${id} ("${before.household_name}") updated: ${fieldChanges.join(', ')}.`
         : `Family #${id} ("${before.household_name}") update submitted with no effective changes.`,
@@ -350,19 +404,59 @@ export class FamiliesService {
 
   // ── Assign child to family ────────────────────────────────────────────────
 
-  async assignChildToFamily(familyId: number, studentId: number, changedBy: string) {
+  async assignChildToFamily(familyId: number, studentId: number, user?: IJwtStaffPayload | string) {
+    const userPayload = typeof user === 'object' ? user : undefined;
+    const changedBy = typeof user === 'string' ? user : user?.username ?? 'system';
+
     const [family, student] = await Promise.all([
       this.prisma.families.findFirst({
         where: { id: familyId, deleted_at: null },
-        include: { students: { where: { deleted_at: null }, take: 1 } },
+        include: {
+          students: {
+            where: { deleted_at: null },
+            select: {
+              cc: true,
+              full_name: true,
+              campus_id: true,
+              class_id: true,
+              section_id: true,
+              classes: { select: { segment_id: true } },
+            },
+          },
+        },
       }),
       this.prisma.students.findFirst({
         where: { cc: studentId, deleted_at: null },
+        include: {
+          classes: { select: { segment_id: true } },
+        },
       }),
     ]);
 
     if (!family) throw new NotFoundException(`Family #${familyId} not found`);
     if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+
+    if (userPayload && !this.scope.isExempt(userPayload)) {
+      if (!this.scope.canSeeStudent(userPayload, {
+        campus_id: student.campus_id,
+        class_id: student.class_id,
+        section_id: student.section_id,
+        segment_id: student.classes?.segment_id,
+      })) {
+        throw new NotFoundException(`Student #${studentId} not found`);
+      }
+
+      if (family.students.length > 0 && !family.students.some((s) =>
+        this.scope.canSeeStudent(userPayload, {
+          campus_id: s.campus_id,
+          class_id: s.class_id,
+          section_id: s.section_id,
+          segment_id: s.classes?.segment_id,
+        }),
+      )) {
+        throw new NotFoundException(`Family #${familyId} not found`);
+      }
+    }
 
     if (student.family_id === familyId) {
       throw new ConflictException(
@@ -435,7 +529,6 @@ export class FamiliesService {
 
         if (match && match.guardian_id !== iSG.guardian_id) {
           // Sync point: The incoming student's parent is already in the family under a different ID (or we want to converge to one)
-          // Actually, if it's a match, we should update the student_guardian link to point to the family's canonical guardian ID
           await tx.student_guardians.update({
             where: { student_id_guardian_id: { student_id: studentId, guardian_id: iSG.guardian_id } },
             data: { guardian_id: match.guardian_id }
@@ -491,10 +584,14 @@ export class FamiliesService {
     return updated;
   }
 
-  async initializeFamilyFromStudent(studentId: number, changedBy?: string) {
+  async initializeFamilyFromStudent(studentId: number, user?: IJwtStaffPayload | string) {
+    const userPayload = typeof user === 'object' ? user : undefined;
+    const changedBy = typeof user === 'string' ? user : user?.username ?? 'system';
+
     const student = await this.prisma.students.findFirst({
       where: { cc: studentId, deleted_at: null },
       include: {
+        classes: { select: { segment_id: true } },
         student_guardians: {
           include: { guardians: true },
           where: { is_primary_contact: true },
@@ -503,6 +600,18 @@ export class FamiliesService {
     });
 
     if (!student) throw new NotFoundException(`Student #${studentId} not found`);
+
+    if (userPayload && !this.scope.isExempt(userPayload)) {
+      if (!this.scope.canSeeStudent(userPayload, {
+        campus_id: student.campus_id,
+        class_id: student.class_id,
+        section_id: student.section_id,
+        segment_id: student.classes?.segment_id,
+      })) {
+        throw new NotFoundException(`Student #${studentId} not found`);
+      }
+    }
+
     if (student.family_id) {
       throw new ConflictException(`Student #${studentId} already has a family assigned`);
     }
@@ -549,7 +658,7 @@ export class FamiliesService {
       entity_id: String(result.id),
       action: 'CREATED',
       new_value: householdName,
-      changed_by: changedBy ?? 'system',
+      changed_by: changedBy,
       student_id: studentId,
       note: `Initialized family #${result.id} ("${householdName}") from student #${studentId} (${student.full_name ?? 'unnamed'})` +
         (primaryGuardian?.full_name ? ` via primary guardian ${primaryGuardian.full_name}` : '') +
@@ -561,16 +670,33 @@ export class FamiliesService {
 
   // ── Remove child from family ──────────────────────────────────────────────
 
-  async removeChildFromFamily(familyId: number, studentId: number) {
-    await this._assertExists(familyId);
+  async removeChildFromFamily(familyId: number, studentId: number, user?: IJwtStaffPayload | string) {
+    const userPayload = typeof user === 'object' ? user : undefined;
+    await this._assertFamilyInScope(familyId, userPayload);
 
     const student = await this.prisma.students.findFirst({
       where: { cc: studentId, deleted_at: null, family_id: familyId },
+      include: {
+        classes: { select: { segment_id: true } },
+      },
     });
     if (!student) {
       throw new NotFoundException(
         `Student #${studentId} not found in family #${familyId}`,
       );
+    }
+
+    if (userPayload && !this.scope.isExempt(userPayload)) {
+      if (!this.scope.canSeeStudent(userPayload, {
+        campus_id: student.campus_id,
+        class_id: student.class_id,
+        section_id: student.section_id,
+        segment_id: student.classes?.segment_id,
+      })) {
+        throw new NotFoundException(
+          `Student #${studentId} not found in family #${familyId}`,
+        );
+      }
     }
 
     // family_id is a required non-nullable FK — we cannot null it out.
@@ -583,11 +709,39 @@ export class FamiliesService {
 
   // ── Internal helpers ──────────────────────────────────────────────────────
 
-  private async _assertExists(id: number) {
+  private async _assertFamilyInScope(id: number, user?: IJwtStaffPayload) {
     const family = await this.prisma.families.findFirst({
       where: { id, deleted_at: null },
+      include: {
+        students: {
+          where: { deleted_at: null },
+          select: {
+            cc: true,
+            campus_id: true,
+            class_id: true,
+            section_id: true,
+            classes: { select: { segment_id: true } },
+          },
+        },
+      },
     });
     if (!family) throw new NotFoundException(`Family #${id} not found`);
+
+    if (user && !this.scope.isExempt(user)) {
+      const canSee = family.students.length > 0 && family.students.some((s) =>
+        this.scope.canSeeStudent(user, {
+          campus_id: s.campus_id,
+          class_id: s.class_id,
+          section_id: s.section_id,
+          segment_id: s.classes?.segment_id,
+        }),
+      );
+      if (!canSee) {
+        throw new NotFoundException(`Family #${id} not found`);
+      }
+    }
+
     return family;
   }
 }
+

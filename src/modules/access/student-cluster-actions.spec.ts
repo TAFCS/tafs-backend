@@ -14,6 +14,8 @@ import { EnrollmentService } from '../enrollments/enrollment.service';
 import { HouseBalancerController } from '../house-balancer/house-balancer.controller';
 import { HouseBalancerService } from '../house-balancer/house-balancer.service';
 import { StudentsController } from '../students/students.controller';
+import { FamiliesController } from '../families/families.controller';
+import { FamiliesService } from '../families/families.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
@@ -303,3 +305,110 @@ describe('Enrollments', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
+
+describe('Families', () => {
+  const t = tile('student.families');
+
+  it('is bridged from students.families.edit, so a view-only role loses only writes/mutations', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual(['students.families.edit']);
+    const viewOnly = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.PRINCIPAL,
+      roleKeys: ['students.families.view'],
+    });
+    expect(viewOnly.actionIds.filter((k) => k.startsWith('student.families#'))).toEqual([
+      actionKey('student.families', 'view'),
+    ]);
+    const admin = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['students.families.view', 'students.families.edit'],
+    });
+    for (const a of t.actions!) expect(admin.actionIds).toContain(actionKey('student.families', a.id));
+  });
+
+  it('puts mutations on their own actions and lists/reads on view', () => {
+    const p = FamiliesController.prototype;
+    expect(meta(p, 'listFamilies')?.actionKeys).toEqual([actionKey('student.families', 'view')]);
+    expect(meta(p, 'getFamilyStats')?.actionKeys).toEqual([actionKey('student.families', 'view')]);
+    expect(meta(p, 'getFamilyById')?.actionKeys).toEqual([actionKey('student.families', 'view')]);
+    expect(meta(p, 'createFamily')?.actionKeys).toEqual([actionKey('student.families', 'create')]);
+    expect(meta(p, 'initializeFromStudent')?.actionKeys).toEqual([actionKey('student.families', 'create')]);
+    expect(meta(p, 'updateFamily')?.actionKeys).toEqual([actionKey('student.families', 'edit')]);
+    expect(meta(p, 'assignChild')?.actionKeys).toEqual([actionKey('student.families', 'assign_student')]);
+    expect(meta(p, 'removeChild')?.actionKeys).toEqual([actionKey('student.families', 'assign_student')]);
+    keysExist([
+      'student.families#view',
+      'student.families#create',
+      'student.families#edit',
+      'student.families#assign_student',
+    ]);
+    const guards: unknown[] = Reflect.getMetadata('__guards__', FamiliesController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+  });
+
+  function svc(opts: { family?: unknown; student?: unknown; canSee?: boolean }) {
+    const prisma = {
+      families: {
+        findFirst: jest.fn().mockResolvedValue(opts.family ?? null),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn().mockResolvedValue({ id: 1, household_name: 'Test Fam' }),
+        update: jest.fn().mockResolvedValue({ id: 1, household_name: 'Updated Fam' }),
+      },
+      students: {
+        findFirst: jest.fn().mockResolvedValue(opts.student ?? null),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        update: jest.fn(),
+      },
+      student_guardians: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      audit_logs: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((cb) => (typeof cb === 'function' ? cb(prisma) : Promise.all(cb))),
+    };
+    const scope = {
+      isExempt: jest.fn().mockReturnValue(false),
+      canSeeStudent: jest.fn().mockReturnValue(opts.canSee ?? true),
+      whereForStudents: jest.fn().mockReturnValue({ campus_id: { in: [3] } }),
+    };
+    const auditLogs = { log: jest.fn() };
+    const s = new FamiliesService(prisma as any, auditLogs as any, scope as any);
+    return { s, prisma, scope };
+  }
+
+  const famWithStudent = {
+    id: 1,
+    household_name: 'Test Fam',
+    students: [{ cc: 1, campus_id: 1, class_id: 3, section_id: 4, classes: { segment_id: 1 } }],
+  };
+
+  it('narrows listFamilies and getFamilyStats to caller student scope', async () => {
+    const { s, prisma } = svc({});
+    await s.listFamilies({ page: 1, limit: 10 }, scopedUser);
+    const findWhere = prisma.families.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(findWhere.students.some)).toContain('"campus_id":{"in":[3]}');
+
+    await s.getFamilyStats(scopedUser);
+    const countWhere = prisma.families.count.mock.calls[0][0].where;
+    expect(JSON.stringify(countWhere.students.some)).toContain('"campus_id":{"in":[3]}');
+  });
+
+  it('404s an out-of-scope family on getFamilyById and updateFamily', async () => {
+    const { s } = svc({ family: famWithStudent, canSee: false });
+    await expect(s.getFamilyById(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.updateFamily(1, { household_name: 'New' }, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('404s out-of-scope assignments and student initializations', async () => {
+    const { s } = svc({
+      family: famWithStudent,
+      student: { cc: 2, campus_id: 2, class_id: 1, section_id: 1 },
+      canSee: false,
+    });
+    await expect(s.assignChildToFamily(1, 2, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.initializeFamilyFromStudent(2, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+

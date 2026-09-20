@@ -19,14 +19,15 @@ import { UpdateFamilyDto } from './dto/update-family.dto';
 import { AssignStudentDto } from './dto/assign-student.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
-
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('families')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class FamiliesController {
   constructor(private readonly familiesService: FamiliesService) {}
 
@@ -34,8 +35,12 @@ export class FamiliesController {
   @Get()
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
-  async listFamilies(@Query() query: QueryFamiliesDto) {
-    const result = await this.familiesService.listFamilies(query);
+  @RequireAction('student.families#view')
+  async listFamilies(
+    @Query() query: QueryFamiliesDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const result = await this.familiesService.listFamilies(query, user);
     return {
       success: true,
       message: 'Families fetched successfully',
@@ -48,8 +53,9 @@ export class FamiliesController {
   @Get('stats')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
-  async getFamilyStats() {
-    const stats = await this.familiesService.getFamilyStats();
+  @RequireAction('student.families#view')
+  async getFamilyStats(@CurrentUser() user: IJwtStaffPayload) {
+    const stats = await this.familiesService.getFamilyStats(user);
     return {
       success: true,
       message: 'Family stats fetched successfully',
@@ -61,8 +67,12 @@ export class FamiliesController {
   @Get(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
-  async getFamilyById(@Param('id', ParseIntPipe) id: number) {
-    const family = await this.familiesService.getFamilyById(id);
+  @RequireAction('student.families#view')
+  async getFamilyById(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const family = await this.familiesService.getFamilyById(id, user);
     return {
       success: true,
       message: 'Family fetched successfully',
@@ -74,11 +84,12 @@ export class FamiliesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Family'))
+  @RequireAction('student.families#create')
   async createFamily(
     @Body() dto: CreateFamilyDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const family = await this.familiesService.createFamily(dto, user.username);
+    const family = await this.familiesService.createFamily(dto, user);
     return {
       success: true,
       message: 'Family created successfully',
@@ -90,12 +101,13 @@ export class FamiliesController {
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Family'))
+  @RequireAction('student.families#edit')
   async updateFamily(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateFamilyDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const family = await this.familiesService.updateFamily(id, dto, user.username);
+    const family = await this.familiesService.updateFamily(id, dto, user);
     return {
       success: true,
       message: 'Family updated successfully',
@@ -107,6 +119,7 @@ export class FamiliesController {
   @Post(':id/assign-child')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Family'))
+  @RequireAction('student.families#assign_student')
   async assignChild(
     @Param('id', ParseIntPipe) familyId: number,
     @Body() dto: AssignStudentDto,
@@ -117,7 +130,7 @@ export class FamiliesController {
     const student = await this.familiesService.assignChildToFamily(
       familyId,
       dto.student_id,
-      user.username,
+      user,
     );
     return {
       success: true,
@@ -130,11 +143,12 @@ export class FamiliesController {
   @Post('from-student/:studentId')
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Family'))
+  @RequireAction('student.families#create')
   async initializeFromStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.familiesService.initializeFamilyFromStudent(studentId, user.username);
+    const student = await this.familiesService.initializeFamilyFromStudent(studentId, user);
     return {
       success: true,
       message: 'Family initialized successfully from student data',
@@ -146,14 +160,17 @@ export class FamiliesController {
   @Delete(':id/students/:studentId')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Family'))
+  @RequireAction('student.families#assign_student')
   async removeChild(
     @Param('id', ParseIntPipe) familyId: number,
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    await this.familiesService.removeChildFromFamily(familyId, studentId);
+    await this.familiesService.removeChildFromFamily(familyId, studentId, user);
     return {
       success: true,
       message: `Student #${studentId} removed from family #${familyId}`,
     };
   }
 }
+
