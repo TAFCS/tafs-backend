@@ -10,6 +10,11 @@ import { ClassAttendanceModesController } from '../hr/class-attendance-modes/cla
 import { SaturdaySchedulesService } from '../hr/saturday-schedules/saturday-schedules.service';
 import { ShiftOverridesService } from '../hr/shift-overrides/shift-overrides.service';
 import { ForbiddenException } from '@nestjs/common';
+import { StudentAttendanceController } from '../attendance/student-attendance.controller';
+import { RollSessionsController } from '../attendance/roll-sessions.controller';
+import { ZkAttendanceMappingController } from '../attendance/zk-attendance-mapping.controller';
+import { ZkScanResolutionController } from '../attendance/zk-scan-resolution.controller';
+import { ZkLogsController } from '../attendance/zk-push.controller';
 import { TimetablesController } from '../timetables/timetables.controller';
 import { SubjectsController } from '../timetables/subjects.controller';
 import { TeachingGroupsController } from '../timetables/teaching-groups.controller';
@@ -789,3 +794,152 @@ describe('Scope on the policy tiles', () => {
   });
 });
 
+
+// ── Student attendance tiles, Quick Check-In, A-Level Roll Call ───────────────
+describe('Student attendance tiles', () => {
+  const STUDENT_TILES = [
+    'attendance.student_attendance',
+    'attendance.student_attendance_cycle',
+    'attendance.quick_check_in',
+    'attendance.alevel_roll_call',
+  ];
+
+  it.each(STUDENT_TILES)('%s bridges from rollcall.mark and has one default action', (id) => {
+    const t = tile(id);
+    expect(t.legacyFullAccessCapabilities).toEqual(['attendance.student.rollcall.mark']);
+    expect(t.actions!.filter((a) => a.default).map((a) => a.id)).toEqual(['view']);
+    const holder = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.TEACHER,
+      roleKeys: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'],
+    });
+    for (const a of t.actions!) expect(holder.actionIds).toContain(actionKey(id, a.id));
+    const other = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, roleKeys: ['attendance.self.view'] });
+    expect(other.tileIds).not.toContain(id);
+  });
+
+  it('gates every student-attendance route, each on the tile whose page calls it', () => {
+    const p = StudentAttendanceController.prototype;
+    for (const h of ['getSummary', 'getDashboard', 'getTimeline']) {
+      expect(meta(p, h)?.actionKeys).toEqual([actionKey('attendance.student_attendance', 'view')]);
+    }
+    expect(meta(p, 'bulkManualMark')?.actionKeys).toEqual([actionKey('attendance.student_attendance', 'mark')]);
+    expect(meta(p, 'resolveAttendance')?.actionKeys).toEqual([actionKey('attendance.student_attendance', 'resolve')]);
+    expect(meta(p, 'getAttendanceMatrix')?.actionKeys).toEqual([actionKey('attendance.student_attendance_cycle', 'view')]);
+    expect(meta(p, 'exportAttendanceMatrix')?.actionKeys).toEqual([actionKey('attendance.student_attendance_cycle', 'export')]);
+    expect(meta(p, 'getQuickCheckState')?.actionKeys).toEqual([actionKey('attendance.quick_check_in', 'view')]);
+    expect(meta(p, 'manualScan')?.actionKeys).toEqual([actionKey('attendance.quick_check_in', 'scan')]);
+    assertEveryRouteAccountedFor(StudentAttendanceController, {});
+    const guards: unknown[] = Reflect.getMetadata('__guards__', StudentAttendanceController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+    keysExist(['getSummary', 'bulkManualMark', 'resolveAttendance', 'getAttendanceMatrix', 'exportAttendanceMatrix', 'getQuickCheckState', 'manualScan'].flatMap((h) => meta(p, h)!.actionKeys));
+  });
+
+  it('keeps the roll-session routes open to the Timetables page that shares them, and skip to A-Level Roll Call alone', () => {
+    const p = RollSessionsController.prototype;
+    for (const h of ['findAll', 'findOne']) {
+      expect(meta(p, h)?.actionKeys).toEqual(['attendance.alevel_roll_call#view', 'attendance.timetables#view']);
+    }
+    for (const h of ['create', 'update', 'revert']) {
+      expect(meta(p, h)?.actionKeys).toEqual(['attendance.alevel_roll_call#mark', 'attendance.timetables#view']);
+    }
+    expect(meta(p, 'skip')?.actionKeys).toEqual([actionKey('attendance.alevel_roll_call', 'skip')]);
+    assertEveryRouteAccountedFor(RollSessionsController, {});
+    keysExist(['findAll', 'create', 'skip'].flatMap((h) => meta(p, h)!.actionKeys));
+  });
+
+  it('lets a holder of ONLY the Timetables tile reach the shared roll-session routes', () => {
+    const r = computeEffectiveAccess({ ...base, role: StaffRole.CAMPUS_ADMIN, roleKeys: ['hr.timetable.view', 'hr.timetable.manage'] });
+    const held = new Set(r.actionIds);
+    expect(r.tileIds).not.toContain('attendance.alevel_roll_call');
+    for (const h of ['findAll', 'create']) {
+      expect(meta(RollSessionsController.prototype, h)!.actionKeys.some((k) => held.has(k))).toBe(true);
+    }
+  });
+});
+
+describe('ZK Device Logs', () => {
+  const t = tile('attendance.zk_device_logs');
+  const Z = 'attendance.zk_device_logs';
+
+  // These routes were locked to SUPER_ADMIN by raw role checks; the tile's
+  // capability is system.permissions.manage, so a bridge would hand them to every
+  // holder of that capability.
+  it('has NO legacy bridge and one default action', () => {
+    expect(t.legacyFullAccessCapabilities).toBeUndefined();
+    expect(t.actions!.filter((a) => a.default).map((a) => a.id)).toEqual(['view']);
+    const holder = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, roleKeys: ['system.permissions.manage'] });
+    expect(holder.tileIds).toContain(Z);
+    expect(holder.actionIds.filter((k) => k.startsWith(`${Z}#`))).toEqual([actionKey(Z, 'view')]);
+    const sa = computeEffectiveAccess({ ...base, role: StaffRole.SUPER_ADMIN });
+    for (const a of t.actions!) expect(sa.actionIds).toContain(actionKey(Z, a.id));
+  });
+
+  it('no longer hard-codes a SUPER_ADMIN check in any of the three controllers', () => {
+    expect((ZkAttendanceMappingController.prototype as any).assertSuperAdmin).toBeUndefined();
+    expect((ZkScanResolutionController.prototype as any).assertSuperAdmin).toBeUndefined();
+  });
+
+  it('gates the global mapping routes and leaves per-person create / edit to the directories', () => {
+    const p = ZkAttendanceMappingController.prototype;
+    for (const h of ['collisionCheck', 'pinLookup', 'getUnmapped']) expect(meta(p, h)?.actionKeys).toEqual([actionKey(Z, 'mappings.view')]);
+    expect(meta(p, 'simulateScan')?.actionKeys).toEqual([actionKey(Z, 'simulate')]);
+    expect(meta(p, 'deleteMapping')?.actionKeys).toEqual([actionKey(Z, 'mappings.delete')]);
+    for (const h of ['createMapping', 'updateMapping', 'getMappings']) expect(meta(p, h)).toBeUndefined();
+    const guards: unknown[] = Reflect.getMetadata('__guards__', ZkAttendanceMappingController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+  });
+
+  it('gates every scan-resolution route and the device log', () => {
+    const p = ZkScanResolutionController.prototype;
+    for (const h of ['resolve', 'previewLink', 'previewUnlink']) expect(meta(p, h)?.actionKeys).toEqual([actionKey(Z, 'resolve')]);
+    expect(meta(p, 'drift')?.actionKeys).toEqual([actionKey(Z, 'mappings.view')]);
+    assertEveryRouteAccountedFor(ZkScanResolutionController, {});
+    expect(meta(ZkLogsController.prototype, 'getLogs')?.actionKeys).toEqual([actionKey(Z, 'view')]);
+    keysExist(['resolve', 'drift'].flatMap((h) => meta(p, h)!.actionKeys).concat(meta(ZkLogsController.prototype, 'getLogs')!.actionKeys));
+  });
+
+  describe('routes that reach every campus need an unrestricted caller', () => {
+    const scope = new ScopeService({} as any);
+    const user = (role: string, extra: Record<string, unknown> = {}) =>
+      ({ sub: 'u', role, campusId: null, allowedClassIds: [], userType: 'STAFF', permissions: [], actions: [Z + '#*'],
+         scope: { campuses: [], segments: [], classes: [], sections: [], departments: [], staffCategories: [] }, ...extra }) as any;
+    const scoped = user('PRINCIPAL', { scope: { campuses: [3], segments: [], classes: [], sections: [], departments: [], staffCategories: [] } });
+    const legacy = user('PRINCIPAL', { campusId: 3 });
+
+    it('the device log', async () => {
+      const zk: any = { getLogs: jest.fn().mockResolvedValue({ logs: [], nextCursor: null }), getDistinctDevices: jest.fn().mockResolvedValue([]) };
+      const c = new ZkLogsController(zk, {} as any, scope);
+      await expect(c.getLogs({} as any, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.getLogs({} as any, legacy)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(zk.getLogs).not.toHaveBeenCalled();
+      await expect(c.getLogs({} as any, user('PRINCIPAL'))).resolves.toBeDefined();
+      await expect(c.getLogs({} as any, user('SUPER_ADMIN'))).resolves.toBeDefined();
+    });
+
+    it('listing every mapping, pin lookup, unmapped pins and delete; one person\'s mappings stay open', async () => {
+      const svc: any = { getMappings: jest.fn().mockResolvedValue([]), getUnmappedPins: jest.fn().mockResolvedValue([]), lookupPin: jest.fn(), deleteMapping: jest.fn() };
+      const c = new ZkAttendanceMappingController(svc, scope);
+      await expect(c.getMappings(undefined, undefined, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      // without the ZK action, even an unrestricted caller cannot list them all
+      await expect(c.getMappings(undefined, undefined, user('PRINCIPAL', { actions: [] }))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.getMappings(undefined, undefined, user('PRINCIPAL'))).resolves.toBeDefined();
+      await expect(c.getMappings(undefined, undefined, user('SUPER_ADMIN', { actions: [] }))).resolves.toBeDefined();
+      // ONE person's mappings: the directories' path, unchanged, for anyone
+      await expect(c.getMappings('5', undefined, scoped)).resolves.toBeDefined();
+      await expect(c.getUnmapped(scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.pinLookup('1', undefined, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.deleteMapping(1, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(svc.deleteMapping).not.toHaveBeenCalled();
+    });
+
+    it('scan resolution', async () => {
+      const res: any = { resolve: jest.fn(), previewLink: jest.fn(), previewUnlink: jest.fn(), drift: jest.fn() };
+      const c = new ZkScanResolutionController(res, scope);
+      await expect(c.resolve({} as any, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.previewLink({} as any, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(c.previewUnlink({} as any, scoped)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(res.resolve).not.toHaveBeenCalled();
+    });
+  });
+});

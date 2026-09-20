@@ -13,6 +13,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
@@ -26,15 +28,21 @@ import {
   UpdateRollSessionDto,
 } from './dto/roll-sessions.dto';
 
+// Roll sessions are used by the A-Level Roll Call page and by the roll-marking
+// mode of the Timetables page (useSlotAttendanceSession), so list / open /
+// create / update / revert accept either tile. `skip` is called only by the
+// A-Level Roll Call page. The policy check stays ANDed, so a Timetables viewer
+// still needs the roll-call capability to write.
 @ApiTags('Attendance Roll Sessions')
 @ApiBearerAuth()
 @Controller('attendance/roll-sessions')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class RollSessionsController {
   constructor(private readonly rollSessionsService: RollSessionsService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAnyAction('attendance.alevel_roll_call#view', 'attendance.timetables#view')
   async findAll(
     @Query() query: ListRollSessionsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -45,6 +53,7 @@ export class RollSessionsController {
 
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAnyAction('attendance.alevel_roll_call#view', 'attendance.timetables#view')
   async findOne(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -55,6 +64,7 @@ export class RollSessionsController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
+  @RequireAnyAction('attendance.alevel_roll_call#mark', 'attendance.timetables#view')
   async create(
     @Body() dto: CreateRollSessionDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -65,6 +75,7 @@ export class RollSessionsController {
 
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
+  @RequireAnyAction('attendance.alevel_roll_call#mark', 'attendance.timetables#view')
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateRollSessionDto,
@@ -82,6 +93,7 @@ export class RollSessionsController {
 
   @Post(':id/skip')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
+  @RequireAction('attendance.alevel_roll_call#skip')
   async skip(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: SkipRollSessionDto,
@@ -93,6 +105,7 @@ export class RollSessionsController {
 
   @Post(':id/revert')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
+  @RequireAnyAction('attendance.alevel_roll_call#mark', 'attendance.timetables#view')
   async revert(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,

@@ -3,6 +3,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
@@ -18,15 +20,21 @@ import {
   ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 
+// Route-shaped across three tiles: the Student Attendance page (summary, dashboard,
+// timeline, bulk mark, resolve), the Student Attendance by Cycle page (matrix and
+// its export) and the Quick Check-In page (state and scan). Each route is called
+// by exactly one of them. The policy check is unchanged and ANDed with the tile
+// action; scope was already enforced by the earlier scope sweep.
 @ApiTags('Attendance Students')
 @ApiBearerAuth()
 @Controller('attendance/students')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class StudentAttendanceController {
   constructor(private readonly studentAttendanceService: StudentAttendanceService) {}
 
   @Get('summary')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.student_attendance#view')
   async getSummary(
     @Query() query: GetStudentAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -37,6 +45,7 @@ export class StudentAttendanceController {
 
   @Get('dashboard')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.student_attendance#view')
   async getDashboard(
     @Query() query: GetStudentAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -48,6 +57,7 @@ export class StudentAttendanceController {
   /** Payroll-cycle-independent lines + punch matrix, mirroring HR payroll's attendance-matrix. Registered before `:studentCc/*` so it isn't swallowed by that param route. */
   @Get('matrix')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.student_attendance_cycle#view')
   async getAttendanceMatrix(
     @Query() query: GetStudentAttendanceMatrixQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -58,6 +68,7 @@ export class StudentAttendanceController {
 
   @Get('matrix/export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.student_attendance_cycle#export')
   async exportAttendanceMatrix(
     @Query() query: GetStudentAttendanceMatrixQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -74,6 +85,7 @@ export class StudentAttendanceController {
 
   @Get(':studentCc/timeline')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.student_attendance#view')
   async getTimeline(
     @Param('studentCc', ParseIntPipe) studentCc: number,
     @Query() query: GetStudentTimelineQueryDto,
@@ -86,6 +98,7 @@ export class StudentAttendanceController {
   /** Gate-desk panel: today's punch state for one student. */
   @Get(':studentCc/quick-check')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
+  @RequireAction('attendance.quick_check_in#view')
   async getQuickCheckState(
     @Param('studentCc', ParseIntPipe) studentCc: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -97,6 +110,7 @@ export class StudentAttendanceController {
   /** Gate-desk panel: record a check-in or check-out at the current time. */
   @Post(':studentCc/quick-check')
   @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  @RequireAction('attendance.quick_check_in#scan')
   async manualScan(
     @Param('studentCc', ParseIntPipe) studentCc: number,
     @Body() dto: ManualStudentScanDto,
@@ -112,6 +126,7 @@ export class StudentAttendanceController {
 
   @Put(':studentCc/resolve')
   @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  @RequireAction('attendance.student_attendance#resolve')
   async resolveAttendance(
     @Param('studentCc', ParseIntPipe) studentCc: number,
     @Body() dto: ResolveStudentAttendanceDto,
@@ -123,6 +138,7 @@ export class StudentAttendanceController {
 
   @Put('bulk-manual')
   @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
+  @RequireAction('attendance.student_attendance#mark')
   async bulkManualMark(
     @Body() dto: BulkManualStudentAttendanceDto,
     @CurrentUser() user: IJwtStaffPayload,

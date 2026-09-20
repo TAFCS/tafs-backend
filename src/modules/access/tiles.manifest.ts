@@ -579,6 +579,58 @@ const CLASS_MODES_ACTIONS: TileAction[] = [
   { id: 'manage', label: 'Set or clear a class\'s attendance mode', implies: ['view'] },
 ];
 
+// Student attendance tiles. Their routes carried only a policy check (Read /
+// Update on RollSession), so each of the four bridges from
+// attendance.student.rollcall.mark, which the tiles already require (every tile
+// here lists it), so nobody who holds a tile loses anything. Each route is called
+// by exactly one of Student Attendance, its Cycle view or Quick Check-In; the
+// roll-session routes are shared with the Timetables page's roll-marking mode.
+const STUDENT_ATTENDANCE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Student Attendance', description: 'See the summary, dashboard and a student\'s timeline', default: true },
+
+  { id: 'mark', label: 'Mark student attendance in bulk', implies: ['view'] },
+  { id: 'resolve', label: 'Resolve a student\'s attendance for a day', description: 'Overrides what the device recorded', implies: ['view'] },
+];
+
+const STUDENT_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Student Attendance by Cycle', description: 'See the cycle matrix', default: true },
+
+  { id: 'export', label: 'Export the cycle matrix', implies: ['view'] },
+];
+
+const QUICK_CHECK_IN_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Quick Check-In', description: 'Look a student up and see today\'s state', default: true },
+
+  { id: 'scan', label: 'Record a manual check-in or check-out', implies: ['view'] },
+];
+
+const ALEVEL_ROLL_CALL_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open A-Level Roll Call', description: 'See roll sessions', default: true },
+
+  { id: 'mark', label: 'Create, update and revert roll sessions', implies: ['view'] },
+  { id: 'skip', label: 'Skip a roll session', implies: ['view'] },
+];
+
+// ZK Device Logs. Every staff-facing route (the logs, the global mapping list,
+// pin lookup, unmapped pins, collision check, simulate-scan, deleting a mapping,
+// and all four scan-resolution routes) was locked to SUPER_ADMIN by a raw role
+// check, so none of it could be delegated. They now take these actions.
+// Deliberately NO legacy bridge: the tile's capability is
+// system.permissions.manage, so bridging would hand SUPER_ADMIN-only powers to
+// every holder of that capability. Creating or editing ONE person's mapping is
+// also done from the Employee and Student Directory biometric tabs, so those
+// routes keep their policy check and carry no action here. All of these reach
+// every campus at once, so they also need an unrestricted caller. The device
+// protocol endpoints (/iclock/*) are the hardware's own and are untouched.
+const ZK_DEVICE_LOGS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open ZK Device Logs', description: 'See the raw device push log', default: true },
+
+  { id: 'mappings.view', label: 'See device mappings and unmapped pins', description: 'The global mapping list, pin lookup, collision check and drift report', implies: ['view'] },
+  { id: 'mappings.delete', label: 'Delete a device mapping', description: 'Releases every scan the mapping owned and rebuilds daily attendance', implies: ['view'] },
+  { id: 'simulate', label: 'Simulate a scan', implies: ['view'] },
+  { id: 'resolve', label: 'Re-resolve scan attribution', description: 'Rebuilds who each scan belongs to; reaches every campus', implies: ['view'] },
+];
+
 // Timetables and Teaching Groups both list hr.timetable.view AND
 // hr.timetable.manage as their tile capabilities, so anyone who holds either
 // tile already holds the manage capability the routes' policy checks needed.
@@ -819,10 +871,10 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'], actions: EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage', 'hr.payroll.view'] },
   { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'], actions: OBJECTIONS_ACTIONS, legacyFullAccessCapabilities: ['hr.objections.review'] },
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'], actions: LEAVE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['hr.leave.approve'] },
-  { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
-  { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
-  { id: 'attendance.quick_check_in', module: 'attendance', label: 'Quick Check-In', description: 'Filter, search, and punch students in or out � including default absents', href: '/attendance/quick-check-in', group: 'Students', capabilities: ['attendance.student.rollcall.mark'] },
-  { id: 'attendance.alevel_roll_call', module: 'attendance', label: 'A-Level Roll Call', description: 'A-level section marking', href: '/hr/roll-call', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
+  { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
+  { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
+  { id: 'attendance.quick_check_in', module: 'attendance', label: 'Quick Check-In', description: 'Filter, search, and punch students in or out � including default absents', href: '/attendance/quick-check-in', group: 'Students', capabilities: ['attendance.student.rollcall.mark'], actions: QUICK_CHECK_IN_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
+  { id: 'attendance.alevel_roll_call', module: 'attendance', label: 'A-Level Roll Call', description: 'A-level section marking', href: '/hr/roll-call', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: ALEVEL_ROLL_CALL_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.timetables', module: 'attendance', label: 'Timetables', description: 'Weekly schedules and O/A-Level makeup reschedules', href: '/hr/timetables', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TIMETABLES_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
   { id: 'attendance.teaching_groups', module: 'attendance', label: 'Teaching Groups', description: 'Subject classes and student subject enrollment', href: '/hr/teaching-groups', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TEACHING_GROUPS_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
   { id: 'attendance.saturday_schedules', module: 'attendance', label: 'Saturday Schedules', description: 'Mandatory teacher Saturdays', href: '/hr/saturday-schedules', group: 'Scheduling', capabilities: ['hr.policies.manage'], actions: SATURDAY_SCHEDULES_ACTIONS, legacyFullAccessCapabilities: ['hr.policies.manage'] },
@@ -830,7 +882,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.academic_calendar', module: 'attendance', label: 'Academic Calendar', description: 'School year and events', href: '/hr/calendar', group: 'Scheduling', capabilities: ['hr.policies.manage'], actions: ACADEMIC_CALENDAR_ACTIONS },
   { id: 'attendance.settings', module: 'attendance', label: 'Attendance Settings', description: 'Rules and thresholds', href: '/hr/attendance-settings', group: 'Configuration', capabilities: ['hr.policies.manage'], actions: ATTENDANCE_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['hr.policies.manage'] },
   { id: 'attendance.class_modes', module: 'attendance', label: 'Class Modes', description: 'Online / offline configuration', href: '/hr/class-modes', group: 'Configuration', capabilities: ['hr.policies.manage'], actions: CLASS_MODES_ACTIONS, legacyFullAccessCapabilities: ['hr.policies.manage'] },
-  { id: 'attendance.zk_device_logs', module: 'attendance', label: 'ZK Device Logs', description: 'Biometric device data', href: '/attendance/zk-device-logs', group: 'Configuration', capabilities: ['system.permissions.manage'] },
+  { id: 'attendance.zk_device_logs', module: 'attendance', label: 'ZK Device Logs', description: 'Biometric device data', href: '/attendance/zk-device-logs', group: 'Configuration', capabilities: ['system.permissions.manage'], actions: ZK_DEVICE_LOGS_ACTIONS },
 
   // ?? School Setup ?????????????????????????????????????????????????????????
   { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'], actions: CAMPUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },

@@ -130,10 +130,10 @@ describe('userHoldsTile', () => {
     const withActions = tokenFor({ allowTileIds: ['finance.receive_deposit'] });
     expect(userHoldsTile(withActions, 'finance.receive_deposit')).toBe(true);
     expect(userHoldsTile(withActions, 'finance.vouchers')).toBe(false);
-    // attendance.quick_check_in has no actions yet
-    expect(TILES_MANIFEST.find((t) => t.id === 'attendance.quick_check_in')?.actions).toBeUndefined();
-    expect(userHoldsTile(tokenFor({ allowTileIds: ['attendance.quick_check_in'] }), 'attendance.quick_check_in')).toBe(true);
-    expect(userHoldsTile(tokenFor({}), 'attendance.quick_check_in')).toBe(false);
+    // system.developer_settings has no actions
+    expect(TILES_MANIFEST.find((t) => t.id === 'system.developer_settings')?.actions).toBeUndefined();
+    expect(userHoldsTile(tokenFor({ allowTileIds: ['system.developer_settings'] }), 'system.developer_settings')).toBe(true);
+    expect(userHoldsTile(tokenFor({}), 'system.developer_settings')).toBe(false);
   });
 
   it('falls back to capabilities for a session issued before the actions claim existed', () => {

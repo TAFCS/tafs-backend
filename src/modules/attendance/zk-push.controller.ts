@@ -24,6 +24,9 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { GetZkLogsQueryDto } from './dto/zk-push.dto';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkPushService } from './zk-push.service';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { ScopeService } from '../../common/scope/scope.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 
 /**
@@ -224,11 +227,12 @@ export class ZkDeviceController {
 @ApiTags('Attendance ZK Logs')
 @ApiBearerAuth()
 @Controller('attendance')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, TileActionGuard)
 export class ZkLogsController {
   constructor(
     private readonly zkPushService: ZkPushService,
     private readonly prisma: PrismaService,
+    private readonly scope: ScopeService,
   ) {}
 
   /** Device heartbeat for the attendance dashboard. Campus users see only their campus's devices. */
@@ -257,10 +261,15 @@ export class ZkLogsController {
     return createApiResponse(data, HttpStatus.OK, 'Device health retrieved');
   }
 
+  // The device logs were locked to SUPER_ADMIN by a raw role check. They now take
+  // the ZK Device Logs tile's `view` (no legacy bridge: nobody but SUPER_ADMIN
+  // holds it until one is granted). The feed spans every campus's devices and
+  // cannot be cut down per row, so a caller with a narrowed data scope is refused.
   @Get('zk-push-logs')
+  @RequireAction('attendance.zk_device_logs#view')
   async getLogs(@Query() query: GetZkLogsQueryDto, @CurrentUser() user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can view ZK device logs');
+    if (!this.scope.isUnrestricted(user)) {
+      throw new ForbiddenException('This needs access to every campus, which your data scope does not include');
     }
 
     const [{ logs, nextCursor }, devices] = await Promise.all([

@@ -21,13 +21,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { Action } from '../auth/casl/actions';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../utils/serializer.util';
 import { DevicePersonType } from '@prisma/client';
@@ -88,10 +90,17 @@ export class ResolveScansDto {
 
 @ApiTags('Attendance Scan Resolution')
 @ApiBearerAuth()
+// Every route here was locked to SUPER_ADMIN by a raw role check. They now take
+// the ZK Device Logs tile's actions (no legacy bridge, so nobody but SUPER_ADMIN
+// holds them until one is granted) and need an unrestricted caller, because
+// re-resolving scans reaches every campus at once.
 @Controller('attendance/zk-scan-resolution')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class ZkScanResolutionController {
-  constructor(private readonly resolution: ZkScanResolutionService) {}
+  constructor(
+    private readonly resolution: ZkScanResolutionService,
+    private readonly scope: ScopeService,
+  ) {}
 
   /**
    * Rebuilds scan attribution from the current mappings. Dry-run by default —
@@ -99,8 +108,9 @@ export class ZkScanResolutionController {
    */
   @Post('resolve')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
+  @RequireAction('attendance.zk_device_logs#resolve')
   async resolve(@Body() dto: ResolveScansDto, @CurrentUser() user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertUnrestricted(user);
 
     const scope = this.buildScope(dto);
     const report = await this.resolution.resolve(scope, {
@@ -128,8 +138,9 @@ export class ZkScanResolutionController {
    */
   @Post('preview-link')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  @RequireAction('attendance.zk_device_logs#resolve')
   async previewLink(@Body() dto: PreviewLinkDto, @CurrentUser() user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertUnrestricted(user);
     if (dto.person_type === 'STAFF' && !dto.employee_id) {
       throw new BadRequestException('employee_id is required for a STAFF preview');
     }
@@ -162,8 +173,9 @@ export class ZkScanResolutionController {
    */
   @Post('preview-unlink')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
+  @RequireAction('attendance.zk_device_logs#resolve')
   async previewUnlink(@Body() dto: PreviewUnlinkDto, @CurrentUser() user: IJwtStaffPayload) {
-    this.assertSuperAdmin(user);
+    this.assertUnrestricted(user);
     const report = await this.resolution.resolve(
       { kind: 'device_pin', device_sn: dto.device_sn, device_pin: dto.device_pin },
       { actor: auditActorLabel(user), dryRun: true, overrideToUnmapped: true },
@@ -182,12 +194,13 @@ export class ZkScanResolutionController {
   /** Read-only drift preview for a single device pin. */
   @Get('drift')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('attendance.zk_device_logs#mappings.view')
   async drift(
     @Query('device_sn') deviceSn: string,
     @Query('device_pin') devicePin: string,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    this.assertSuperAdmin(user);
+    this.assertUnrestricted(user);
     if (!deviceSn || !devicePin) {
       throw new BadRequestException('device_sn and device_pin are both required');
     }
@@ -233,9 +246,14 @@ export class ZkScanResolutionController {
     return d;
   }
 
-  private assertSuperAdmin(user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can re-resolve scan attribution');
+  /**
+   * These routes reach every campus's devices and scans at once and cannot be
+   * cut down per row, so a caller whose data scope is narrowed is refused.
+   * SUPER_ADMIN, who holds every action, is never narrowed.
+   */
+  private assertUnrestricted(user: IJwtStaffPayload) {
+    if (!this.scope.isUnrestricted(user)) {
+      throw new ForbiddenException('This needs access to every campus, which your data scope does not include');
     }
   }
 }

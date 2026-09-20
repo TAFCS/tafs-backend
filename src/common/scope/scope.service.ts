@@ -194,6 +194,26 @@ export class ScopeService {
     this.assertSegment(user, student.segment_id);
   }
 
+  /**
+   * True when nothing narrows the caller: SUPER_ADMIN, or no universal scope on
+   * any dimension and no legacy campus / class field on an older token. For
+   * routes that reach every campus at once and cannot be cut down per row.
+   */
+  isUnrestricted(user: Parameters<ScopeService['assertDimension']>[0] & { campusId?: number | null; allowedClassIds?: number[] }): boolean {
+    if (this.isExempt(user)) return true;
+    const s = this.scopeOf(user);
+    return (
+      s.campuses.length === 0 &&
+      s.segments.length === 0 &&
+      s.classes.length === 0 &&
+      s.sections.length === 0 &&
+      s.departments.length === 0 &&
+      s.staffCategories.length === 0 &&
+      user.campusId == null &&
+      (user.allowedClassIds?.length ?? 0) === 0
+    );
+  }
+
   /** Non-throwing counterpart, for turning a 403 into a 404 on lookups. */
   canSeeStudent(
     user: Parameters<ScopeService['assertDimension']>[0],
