@@ -15,6 +15,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -29,8 +31,12 @@ import {
 
 @ApiTags('Teaching Groups')
 @ApiBearerAuth()
+// This API is used only by the Teaching Groups page. `view` is the class-wide
+// default (list, roster, a student's subject enrollments); group edits and
+// enrolment override it per route.
 @Controller('teaching-groups')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+@RequireAction('attendance.teaching_groups#view')
 export class TeachingGroupsController {
   constructor(private readonly service: TeachingGroupsService) {}
 
@@ -51,6 +57,7 @@ export class TeachingGroupsController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.teaching_groups#manage')
   async create(
     @Body() dto: CreateTeachingGroupDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -61,6 +68,7 @@ export class TeachingGroupsController {
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.teaching_groups#manage')
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateTeachingGroupDto,
@@ -72,6 +80,7 @@ export class TeachingGroupsController {
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.teaching_groups#manage')
   async remove(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: { user: IJwtStaffPayload },
@@ -92,6 +101,7 @@ export class TeachingGroupsController {
 
   @Post(':id/enrollments')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.teaching_groups#enroll')
   async bulkEnroll(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: BulkEnrollDto,
@@ -103,6 +113,7 @@ export class TeachingGroupsController {
 
   @Delete(':id/enrollments/:studentId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.teaching_groups#enroll')
   async removeEnrollment(
     @Param('id', ParseIntPipe) id: number,
     @Param('studentId', ParseIntPipe) studentId: number,

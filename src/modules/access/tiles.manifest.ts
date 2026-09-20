@@ -502,6 +502,30 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Timetables and Teaching Groups both list hr.timetable.view AND
+// hr.timetable.manage as their tile capabilities, so anyone who holds either
+// tile already holds the manage capability the routes' policy checks needed.
+// Both bridge from hr.timetable.manage; a bare grant therefore gives the whole
+// tile and a SUPER_ADMIN narrows by denying individual actions.
+// Timetables: the page's own reads and writes carry these actions. Routes with
+// no webapp caller (`blocks`, `day-slots`, `teachers/:id/...`) and the one the
+// A-Level Roll Call page also reads (`group-day-slots`) are left to their
+// policy check, as is the subject LIST that Teaching Groups also uses.
+const TIMETABLES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Timetables', description: 'See the period list and the class and group grids', default: true },
+
+  { id: 'periods.manage', label: 'Edit the period definitions', implies: ['view'] },
+  { id: 'slots.manage', label: 'Edit timetable slots and subjects', description: 'Add, change and remove a slot, and create subjects', implies: ['view'] },
+];
+
+// Teaching Groups: the /teaching-groups API is used only by this page.
+const TEACHING_GROUPS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Teaching Groups', description: 'See groups, their rosters and a student\'s subject enrolments', default: true },
+
+  { id: 'manage', label: 'Create, edit and delete teaching groups', implies: ['view'] },
+  { id: 'enroll', label: 'Enrol and remove students', implies: ['view'] },
+];
+
 // Section Allocation Rules is one page listed under two tiles
 // (student.section_allocation and school-setup.section_allocation), so both
 // carry this same action set and every route accepts either. Bridged from
@@ -690,8 +714,8 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
   { id: 'attendance.quick_check_in', module: 'attendance', label: 'Quick Check-In', description: 'Filter, search, and punch students in or out � including default absents', href: '/attendance/quick-check-in', group: 'Students', capabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.alevel_roll_call', module: 'attendance', label: 'A-Level Roll Call', description: 'A-level section marking', href: '/hr/roll-call', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
-  { id: 'attendance.timetables', module: 'attendance', label: 'Timetables', description: 'Weekly schedules and O/A-Level makeup reschedules', href: '/hr/timetables', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'] },
-  { id: 'attendance.teaching_groups', module: 'attendance', label: 'Teaching Groups', description: 'Subject classes and student subject enrollment', href: '/hr/teaching-groups', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'] },
+  { id: 'attendance.timetables', module: 'attendance', label: 'Timetables', description: 'Weekly schedules and O/A-Level makeup reschedules', href: '/hr/timetables', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TIMETABLES_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
+  { id: 'attendance.teaching_groups', module: 'attendance', label: 'Teaching Groups', description: 'Subject classes and student subject enrollment', href: '/hr/teaching-groups', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TEACHING_GROUPS_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
   { id: 'attendance.saturday_schedules', module: 'attendance', label: 'Saturday Schedules', description: 'Mandatory teacher Saturdays', href: '/hr/saturday-schedules', group: 'Scheduling', capabilities: ['hr.policies.manage'] },
   { id: 'attendance.shift_overrides', module: 'attendance', label: 'Shift Overrides', description: 'Override check-in/out time for a campus or segment on specific days', href: '/hr/shift-overrides', group: 'Scheduling', capabilities: ['hr.policies.manage'] },
   { id: 'attendance.academic_calendar', module: 'attendance', label: 'Academic Calendar', description: 'School year and events', href: '/hr/calendar', group: 'Scheduling', capabilities: ['hr.policies.manage'] },

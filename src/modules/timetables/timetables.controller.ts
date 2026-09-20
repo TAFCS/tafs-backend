@@ -16,6 +16,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -38,8 +40,13 @@ import { PrismaService } from '../../../prisma/prisma.service';
 
 @ApiTags('Timetables')
 @ApiBearerAuth()
+// Route-shaped. Reads and writes exclusive to the Timetables page carry its
+// actions. Left undecorated on purpose: `blocks`, `day-slots`, `teachers/:id/...`
+// (no webapp caller) and `group-day-slots`, which the A-Level Roll Call page
+// also reads. `getOrCreate*` sit under `view` because opening a grid calls
+// them; they only create an empty container when none exists.
 @Controller('timetables')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class TimetablesController {
   constructor(
     private readonly service: TimetablesService,
@@ -50,6 +57,7 @@ export class TimetablesController {
 
   @Get('periods')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  @RequireAction('attendance.timetables#view')
   async listPeriods(@Query() query: ListClassPeriodsQueryDto) {
     const data = await this.classPeriods.list(query.campus_id, query.class_id);
     return createApiResponse(data, HttpStatus.OK, 'Class periods retrieved');
@@ -57,6 +65,7 @@ export class TimetablesController {
 
   @Put('periods')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#periods.manage')
   async upsertPeriod(
     @Body() dto: UpsertClassPeriodDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -67,6 +76,7 @@ export class TimetablesController {
 
   @Delete('periods/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#periods.manage')
   async deletePeriod(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: { user: IJwtStaffPayload },
@@ -100,6 +110,7 @@ export class TimetablesController {
 
   @Get('grid')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  @RequireAction('attendance.timetables#view')
   async getGrid(
     @Query() query: TimetableGridQueryDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -130,6 +141,7 @@ export class TimetablesController {
 
   @Get('group-grid')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
+  @RequireAction('attendance.timetables#view')
   async getGridByGroup(
     @Query() query: TeachingGroupGridQueryDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -144,6 +156,7 @@ export class TimetablesController {
 
   @Post('group')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#view')
   async getOrCreateByGroup(
     @Body() dto: CreateGroupTimetableDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -158,6 +171,7 @@ export class TimetablesController {
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#view')
   async getOrCreate(
     @Body() dto: CreateTimetableDto,
     @Req() req: { user: IJwtStaffPayload },
@@ -174,6 +188,7 @@ export class TimetablesController {
 
   @Put(':timetableId/slots')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#slots.manage')
   async upsertSlot(
     @Param('timetableId', ParseIntPipe) timetableId: number,
     @Body() dto: UpsertSlotDto,
@@ -185,6 +200,7 @@ export class TimetablesController {
 
   @Delete('slots/:slotId')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Timetable'))
+  @RequireAction('attendance.timetables#slots.manage')
   async deleteSlot(
     @Param('slotId', ParseIntPipe) slotId: number,
     @Req() req: { user: IJwtStaffPayload },
