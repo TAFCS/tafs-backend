@@ -40,12 +40,17 @@ export class ZkPushService {
   }
 
   /**
-   * Heartbeat per known device. `campusCode` limits to one campus (non
+   * Heartbeat per known device. `campusCodes` limits to specific campus(es) (non
    * super-admin users); omit for all.
    */
-  async getDeviceHealth(campusCode?: string | null, now = new Date()) {
+  async getDeviceHealth(campusCodes?: string[] | string | null, now = new Date()) {
+    const codes = Array.isArray(campusCodes)
+      ? campusCodes
+      : campusCodes
+      ? [campusCodes]
+      : null;
     const sns = Object.keys(ZK_DEVICES).filter(
-      (sn) => !campusCode || ZK_DEVICES[sn].campusCode === campusCode,
+      (sn) => !codes || codes.includes(ZK_DEVICES[sn].campusCode),
     );
     const rows = sns.length
       ? await this.prisma.zk_push_logs.groupBy({

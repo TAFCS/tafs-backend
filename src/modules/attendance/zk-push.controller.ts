@@ -236,16 +236,24 @@ export class ZkLogsController {
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getDeviceHealth(@CurrentUser() user: IJwtStaffPayload) {
-    let campusCode: string | null = null;
-    if (user.campusId) {
-      const campus = await this.prisma.campuses.findUnique({
-        where: { id: user.campusId },
-        select: { campus_code: true },
-      });
-      // A campus user with an unresolvable campus sees nothing rather than everything.
-      campusCode = campus?.campus_code ?? '__none__';
+    let campusCodes: string[] | null = null;
+    if (user.role !== StaffRole.SUPER_ADMIN) {
+      const scopedCampusIds = user.scope?.campuses?.length
+        ? user.scope.campuses
+        : user.campusId
+        ? [user.campusId]
+        : [];
+      if (scopedCampusIds.length > 0) {
+        const campuses = await this.prisma.campuses.findMany({
+          where: { id: { in: scopedCampusIds } },
+          select: { campus_code: true },
+        });
+        campusCodes = campuses.map((c) => c.campus_code);
+      } else if (user.campusId) {
+        campusCodes = ['__none__'];
+      }
     }
-    const data = await this.zkPushService.getDeviceHealth(campusCode);
+    const data = await this.zkPushService.getDeviceHealth(campusCodes);
     return createApiResponse(data, HttpStatus.OK, 'Device health retrieved');
   }
 
