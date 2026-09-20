@@ -1,11 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppConfigService } from './app-config.service';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AppPlatform } from './dto/app-config.dto';
 
 describe('AppConfigService (Test Plan Phase 1)', () => {
   let service: AppConfigService;
   let prisma: { app_config: { findMany: jest.Mock; upsert: jest.Mock } };
+  let auditLogs: { log: jest.Mock };
 
   const defaultConfigs = [
     { key: 'maintenance_mode', value: 'false' },
@@ -20,14 +22,19 @@ describe('AppConfigService (Test Plan Phase 1)', () => {
     prisma = {
       app_config: {
         findMany: jest.fn().mockResolvedValue(defaultConfigs),
+        findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),
       },
+    };
+    auditLogs = {
+      log: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AppConfigService,
         { provide: PrismaService, useValue: prisma },
+        { provide: AuditLogsService, useValue: auditLogs },
       ],
     }).compile();
 

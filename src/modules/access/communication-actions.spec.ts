@@ -7,6 +7,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { StaffRole, TicketCategory, TicketStatus } from '@prisma/client';
 import { SupportTicketsController } from '../support-tickets/support-tickets.controller';
 import { SupportTicketsService } from '../support-tickets/support-tickets.service';
+import { AppConfigController } from '../app-config/app-config.controller';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
 import {
@@ -197,5 +198,38 @@ describe('Support Tickets', () => {
     };
     const { s } = svc({ ticket: outOfScopeTicket, canSee: false });
     await expect(s.getTicketById('t-1', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('Notification Templates', () => {
+  const t = tile('communication.notification_templates');
+
+  it('is bridged from system.permissions.manage, so a role with manage perms gets all actions', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual(['system.permissions.manage']);
+    const fullAccess = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.SUPER_ADMIN,
+      roleKeys: ['communication.send_announcements', 'system.permissions.manage'],
+    });
+    for (const a of t.actions!) {
+      expect(fullAccess.actionIds).toContain(actionKey('communication.notification_templates', a.id));
+    }
+  });
+
+  it('decorates routes with tile actions', () => {
+    const proto = AppConfigController.prototype;
+    expect(meta(proto, 'getAllConfigs')?.actionKeys).toEqual([
+      actionKey('communication.notification_templates', 'view'),
+      'system.developer_settings#view',
+    ]);
+    expect(meta(proto, 'setConfig')?.actionKeys).toEqual([
+      actionKey('communication.notification_templates', 'edit'),
+      'system.developer_settings#edit',
+    ]);
+
+    keysExist([
+      'communication.notification_templates#view',
+      'communication.notification_templates#edit',
+    ]);
   });
 });

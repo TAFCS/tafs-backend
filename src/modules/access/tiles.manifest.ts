@@ -632,6 +632,12 @@ const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
   { id: 'manage_replies', label: 'Review and approve staff replies', description: 'Approve, edit, or reject pending staff replies before delivery to parents', implies: ['view'] },
 ];
 
+const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
+
+  { id: 'edit', label: 'Edit notification templates', description: 'Modify notification text, variables, and enable or disable notifications', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -667,7 +673,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ?? Communications ???????????????????????????????????????????????????????
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },
   { id: 'communication.support_tickets', module: 'communication', label: 'Support Tickets', description: 'Issue tracking and resolution', href: '/support-tickets', capabilities: ['communication.support_tickets.view'], actions: SUPPORT_TICKETS_ACTIONS, legacyFullAccessCapabilities: ['communication.support_tickets.approve'] },
-  { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['system.permissions.manage'] },
+  { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['communication.send_announcements', 'system.permissions.manage'], actions: NOTIFICATION_TEMPLATES_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 
   // ?? HR & Payroll ?????????????????????????????????????????????????????????
   { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },

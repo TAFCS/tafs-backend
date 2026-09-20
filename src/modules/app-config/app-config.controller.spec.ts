@@ -1,12 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
 import { AppConfigController } from './app-config.controller';
 import { AppConfigService } from './app-config.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
-import { StaffRole } from '@prisma/client';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { AppPlatform } from './dto/app-config.dto';
 
-describe('AppConfigController (Test Plan Phase 1.5 auth)', () => {
+describe('AppConfigController', () => {
   let controller: AppConfigController;
   let service: {
     getAppStatus: jest.Mock;
@@ -33,6 +32,8 @@ describe('AppConfigController (Test Plan Phase 1.5 auth)', () => {
     })
       .overrideGuard(JwtStaffGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(TileActionGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get(AppConfigController);
@@ -46,43 +47,21 @@ describe('AppConfigController (Test Plan Phase 1.5 auth)', () => {
     expect(response.status).toBe(200);
   });
 
-  it('GET all configs allowed for SUPER_ADMIN', async () => {
-    const result = await controller.getAllConfigs({
-      role: StaffRole.SUPER_ADMIN,
-      username: 'super',
-    } as any);
+  it('GET all configs returns configs from service', async () => {
+    const result = await controller.getAllConfigs();
 
     expect(service.getAllConfigs).toHaveBeenCalled();
     expect(result.status).toBe(200);
   });
 
-  it('GET all configs forbidden for CAMPUS_ADMIN', async () => {
-    await expect(
-      controller.getAllConfigs({
-        role: StaffRole.CAMPUS_ADMIN,
-        username: 'campus',
-      } as any),
-    ).rejects.toThrow(ForbiddenException);
-  });
-
-  it('PATCH config allowed for SUPER_ADMIN', async () => {
+  it('PATCH config calls service.setConfig', async () => {
     const result = await controller.setConfig(
       'maintenance_mode',
       { value: 'true' },
-      { role: StaffRole.SUPER_ADMIN, username: 'super' } as any,
+      { username: 'super' } as any,
     );
 
     expect(service.setConfig).toHaveBeenCalledWith('maintenance_mode', 'true', 'super');
     expect(result.status).toBe(200);
-  });
-
-  it('PATCH config forbidden for CAMPUS_ADMIN', async () => {
-    await expect(
-      controller.setConfig(
-        'maintenance_mode',
-        { value: 'true' },
-        { role: StaffRole.CAMPUS_ADMIN, username: 'campus' } as any,
-      ),
-    ).rejects.toThrow(ForbiddenException);
   });
 });

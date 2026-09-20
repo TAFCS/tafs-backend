@@ -7,15 +7,15 @@ import {
   Param,
   UseGuards,
   HttpStatus,
-  ForbiddenException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from './app-config.service';
 import { AppStatusQueryDto, UpdateAppConfigDto } from './dto/app-config.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAnyAction } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { StaffRole } from '@prisma/client';
 import { createApiResponse } from '../../utils/serializer.util';
 
 @ApiTags('App Config')
@@ -31,26 +31,22 @@ export class AppConfigController {
 
   @ApiBearerAuth()
   @Get()
-  @UseGuards(JwtStaffGuard)
-  async getAllConfigs(@CurrentUser() user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Access denied. Super Admin role required.');
-    }
+  @UseGuards(JwtStaffGuard, TileActionGuard)
+  @RequireAnyAction('communication.notification_templates#view', 'system.developer_settings#view')
+  async getAllConfigs() {
     const data = await this.appConfigService.getAllConfigs();
     return createApiResponse(data, HttpStatus.OK, 'Configurations retrieved successfully');
   }
 
   @ApiBearerAuth()
   @Patch(':key')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, TileActionGuard)
+  @RequireAnyAction('communication.notification_templates#edit', 'system.developer_settings#edit')
   async setConfig(
     @Param('key') key: string,
     @Body() dto: UpdateAppConfigDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    if (user.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Access denied. Super Admin role required.');
-    }
     const data = await this.appConfigService.setConfig(key, dto.value, user.username);
     return createApiResponse(data, HttpStatus.OK, 'Configuration updated successfully');
   }
