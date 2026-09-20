@@ -726,6 +726,11 @@ const OBJECTIONS_ACTIONS: TileAction[] = [
   { id: 'review', label: 'Review attendance objections', description: 'Accept or reject employee attendance objections', implies: ['view'] },
 ];
 
+const LEAVE_REQUESTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View leave requests', description: 'See pending, approved, and rejected leave applications', default: true },
+  { id: 'approve', label: 'Approve, reject, or revoke leave', description: 'Review employee leave applications and revoke approved leaves', implies: ['view'] },
+];
+
 const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
 
@@ -785,7 +790,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'], actions: EMPLOYEE_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
   { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'], actions: EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage', 'hr.payroll.view'] },
   { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'], actions: OBJECTIONS_ACTIONS, legacyFullAccessCapabilities: ['hr.objections.review'] },
-  { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'] },
+  { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'], actions: LEAVE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['hr.leave.approve'] },
   { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
   { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
   { id: 'attendance.quick_check_in', module: 'attendance', label: 'Quick Check-In', description: 'Filter, search, and punch students in or out � including default absents', href: '/attendance/quick-check-in', group: 'Students', capabilities: ['attendance.student.rollcall.mark'] },

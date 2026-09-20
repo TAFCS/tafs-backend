@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
+import { RequireAction } from '../../../decorators/require-action.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { createApiResponse } from '../../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -20,11 +22,12 @@ import { LeaveRequestsService } from './leave-requests.service';
 @ApiTags('Leave Requests (Admin)')
 @ApiBearerAuth()
 @Controller('hr/leaves')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, TileActionGuard)
 export class LeaveRequestsController {
   constructor(private readonly leaveService: LeaveRequestsService) {}
 
   @Get()
+  @RequireAction('attendance.leave_requests#view')
   async list(
     @Query() query: ListLeaveRequestsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -34,6 +37,7 @@ export class LeaveRequestsController {
   }
 
   @Get(':id')
+  @RequireAction('attendance.leave_requests#view')
   async getOne(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -43,6 +47,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/review')
+  @RequireAction('attendance.leave_requests#approve')
   async review(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReviewLeaveRequestDto,
@@ -53,6 +58,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/revoke')
+  @RequireAction('attendance.leave_requests#approve')
   async revoke(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RevokeLeaveRequestDto,
@@ -62,3 +68,4 @@ export class LeaveRequestsController {
     return createApiResponse(data, HttpStatus.OK, 'Leave request revoked successfully');
   }
 }
+

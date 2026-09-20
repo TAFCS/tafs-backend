@@ -16,6 +16,8 @@ import { TeachingGroupsController } from '../timetables/teaching-groups.controll
 import { StaffAttendanceController } from '../attendance/staff-attendance.controller';
 import { StaffAttendanceService } from '../attendance/staff-attendance.service';
 import { AttendanceObjectionsController } from '../attendance/attendance-objections.controller';
+import { LeaveRequestsController } from '../hr/leaves/leave-requests.controller';
+import { LeaveRequestsSelfController } from '../hr/leaves/leave-requests-self.controller';
 import { PayrollMatrixController } from '../hr/payroll/payroll-matrix.controller';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
@@ -721,6 +723,68 @@ describe('Scope on the policy tiles', () => {
       });
       expect(r.actionIds).toContain(actionKey('attendance.objections', 'view'));
       expect(r.actionIds).not.toContain(actionKey('attendance.objections', 'review'));
+    });
+  });
+
+  describe('Leave Requests', () => {
+    const leaveTile = tile('attendance.leave_requests');
+
+    it('bridges from hr.leave.approve', () => {
+      expect(leaveTile.capabilities).toEqual(['hr.leave.approve']);
+      expect(leaveTile.legacyFullAccessCapabilities).toEqual(['hr.leave.approve']);
+
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['hr.leave.approve'],
+      });
+      for (const a of leaveTile.actions!) {
+        expect(r.actionIds).toContain(actionKey('attendance.leave_requests', a.id));
+      }
+    });
+
+    it('gates review and revoke routes on their respective actions', () => {
+      const p = LeaveRequestsController.prototype;
+      expect(meta(p, 'list')?.actionKeys).toEqual([
+        actionKey('attendance.leave_requests', 'view'),
+      ]);
+      expect(meta(p, 'getOne')?.actionKeys).toEqual([
+        actionKey('attendance.leave_requests', 'view'),
+      ]);
+      expect(meta(p, 'review')?.actionKeys).toEqual([
+        actionKey('attendance.leave_requests', 'approve'),
+      ]);
+      expect(meta(p, 'revoke')?.actionKeys).toEqual([
+        actionKey('attendance.leave_requests', 'approve'),
+      ]);
+
+      const guards: unknown[] = Reflect.getMetadata('__guards__', LeaveRequestsController) ?? [];
+      expect(guards).toContain(TileActionGuard);
+      keysExist([
+        'attendance.leave_requests#view',
+        'attendance.leave_requests#approve',
+      ]);
+    });
+
+    it('accounts for every route: decorated or left open on purpose with a reason', () => {
+      assertEveryRouteAccountedFor(LeaveRequestsController, {});
+      assertEveryRouteAccountedFor(LeaveRequestsSelfController, {
+        create: 'staff self service with assertStaffSelfPermission',
+        listMine: 'staff self service with assertStaffSelfPermission',
+        getContext: 'staff self service with assertStaffSelfPermission',
+        cancel: 'staff self service with assertStaffSelfPermission',
+      });
+    });
+
+    it('lets a SUPER_ADMIN narrow Leave Requests: deny approve and they keep view', () => {
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.EMPLOYEE,
+        roleKeys: ['hr.leave.approve'],
+        userActionGrants: [{ tileId: 'attendance.leave_requests', actionId: 'approve', allow: false }],
+      });
+      expect(r.actionIds).toContain(actionKey('attendance.leave_requests', 'view'));
+      expect(r.actionIds).not.toContain(actionKey('attendance.leave_requests', 'approve'));
     });
   });
 });
