@@ -502,6 +502,20 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Quick Registration: creating a quick admission, reading it back and uploading
+// its photos were locked to SUPER_ADMIN by a raw role check in the controller,
+// so it could never be delegated. They now sit behind `create`, which no role
+// holds by default (deliberately NO legacyFullAccessCapabilities bridge: nobody
+// but SUPER_ADMIN could do this before, so nobody inherits it). A SUPER_ADMIN
+// grants it per role or person in People & Access. The deposit slip is also
+// printed from the Student Directory's Certificates tab, so it carries no
+// action of this tile; it is scoped instead.
+const QUICK_REGISTRATION_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Quick Registration', default: true },
+
+  { id: 'create', label: 'Register a quick admission', description: 'Create the admission, read it back, and upload the student and guardian photographs', implies: ['view'] },
+];
+
 // EnrollmentController had only JwtStaffGuard: no policy check of any kind, so
 // every logged-in staff member could enroll a student or flip their pursuit
 // status. Bridged from students.enrollment.complete ("Complete admission"),
@@ -591,7 +605,7 @@ const PARENT_CHANGE_REQUESTS_ACTIONS: TileAction[] = [
  */
 export const TILES_MANIFEST: TileManifestEntry[] = [
   // ── Student & Profiling ──────────────────────────────────────────────────
-  { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'] },
+  { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'], actions: QUICK_REGISTRATION_ACTIONS },
   { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'] },
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },

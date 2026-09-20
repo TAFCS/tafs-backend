@@ -5,11 +5,14 @@ import 'reflect-metadata';
 jest.mock('@react-pdf/renderer', () => ({ renderToBuffer: jest.fn() }));
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid' }));
 // virtual: jest here has no tsx in moduleFileExtensions, so it cannot resolve the file.
+jest.mock('../unconfirmed-admissions/DepositSlipPDF', () => ({ DepositSlipPDF: () => null }), { virtual: true });
 jest.mock('../transfers/TransferOrderPDF', () => ({ TransferOrderPDF: () => null }), { virtual: true });
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { TransferController } from '../transfers/transfer.controller';
 import { TransferService } from '../transfers/transfer.service';
+import { UnconfirmedAdmissionsController } from '../unconfirmed-admissions/unconfirmed-admissions.controller';
+import { UnconfirmedAdmissionsService } from '../unconfirmed-admissions/unconfirmed-admissions.service';
 import { EnrollmentController } from '../enrollments/enrollment.controller';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 import { HouseBalancerController } from '../house-balancer/house-balancer.controller';
@@ -533,3 +536,86 @@ describe('Parent Change Requests', () => {
 });
 
 
+describe('Quick Registration', () => {
+  const t = tile('student.quick_registration');
+
+  it('has NO legacy bridge: nobody but SUPER_ADMIN could do this before, so nobody inherits it', () => {
+    expect(t.legacyFullAccessCapabilities).toBeUndefined();
+    expect(t.actions!.filter((a) => a.default).map((a) => a.id)).toEqual(['view']);
+  });
+
+  it('shows the tile to a registration.view holder but grants no write action', () => {
+    const r = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, roleKeys: ['students.registration.view', 'students.registration.create'] });
+    expect(r.tileIds).toContain('student.quick_registration');
+    expect(r.actionIds.filter((k) => k.startsWith('student.quick_registration#'))).toEqual([
+      actionKey('student.quick_registration', 'view'),
+    ]);
+  });
+
+  it('lets a SUPER_ADMIN delegate: a granted `create` is held', () => {
+    const r = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.EMPLOYEE,
+      allowTileIds: ['student.quick_registration'],
+      userActionGrants: [{ tileId: 'student.quick_registration', actionId: 'create', allow: true }],
+    });
+    expect(r.actionIds).toContain(actionKey('student.quick_registration', 'create'));
+  });
+
+  it('gates create, read-back and both photo uploads on `create`, and leaves the shared deposit slip alone', () => {
+    const p = UnconfirmedAdmissionsController.prototype;
+    for (const h of ['create', 'getByCC', 'uploadPhoto', 'uploadGuardianPhoto']) {
+      expect(meta(p, h)?.actionKeys).toEqual([actionKey('student.quick_registration', 'create')]);
+    }
+    expect(meta(p, 'getDepositSlip')).toBeUndefined();
+    const guards: unknown[] = Reflect.getMetadata('__guards__', UnconfirmedAdmissionsController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+    keysExist(['student.quick_registration#create']);
+  });
+
+  it('no longer hard-codes a role check in the controller', () => {
+    expect((UnconfirmedAdmissionsController.prototype as any).assertSuperAdmin).toBeUndefined();
+  });
+
+  function svc(opts: { student?: unknown; canSee?: boolean; campusThrows?: boolean; leftover?: unknown }) {
+    const prisma = {
+      students: {
+        findUnique: jest.fn().mockResolvedValue(opts.student ?? null),
+        findFirst: jest.fn().mockResolvedValue(opts.student ? { cc: 1, status: 'QUICK_ADMISSION' } : null),
+      },
+      unconfirmed_admissions: { findUnique: jest.fn().mockResolvedValue(opts.leftover ?? null) },
+      $transaction: jest.fn(),
+    };
+    const scope = {
+      canSeeStudent: jest.fn().mockReturnValue(opts.canSee ?? true),
+      assertCampus: jest.fn(() => {
+        if (opts.campusThrows) throw new ForbiddenException('nope');
+      }),
+    };
+    const s = new UnconfirmedAdmissionsService(prisma as any, {} as any, {} as any, { log: jest.fn() } as any, scope as any);
+    return { s, prisma, scope };
+  }
+  const stu = { campus_id: 1, class_id: null, section_id: null, classes: null };
+
+  it('refuses a create whose campus is outside scope, and one with no campus for a restricted caller, before any write', async () => {
+    const { s, prisma, scope } = svc({ campusThrows: true });
+    await expect(s.create({ campus_id: 9 } as any, 'u', scopedUser)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(s.create({} as any, 'u', scopedUser)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(scope.assertCampus).toHaveBeenLastCalledWith(scopedUser, null);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('404s a quick admission outside scope on read, both photo uploads and the deposit slip', async () => {
+    const { s } = svc({ student: stu, canSee: false });
+    const file = { originalname: 'a.jpg', buffer: Buffer.from('x'), mimetype: 'image/jpeg' } as any;
+    await expect(s.getByCC(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.uploadPhoto(1, file, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.uploadGuardianPhoto(1, 0, file, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.generateDepositSlipPdf(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('applies the campus scope to a leftover row from the legacy table too', async () => {
+    const { s } = svc({ student: null, canSee: false, leftover: { id: 7, campus_id: 5 } });
+    await expect(s.getByCC(7, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});

@@ -9,6 +9,9 @@ import { StorageService } from '../../common/storage/storage.service';
 import { CcAllocatorService } from '../identity/cc-allocator.service';
 import { StudentStatus } from '../../constants/student-status.constant';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -28,7 +31,44 @@ export class UnconfirmedAdmissionsService {
     private readonly storage: StorageService,
     private readonly ccAllocator: CcAllocatorService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /**
+   * Quick admissions are `students` rows, so the ordinary student scope
+   * applies: universal scope AND the legacy campus / class fields. A row the
+   * caller cannot see 404s, same as a missing one. A cc with no students row
+   * is left to the caller's own not-found / legacy-table handling. `user`
+   * omitted means an internal caller.
+   */
+  private async assertVisible(cc: number, user?: IJwtStaffPayload) {
+    if (!user) return;
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+    });
+    if (!s) return;
+    const ok =
+      this.scope.canSeeStudent(user, {
+        campus_id: s.campus_id,
+        class_id: s.class_id,
+        section_id: s.section_id,
+        segment_id: s.classes?.segment_id ?? null,
+      }) &&
+      !!(await this.prisma.students.findFirst({
+        where: applyStudentScope(user, { cc }),
+        select: { cc: true },
+      }));
+    if (!ok) throw new NotFoundException(`Quick admission with CC ${cc} not found`);
+  }
+
+  /** The legacy unconfirmed_admissions table carries a campus only. */
+  private assertLeftoverVisible(admission: { campus_id?: number | null; id: number }, user?: IJwtStaffPayload) {
+    if (!user) return;
+    if (!this.scope.canSeeStudent(user, { campus_id: admission.campus_id ?? null })) {
+      throw new NotFoundException(`Quick admission with CC ${admission.id} not found`);
+    }
+  }
 
   private calculateAge(dob: Date): string {
     const today = new Date();
@@ -163,7 +203,10 @@ export class UnconfirmedAdmissionsService {
     return guardian;
   }
 
-  async create(dto: CreateUnconfirmedAdmissionDto, createdBy?: string) {
+  async create(dto: CreateUnconfirmedAdmissionDto, createdBy?: string, user?: IJwtStaffPayload) {
+    // A scoped caller must name a campus inside their scope; a restricted
+    // campus dimension rejects a missing campus too.
+    if (user) this.scope.assertCampus(user, dto.campus_id ?? null);
     const dateOfBirth = new Date(dto.date_of_birth);
 
     const student = await this.prisma.$transaction(async (tx) => {
@@ -231,7 +274,8 @@ export class UnconfirmedAdmissionsService {
     return this.toLegacyResponse(student);
   }
 
-  async getByCC(cc: number) {
+  async getByCC(cc: number, user?: IJwtStaffPayload) {
+    await this.assertVisible(cc, user);
     const student = await this.findQuickStudent(cc);
     if (student) {
       return this.toLegacyResponse(student);
@@ -245,10 +289,12 @@ export class UnconfirmedAdmissionsService {
     if (!admission) {
       throw new NotFoundException(`Quick admission with CC ${cc} not found`);
     }
+    this.assertLeftoverVisible(admission, user);
     return admission;
   }
 
-  async uploadPhoto(cc: number, file: Express.Multer.File, changedBy: string) {
+  async uploadPhoto(cc: number, file: Express.Multer.File, changedBy: string, user?: IJwtStaffPayload) {
+    await this.assertVisible(cc, user);
     const student = await this.prisma.students.findFirst({
       where: { cc, status: StudentStatus.QUICK_ADMISSION, deleted_at: null },
     });
@@ -278,7 +324,8 @@ export class UnconfirmedAdmissionsService {
     return { url };
   }
 
-  async uploadGuardianPhoto(cc: number, guardianIndex: number, file: Express.Multer.File, changedBy: string) {
+  async uploadGuardianPhoto(cc: number, guardianIndex: number, file: Express.Multer.File, changedBy: string, user?: IJwtStaffPayload) {
+    await this.assertVisible(cc, user);
     const student = await this.findQuickStudent(cc);
     if (!student) {
       throw new NotFoundException(`Quick admission with CC ${cc} not found`);
@@ -312,7 +359,8 @@ export class UnconfirmedAdmissionsService {
     return { url };
   }
 
-  async generateDepositSlipPdf(cc: number): Promise<Buffer> {
+  async generateDepositSlipPdf(cc: number, user?: IJwtStaffPayload): Promise<Buffer> {
+    await this.assertVisible(cc, user);
     const student = await this.findQuickStudent(cc, false);
     if (!student) {
       // Fall back to leftover unconfirmed row for ops collisions
@@ -323,6 +371,7 @@ export class UnconfirmedAdmissionsService {
       if (!admission) {
         throw new NotFoundException(`Quick admission with CC ${cc} not found`);
       }
+      this.assertLeftoverVisible(admission, user);
       return this.renderSlipFromUnconfirmed(admission);
     }
 
