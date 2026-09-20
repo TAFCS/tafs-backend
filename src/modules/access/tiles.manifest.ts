@@ -502,6 +502,19 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Access Packs. The pack list is also read by People & Access (to assign a
+// pack), so it stays undecorated; create / update / delete belong to this tile
+// alone. Bridged from system.permissions.manage, the capability the routes'
+// Manage Permission policy already required and which no default role but
+// SUPER_ADMIN holds, so nothing changes for anyone today. A pack only describes
+// tiles and actions: nobody gains any of them until a pack is ASSIGNED, which is
+// People & Access's `access.edit`.
+const ACCESS_PACKS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles', default: true },
+
+  { id: 'manage', label: 'Create, edit and delete access packs', implies: ['view'] },
+];
+
 // Database Backups. BackupsController had only JwtStaffGuard: any logged-in
 // staff member could list, trigger, download or delete backups through the API
 // (only the tile's visibility hid it). system.backups.view is deliberately held
@@ -844,7 +857,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
 
   // ?? System ???????????????????????????????????????????????????????????????
   { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'], actions: PEOPLE_ACCESS_ACTIONS, legacyFullAccessCapabilities: ['system.users.edit', 'system.permissions.manage'] },
-  { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'] },
+  { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'], actions: ACCESS_PACKS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
   { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'] },
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'], actions: BACKUPS_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },

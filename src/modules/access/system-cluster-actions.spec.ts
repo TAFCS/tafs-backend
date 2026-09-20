@@ -1,6 +1,11 @@
 import 'reflect-metadata';
 import { StaffRole } from '@prisma/client';
 import { BackupsController } from '../backups/backups.controller';
+import { AccessController } from './access.controller';
+import { AuditLogsGuard } from '../audit-logs/guards/audit-logs.guard';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { ExecutionContext } from '@nestjs/common';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
@@ -95,5 +100,93 @@ describe('Database Backups', () => {
     expect(held).toContain(actionKey('system.backups', 'download'));
     expect(held).not.toContain(actionKey('system.backups', 'delete'));
     expect(held).not.toContain(actionKey('system.backups', 'trigger'));
+  });
+});
+
+describe('Access Packs', () => {
+  const t = tile('system.access_packs');
+
+  it('bridges from system.permissions.manage, which no default role but SUPER_ADMIN holds', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual(['system.permissions.manage']);
+    expect(t.actions!.filter((a) => a.default).map((a) => a.id)).toEqual(['view']);
+    const campusAdmin = computeEffectiveAccess({ ...base, role: StaffRole.CAMPUS_ADMIN, roleKeys: CAMPUS_ADMIN_KEYS });
+    expect(campusAdmin.tileIds).not.toContain('system.access_packs');
+    const holder = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, roleKeys: ['system.permissions.manage'] });
+    for (const a of t.actions!) expect(holder.actionIds).toContain(actionKey('system.access_packs', a.id));
+  });
+
+  it('puts pack create / update / delete on `manage` and leaves the list open (People & Access shares it)', () => {
+    const p = AccessController.prototype;
+    for (const h of ['createPack', 'updatePack', 'deletePack']) {
+      expect(meta(p, h)?.actionKeys).toEqual([actionKey('system.access_packs', 'manage')]);
+    }
+    expect(meta(p, 'listPacks')).toBeUndefined();
+  });
+});
+
+describe('Activity Logs: delegation and scope', () => {
+  const guard = new AuditLogsGuard();
+  const ctx = (user: unknown, query: Record<string, unknown> = {}) =>
+    ({ switchToHttp: () => ({ getRequest: () => ({ user, query }) }) }) as unknown as ExecutionContext;
+  const staff = (role: string, opts: { permissions?: string[]; actions?: string[] } = {}) => ({
+    userType: 'STAFF', role, permissions: opts.permissions ?? [], actions: opts.actions ?? [],
+  });
+
+  it('keeps the role allowlist exactly as it was', () => {
+    for (const role of ['SUPER_ADMIN', 'CAMPUS_ADMIN', 'PRINCIPAL']) expect(guard.canActivate(ctx(staff(role)))).toBe(true);
+    for (const role of ['FINANCE_CLERK', 'TEACHER', 'RECEPTIONIST', 'EMPLOYEE']) expect(guard.canActivate(ctx(staff(role)))).toBe(false);
+  });
+
+  it('keeps the directory-staff path: one student\'s timeline only', () => {
+    const dir = staff('TEACHER', { permissions: ['students.directory.view'] });
+    expect(guard.canActivate(ctx(dir, { student_id: '5' }))).toBe(true);
+    expect(guard.canActivate(ctx(dir, {}))).toBe(false);
+  });
+
+  it('lets a user a SUPER_ADMIN delegated the Activity Logs tile to see the feed, and nobody else', () => {
+    const viaGrant = computeEffectiveAccess({ ...base, role: StaffRole.FINANCE_CLERK, allowTileIds: ['system.activity_logs'] });
+    const delegated = staff('FINANCE_CLERK', { permissions: viaGrant.capabilityKeys, actions: viaGrant.actionIds });
+    expect(guard.canActivate(ctx(delegated))).toBe(true);
+    // a finance clerk with the finance capabilities alone is still refused
+    const clerk = computeEffectiveAccess({ ...base, role: StaffRole.FINANCE_CLERK, roleKeys: ['finance.vouchers.view', 'finance.deposits.record'] });
+    expect(guard.canActivate(ctx(staff('FINANCE_CLERK', { permissions: clerk.capabilityKeys, actions: clerk.actionIds })))).toBe(false);
+    expect(guard.canActivate(ctx({ userType: 'PARENT' }))).toBe(false);
+  });
+
+  describe('the feed a scope-restricted caller sees', () => {
+    const realScope = new ScopeService({} as any);
+    const mk = () => {
+      const audit_logs = { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) };
+      // Any other table the service reads (users, employees, ...) answers "nothing".
+      const other = () => ({ findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0) });
+      const prisma: any = new Proxy({ audit_logs }, { get: (t: any, k: string) => t[k] ?? (t[k] = other()) });
+      return { svc: new AuditLogsService(prisma as any, realScope), prisma };
+    };
+    const user = (role: string, extra: Record<string, unknown> = {}) =>
+      ({ sub: 'u', role, campusId: null, allowedClassIds: [], userType: 'STAFF', permissions: [], actions: [], scope: { campuses: [], segments: [], classes: [], sections: [], departments: [], staffCategories: [] }, ...extra }) as any;
+    const whereOf = (prisma: any) => JSON.stringify(prisma.audit_logs.findMany.mock.calls[0]?.[0]?.where ?? {});
+
+    it('adds a student-scope clause for a campus-scoped caller, and for a legacy campus-bound one', async () => {
+      for (const u of [
+        user('CAMPUS_ADMIN', { scope: { campuses: [3], segments: [], classes: [], sections: [], departments: [], staffCategories: [] } }),
+        user('CAMPUS_ADMIN', { campusId: 3 }),
+      ]) {
+        const { svc, prisma } = mk();
+        await svc.findAll({} as any, u);
+        expect(whereOf(prisma)).toContain('"students"');
+      }
+    });
+    it('leaves SUPER_ADMIN and an unrestricted caller with the full feed', async () => {
+      for (const u of [user('SUPER_ADMIN'), user('CAMPUS_ADMIN'), user('PRINCIPAL')]) {
+        const { svc, prisma } = mk();
+        await svc.findAll({} as any, u);
+        expect(whereOf(prisma)).not.toContain('"students"');
+      }
+    });
+    it('applies the scope to one student\'s timeline too', async () => {
+      const { svc, prisma } = mk();
+      await svc.findAll({ student_id: '5' } as any, user('CAMPUS_ADMIN', { campusId: 3 }));
+      expect(whereOf(prisma)).toContain('"students"');
+    });
   });
 });

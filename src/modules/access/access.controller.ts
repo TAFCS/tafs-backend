@@ -46,8 +46,8 @@ export class AccessController {
   // Shared with the separate Access Packs tile (system.access_packs, the
   // /system/permissions page) -- read-only here, so left undecorated rather
   // than requiring a system.people_access action for a page that isn't this
-  // one. The packs CRUD routes below belong to that tile entirely; not
-  // decorated here either.
+  // one. The packs CRUD routes below belong to that tile entirely and carry its
+  // `manage` action.
   @Get('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async listPacks() {
@@ -57,6 +57,7 @@ export class AccessController {
 
   @Post('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.access_packs#manage')
   async createPack(@Body() dto: CreateAccessPackDto, @CurrentUser() user: IJwtStaffPayload) {
     const pack = await this.accessService.createPack(dto, user.username || user.sub);
     return createApiResponse(pack, HttpStatus.CREATED, 'Access pack created successfully');
@@ -64,6 +65,7 @@ export class AccessController {
 
   @Put('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.access_packs#manage')
   async updatePack(
     @Param('id') id: string,
     @Body() dto: UpdateAccessPackDto,
@@ -75,6 +77,7 @@ export class AccessController {
 
   @Delete('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
+  @RequireAction('system.access_packs#manage')
   async deletePack(@Param('id') id: string, @CurrentUser() user: IJwtStaffPayload) {
     const result = await this.accessService.deletePack(id, user.username || user.sub);
     return createApiResponse(result, HttpStatus.OK, 'Access pack deleted successfully');

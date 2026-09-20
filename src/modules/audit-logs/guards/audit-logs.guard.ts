@@ -1,5 +1,6 @@
 import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
+import { userHoldsTile } from '../../access/tiles.manifest';
 
 const GLOBAL_AUDIT_ROLES: StaffRole[] = [
   StaffRole.SUPER_ADMIN,
@@ -22,6 +23,13 @@ export class AuditLogsGuard implements CanActivate {
     }
 
     if (GLOBAL_AUDIT_ROLES.includes(user.role)) {
+      return true;
+    }
+
+    // A user a SUPER_ADMIN delegated the Activity Logs tile to gets the feed too.
+    // The role list above could never be delegated; the service still limits
+    // what a scope-restricted caller sees.
+    if (userHoldsTile(user, 'system.activity_logs')) {
       return true;
     }
 

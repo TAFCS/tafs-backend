@@ -7,6 +7,9 @@ import {
   resolveAuditActorDisplay,
 } from '../../common/utils/audit-actor.util';
 import { QueryAuditLogsDto } from './dto/query-audit-logs.dto';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER', 'STUDENT_FLAG'],
@@ -137,7 +140,30 @@ export function parseSearchTerms(raw: string): SearchTerm[] {
 
 @Injectable()
 export class AuditLogsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly scope: ScopeService,
+  ) {}
+
+  /**
+   * Whether the caller's data scope narrows anything at all: a universal scope
+   * on any dimension, or the legacy campus / class fields older tokens carry.
+   * SUPER_ADMIN and internal callers are never restricted.
+   */
+  private isScopeRestricted(user?: IJwtStaffPayload): boolean {
+    if (!user || this.scope.isExempt(user)) return false;
+    const s = this.scope.scopeOf(user);
+    return (
+      s.campuses.length > 0 ||
+      s.segments.length > 0 ||
+      s.classes.length > 0 ||
+      s.sections.length > 0 ||
+      s.departments.length > 0 ||
+      s.staffCategories.length > 0 ||
+      user.campusId != null ||
+      (user.allowedClassIds?.length ?? 0) > 0
+    );
+  }
 
   /**
    * Log an event. Fire-and-forget safe: failures are swallowed so user actions
@@ -331,7 +357,7 @@ export class AuditLogsService {
    * Student-scoped: top-level rows for that student (parent_id null, or orphans whose
    * parent is not student-scoped), each with nested children when available.
    */
-  async findAll(query: QueryAuditLogsDto, requestingUser?: { role?: string }) {
+  async findAll(query: QueryAuditLogsDto, requestingUser?: Partial<IJwtStaffPayload>) {
     const where: any = {};
     const studentId = query.student_id ? Number(query.student_id) : null;
     const isStudentScoped = studentId != null && Number.isFinite(studentId);
@@ -431,6 +457,21 @@ export class AuditLogsService {
     const isSuperAdmin = requestingUser?.role === StaffRole.SUPER_ADMIN;
     if (!isSuperAdmin) {
       clauses.push({ entity_type: { notIn: SUPER_ADMIN_ONLY_ENTITY_TYPES } });
+    }
+
+    // A scope-restricted caller sees only events tied to a student inside their
+    // scope. Audit rows carry a student but no campus, so an event with no
+    // student (an employee, finance or settings change) cannot be placed in the
+    // caller's scope and is left out rather than risk showing another campus's.
+    if (this.isScopeRestricted(requestingUser as IJwtStaffPayload)) {
+      clauses.push({
+        students: {
+          AND: [
+            this.scope.whereForStudents(requestingUser as IJwtStaffPayload),
+            applyStudentScope(requestingUser as IJwtStaffPayload, {}),
+          ],
+        },
+      });
     }
 
     const finalWhere = clauses.length === 1 ? clauses[0] : { AND: clauses };
