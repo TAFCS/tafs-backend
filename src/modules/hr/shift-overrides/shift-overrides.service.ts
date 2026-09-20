@@ -8,6 +8,7 @@ import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { CreateShiftOverridesDto, ListShiftOverridesQueryDto } from './dto/shift-overrides.dto';
+import { actionsCover } from '../../access/tiles.manifest';
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
 
@@ -274,10 +275,17 @@ export class ShiftOverridesService {
     return { id };
   }
 
+  /**
+   * SUPER_ADMIN and CAMPUS_ADMIN keep exactly the access they had. A SUPER_ADMIN
+   * can now also delegate: a user who holds the tile's `manage` action passes
+   * too (the controller's TileActionGuard has already enforced it; this only
+   * stops the role check refusing a delegated user). Sessions without an
+   * `actions` claim fall back to the role.
+   */
   private assertCanManage(user: IJwtStaffPayload) {
-    if (user.role !== StaffRole.SUPER_ADMIN && user.role !== StaffRole.CAMPUS_ADMIN) {
-      throw new ForbiddenException('Only super admins and campus admins can manage shift overrides');
-    }
+    if (user.role === StaffRole.SUPER_ADMIN || user.role === StaffRole.CAMPUS_ADMIN) return;
+    if (actionsCover(user.actions ?? [], 'attendance.shift_overrides#manage')) return;
+    throw new ForbiddenException('Only super admins and campus admins can manage shift overrides');
   }
 
   // Legacy check kept standing per the scope-sweep handoff (do not delete until
