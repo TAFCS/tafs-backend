@@ -14,6 +14,8 @@ import { NoticeBoardService } from '../notice-board/notice-board.service';
 import { Prisma } from '@prisma/client';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
 import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/invalidate-unpaid-pdfs';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 export const ACCOUNT_DELETION_REQUEST_TYPE = 'ACCOUNT_DELETION';
 const AUDIT_ENTITY_TYPE = 'PARENT_CHANGE_REQUEST';
@@ -55,6 +57,7 @@ export class ParentChangeRequestsService {
     private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => NoticeBoardService))
     private readonly noticeBoardService: NoticeBoardService,
+    private readonly scope: ScopeService,
   ) {}
 
   /**
@@ -230,8 +233,24 @@ export class ParentChangeRequestsService {
     return request;
   }
 
-  async listRequests() {
+  async listRequests(user?: IJwtStaffPayload) {
+    const studentScope = user ? this.scope.whereForStudents(user) : {};
+    const hasScope = Object.keys(studentScope).length > 0;
+    const where = hasScope
+      ? {
+          families: {
+            students: {
+              some: {
+                deleted_at: null,
+                ...studentScope,
+              },
+            },
+          },
+        }
+      : {};
+
     return this.prisma.parent_change_requests.findMany({
+      where,
       include: {
         guardians: {
           select: {
@@ -270,19 +289,42 @@ export class ParentChangeRequestsService {
     });
   }
 
-  async getRequestById(id: number) {
+  async getRequestById(id: number, user?: IJwtStaffPayload) {
     const request = await this.prisma.parent_change_requests.findUnique({
       where: { id },
       include: {
         guardians: true,
         families: {
           include: {
-            students: true,
+            students: {
+              where: { deleted_at: null },
+              include: {
+                classes: { select: { segment_id: true } },
+              },
+            },
           },
         },
       },
     });
     if (!request) throw new NotFoundException('Change request not found');
+
+    if (user && !this.scope.isExempt(user)) {
+      const students = request.families?.students || [];
+      const canSee =
+        students.length > 0 &&
+        students.some((s) =>
+          this.scope.canSeeStudent(user, {
+            campus_id: s.campus_id,
+            class_id: s.class_id,
+            section_id: s.section_id,
+            segment_id: s.classes?.segment_id,
+          }),
+        );
+      if (!canSee) {
+        throw new NotFoundException('Change request not found');
+      }
+    }
+
     return request;
   }
 
@@ -570,8 +612,9 @@ export class ParentChangeRequestsService {
     dto: ProcessChangeRequestDto,
     adminId: string,
     adminLabel?: string,
+    user?: IJwtStaffPayload,
   ) {
-    const request = await this.getRequestById(id);
+    const request = await this.getRequestById(id, user);
 
     if (request.status !== 'PENDING') {
       throw new BadRequestException('Request has already been processed');

@@ -576,6 +576,12 @@ const FAMILIES_ACTIONS: TileAction[] = [
   { id: 'assign_student', label: 'Move / assign students', description: 'Assign or transfer students into a family household', implies: ['view'] },
 ];
 
+const PARENT_CHANGE_REQUESTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Parent Change Requests', description: 'See pending and processed profile change requests', default: true },
+
+  { id: 'process', label: 'Approve or reject requests', description: 'Process guardian and student profile change requests in full or partially', implies: ['view'] },
+];
+
 /**
  * Source of truth for ERP tiles. The API catalog and effective-tile math
  * read this array from memory. On boot, AccessSync upserts the same rows
@@ -590,7 +596,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'], actions: FAMILIES_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
-  { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'] },
+  { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'], actions: PARENT_CHANGE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },
   { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'], actions: ACADEMIC_ACTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.bulk_promote.execute'] },
   { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },

@@ -14,6 +14,13 @@ import { CreateChangeRequestDto } from './dto/create-change-request.dto';
 import { ProcessChangeRequestDto } from './dto/process-change-request.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
+import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { Action } from '../auth/casl/actions';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('parent-change-requests')
 export class ParentChangeRequestsController {
@@ -26,25 +33,36 @@ export class ParentChangeRequestsController {
   }
 
   @Get()
-  @UseGuards(JwtStaffGuard)
-  async listRequests() {
-    return this.service.listRequests();
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
+  @RequireAction('student.parent_change_requests#view')
+  async listRequests(@CurrentUser() user: IJwtStaffPayload) {
+    return this.service.listRequests(user);
   }
 
   @Get(':id')
-  @UseGuards(JwtStaffGuard)
-  async getRequest(@Param('id', ParseIntPipe) id: number) {
-    return this.service.getRequestById(id);
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Family'))
+  @RequireAction('student.parent_change_requests#view')
+  async getRequest(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return this.service.getRequestById(id, user);
   }
 
   @Patch(':id/process')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Update, 'Family'))
+  @RequireAction('student.parent_change_requests#process')
   async processRequest(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ProcessChangeRequestDto,
+    @CurrentUser() user: IJwtStaffPayload,
     @Request() req: any,
   ) {
-    const adminLabel = req.user?.username || req.user?.sub || 'system';
-    return this.service.processRequest(id, dto, req.user.sub, adminLabel);
+    const adminLabel = user?.username || req?.user?.username || user?.sub || 'system';
+    return this.service.processRequest(id, dto, user.sub, adminLabel, user);
   }
 }
+

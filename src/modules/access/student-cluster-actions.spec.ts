@@ -3,6 +3,7 @@ import 'reflect-metadata';
 // @react-pdf/renderer ships ESM that jest does not transform; nothing here
 // renders a PDF, so stub it (and the component that imports it).
 jest.mock('@react-pdf/renderer', () => ({ renderToBuffer: jest.fn() }));
+jest.mock('uuid', () => ({ v4: () => 'mock-uuid' }));
 // virtual: jest here has no tsx in moduleFileExtensions, so it cannot resolve the file.
 jest.mock('../transfers/TransferOrderPDF', () => ({ TransferOrderPDF: () => null }), { virtual: true });
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
@@ -16,6 +17,9 @@ import { HouseBalancerService } from '../house-balancer/house-balancer.service';
 import { StudentsController } from '../students/students.controller';
 import { FamiliesController } from '../families/families.controller';
 import { FamiliesService } from '../families/families.service';
+import { ParentChangeRequestsController } from '../parent-change-requests/parent-change-requests.controller';
+import { ParentChangeRequestsService } from '../parent-change-requests/parent-change-requests.service';
+import { ChangeRequestStatus } from '../parent-change-requests/dto/process-change-request.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
@@ -411,4 +415,121 @@ describe('Families', () => {
     await expect(s.initializeFamilyFromStudent(2, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+describe('Parent Change Requests', () => {
+  const t = tile('student.parent_change_requests');
+
+  it('is bridged from students.families.edit, so a view-only role gets view and an editor gets process', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual(['students.families.edit']);
+    const viewOnly = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.PRINCIPAL,
+      roleKeys: ['students.families.view'],
+    });
+    const held = viewOnly.actionIds.filter((k) => k.startsWith('student.parent_change_requests#'));
+    expect(held).toEqual([actionKey('student.parent_change_requests', 'view')]);
+
+    const editor = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['students.families.view', 'students.families.edit'],
+    });
+    for (const a of t.actions!) {
+      expect(editor.actionIds).toContain(actionKey('student.parent_change_requests', a.id));
+    }
+  });
+
+  it('decorates routes with tile actions', () => {
+    const proto = ParentChangeRequestsController.prototype;
+    expect(meta(proto, 'listRequests')?.actionKeys).toEqual([
+      actionKey('student.parent_change_requests', 'view'),
+    ]);
+    expect(meta(proto, 'getRequest')?.actionKeys).toEqual([
+      actionKey('student.parent_change_requests', 'view'),
+    ]);
+    expect(meta(proto, 'processRequest')?.actionKeys).toEqual([
+      actionKey('student.parent_change_requests', 'process'),
+    ]);
+    keysExist([
+      'student.parent_change_requests#view',
+      'student.parent_change_requests#process',
+    ]);
+  });
+
+  function svc(opts: { request?: unknown; canSee?: boolean }) {
+    const prisma = {
+      parent_change_requests: {
+        findUnique: jest.fn().mockResolvedValue(opts.request ?? null),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockResolvedValue({ id: 2 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 1, status: 'APPROVED' }),
+      },
+      guardians: {
+        findUnique: jest.fn().mockResolvedValue({ id: 1, full_name: 'Parent' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      families: {
+        findUnique: jest.fn().mockResolvedValue({ id: 1, household_name: 'Family' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      students: {
+        findUnique: jest.fn().mockResolvedValue({ cc: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      student_guardians: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      audit_logs: { log: jest.fn() },
+      $transaction: jest.fn((cb) => (typeof cb === 'function' ? cb(prisma) : Promise.all(cb))),
+    };
+    const scope = {
+      isExempt: jest.fn().mockReturnValue(false),
+      canSeeStudent: jest.fn().mockReturnValue(opts.canSee ?? true),
+      whereForStudents: jest.fn().mockReturnValue({ campus_id: { in: [3] } }),
+    };
+    const authService = { deleteParentAccount: jest.fn() };
+    const auditLogs = { log: jest.fn() };
+    const noticeBoard = { createPost: jest.fn() };
+    const s = new ParentChangeRequestsService(
+      prisma as any,
+      authService as any,
+      auditLogs as any,
+      noticeBoard as any,
+      scope as any,
+    );
+    return { s, prisma, scope };
+  }
+
+  const reqWithStudent = {
+    id: 1,
+    guardian_id: 1,
+    family_id: 1,
+    status: 'PENDING',
+    requested_data: { full_name: 'NEW NAME' },
+    guardians: { id: 1, full_name: 'Old Name' },
+    families: {
+      id: 1,
+      household_name: 'Family',
+      students: [{ cc: 1, campus_id: 1, class_id: 3, section_id: 4, classes: { segment_id: 1 } }],
+    },
+  };
+
+  it('narrows listRequests to caller student scope', async () => {
+    const { s, prisma } = svc({});
+    await s.listRequests(scopedUser);
+    const findWhere = prisma.parent_change_requests.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(findWhere.families.students.some)).toContain('"campus_id":{"in":[3]}');
+  });
+
+  it('404s an out-of-scope change request on getRequestById and processRequest', async () => {
+    const { s } = svc({ request: reqWithStudent, canSee: false });
+    await expect(s.getRequestById(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      s.processRequest(1, { status: ChangeRequestStatus.APPROVED }, 'admin', 'admin', scopedUser),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 
