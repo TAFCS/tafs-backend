@@ -38,7 +38,7 @@ export class StaffAttendanceController {
 
   @Put()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
-  @RequireAnyAction('attendance.staff_register#mark', 'hr.payroll#line_manage')
+  @RequireAnyAction('attendance.staff_register#mark', 'attendance.employee_attendance#mark', 'hr.payroll#line_manage')
   async bulkMark(
     @Body() dto: BulkMarkStaffAttendanceDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -49,6 +49,7 @@ export class StaffAttendanceController {
 
   @Get('summary')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAction('attendance.employee_attendance#view')
   async getSummary(
     @Query() query: GetStaffAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -59,6 +60,7 @@ export class StaffAttendanceController {
 
   @Get('dashboard')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAction('attendance.employee_attendance#view')
   async getDashboard(
     @Query() query: GetStaffAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -79,6 +81,7 @@ export class StaffAttendanceController {
 
   @Get(':employeeId/timeline')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAnyAction('attendance.employee_attendance#view', 'hr.employee_directory#view', 'attendance.timetables#view')
   async getTimeline(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Query() query: GetStaffTimelineQueryDto,

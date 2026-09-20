@@ -513,53 +513,69 @@ describe('Scope on the policy tiles', () => {
     });
   });
 
-  describe('Staff Register', () => {
-    const t = tile('attendance.staff_register');
+  describe('Staff Register & Employee Attendance', () => {
+    const srTile = tile('attendance.staff_register');
+    const eaTile = tile('attendance.employee_attendance');
 
-    it('bridges from attendance.staff.mark, which the tile itself requires', () => {
-      expect(t.capabilities).toEqual(['attendance.staff.mark']);
-      expect(t.legacyFullAccessCapabilities).toEqual(['attendance.staff.mark']);
+    it('bridges from attendance.staff.mark for both tiles', () => {
+      expect(srTile.capabilities).toEqual(['attendance.staff.mark']);
+      expect(srTile.legacyFullAccessCapabilities).toEqual(['attendance.staff.mark']);
+      expect(eaTile.capabilities).toEqual(['attendance.staff.mark', 'hr.objections.review']);
+      expect(eaTile.legacyFullAccessCapabilities).toEqual(['attendance.staff.mark']);
+
       const r = computeEffectiveAccess({
         ...base,
         role: StaffRole.CAMPUS_ADMIN,
-        roleKeys: ['attendance.staff.mark'],
+        roleKeys: ['attendance.staff.mark', 'hr.objections.review'],
       });
-      for (const a of t.actions!) expect(r.actionIds).toContain(actionKey('attendance.staff_register', a.id));
+      for (const a of srTile.actions!) expect(r.actionIds).toContain(actionKey('attendance.staff_register', a.id));
+      for (const a of eaTile.actions!) expect(r.actionIds).toContain(actionKey('attendance.employee_attendance', a.id));
     });
 
-    it('gates getRegister on view and bulkMark on mark or hr.payroll#line_manage', () => {
+    it('gates routes on their respective actions', () => {
       const p = StaffAttendanceController.prototype;
       expect(meta(p, 'getRegister')?.actionKeys).toEqual([actionKey('attendance.staff_register', 'view')]);
       expect(meta(p, 'bulkMark')?.actionKeys).toEqual([
         actionKey('attendance.staff_register', 'mark'),
+        actionKey('attendance.employee_attendance', 'mark'),
         actionKey('hr.payroll', 'line_manage'),
       ]);
+      expect(meta(p, 'getSummary')?.actionKeys).toEqual([actionKey('attendance.employee_attendance', 'view')]);
+      expect(meta(p, 'getDashboard')?.actionKeys).toEqual([actionKey('attendance.employee_attendance', 'view')]);
+      expect(meta(p, 'getTimeline')?.actionKeys).toEqual([
+        actionKey('attendance.employee_attendance', 'view'),
+        actionKey('hr.employee_directory', 'view'),
+        actionKey('attendance.timetables', 'view'),
+      ]);
+
       const guards: unknown[] = Reflect.getMetadata('__guards__', StaffAttendanceController) ?? [];
       expect(guards).toContain(TileActionGuard);
-      keysExist(['attendance.staff_register#view', 'attendance.staff_register#mark']);
+      keysExist([
+        'attendance.staff_register#view',
+        'attendance.staff_register#mark',
+        'attendance.employee_attendance#view',
+        'attendance.employee_attendance#mark',
+      ]);
     });
 
     it('accounts for every route: decorated or left open on purpose with a reason', () => {
       assertEveryRouteAccountedFor(StaffAttendanceController, {
-        getSummary: 'used by attendance dashboard and summary statistics',
-        getDashboard: 'used by attendance dashboard',
         getMyAttendance: 'staff self service with assertStaffSelfPermission',
-        getTimeline: 'used by attendance timeline',
       });
     });
 
-    it('lets a SUPER_ADMIN narrow a person: deny mark and they keep view', () => {
+    it('lets a SUPER_ADMIN narrow Employee Attendance: deny mark and they keep view', () => {
       const r = computeEffectiveAccess({
         ...base,
         role: StaffRole.EMPLOYEE,
-        roleKeys: ['attendance.staff.mark'],
-        userActionGrants: [{ tileId: 'attendance.staff_register', actionId: 'mark', allow: false }],
+        roleKeys: ['attendance.staff.mark', 'hr.objections.review'],
+        userActionGrants: [{ tileId: 'attendance.employee_attendance', actionId: 'mark', allow: false }],
       });
-      expect(r.actionIds).toContain(actionKey('attendance.staff_register', 'view'));
-      expect(r.actionIds).not.toContain(actionKey('attendance.staff_register', 'mark'));
+      expect(r.actionIds).toContain(actionKey('attendance.employee_attendance', 'view'));
+      expect(r.actionIds).not.toContain(actionKey('attendance.employee_attendance', 'mark'));
     });
 
-    it('refuses another campus on getRegister and bulkMark before touching attendance records', async () => {
+    it('refuses another campus on getRegister, getSummary, getDashboard, and bulkMark before touching attendance records', async () => {
       const prisma = {
         employee_profiles: { findMany: jest.fn().mockResolvedValue([]) },
         attendance_staff_daily: { findMany: jest.fn().mockResolvedValue([]) },
@@ -578,6 +594,14 @@ describe('Scope on the policy tiles', () => {
 
       await expect(
         s.getRegister({ date: '2026-09-20', campus_id: [9] } as any, scoped),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      await expect(
+        s.getSummary({ date: '2026-09-20', campus_id: [9] } as any, scoped),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      await expect(
+        s.getDashboard({ date: '2026-09-20', campus_id: [9] } as any, scoped),
       ).rejects.toBeInstanceOf(ForbiddenException);
 
       await expect(

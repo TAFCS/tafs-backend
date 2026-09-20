@@ -710,6 +710,11 @@ const STAFF_REGISTER_ACTIONS: TileAction[] = [
   { id: 'mark', label: 'Mark staff attendance', description: 'Mark present/absent/late/excused and save daily attendance', implies: ['view'] },
 ];
 
+const EMPLOYEE_ATTENDANCE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View employee attendance', description: 'Daily attendance board, summary stats, and employee timeline', default: true },
+  { id: 'mark', label: 'Mark or resolve attendance', description: 'Bulk mark attendance status, apply clock-out times, and resolve missing punches', implies: ['view'] },
+];
+
 const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
 
@@ -766,7 +771,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
 
   // ── Attendance ───────────────────────────────────────────────────────────
   { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'], actions: STAFF_REGISTER_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
-  { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'] },
+  { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'], actions: EMPLOYEE_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
   { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'] },
   { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'] },
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'] },
