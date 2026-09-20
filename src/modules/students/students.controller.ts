@@ -39,9 +39,17 @@ export class StudentsController {
     );
   }
 
+  // Also the roster / preview list behind Academic Actions (bulk promote) and
+  // Section Allocation Rules, so those tiles' holders are not refused by a
+  // directory-only action. The policy check and scope are unchanged.
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAction('student.directory#view')
+  @RequireAnyAction(
+    'student.directory#view',
+    'student.academic_actions#view',
+    'student.section_allocation#view',
+    'school-setup.section_allocation#view',
+  )
   async findAll(
     @Query() query: GetStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -141,7 +149,11 @@ export class StudentsController {
 
   @Patch(':id/assignment')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  @RequireAction('student.directory#assignment.edit')
+  @RequireAnyAction(
+    'student.directory#assignment.edit',
+    'student.section_allocation#move',
+    'school-setup.section_allocation#move',
+  )
   async assignStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AssignStudentDto,

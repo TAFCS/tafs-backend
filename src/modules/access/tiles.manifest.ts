@@ -502,6 +502,20 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Section Allocation Rules is one page listed under two tiles
+// (student.section_allocation and school-setup.section_allocation), so both
+// carry this same action set and every route accepts either. Bridged from
+// academic.campuses.edit, which the section-mapping route's Update Campus
+// policy already required. The page reads its roster from GET /students and
+// moves students with PATCH /students/:id/assignment, both Student Directory
+// routes, so those now also accept this tile's `view` / `move`.
+const SECTION_ALLOCATION_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Section Allocation Rules', description: 'See each campus\'s sections, their rules and the students in them', default: true },
+
+  { id: 'rules.edit', label: 'Edit section rules', description: 'Activate a section at a campus and change its allocation settings', implies: ['view'] },
+  { id: 'move', label: 'Move students between sections', implies: ['view'] },
+];
+
 // Registration (the full admission form). Both writes already carried a CASL
 // policy (Create / Update on Student), so the bridge preserves exactly who
 // could do them: every capability that the generic mapper turns into "manage
@@ -627,7 +641,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'], actions: PARENT_CHANGE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },
   { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'], actions: ACADEMIC_ACTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.bulk_promote.execute'] },
-  { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
+  { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
 
   // ?? Finance ??????????????????????????????????????????????????????????????
@@ -682,7 +696,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'], actions: CLASSES_ACTIONS, legacyFullAccessCapabilities: ['academic.classes.edit'] },
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
   { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
-  { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
+  { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'], actions: FEE_TYPES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
   { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'], actions: DISCOUNT_PRESETS_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },

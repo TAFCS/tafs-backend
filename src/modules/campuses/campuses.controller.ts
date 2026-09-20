@@ -20,7 +20,7 @@ import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Action } from '../auth/casl/actions';
 import { CreateCampusDto } from './dto/create-campus.dto';
@@ -29,10 +29,11 @@ import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CAMPUSES_MESSAGES } from '../../constants/api-response/campuses.constant';
 
-// GET routes are read by nearly every page for campus dropdowns, and the
-// section-mapping PUT is also called by Student Overrides (studentwise-fees) —
-// those stay undecorated at the tile layer; scope is still enforced on every
-// write. Only routes exclusive to the Campuses page carry @RequireAction.
+// GET routes are read by nearly every page for campus dropdowns, so they stay
+// undecorated at the tile layer. The section-mapping PUT is shared by the
+// Campuses page, Student Overrides and Section Allocation Rules, so it takes
+// @RequireAnyAction across those tiles. Routes exclusive to the Campuses page
+// carry @RequireAction. Scope is enforced on every write.
 @Controller('campuses')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class CampusesController {
@@ -139,9 +140,19 @@ export class CampusesController {
 
     // ─── Campus Sections ──────────────────────────────────────────────────────
 
+    // Called by four pages across three tiles: the Campuses page, Student
+    // Overrides (which syncs the section on save) and Section Allocation Rules
+    // (listed under two tile ids). Each tile's own action is accepted; scope is
+    // still enforced on every write.
     @Put(':id/classes/:classId/sections/:sectionId')
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    @RequireAnyAction(
+        'school-setup.campuses#classes.manage',
+        'finance.student_overrides#schedule.edit',
+        'student.section_allocation#rules.edit',
+        'school-setup.section_allocation#rules.edit',
+    )
     async upsertCampusSection(
         @Param('id', ParseIntPipe) id: number,
         @Param('classId', ParseIntPipe) classId: number,

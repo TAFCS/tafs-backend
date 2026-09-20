@@ -15,6 +15,7 @@ import { UnconfirmedAdmissionsController } from '../unconfirmed-admissions/uncon
 import { UnconfirmedAdmissionsService } from '../unconfirmed-admissions/unconfirmed-admissions.service';
 import { IdentityController } from '../identity/identity.controller';
 import { IdentityService } from '../identity/identity.service';
+import { CampusesController } from '../campuses/campuses.controller';
 import { EnrollmentController } from '../enrollments/enrollment.controller';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 import { HouseBalancerController } from '../house-balancer/house-balancer.controller';
@@ -27,7 +28,7 @@ import { ParentChangeRequestsService } from '../parent-change-requests/parent-ch
 import { ChangeRequestStatus } from '../parent-change-requests/dto/process-change-request.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { TILES_MANIFEST, actionKey } from './tiles.manifest';
+import { TILES_MANIFEST, actionKey, actionsCover } from './tiles.manifest';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
 import {
   REQUIRE_ACTION_KEY,
@@ -708,5 +709,77 @@ describe('Registration', () => {
     expect(hidden.prisma.$transaction).not.toHaveBeenCalled();
     const leftover = svc({ student: null, canSee: false, leftover: { campus_id: 5 } });
     await expect(leftover.s.getAdmissionByCC(7, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('Section Allocation Rules (two tiles, one page)', () => {
+  const a = tile('student.section_allocation');
+  const b = tile('school-setup.section_allocation');
+
+  it('gives both tile ids the same actions and the same bridge', () => {
+    expect(a.actions).toBe(b.actions);
+    expect(a.legacyFullAccessCapabilities).toEqual(['academic.campuses.edit']);
+    expect(b.legacyFullAccessCapabilities).toEqual(['academic.campuses.edit']);
+  });
+
+  it('keeps a campuses.view-only role read-only and gives an editor everything', () => {
+    const viewOnly = computeEffectiveAccess({ ...base, role: StaffRole.PRINCIPAL, roleKeys: ['academic.campuses.view'] });
+    expect(viewOnly.actionIds.filter((k) => k.includes('section_allocation#'))).toEqual([
+      actionKey('student.section_allocation', 'view'),
+      actionKey('school-setup.section_allocation', 'view'),
+    ]);
+    const editor = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['academic.campuses.view', 'academic.campuses.edit'],
+    });
+    for (const id of ['student.section_allocation', 'school-setup.section_allocation']) {
+      for (const act of a.actions!) expect(editor.actionIds).toContain(actionKey(id, act.id));
+    }
+  });
+
+  it('lets a holder of ONLY this tile reach the roster list, the move route and the section PUT', () => {
+    const r = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['academic.campuses.view', 'academic.campuses.edit'],
+    });
+    const held = new Set(r.actionIds);
+    // ...and does NOT hold the Student Directory tile.
+    expect(r.tileIds).not.toContain('student.directory');
+    for (const [ctrl, handler] of [
+      [StudentsController, 'findAll'],
+      [StudentsController, 'assignStudent'],
+      [CampusesController, 'upsertCampusSection'],
+    ] as const) {
+      const m = meta(ctrl.prototype, handler)!;
+      expect(m.mode).toBe('any');
+      expect(m.actionKeys.some((k) => actionsCover(held, k))).toBe(true);
+    }
+  });
+
+  it('keeps the shared routes open to every tile that already calls them', () => {
+    const list = meta(StudentsController.prototype, 'findAll')!.actionKeys;
+    expect(list).toEqual(
+      expect.arrayContaining([
+        'student.directory#view',
+        'student.academic_actions#view',
+        'student.section_allocation#view',
+        'school-setup.section_allocation#view',
+      ]),
+    );
+    expect(meta(StudentsController.prototype, 'assignStudent')!.actionKeys).toEqual(
+      expect.arrayContaining(['student.directory#assignment.edit', 'student.section_allocation#move', 'school-setup.section_allocation#move']),
+    );
+    const put = meta(CampusesController.prototype, 'upsertCampusSection')!.actionKeys;
+    expect(put).toEqual(
+      expect.arrayContaining([
+        'school-setup.campuses#classes.manage', // Campuses page
+        'finance.student_overrides#schedule.edit', // Student Overrides saves the section
+        'student.section_allocation#rules.edit',
+        'school-setup.section_allocation#rules.edit',
+      ]),
+    );
+    keysExist([...list, ...put, 'student.section_allocation#move', 'school-setup.section_allocation#move']);
   });
 });
