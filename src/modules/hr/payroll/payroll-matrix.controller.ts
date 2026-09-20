@@ -3,7 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
+import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
+import { RequireAnyAction } from '../../../decorators/require-action.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -14,12 +16,13 @@ import { AttendanceMatrixQueryDto } from './dto/payroll.dto';
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
 @Controller('hr/payroll')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class PayrollMatrixController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Get('attendance-matrix')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAnyAction('attendance.employee_attendance_cycle#view', 'hr.payroll#view')
   async getAttendanceMatrix(@Query() query: AttendanceMatrixQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.getAttendanceMatrix(query, user);
     return createApiResponse(data, HttpStatus.OK, 'Attendance matrix retrieved successfully');
@@ -27,6 +30,7 @@ export class PayrollMatrixController {
 
   @Get('attendance-matrix/export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Payroll'))
+  @RequireAnyAction('attendance.employee_attendance_cycle#export', 'hr.payroll#export')
   async exportAttendanceMatrix(
     @Query() query: AttendanceMatrixQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -41,3 +45,4 @@ export class PayrollMatrixController {
     res.send(buffer);
   }
 }
+

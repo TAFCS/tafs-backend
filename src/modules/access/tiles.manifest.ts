@@ -715,6 +715,17 @@ const EMPLOYEE_ATTENDANCE_ACTIONS: TileAction[] = [
   { id: 'mark', label: 'Mark or resolve attendance', description: 'Bulk mark attendance status, apply clock-out times, and resolve missing punches', implies: ['view'] },
 ];
 
+const EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View cycle attendance', description: 'See employee lines and punch card matrix over date range', default: true },
+  { id: 'export', label: 'Export cycle attendance', description: 'Export employee lines and punch matrix to Excel', implies: ['view'] },
+  { id: 'mark', label: 'Resolve or edit attendance', description: 'Mark status, set clock-out times, and resolve missing punches', implies: ['view'] },
+];
+
+const OBJECTIONS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View attendance objections', description: 'See pending and reviewed attendance disputes and stats', default: true },
+  { id: 'review', label: 'Review attendance objections', description: 'Accept or reject employee attendance objections', implies: ['view'] },
+];
+
 const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
 
@@ -772,8 +783,8 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ── Attendance ───────────────────────────────────────────────────────────
   { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'], actions: STAFF_REGISTER_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
   { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'], actions: EMPLOYEE_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
-  { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'] },
-  { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'] },
+  { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'], actions: EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage', 'hr.payroll.view'] },
+  { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'], actions: OBJECTIONS_ACTIONS, legacyFullAccessCapabilities: ['hr.objections.review'] },
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'] },
   { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },
   { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'] },

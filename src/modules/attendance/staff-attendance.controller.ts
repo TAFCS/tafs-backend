@@ -38,7 +38,12 @@ export class StaffAttendanceController {
 
   @Put()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
-  @RequireAnyAction('attendance.staff_register#mark', 'attendance.employee_attendance#mark', 'hr.payroll#line_manage')
+  @RequireAnyAction(
+    'attendance.staff_register#mark',
+    'attendance.employee_attendance#mark',
+    'attendance.employee_attendance_cycle#mark',
+    'hr.payroll#line_manage',
+  )
   async bulkMark(
     @Body() dto: BulkMarkStaffAttendanceDto,
     @CurrentUser() user: IJwtStaffPayload,

@@ -13,6 +13,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
@@ -29,7 +31,7 @@ import {
 @ApiTags('Attendance Objections')
 @ApiBearerAuth()
 @Controller('attendance/objections')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class AttendanceObjectionsController {
   constructor(private readonly objectionsService: AttendanceObjectionsService) {}
 
@@ -51,8 +53,8 @@ export class AttendanceObjectionsController {
   }
 
   @Get()
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
+  @RequireAction('attendance.objections#view')
   async listForReview(
     @Query() query: ListAttendanceObjectionsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -62,16 +64,16 @@ export class AttendanceObjectionsController {
   }
 
   @Get('pending-count')
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
+  @RequireAction('attendance.objections#view')
   async countPending(@CurrentUser() user: IJwtStaffPayload) {
     const data = await this.objectionsService.countPending(user);
     return createApiResponse(data, HttpStatus.OK, 'Pending objections count retrieved successfully');
   }
 
   @Patch(':id')
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
+  @RequireAction('attendance.objections#review')
   async review(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReviewAttendanceObjectionDto,
@@ -81,3 +83,4 @@ export class AttendanceObjectionsController {
     return createApiResponse(data, HttpStatus.OK, 'Objection reviewed successfully');
   }
 }
+

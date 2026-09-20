@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+jest.mock('@react-pdf/renderer', () => ({ renderToBuffer: jest.fn() }));
+jest.mock('../hr/payroll/payslip-pdf/PayslipPDF', () => ({ PayslipPDF: () => null }), { virtual: true });
 import { StaffRole } from '@prisma/client';
 import { SaturdaySchedulesController } from '../hr/saturday-schedules/saturday-schedules.controller';
 import { ShiftOverridesController } from '../hr/shift-overrides/shift-overrides.controller';
@@ -13,6 +15,8 @@ import { SubjectsController } from '../timetables/subjects.controller';
 import { TeachingGroupsController } from '../timetables/teaching-groups.controller';
 import { StaffAttendanceController } from '../attendance/staff-attendance.controller';
 import { StaffAttendanceService } from '../attendance/staff-attendance.service';
+import { AttendanceObjectionsController } from '../attendance/attendance-objections.controller';
+import { PayrollMatrixController } from '../hr/payroll/payroll-matrix.controller';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
@@ -538,6 +542,7 @@ describe('Scope on the policy tiles', () => {
       expect(meta(p, 'bulkMark')?.actionKeys).toEqual([
         actionKey('attendance.staff_register', 'mark'),
         actionKey('attendance.employee_attendance', 'mark'),
+        actionKey('attendance.employee_attendance_cycle', 'mark'),
         actionKey('hr.payroll', 'line_manage'),
       ]);
       expect(meta(p, 'getSummary')?.actionKeys).toEqual([actionKey('attendance.employee_attendance', 'view')]);
@@ -555,6 +560,7 @@ describe('Scope on the policy tiles', () => {
         'attendance.staff_register#mark',
         'attendance.employee_attendance#view',
         'attendance.employee_attendance#mark',
+        'attendance.employee_attendance_cycle#mark',
       ]);
     });
 
@@ -610,6 +616,111 @@ describe('Scope on the policy tiles', () => {
           scoped,
         ),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  describe('Employee Attendance by Cycle', () => {
+    const eacTile = tile('attendance.employee_attendance_cycle');
+
+    it('bridges from hr.payroll.view and hr.payroll.manage', () => {
+      expect(eacTile.capabilities).toEqual(['hr.payroll.view']);
+      expect(eacTile.legacyFullAccessCapabilities).toEqual(['hr.payroll.manage', 'hr.payroll.view']);
+
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['hr.payroll.view'],
+      });
+      for (const a of eacTile.actions!) {
+        expect(r.actionIds).toContain(actionKey('attendance.employee_attendance_cycle', a.id));
+      }
+    });
+
+    it('gates matrix and export routes on their respective actions', () => {
+      const p = PayrollMatrixController.prototype;
+      expect(meta(p, 'getAttendanceMatrix')?.actionKeys).toEqual([
+        actionKey('attendance.employee_attendance_cycle', 'view'),
+        actionKey('hr.payroll', 'view'),
+      ]);
+      expect(meta(p, 'exportAttendanceMatrix')?.actionKeys).toEqual([
+        actionKey('attendance.employee_attendance_cycle', 'export'),
+        actionKey('hr.payroll', 'export'),
+      ]);
+
+      const guards: unknown[] = Reflect.getMetadata('__guards__', PayrollMatrixController) ?? [];
+      expect(guards).toContain(TileActionGuard);
+      keysExist([
+        'attendance.employee_attendance_cycle#view',
+        'attendance.employee_attendance_cycle#export',
+        'attendance.employee_attendance_cycle#mark',
+      ]);
+    });
+
+    it('lets a SUPER_ADMIN narrow Employee Attendance by Cycle: deny export and they keep view', () => {
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.EMPLOYEE,
+        roleKeys: ['hr.payroll.view'],
+        userActionGrants: [{ tileId: 'attendance.employee_attendance_cycle', actionId: 'export', allow: false }],
+      });
+      expect(r.actionIds).toContain(actionKey('attendance.employee_attendance_cycle', 'view'));
+      expect(r.actionIds).not.toContain(actionKey('attendance.employee_attendance_cycle', 'export'));
+    });
+  });
+
+  describe('Attendance Objections', () => {
+    const objTile = tile('attendance.objections');
+
+    it('bridges from hr.objections.review', () => {
+      expect(objTile.capabilities).toEqual(['hr.objections.review']);
+      expect(objTile.legacyFullAccessCapabilities).toEqual(['hr.objections.review']);
+
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['hr.objections.review'],
+      });
+      for (const a of objTile.actions!) {
+        expect(r.actionIds).toContain(actionKey('attendance.objections', a.id));
+      }
+    });
+
+    it('gates review routes on their respective actions', () => {
+      const p = AttendanceObjectionsController.prototype;
+      expect(meta(p, 'listForReview')?.actionKeys).toEqual([
+        actionKey('attendance.objections', 'view'),
+      ]);
+      expect(meta(p, 'countPending')?.actionKeys).toEqual([
+        actionKey('attendance.objections', 'view'),
+      ]);
+      expect(meta(p, 'review')?.actionKeys).toEqual([
+        actionKey('attendance.objections', 'review'),
+      ]);
+
+      const guards: unknown[] = Reflect.getMetadata('__guards__', AttendanceObjectionsController) ?? [];
+      expect(guards).toContain(TileActionGuard);
+      keysExist([
+        'attendance.objections#view',
+        'attendance.objections#review',
+      ]);
+    });
+
+    it('accounts for every route: decorated or left open on purpose with a reason', () => {
+      assertEveryRouteAccountedFor(AttendanceObjectionsController, {
+        create: 'staff self service with assertStaffSelfPermission',
+        listMine: 'staff self service with assertStaffSelfPermission',
+      });
+    });
+
+    it('lets a SUPER_ADMIN narrow Attendance Objections: deny review and they keep view', () => {
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.EMPLOYEE,
+        roleKeys: ['hr.objections.review'],
+        userActionGrants: [{ tileId: 'attendance.objections', actionId: 'review', allow: false }],
+      });
+      expect(r.actionIds).toContain(actionKey('attendance.objections', 'view'));
+      expect(r.actionIds).not.toContain(actionKey('attendance.objections', 'review'));
     });
   });
 });
