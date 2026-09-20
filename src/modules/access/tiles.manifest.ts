@@ -502,6 +502,21 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// Database Backups. BackupsController had only JwtStaffGuard: any logged-in
+// staff member could list, trigger, download or delete backups through the API
+// (only the tile's visibility hid it). system.backups.view is deliberately held
+// by no default role but SUPER_ADMIN (CAMPUS_ADMIN's mapping excludes it), and
+// there is NO legacy bridge, so nobody else inherits anything. Downloading a
+// backup exposes every campus's data at once, and deleting one is irreversible,
+// so each is its own action a SUPER_ADMIN grants deliberately.
+const BACKUPS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Database Backups', description: 'See the list of backups', default: true },
+
+  { id: 'trigger', label: 'Start a backup', implies: ['view'] },
+  { id: 'download', label: 'Download a backup', description: 'A backup contains every campus\'s data', implies: ['view'] },
+  { id: 'delete', label: 'Delete a backup', description: 'Irreversible', implies: ['view'] },
+];
+
 // The five "policy" tiles all list hr.policies.manage, which the generic mapper
 // turns into manage on Policy, Calendar and ClassAttendanceMode. Four of them
 // bridge from it, so everyone who holds those tiles keeps every action. The
@@ -831,7 +846,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'], actions: PEOPLE_ACCESS_ACTIONS, legacyFullAccessCapabilities: ['system.users.edit', 'system.permissions.manage'] },
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'] },
   { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'] },
-  { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'] },
+  { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'], actions: BACKUPS_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },
 ];
 
