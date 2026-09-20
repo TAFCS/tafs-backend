@@ -21,17 +21,40 @@ export class AccessSyncService implements OnModuleInit {
   async sync() {
     const started = Date.now();
     const keys = [...new Set(TILES_MANIFEST.flatMap((t) => t.capabilities))];
-    const permissions = await this.prisma.permissions.findMany({
-      where: { key: { in: keys } },
-      select: { id: true, key: true },
-    });
-    const permByKey = new Map(permissions.map((p) => [p.key, p.id]));
+    const findPermissions = () =>
+      this.prisma.permissions.findMany({
+        where: { key: { in: keys } },
+        select: { id: true, key: true },
+      });
+    let permissions = await findPermissions();
+    let permByKey = new Map(permissions.map((p) => [p.key, p.id]));
     const missing = keys.filter((k) => !permByKey.has(k));
     if (missing.length > 0) {
-      throw new Error(
-        `Access tile manifest references permission keys that do not exist: ${missing.join(', ')}. ` +
-          'Add them to scripts/seed-permissions.ts (and run the seed) before booting.',
+      // Deploys here do not run the permissions seed, so a manifest key added
+      // in the same release would otherwise crash-loop the boot. Insert a
+      // placeholder row instead. It grants nothing: no role_permissions row is
+      // created, so holding it still requires an explicit grant. The seed
+      // upserts by key and overwrites module/description with the real values.
+      const tileFor = new Map<string, (typeof TILES_MANIFEST)[number]>();
+      for (const tile of TILES_MANIFEST) {
+        for (const key of tile.capabilities) {
+          if (!tileFor.has(key)) tileFor.set(key, tile);
+        }
+      }
+      await this.prisma.permissions.createMany({
+        data: missing.map((key) => ({
+          key,
+          module: (tileFor.get(key)?.module ?? 'Access').slice(0, 50),
+          description: (tileFor.get(key)?.label ?? key).slice(0, 255),
+        })),
+        skipDuplicates: true,
+      });
+      this.logger.warn(
+        `Permissions missing from the table, created placeholder rows: ${missing.join(', ')}. ` +
+          'Run scripts/seed-permissions.ts to set their real module/description.',
       );
+      permissions = await findPermissions();
+      permByKey = new Map(permissions.map((p) => [p.key, p.id]));
     }
 
     const manifestIds = TILES_MANIFEST.map((t) => t.id);
