@@ -18,6 +18,8 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -81,16 +83,18 @@ export class SupportTicketsController {
   }
 
   @Post('mark-read')
-  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard)
+  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Mark ticket read (staff or parent)' })
   markRead(@CurrentUser() user: any, @Body() dto: MarkTicketReadDto) {
     return this.supportTicketsService.markRead(dto.ticketId, user);
   }
 
   @Get('my-queue')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Open tickets assigned to the current staff member' })
   myQueue(
     @CurrentUser() staff: any,
@@ -106,8 +110,9 @@ export class SupportTicketsController {
   }
 
   @Get('finance-queue')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Shared finance ticket queue' })
   financeQueue(
     @CurrentUser() staff: any,
@@ -123,8 +128,9 @@ export class SupportTicketsController {
   }
 
   @Get('oversight')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Super Admin view of all open tickets' })
   oversightQueue(
     @CurrentUser() staff: any,
@@ -140,8 +146,9 @@ export class SupportTicketsController {
   }
 
   @Get('closed')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Closed ticket history (role-filtered)' })
   closedTickets(
     @CurrentUser() staff: any,
@@ -157,16 +164,18 @@ export class SupportTicketsController {
   }
 
   @Get('approvals/pending')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canManageTickets)
+  @RequireAction('communication.support_tickets#manage_replies')
   @ApiOperation({ summary: 'Super Admin pending reply approval queue' })
   pendingApprovals(@CurrentUser() staff: any) {
     return this.supportTicketsService.listPendingApprovals(staff);
   }
 
   @Patch('messages/:messageId')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canManageTickets)
+  @RequireAction('communication.support_tickets#manage_replies')
   @ApiOperation({ summary: 'Super Admin edit any employee ticket message' })
   editMessage(
     @Param('messageId') messageId: string,
@@ -177,8 +186,9 @@ export class SupportTicketsController {
   }
 
   @Patch('messages/:messageId/review')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canManageTickets)
+  @RequireAction('communication.support_tickets#manage_replies')
   @ApiOperation({ summary: 'Super Admin approve or reject a staff reply' })
   reviewMessage(
     @Param('messageId') messageId: string,
@@ -189,8 +199,9 @@ export class SupportTicketsController {
   }
 
   @Delete('messages/:messageId')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canManageTickets)
+  @RequireAction('communication.support_tickets#manage_replies')
   @ApiOperation({ summary: 'Super Admin soft-delete own ticket message (tombstone)' })
   deleteMessage(
     @Param('messageId') messageId: string,
@@ -200,8 +211,9 @@ export class SupportTicketsController {
   }
 
   @Post('media')
-  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard)
+  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#respond')
   @ApiOperation({ summary: 'Upload ticket attachment (delegates to chat media pipeline)' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
@@ -213,8 +225,9 @@ export class SupportTicketsController {
   }
 
   @Get(':id')
-  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard)
+  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
   @ApiOperation({ summary: 'Get ticket detail with messages' })
   getTicket(
     @Param('id') id: string,
@@ -232,15 +245,17 @@ export class SupportTicketsController {
   }
 
   @Post(':id/claim')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
   claimTicket(@Param('id') id: string, @CurrentUser() staff: any) {
     return this.supportTicketsService.claimTicket(id, staff);
   }
 
   @Post(':id/transfer')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
   transferTicket(
     @Param('id') id: string,
     @Body() dto: TransferTicketDto,
@@ -250,8 +265,9 @@ export class SupportTicketsController {
   }
 
   @Post(':id/forward')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
   forwardTicket(
     @Param('id') id: string,
     @Body() dto: ForwardTicketDto,
@@ -261,8 +277,9 @@ export class SupportTicketsController {
   }
 
   @Post(':id/messages')
-  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard)
+  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#respond')
   createMessage(
     @Param('id') id: string,
     @Body() dto: CreateTicketMessageDto,
@@ -275,8 +292,9 @@ export class SupportTicketsController {
   }
 
   @Post(':id/close')
-  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard)
+  @UseGuards(JwtStaffOrParentGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#respond')
   closeTicket(
     @Param('id') id: string,
     @Body() dto: CloseTicketDto,

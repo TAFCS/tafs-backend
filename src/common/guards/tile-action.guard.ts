@@ -32,6 +32,12 @@ export class TileActionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user: IJwtStaffPayload | IJwtParentPayload | undefined = request.user;
 
+    // Dual-surface endpoints (e.g. support tickets): parents have no ERP staff
+    // tile actions; their access is bounded by PoliciesGuard and family-scoping.
+    if (user && user.userType === 'PARENT') {
+      return true;
+    }
+
     if (!user || user.userType !== 'STAFF') {
       throw new ForbiddenException('Staff session required.');
     }

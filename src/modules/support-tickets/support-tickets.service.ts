@@ -37,10 +37,27 @@ import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
 import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
 
+import { ScopeService } from '../../common/scope/scope.service';
+
 const MAX_OPEN_TICKETS_PER_FAMILY = 10;
 
 const ticketInclude = {
-  families: { select: { id: true, household_name: true } },
+  families: {
+    select: {
+      id: true,
+      household_name: true,
+      students: {
+        where: { deleted_at: null },
+        select: {
+          cc: true,
+          campus_id: true,
+          class_id: true,
+          section_id: true,
+          classes: { select: { segment_id: true } },
+        },
+      },
+    },
+  },
   students: {
     select: {
       cc: true,
@@ -51,7 +68,10 @@ const ticketInclude = {
       primary_phone: true,
       whatsapp_number: true,
       whatsapp_country_code: true,
-      classes: { select: { description: true } },
+      campus_id: true,
+      class_id: true,
+      section_id: true,
+      classes: { select: { description: true, segment_id: true } },
       sections: { select: { description: true } },
       campuses: { select: { campus_name: true } },
     },
@@ -69,7 +89,31 @@ export class SupportTicketsService {
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
+
+  private studentScopeWhere(staff?: IJwtStaffPayload) {
+    if (!staff) return {};
+    const studentScope = this.scope.whereForStudents(staff);
+    const hasScope = Object.keys(studentScope).length > 0;
+    if (!hasScope) return {};
+    return {
+      OR: [
+        { students: { deleted_at: null, ...studentScope } },
+        {
+          student_id: null,
+          families: {
+            students: {
+              some: {
+                deleted_at: null,
+                ...studentScope,
+              },
+            },
+          },
+        },
+      ],
+    };
+  }
 
   getOriginationOptions() {
     return ORIGINATION_OPTIONS;
@@ -133,6 +177,7 @@ export class SupportTicketsService {
       category: TicketCategory.FINANCIAL,
       routed_role: StaffRole.FINANCE_CLERK,
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
+      ...this.studentScopeWhere(staff),
     };
 
     const [items, total] = await Promise.all([
@@ -156,6 +201,7 @@ export class SupportTicketsService {
 
     const where = {
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
+      ...this.studentScopeWhere(staff),
     };
 
     const [items, total] = await Promise.all([
@@ -173,7 +219,10 @@ export class SupportTicketsService {
   }
 
   async listClosedTickets(staff: IJwtStaffPayload, take = 50, skip = 0) {
-    const where = closedTicketVisibilityWhere(staff);
+    const where = {
+      ...closedTicketVisibilityWhere(staff),
+      ...this.studentScopeWhere(staff),
+    };
 
     const [items, total] = await Promise.all([
       this.prisma.support_tickets.findMany({
@@ -217,12 +266,16 @@ export class SupportTicketsService {
       throw new ForbiddenException('Super Admin access required');
     }
 
+    const scopeWhere = this.studentScopeWhere(staff);
+    const where = {
+      status: MessageStatus.PENDING,
+      sender_type: 'STAFF' as const,
+      deleted_at: null,
+      ...(Object.keys(scopeWhere).length > 0 ? { ticket: scopeWhere } : {}),
+    };
+
     return this.prisma.ticket_messages.findMany({
-      where: {
-        status: MessageStatus.PENDING,
-        sender_type: 'STAFF',
-        deleted_at: null,
-      },
+      where,
       orderBy: { created_at: 'asc' },
       take,
       skip,
@@ -1576,6 +1629,8 @@ export class SupportTicketsService {
       current_assignee_id: string | null;
       category: TicketCategory;
       routed_role: StaffRole;
+      students?: any;
+      families?: any;
     },
     actor: IJwtStaffPayload | IJwtParentPayload,
   ) {
@@ -1587,6 +1642,31 @@ export class SupportTicketsService {
     }
 
     const staff = actor as IJwtStaffPayload;
+    if (!this.scope.isExempt(staff)) {
+      const student = ticket.students;
+      let canSee = false;
+      if (student) {
+        canSee = this.scope.canSeeStudent(staff, {
+          campus_id: student.campus_id,
+          class_id: student.class_id,
+          section_id: student.section_id,
+          segment_id: student.classes?.segment_id,
+        });
+      } else if (ticket.families?.students?.length) {
+        canSee = ticket.families.students.some((s: any) =>
+          this.scope.canSeeStudent(staff, {
+            campus_id: s.campus_id,
+            class_id: s.class_id,
+            section_id: s.section_id,
+            segment_id: s.classes?.segment_id,
+          }),
+        );
+      }
+      if (!canSee) {
+        throw new NotFoundException('Ticket not found');
+      }
+    }
+
     if (staff.role === 'SUPER_ADMIN') return;
 
     if (ticket.status === TicketStatus.CLOSED) {
