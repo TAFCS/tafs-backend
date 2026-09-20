@@ -16,6 +16,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -29,46 +31,53 @@ import {
 
 @ApiTags('Class Check-In Schedules')
 @ApiBearerAuth()
+// Called only by the Attendance Settings page. Policy check unchanged and ANDed
+// with the tile action; every route is limited to the caller's campus and class
+// scope.
 @Controller('hr/class-check-in-schedules')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class ClassCheckInScheduleController {
   constructor(private readonly service: ClassCheckInScheduleService) {}
 
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Policy'))
-  async findAll(@Query('campus_id') campusId: string) {
+  @RequireAction('attendance.settings#view')
+  async findAll(@Query('campus_id') campusId: string, @Req() req: { user: IJwtStaffPayload }) {
     if (!campusId) {
       throw new BadRequestException('campus_id is required');
     }
-    const data = await this.service.findAll(parseInt(campusId, 10));
+    const data = await this.service.findAll(parseInt(campusId, 10), req.user);
     return createApiResponse(data, HttpStatus.OK, 'Class schedules retrieved successfully');
   }
 
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
+  @RequireAction('attendance.settings#schedules.manage')
   async create(@Body() dto: CreateClassScheduleDto, @Req() req: { user: IJwtStaffPayload }) {
-    const data = await this.service.create(dto, req.user.sub, auditActorLabel(req.user));
+    const data = await this.service.create(dto, req.user.sub, auditActorLabel(req.user), req.user);
     return createApiResponse(data, HttpStatus.CREATED, 'Class schedule created successfully');
   }
 
   @Patch(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
+  @RequireAction('attendance.settings#schedules.manage')
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateClassScheduleDto,
     @Req() req: { user: IJwtStaffPayload },
   ) {
-    const data = await this.service.update(id, dto, auditActorLabel(req.user));
+    const data = await this.service.update(id, dto, auditActorLabel(req.user), req.user);
     return createApiResponse(data, HttpStatus.OK, 'Class schedule updated successfully');
   }
 
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
+  @RequireAction('attendance.settings#schedules.manage')
   async remove(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: { user: IJwtStaffPayload },
   ) {
-    const data = await this.service.remove(id, auditActorLabel(req.user));
+    const data = await this.service.remove(id, auditActorLabel(req.user), req.user);
     return createApiResponse(data, HttpStatus.OK, 'Class schedule deleted successfully');
   }
 }

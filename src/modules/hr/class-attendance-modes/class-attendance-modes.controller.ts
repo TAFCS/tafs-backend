@@ -22,16 +22,16 @@ export class ClassAttendanceModesController {
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'ClassAttendanceMode'))
   @RequireAction('attendance.class_modes#view')
-  async findAll() {
-    const data = await this.modesService.findAll();
+  async findAll(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.modesService.findAll(user);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance modes retrieved successfully');
   }
 
   @Get(':classId')
   @CheckPolicies((ability) => ability.can(Action.Read, 'ClassAttendanceMode'))
   @RequireAction('attendance.class_modes#view')
-  async findOne(@Param('classId', ParseIntPipe) classId: number) {
-    const data = await this.modesService.findOneByClass(classId);
+  async findOne(@Param('classId', ParseIntPipe) classId: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.modesService.findOneByClass(classId, user);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance mode retrieved successfully');
   }
 
@@ -39,7 +39,7 @@ export class ClassAttendanceModesController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'ClassAttendanceMode'))
   @RequireAction('attendance.class_modes#manage')
   async setMode(@Body() dto: SetClassAttendanceModeDto, @CurrentUser() user: IJwtStaffPayload) {
-    const data = await this.modesService.setMode(dto, user.username);
+    const data = await this.modesService.setMode(dto, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance mode set successfully');
   }
 
@@ -47,7 +47,7 @@ export class ClassAttendanceModesController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'ClassAttendanceMode'))
   @RequireAction('attendance.class_modes#manage')
   async remove(@Param('classId', ParseIntPipe) classId: number, @CurrentUser() user: IJwtStaffPayload) {
-    const data = await this.modesService.remove(classId, user.username);
+    const data = await this.modesService.remove(classId, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Class attendance mode configuration removed successfully');
   }
 }

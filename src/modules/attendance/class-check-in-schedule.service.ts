@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 const toTime = (value?: string) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
 const fmtTime = (d: Date | null) => (d ? d.toISOString().slice(11, 16) : '—');
@@ -45,9 +47,25 @@ export class ClassCheckInScheduleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async findAll(campusId: number) {
+  /**
+   * The caller must be able to act on this campus (and class): universal scope
+   * AND the legacy campus field older tokens still carry. `user` omitted means
+   * an internal caller.
+   */
+  private assertCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined, classId?: number | null) {
+    if (!user) return;
+    this.scope.assertCampus(user, campusId ?? null);
+    if (user.campusId != null && campusId != null && campusId !== user.campusId) {
+      throw new ForbiddenException('You do not have access to this campus');
+    }
+    if (classId != null) this.scope.assertClass(user, classId);
+  }
+
+  async findAll(campusId: number, user?: IJwtStaffPayload) {
+    this.assertCampus(user, campusId);
     return this.prisma.class_check_in_schedules.findMany({
       where: { campus_id: campusId },
       include: {
@@ -57,20 +75,30 @@ export class ClassCheckInScheduleService {
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, user?: IJwtStaffPayload) {
     const schedule = await this.prisma.class_check_in_schedules.findUnique({
       where: { id },
       include: {
         classes: { select: { id: true, description: true, class_code: true } },
       },
     });
-    if (!schedule) {
+    // Missing and out-of-scope both 404.
+    let visible = !!schedule;
+    if (schedule && user) {
+      try {
+        this.assertCampus(user, schedule.campus_id, schedule.class_id);
+      } catch {
+        visible = false;
+      }
+    }
+    if (!schedule || !visible) {
       throw new NotFoundException(`Check-in schedule with ID ${id} not found`);
     }
     return schedule;
   }
 
-  async create(dto: CreateClassScheduleDto, createdBy?: string, changedBy?: string) {
+  async create(dto: CreateClassScheduleDto, createdBy?: string, changedBy?: string, user?: IJwtStaffPayload) {
+    this.assertCampus(user, dto.campus_id, dto.class_id);
     const effectiveFrom = new Date(dto.effective_from);
     effectiveFrom.setUTCHours(0, 0, 0, 0);
 
@@ -119,8 +147,8 @@ export class ClassCheckInScheduleService {
     return record;
   }
 
-  async update(id: number, dto: UpdateClassScheduleDto, changedBy?: string) {
-    const existing = await this.findOne(id);
+  async update(id: number, dto: UpdateClassScheduleDto, changedBy?: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOne(id, user);
 
     const data: any = {};
     if (dto.expected_check_in !== undefined) {
@@ -186,8 +214,8 @@ export class ClassCheckInScheduleService {
     return updated;
   }
 
-  async remove(id: number, changedBy?: string) {
-    const existing = await this.findOne(id);
+  async remove(id: number, changedBy?: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOne(id, user);
     await this.prisma.class_check_in_schedules.delete({
       where: { id },
     });

@@ -24,16 +24,16 @@ export class PoliciesController {
   @Get()
   @CheckPolicies((ability) => ability.can(Action.Read, 'Policy'))
   @RequireAction('attendance.settings#view')
-  async findAll(@Query('campusId') campusId: string) {
-    const data = await this.policiesService.findAllSets(parseInt(campusId, 10));
+  async findAll(@Query('campusId') campusId: string, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.policiesService.findAllSets(parseInt(campusId, 10), user);
     return createApiResponse(data, HttpStatus.OK, 'Policy sets retrieved successfully');
   }
 
   @Get(':id')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Policy'))
   @RequireAction('attendance.settings#view')
-  async findOneSet(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.policiesService.findOneSet(id);
+  async findOneSet(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.policiesService.findOneSet(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Policy set retrieved successfully');
   }
 
@@ -41,7 +41,7 @@ export class PoliciesController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
   @RequireAction('attendance.settings#sets.manage')
   async createSet(@Body() dto: CreatePolicySetDto, @CurrentUser() user: IJwtStaffPayload) {
-    const data = await this.policiesService.createSet(dto, user.username);
+    const data = await this.policiesService.createSet(dto, user.username, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Policy set created successfully');
   }
 
@@ -53,7 +53,7 @@ export class PoliciesController {
     @Body() dto: Partial<CreatePolicySetDto>,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.updateSet(id, dto, user.username);
+    const data = await this.policiesService.updateSet(id, dto, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Policy set updated successfully');
   }
 
@@ -61,7 +61,7 @@ export class PoliciesController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
   @RequireAction('attendance.settings#sets.manage')
   async removeSet(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
-    const data = await this.policiesService.removeSet(id, user.username);
+    const data = await this.policiesService.removeSet(id, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Policy set deleted successfully');
   }
 
@@ -74,7 +74,7 @@ export class PoliciesController {
     @Body() dto: CreatePolicyRuleDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.createRule(id, dto, user.username);
+    const data = await this.policiesService.createRule(id, dto, user.username, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Policy rule created successfully');
   }
 
@@ -87,7 +87,7 @@ export class PoliciesController {
     @Body() dto: Partial<CreatePolicyRuleDto>,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.updateRule(id, ruleId, dto, user.username);
+    const data = await this.policiesService.updateRule(id, ruleId, dto, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Policy rule updated successfully');
   }
 
@@ -99,7 +99,7 @@ export class PoliciesController {
     @Param('ruleId', ParseIntPipe) ruleId: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.policiesService.removeRule(id, ruleId, user.username);
+    const data = await this.policiesService.removeRule(id, ruleId, user.username, user);
     return createApiResponse(data, HttpStatus.OK, 'Policy rule deleted successfully');
   }
 }

@@ -541,6 +541,8 @@ const ATTENDANCE_SETTINGS_ACTIONS: TileAction[] = [
 
   { id: 'sets.manage', label: 'Create, edit and delete policy sets', implies: ['view'] },
   { id: 'rules.manage', label: 'Create, edit and delete policy rules', implies: ['view'] },
+  { id: 'schedules.manage', label: 'Create, edit and delete class check-in schedules', implies: ['view'] },
+  { id: 'recompute', label: 'Recompute late status', description: 'Rewrites attendance for a campus over a date range', implies: ['view'] },
 ];
 
 const CLASS_MODES_ACTIONS: TileAction[] = [

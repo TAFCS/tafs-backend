@@ -5,12 +5,18 @@ import {
   UseGuards,
   HttpStatus,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsInt, IsOptional, IsString, IsISO8601 } from 'class-validator';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -49,16 +55,26 @@ export class RecomputeLateStatusDto {
 @ApiTags('Attendance Recompute')
 @ApiBearerAuth()
 @Controller('attendance')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class RecomputeLateController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
+    private readonly scope: ScopeService,
   ) {}
 
+  // Called only by the Attendance Settings page. It rewrites attendance for a
+  // whole campus, so the campus (and class, when given) must be inside the
+  // caller's scope: this route had no scope check at all.
   @Post('recompute-late-status')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
-  async recomputeLateStatus(@Body() dto: RecomputeLateStatusDto) {
+  @RequireAction('attendance.settings#recompute')
+  async recomputeLateStatus(@Body() dto: RecomputeLateStatusDto, @CurrentUser() user: IJwtStaffPayload) {
+    this.scope.assertCampus(user, dto.campus_id);
+    if (user.campusId != null && dto.campus_id !== user.campusId) {
+      throw new ForbiddenException('You do not have access to this campus');
+    }
+    if (dto.class_id != null) this.scope.assertClass(user, dto.class_id);
     const fromDate = new Date(dto.date_from);
     const toDate = new Date(dto.date_to);
 
