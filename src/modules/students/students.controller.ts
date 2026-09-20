@@ -15,7 +15,7 @@ import { StudentReturnMode } from '../../constants/student-return-mode.constant'
 import { createApiResponse, createPaginatedApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
-import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
@@ -27,9 +27,35 @@ import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
 export class StudentsController {
   constructor(private readonly studentsService: StudentsService) { }
 
+  // The student search box is shared by every page that lists or picks students,
+  // so it is open to a holder of ANY of those pages' tiles, not just the Student
+  // Directory. That is an allowlist, not "any staff member": a user holding none
+  // of them is still refused, and results stay limited to the caller's scope.
+  // The Read Student policy check is dropped here on purpose: a user delegated
+  // only, say, Receive Deposit holds none of the student capabilities it demands.
+  // Add a tile here when a new page gains a student search.
   @Get('search-simple')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAction('student.directory#view')
+  @RequireAnyTile(
+    'student.directory',
+    'student.academic_actions',
+    'finance.vouchers',
+    'finance.single_voucher',
+    'finance.bulk_voucher',
+    'finance.receive_deposit',
+    'finance.payment_history',
+    'finance.postdated_cheques',
+    'finance.student_overrides',
+    'finance.financial_reports',
+    'hr.employee_directory',
+    'hr.register_employee',
+    'hr.employee_loans',
+    'hr.security_deposits',
+    'attendance.quick_check_in',
+    'attendance.student_attendance',
+    'attendance.teaching_groups',
+    'attendance.zk_device_logs',
+    'communication.notice_board',
+  )
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);
     return createApiResponse(

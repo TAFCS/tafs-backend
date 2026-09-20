@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { ScopeService } from '../../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 import { IsInt, IsOptional, IsString, IsObject } from 'class-validator';
 
@@ -40,9 +42,33 @@ export class PoliciesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async findAllSets(campusId: number) {
+  /**
+   * The caller must be able to act on this campus: universal scope AND the
+   * legacy campus field older tokens still carry. `user` omitted means an
+   * internal caller.
+   */
+  private assertCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined) {
+    if (!user) return;
+    this.scope.assertCampus(user, campusId ?? null);
+    if (user.campusId != null && campusId != null && campusId !== user.campusId) {
+      throw new ForbiddenException('You do not have access to this campus');
+    }
+  }
+
+  private canSeeCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined) {
+    try {
+      this.assertCampus(user, campusId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async findAllSets(campusId: number, user?: IJwtStaffPayload) {
+    this.assertCampus(user, campusId);
     return this.prisma.hr_policy_sets.findMany({
       where: { campus_id: campusId },
       include: { hr_policy_rules: true },
@@ -50,18 +76,20 @@ export class PoliciesService {
     });
   }
 
-  async findOneSet(id: number) {
+  async findOneSet(id: number, user?: IJwtStaffPayload) {
     const set = await this.prisma.hr_policy_sets.findUnique({
       where: { id },
       include: { hr_policy_rules: true }
     });
-    if (!set) {
+    // Missing and out-of-scope both 404.
+    if (!set || !this.canSeeCampus(user, set.campus_id)) {
       throw new NotFoundException(`Policy set with ID ${id} not found`);
     }
     return set;
   }
 
-  async createSet(dto: CreatePolicySetDto, changedBy: string) {
+  async createSet(dto: CreatePolicySetDto, changedBy: string, user?: IJwtStaffPayload) {
+    this.assertCampus(user, dto.campus_id);
     const created = await this.prisma.hr_policy_sets.create({
       data: {
         campus_id: dto.campus_id,
@@ -80,8 +108,9 @@ export class PoliciesService {
     return created;
   }
 
-  async updateSet(id: number, dto: Partial<CreatePolicySetDto>, changedBy: string) {
-    const existing = await this.findOneSet(id);
+  async updateSet(id: number, dto: Partial<CreatePolicySetDto>, changedBy: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOneSet(id, user);
+    if (dto.campus_id != null && dto.campus_id !== existing.campus_id) this.assertCampus(user, dto.campus_id);
     const updated = await this.prisma.hr_policy_sets.update({
       where: { id },
       data: {
@@ -118,8 +147,8 @@ export class PoliciesService {
     return updated;
   }
 
-  async removeSet(id: number, changedBy: string) {
-    const existing = await this.findOneSet(id);
+  async removeSet(id: number, changedBy: string, user?: IJwtStaffPayload) {
+    const existing = await this.findOneSet(id, user);
     const deleted = await this.prisma.hr_policy_sets.delete({
       where: { id }
     });
@@ -134,8 +163,8 @@ export class PoliciesService {
   }
 
   // Rules CRUD
-  async createRule(setId: number, dto: CreatePolicyRuleDto, changedBy: string) {
-    await this.findOneSet(setId);
+  async createRule(setId: number, dto: CreatePolicyRuleDto, changedBy: string, user?: IJwtStaffPayload) {
+    await this.findOneSet(setId, user);
     const created = await this.prisma.hr_policy_rules.create({
       data: {
         policy_set_id: setId,
@@ -155,7 +184,8 @@ export class PoliciesService {
     return created;
   }
 
-  async updateRule(setId: number, ruleId: number, dto: Partial<CreatePolicyRuleDto>, changedBy: string) {
+  async updateRule(setId: number, ruleId: number, dto: Partial<CreatePolicyRuleDto>, changedBy: string, user?: IJwtStaffPayload) {
+    await this.findOneSet(setId, user);
     const rule = await this.prisma.hr_policy_rules.findUnique({
       where: { id: ruleId }
     });
@@ -196,7 +226,8 @@ export class PoliciesService {
     return updated;
   }
 
-  async removeRule(setId: number, ruleId: number, changedBy: string) {
+  async removeRule(setId: number, ruleId: number, changedBy: string, user?: IJwtStaffPayload) {
+    await this.findOneSet(setId, user);
     const rule = await this.prisma.hr_policy_rules.findUnique({
       where: { id: ruleId }
     });

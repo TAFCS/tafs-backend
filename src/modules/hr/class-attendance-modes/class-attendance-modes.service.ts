@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { ScopeService } from '../../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 export class SetClassAttendanceModeDto {
   class_id: number;
@@ -12,17 +14,32 @@ export class ClassAttendanceModesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async findAll() {
+  /** Class ids the caller is limited to; undefined means unrestricted (or an internal caller). */
+  private allowedClassIds(user?: IJwtStaffPayload): number[] | undefined {
+    if (!user || this.scope.isExempt(user)) return undefined;
+    const classes = this.scope.scopeOf(user).classes;
+    return classes.length > 0 ? classes : undefined;
+  }
+
+  async findAll(user?: IJwtStaffPayload) {
+    const allowed = this.allowedClassIds(user);
     return this.prisma.class_attendance_modes.findMany({
+      ...(allowed ? { where: { class_id: { in: allowed } } } : {}),
       include: {
         classes: { select: { description: true, class_code: true } }
       }
     });
   }
 
-  async findOneByClass(classId: number) {
+  async findOneByClass(classId: number, user?: IJwtStaffPayload) {
+    const allowed = this.allowedClassIds(user);
+    // A class outside the caller's scope 404s, same as a missing one.
+    if (allowed && !allowed.includes(classId)) {
+      throw new NotFoundException(`Attendance mode for class ID ${classId} not found`);
+    }
     const mode = await this.prisma.class_attendance_modes.findUnique({
       where: { class_id: classId },
       include: {
@@ -35,7 +52,8 @@ export class ClassAttendanceModesService {
     return mode;
   }
 
-  async setMode(dto: SetClassAttendanceModeDto, changedBy: string) {
+  async setMode(dto: SetClassAttendanceModeDto, changedBy: string, user?: IJwtStaffPayload) {
+    if (user) this.scope.assertClass(user, dto.class_id);
     const existing = await this.prisma.class_attendance_modes.findUnique({
       where: { class_id: dto.class_id },
     });
@@ -61,7 +79,8 @@ export class ClassAttendanceModesService {
     return result;
   }
 
-  async remove(classId: number, changedBy: string) {
+  async remove(classId: number, changedBy: string, user?: IJwtStaffPayload) {
+    if (user) this.scope.assertClass(user, classId);
     const existing = await this.findOneByClass(classId);
     const deleted = await this.prisma.class_attendance_modes.delete({
       where: { class_id: classId }

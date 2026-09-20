@@ -20,6 +20,7 @@ import {
   resolveTemplate,
   isTemplateDisabled,
 } from '../../../utils/notification-templates.util';
+import { actionsCover } from '../../access/tiles.manifest';
 
 // Max mandatory Saturdays that can be assigned to one employee in one payroll
 // month. Employees already at this count are skipped (and reported back in
@@ -351,7 +352,7 @@ export class SaturdaySchedulesService {
   }
 
   async list(query: ListSaturdaySchedulesQueryDto, user: IJwtStaffPayload) {
-    this.assertCanManage(user);
+    this.assertCanManage(user, 'view');
 
     const [year, month] = query.month.split('-').map((v) => parseInt(v, 10));
     if (!year || !month || month < 1 || month > 12) {
@@ -459,15 +460,17 @@ export class SaturdaySchedulesService {
     return { id };
   }
 
-  private assertCanManage(user: IJwtStaffPayload) {
-    if (
-      user.role !== StaffRole.SUPER_ADMIN &&
-      user.role !== StaffRole.CAMPUS_ADMIN
-    ) {
-      throw new ForbiddenException(
-        'Only super admins and campus admins can manage Saturday schedules',
-      );
-    }
+  /**
+   * SUPER_ADMIN and CAMPUS_ADMIN keep exactly the access they had. A SUPER_ADMIN
+   * can now also delegate: a user who holds the tile's action (`view` to list,
+   * `manage` to change) passes too. The controller's TileActionGuard has already
+   * enforced the action; this only stops the role check from refusing a
+   * delegated user. Sessions without an `actions` claim fall back to the role.
+   */
+  private assertCanManage(user: IJwtStaffPayload, action: 'view' | 'manage' = 'manage') {
+    if (user.role === StaffRole.SUPER_ADMIN || user.role === StaffRole.CAMPUS_ADMIN) return;
+    if (actionsCover(user.actions ?? [], `attendance.saturday_schedules#${action}`)) return;
+    throw new ForbiddenException('Only super admins and campus admins can manage Saturday schedules');
   }
 
   // Legacy check kept standing per the scope-sweep handoff (do not delete until
