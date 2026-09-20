@@ -1,5 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
@@ -31,13 +34,55 @@ export class EnrollmentService {
     private readonly allocation: StudentAllocationService,
     private readonly auditLogs: AuditLogsService,
     private readonly progressionHistory: ProgressionHistoryService,
+    private readonly scope: ScopeService,
   ) { }
 
-  async getCandidates() {
+  /**
+   * The caller's data scope against a student, as a Prisma filter: universal
+   * scope AND the legacy campus / class fields (older tokens still carry
+   * them). `user` omitted means an internal caller and applies no filter.
+   */
+  private studentsFilter(user?: IJwtStaffPayload) {
+    if (!user) return {};
+    return { AND: [this.scope.whereForStudents(user), applyStudentScope(user, {})] };
+  }
+
+  /**
+   * Missing and out-of-scope both 404 — a 403 would confirm a student exists
+   * at a campus the caller cannot see. Every cc-addressed route calls this
+   * first, including the certificate / admission-order reads the Student
+   * Directory shares.
+   */
+  private async assertStudentVisible(cc: number, user?: IJwtStaffPayload) {
+    if (!user) return;
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+    });
+    if (
+      !s ||
+      !this.scope.canSeeStudent(user, {
+        campus_id: s.campus_id,
+        class_id: s.class_id,
+        section_id: s.section_id,
+        segment_id: s.classes?.segment_id ?? null,
+      })
+    ) {
+      throw new NotFoundException(`Student with CC #${cc} not found`);
+    }
+    const legacy = await this.prisma.students.findFirst({
+      where: applyStudentScope(user, { cc }),
+      select: { cc: true },
+    });
+    if (!legacy) throw new NotFoundException(`Student with CC #${cc} not found`);
+  }
+
+  async getCandidates(user?: IJwtStaffPayload) {
     return this.prisma.students.findMany({
       where: {
         status: 'SOFT_ADMISSION',
         deleted_at: null,
+        ...(user ? { AND: [this.studentsFilter(user)] } : {}),
       },
       include: {
         campuses: { select: { campus_name: true, campus_code: true } },
@@ -52,7 +97,8 @@ export class EnrollmentService {
     });
   }
 
-  async updatePursuitStatus(cc: number, notPursuing: boolean, changedBy: string) {
+  async updatePursuitStatus(cc: number, notPursuing: boolean, changedBy: string, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
     });
@@ -88,7 +134,8 @@ export class EnrollmentService {
     return updated;
   }
 
-  async getSuggestions(cc: number, sectionId?: number, classId?: number) {
+  async getSuggestions(cc: number, sectionId?: number, classId?: number, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: {
@@ -276,7 +323,9 @@ export class EnrollmentService {
     refNumber?: string,
     note?: string,
     username = 'STAFF',
+    user?: IJwtStaffPayload,
   ) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: { full_name: true },
@@ -296,7 +345,8 @@ export class EnrollmentService {
     return { success: true };
   }
 
-  async getCertificateHistory(cc: number) {
+  async getCertificateHistory(cc: number, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const explicitLogs = await this.prisma.audit_logs.findMany({
       where: {
         student_id: cc,
@@ -398,7 +448,8 @@ export class EnrollmentService {
     return combined;
   }
 
-  async getAdmissionOrderData(cc: number) {
+  async getAdmissionOrderData(cc: number, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -606,7 +657,9 @@ export class EnrollmentService {
     }
   }
 
-  async enroll(cc: number, dto: EnrollStudentDto, changedBy: string) {
+  async enroll(cc: number, dto: EnrollStudentDto, changedBy: string, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
+    if (user && dto.section_id) this.scope.assertSection(user, dto.section_id);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -652,6 +705,9 @@ export class EnrollmentService {
         resolvedClassId = matched?.id ?? null;
       }
     }
+    // A class resolved from the requested grade is a placement the caller
+    // must be allowed to make.
+    if (user && resolvedClassId) this.scope.assertClass(user, resolvedClassId);
 
     const targetSectionId = dto.section_id ?? student.section_id ?? null;
     const targetCampusId = student.campus_id;
@@ -943,7 +999,8 @@ export class EnrollmentService {
     });
   }
 
-  async getLeavingCertificateData(cc: number, username = 'STAFF') {
+  async getLeavingCertificateData(cc: number, username = 'STAFF', user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {
@@ -1141,8 +1198,9 @@ export class EnrollmentService {
   async renderLeavingCertificate(
     cc: number,
     overrides: Partial<SlcCertificateData> = {},
+    user?: IJwtStaffPayload,
   ): Promise<{ pdf: Uint8Array; prefix: string }> {
-    const base = await this.getLeavingCertificateData(cc);
+    const base = await this.getLeavingCertificateData(cc, 'STAFF', user);
     const template = SLC_TEMPLATES[base.slc_template as SlcTemplateId];
     const merged = { ...base, ...overrides } as SlcCertificateData & {
       photograph_url?: string | null;

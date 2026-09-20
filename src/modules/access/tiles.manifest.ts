@@ -502,6 +502,21 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
+// EnrollmentController had only JwtStaffGuard: no policy check of any kind, so
+// every logged-in staff member could enroll a student or flip their pursuit
+// status. Bridged from students.enrollment.complete ("Complete admission"),
+// the capability that names this power. A role holding only
+// students.enrollment.view (e.g. PRINCIPAL) keeps the list but loses
+// enroll / pursuit_status until a SUPER_ADMIN grants them.
+// The certificate, admission-order and houses routes are ALSO used by Student
+// Directory tabs and the Register page, so they carry no action of this tile.
+const ENROLLMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Enrollments', description: 'See the admission candidates and the suggested GR number and house', default: true },
+
+  { id: 'enroll', label: 'Complete an admission', description: 'Enroll a student with a final GR number and house', implies: ['view'] },
+  { id: 'pursuit_status', label: 'Mark a candidate as not pursuing', implies: ['view'] },
+];
+
 // The House Balancer page is listed under two tiles (student.house_balancer and
 // school-setup.house_balancer), so both carry this same action set and every
 // route accepts either. Bridged from academic.campuses.edit, which is exactly
@@ -564,7 +579,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ?? Student & Profiling ??????????????????????????????????????????????????
   { id: 'student.quick_registration', module: 'student', label: 'Quick Registration', description: 'Unconfirmed admission intake', href: '/identity/quick-registration', capabilities: ['students.registration.view'] },
   { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'] },
-  { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'] },
+  { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'] },
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'] },

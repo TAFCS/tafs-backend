@@ -9,6 +9,8 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { TransferController } from '../transfers/transfer.controller';
 import { TransferService } from '../transfers/transfer.service';
+import { EnrollmentController } from '../enrollments/enrollment.controller';
+import { EnrollmentService } from '../enrollments/enrollment.service';
 import { HouseBalancerController } from '../house-balancer/house-balancer.controller';
 import { HouseBalancerService } from '../house-balancer/house-balancer.service';
 import { StudentsController } from '../students/students.controller';
@@ -209,5 +211,95 @@ describe('Academic Actions', () => {
 
   it('is bridged from its own opening capability', () => {
     expect(tile('student.academic_actions').legacyFullAccessCapabilities).toEqual(['academic.bulk_promote.execute']);
+  });
+});
+
+describe('Enrollments', () => {
+  const t = tile('student.enrollments');
+
+  it('is bridged from students.enrollment.complete, so a view-only role loses only the writes', () => {
+    expect(t.legacyFullAccessCapabilities).toEqual(['students.enrollment.complete']);
+    const viewOnly = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.PRINCIPAL,
+      roleKeys: ['students.enrollment.view'],
+    });
+    expect(viewOnly.actionIds.filter((k) => k.startsWith('student.enrollments#'))).toEqual([
+      actionKey('student.enrollments', 'view'),
+    ]);
+    const admin = computeEffectiveAccess({
+      ...base,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['students.enrollment.view', 'students.enrollment.complete'],
+    });
+    for (const a of t.actions!) expect(admin.actionIds).toContain(actionKey('student.enrollments', a.id));
+  });
+
+  it('puts the writes on their own actions and the page-only reads on view', () => {
+    const p = EnrollmentController.prototype;
+    expect(meta(p, 'enroll')?.actionKeys).toEqual([actionKey('student.enrollments', 'enroll')]);
+    expect(meta(p, 'updatePursuitStatus')?.actionKeys).toEqual([actionKey('student.enrollments', 'pursuit_status')]);
+    expect(meta(p, 'getCandidates')?.actionKeys).toEqual([actionKey('student.enrollments', 'view')]);
+    expect(meta(p, 'getSuggestions')?.actionKeys).toEqual([actionKey('student.enrollments', 'view')]);
+    keysExist(['student.enrollments#view', 'student.enrollments#enroll', 'student.enrollments#pursuit_status']);
+    const guards: unknown[] = Reflect.getMetadata('__guards__', EnrollmentController) ?? [];
+    expect(guards).toContain(TileActionGuard);
+  });
+
+  // Certificates / admission order / houses are shared with Student Directory
+  // tabs and the Register page: pinning them to this tile would lock those out.
+  it.each(['getAdmissionOrder', 'getLeavingCertificate', 'getLeavingCertificatePdf', 'logCertificateGeneration', 'getCertificateHistory', 'getHouses'])(
+    'leaves the shared route %s without a tile action',
+    (h) => expect(meta(EnrollmentController.prototype, h)).toBeUndefined(),
+  );
+
+  function svc(opts: { student?: unknown; canSee?: boolean; sectionThrows?: boolean }) {
+    const prisma = {
+      students: {
+        findUnique: jest.fn().mockResolvedValue(opts.student ?? null),
+        findFirst: jest.fn().mockResolvedValue(opts.student ? { cc: 1 } : null),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
+      audit_logs: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const scope = {
+      canSeeStudent: jest.fn().mockReturnValue(opts.canSee ?? true),
+      whereForStudents: jest.fn().mockReturnValue({ campus_id: { in: [3] } }),
+      assertSection: jest.fn(() => {
+        if (opts.sectionThrows) throw new ForbiddenException('nope');
+      }),
+      assertClass: jest.fn(),
+    };
+    const s = new EnrollmentService(prisma as any, {} as any, { log: jest.fn() } as any, {} as any, scope as any);
+    return { s, prisma, scope };
+  }
+  const stu = { campus_id: 1, class_id: 3, section_id: 4, classes: { segment_id: 1 }, status: 'SOFT_ADMISSION' };
+
+  it('narrows the candidate list to the caller scope', async () => {
+    const { s, prisma } = svc({});
+    await s.getCandidates(scopedUser);
+    const where = prisma.students.findMany.mock.calls[0][0].where;
+    expect(where.status).toBe('SOFT_ADMISSION');
+    expect(JSON.stringify(where.AND)).toContain('"campus_id":{"in":[3]}');
+  });
+
+  it('404s an out-of-scope student on every cc route, before any write', async () => {
+    const { s, prisma } = svc({ student: stu, canSee: false });
+    await expect(s.getSuggestions(1, undefined, undefined, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.enroll(1, { gr_number: 'x', house_id: 1 } as any, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.updatePursuitStatus(1, true, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.getAdmissionOrderData(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.getLeavingCertificateData(1, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.getCertificateHistory(1, scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(s.logCertificateGeneration(1, 'SLC', undefined, undefined, 'u', scopedUser)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.students.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses enrolling into a section outside scope', async () => {
+    const { s } = svc({ student: stu, canSee: true, sectionThrows: true });
+    await expect(
+      s.enroll(1, { gr_number: 'x', house_id: 1, section_id: 9 } as any, 'u', scopedUser),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

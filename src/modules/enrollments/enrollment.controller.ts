@@ -5,20 +5,28 @@ import { EnrollStudentDto } from './dto/enroll-student.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('enrollments')
 @ApiBearerAuth()
+// Route-shaped. `candidates` and `suggestions` are read only by the Enrollments
+// page (`view`); `enroll` and `pursuit-status` are its writes. The certificate,
+// admission-order and houses routes are ALSO used by Student Directory tabs and
+// the Register page, so they carry no tile action -- pinning them here would
+// lock those users out -- but every cc-addressed route is scoped (404).
 @Controller('enrollments')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, TileActionGuard)
 export class EnrollmentController {
   constructor(private readonly enrollmentService: EnrollmentService) {}
 
   @Get('candidates')
+  @RequireAction('student.enrollments#view')
   @ApiOperation({ summary: 'Get list of students with SOFT_ADMISSION status' })
-  async getCandidates() {
-    const candidates = await this.enrollmentService.getCandidates();
+  async getCandidates(@CurrentUser() user: IJwtStaffPayload) {
+    const candidates = await this.enrollmentService.getCandidates(user);
     return createApiResponse(
       candidates,
       HttpStatus.OK,
@@ -38,16 +46,19 @@ export class EnrollmentController {
   }
 
   @Get(':cc/suggestions')
+  @RequireAction('student.enrollments#view')
   @ApiOperation({ summary: 'Get suggested GR number and balanced House for a student' })
   async getSuggestions(
     @Param('cc', ParseIntPipe) cc: number,
     @Query('section_id') sectionId?: number,
     @Query('class_id') classId?: number,
+    @CurrentUser() user?: IJwtStaffPayload,
   ) {
     const suggestions = await this.enrollmentService.getSuggestions(
       cc,
       sectionId ? Number(sectionId) : undefined,
       classId ? Number(classId) : undefined,
+      user,
     );
     return createApiResponse(
       suggestions,
@@ -57,13 +68,14 @@ export class EnrollmentController {
   }
 
   @Post(':cc/enroll')
+  @RequireAction('student.enrollments#enroll')
   @ApiOperation({ summary: 'Formally enroll a student with final GR and House' })
   async enroll(
     @Param('cc', ParseIntPipe) cc: number,
     @Body() dto: EnrollStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.enrollmentService.enroll(cc, dto, user.username);
+    const student = await this.enrollmentService.enroll(cc, dto, user.username, user);
     return createApiResponse(
       student,
       HttpStatus.OK,
@@ -72,13 +84,14 @@ export class EnrollmentController {
   }
 
   @Patch(':cc/pursuit-status')
+  @RequireAction('student.enrollments#pursuit_status')
   @ApiOperation({ summary: 'Update whether a candidate is not pursuing admission' })
   async updatePursuitStatus(
     @Param('cc', ParseIntPipe) cc: number,
     @Body('not_pursuing') notPursuing: boolean,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const student = await this.enrollmentService.updatePursuitStatus(cc, notPursuing, user.username);
+    const student = await this.enrollmentService.updatePursuitStatus(cc, notPursuing, user.username, user);
     return createApiResponse(
       student,
       HttpStatus.OK,
@@ -90,8 +103,9 @@ export class EnrollmentController {
   @ApiOperation({ summary: 'Get student data for admission order PDF' })
   async getAdmissionOrder(
     @Param('cc', ParseIntPipe) cc: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.enrollmentService.getAdmissionOrderData(cc);
+    const data = await this.enrollmentService.getAdmissionOrderData(cc, user);
     return createApiResponse(
       data,
       HttpStatus.OK,
@@ -103,8 +117,9 @@ export class EnrollmentController {
   @ApiOperation({ summary: 'Get student data for leaving certificate (SLC) PDF' })
   async getLeavingCertificate(
     @Param('cc', ParseIntPipe) cc: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.enrollmentService.getLeavingCertificateData(cc);
+    const data = await this.enrollmentService.getLeavingCertificateData(cc, user?.username || 'STAFF', user);
     return createApiResponse(
       data,
       HttpStatus.OK,
@@ -125,8 +140,9 @@ export class EnrollmentController {
     @Param('cc', ParseIntPipe) cc: number,
     @Body() body: Record<string, any>,
     @Res() res: Response,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const { pdf, prefix } = await this.enrollmentService.renderLeavingCertificate(cc, body ?? {});
+    const { pdf, prefix } = await this.enrollmentService.renderLeavingCertificate(cc, body ?? {}, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
@@ -148,6 +164,7 @@ export class EnrollmentController {
       body.ref_number,
       body.note,
       user?.username || 'STAFF',
+      user,
     );
     return createApiResponse(
       data,
@@ -158,8 +175,8 @@ export class EnrollmentController {
 
   @Get(':cc/certificate-history')
   @ApiOperation({ summary: 'Get history of generated certificates and documents' })
-  async getCertificateHistory(@Param('cc', ParseIntPipe) cc: number) {
-    const data = await this.enrollmentService.getCertificateHistory(cc);
+  async getCertificateHistory(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.enrollmentService.getCertificateHistory(cc, user);
     return createApiResponse(
       data,
       HttpStatus.OK,
