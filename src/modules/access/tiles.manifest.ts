@@ -875,6 +875,30 @@ export function actionsCover(held: Set<string> | readonly string[], wanted: stri
   return parsed != null && set.has(actionKey(parsed.tileId, ALL_ACTIONS_WILDCARD));
 }
 
+/**
+ * Whether a session holds a tile at all, for routes shared by many tiles
+ * (@RequireAnyTile).
+ *
+ * A tile with sub-permissions is held exactly when its default action is in the
+ * session's actions claim, which respects a SUPER_ADMIN's tile denial. A tile
+ * with none yet, or a session issued before actions existed, is held when the
+ * session carries every capability the tile lists -- the same rule the tile
+ * itself is resolved by.
+ */
+export function userHoldsTile(
+  user: { actions?: readonly string[]; permissions?: readonly string[] },
+  tileId: string,
+): boolean {
+  const tile = TILES_MANIFEST.find((t) => t.id === tileId);
+  if (!tile) return false;
+  if (tile.actions && tile.actions.length > 0 && user.actions !== undefined) {
+    const opener = tile.actions.find((a) => a.default)?.id ?? 'view';
+    return actionsCover(user.actions, actionKey(tileId, opener));
+  }
+  const perms = new Set(user.permissions ?? []);
+  return tile.capabilities.every((c) => perms.has(c));
+}
+
 export function parseActionKey(key: string): { tileId: string; actionId: string } | null {
   const at = key.indexOf('#');
   if (at <= 0 || at === key.length - 1) return null;

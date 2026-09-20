@@ -4,7 +4,7 @@ import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeS
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
@@ -70,9 +70,18 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
   }
 
+  // The employee search box is shared by the Employee Directory, Payroll, the
+  // Academic Calendar and ZK Device Logs. Open to a holder of ANY of those
+  // tiles (an allowlist, not "any staff member"); results stay limited to the
+  // caller's scope. The Read Employee policy check is dropped on purpose: a user
+  // delegated only one of those tiles does not hold it.
   @Get('search-simple')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
-  @RequireAction('hr.employee_directory#view')
+  @RequireAnyTile(
+    'hr.employee_directory',
+    'hr.payroll',
+    'attendance.academic_calendar',
+    'attendance.zk_device_logs',
+  )
   async searchSimple(@Query('q') q: string, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.employeesService.searchSimple(q || '', user);
     return createApiResponse(data, HttpStatus.OK, 'Search results retrieved successfully');

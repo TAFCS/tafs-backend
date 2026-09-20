@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { StaffRole } from '@prisma/client';
-import { actionsCover } from '../../modules/access/tiles.manifest';
+import { actionsCover, userHoldsTile } from '../../modules/access/tiles.manifest';
 import {
   REQUIRE_ACTION_KEY,
   type RequireActionMetadata,
@@ -27,6 +27,9 @@ export class TileActionGuard implements CanActivate {
       REQUIRE_ACTION_KEY,
       [context.getHandler(), context.getClass()],
     );
+    if (meta?.mode === 'tile' && (meta.tileIds?.length ?? 0) > 0) {
+      return this.canActivateForTiles(context, meta.tileIds!);
+    }
     if (!meta || meta.actionKeys.length === 0) return true;
 
     const request = context.switchToHttp().getRequest();
@@ -60,5 +63,17 @@ export class TileActionGuard implements CanActivate {
       );
     }
     return true;
+  }
+
+  /** @RequireAnyTile: staff only, SUPER_ADMIN always, otherwise a holder of any listed tile. */
+  private canActivateForTiles(context: ExecutionContext, tileIds: string[]): boolean {
+    const user: IJwtStaffPayload | IJwtParentPayload | undefined = context.switchToHttp().getRequest().user;
+    if (!user || user.userType !== 'STAFF') {
+      throw new ForbiddenException('Staff session required.');
+    }
+    const staff = user as IJwtStaffPayload;
+    if (staff.role === StaffRole.SUPER_ADMIN) return true;
+    if (tileIds.some((id) => userHoldsTile(staff, id))) return true;
+    throw new ForbiddenException('Your access does not include this lookup.');
   }
 }
