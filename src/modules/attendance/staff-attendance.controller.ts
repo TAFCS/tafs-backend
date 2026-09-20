@@ -2,6 +2,8 @@ import { Body, Controller, Get, HttpStatus, Param, ParseIntPipe, Put, Query, Use
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
@@ -19,13 +21,13 @@ import {
 @ApiTags('Attendance Staff')
 @ApiBearerAuth()
 @Controller('attendance/staff')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class StaffAttendanceController {
   constructor(private readonly staffAttendanceService: StaffAttendanceService) {}
 
   @Get()
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAction('attendance.staff_register#view')
   async getRegister(
     @Query() query: GetStaffAttendanceQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -35,8 +37,8 @@ export class StaffAttendanceController {
   }
 
   @Put()
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
+  @RequireAnyAction('attendance.staff_register#mark', 'hr.payroll#line_manage')
   async bulkMark(
     @Body() dto: BulkMarkStaffAttendanceDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -46,7 +48,6 @@ export class StaffAttendanceController {
   }
 
   @Get('summary')
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getSummary(
     @Query() query: GetStaffAttendanceQueryDto,
@@ -57,7 +58,6 @@ export class StaffAttendanceController {
   }
 
   @Get('dashboard')
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getDashboard(
     @Query() query: GetStaffAttendanceQueryDto,
@@ -78,7 +78,6 @@ export class StaffAttendanceController {
   }
 
   @Get(':employeeId/timeline')
-  @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async getTimeline(
     @Param('employeeId', ParseIntPipe) employeeId: number,

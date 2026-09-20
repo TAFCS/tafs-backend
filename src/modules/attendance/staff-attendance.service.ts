@@ -793,6 +793,7 @@ export class StaffAttendanceService {
           { campus_id: dto.campus_id },
           { users: { campus_id: dto.campus_id } },
         ],
+        ...this.scope.whereForEmployees(user),
       },
       select: { id: true },
     });

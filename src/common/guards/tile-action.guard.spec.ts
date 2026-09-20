@@ -63,10 +63,10 @@ describe('TileActionGuard', () => {
     expect(guard.canActivate(contextFor(staff([], StaffRole.SUPER_ADMIN)))).toBe(true);
   });
 
-  it('denies a parent session', () => {
+  it('allows a parent session to pass through for dual-surface endpoints', () => {
     const guard = guardWith({ mode: 'all', actionKeys: ['t#a'] });
     const parent = { sub: 1, familyId: 1, userType: 'PARENT' as const };
-    expect(() => guard.canActivate(contextFor(parent))).toThrow(ForbiddenException);
+    expect(guard.canActivate(contextFor(parent))).toBe(true);
   });
 
   it('accepts tile#* as every action of that tile', () => {

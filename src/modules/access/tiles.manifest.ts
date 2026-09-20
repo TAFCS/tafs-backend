@@ -705,6 +705,11 @@ const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
   { id: 'manage_replies', label: 'Review and approve staff replies', description: 'Approve, edit, or reject pending staff replies before delivery to parents', implies: ['view'] },
 ];
 
+const STAFF_REGISTER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View staff register', description: 'See staff attendance for any date and campus', default: true },
+  { id: 'mark', label: 'Mark staff attendance', description: 'Mark present/absent/late/excused and save daily attendance', implies: ['view'] },
+];
+
 const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
 
@@ -731,7 +736,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
 
-  // ?? Finance ??????????????????????????????????????????????????????????????
+  // ── Finance ──────────────────────────────────────────────────────────────
   { id: 'finance.financial_reports', module: 'finance', label: 'Financial Reports', description: 'Fee heads (accrual), deposits (cash), a student x month fee matrix, and the defaulters list, with filters and exports', href: '/financial-reports', capabilities: ['system.analytics.view'], actions: FINANCIAL_REPORTS_ACTIONS, legacyFullAccessCapabilities: ['system.analytics.finalize'] },
   { id: 'finance.class_fee_schedule', module: 'finance', label: 'Class Fee Schedule', description: 'Per-class fee configuration', href: '/classwise-fees-schedule', capabilities: ['fee_admin.classwise_schedule.view'], actions: CLASS_FEE_SCHEDULE_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.classwise_schedule.edit'] },
   { id: 'finance.student_overrides', module: 'finance', label: 'Student Overrides', description: 'Individual fee adjustments', href: '/studentwise-fees', capabilities: ['fee_admin.studentwise_schedule.view'], actions: STUDENT_OVERRIDES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.studentwise_schedule.edit'] },
@@ -743,12 +748,12 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'], actions: RECEIVE_DEPOSIT_ACTIONS, legacyFullAccessCapabilities: ['finance.deposits.record'] },
   { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.postdated_cheques.view'], actions: POSTDATED_CHEQUES_ACTIONS },
 
-  // ?? Communications ???????????????????????????????????????????????????????
+  // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },
   { id: 'communication.support_tickets', module: 'communication', label: 'Support Tickets', description: 'Issue tracking and resolution', href: '/support-tickets', capabilities: ['communication.support_tickets.view'], actions: SUPPORT_TICKETS_ACTIONS, legacyFullAccessCapabilities: ['communication.support_tickets.approve'] },
   { id: 'communication.notification_templates', module: 'communication', label: 'Notification Templates', description: 'Edit push notification text', href: '/admin/notification-templates', capabilities: ['communication.send_announcements', 'system.permissions.manage'], actions: NOTIFICATION_TEMPLATES_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 
-  // ?? HR & Payroll ?????????????????????????????????????????????????????????
+  // ── HR & Payroll ─────────────────────────────────────────────────────────
   { id: 'hr.employee_directory', module: 'hr', label: 'Employee Directory', description: 'Staff profiles and records', href: '/hr/employees', capabilities: ['hr.employees.view'], actions: EMPLOYEE_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'hr.register_employee', module: 'hr', label: 'Register a Employee', description: 'Create new employee profile', href: '/hr/employees/new', capabilities: ['hr.employees.view'], actions: REGISTER_EMPLOYEE_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'hr.departments', module: 'hr', label: 'Departments', description: 'Departments and staff categories', href: '/hr/departments', capabilities: ['hr.employees.view'], actions: DEPARTMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
@@ -759,8 +764,8 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'hr.salary_increments', module: 'hr', label: 'Salary Increments', description: 'Plan, review and apply salary increases in bulk', href: '/hr/salary-increments', capabilities: ['hr.employees.view'], actions: SALARY_INCREMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'], actions: EMPLOYEE_NOTICES_ACTIONS, legacyFullAccessCapabilities: ['communication.send_employee_announcements'] },
 
-  // ?? Attendance ???????????????????????????????????????????????????????????
-  { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'] },
+  // ── Attendance ───────────────────────────────────────────────────────────
+  { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'], actions: STAFF_REGISTER_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
   { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'] },
   { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'] },
   { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'] },

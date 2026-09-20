@@ -11,6 +11,8 @@ import { ForbiddenException } from '@nestjs/common';
 import { TimetablesController } from '../timetables/timetables.controller';
 import { SubjectsController } from '../timetables/subjects.controller';
 import { TeachingGroupsController } from '../timetables/teaching-groups.controller';
+import { StaffAttendanceController } from '../attendance/staff-attendance.controller';
+import { StaffAttendanceService } from '../attendance/staff-attendance.service';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { TILES_MANIFEST, actionKey } from './tiles.manifest';
 import { computeEffectiveAccess, type EffectiveTile } from './access.effective';
@@ -510,4 +512,81 @@ describe('Scope on the policy tiles', () => {
       expect(all.data).toHaveLength(3);
     });
   });
+
+  describe('Staff Register', () => {
+    const t = tile('attendance.staff_register');
+
+    it('bridges from attendance.staff.mark, which the tile itself requires', () => {
+      expect(t.capabilities).toEqual(['attendance.staff.mark']);
+      expect(t.legacyFullAccessCapabilities).toEqual(['attendance.staff.mark']);
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['attendance.staff.mark'],
+      });
+      for (const a of t.actions!) expect(r.actionIds).toContain(actionKey('attendance.staff_register', a.id));
+    });
+
+    it('gates getRegister on view and bulkMark on mark or hr.payroll#line_manage', () => {
+      const p = StaffAttendanceController.prototype;
+      expect(meta(p, 'getRegister')?.actionKeys).toEqual([actionKey('attendance.staff_register', 'view')]);
+      expect(meta(p, 'bulkMark')?.actionKeys).toEqual([
+        actionKey('attendance.staff_register', 'mark'),
+        actionKey('hr.payroll', 'line_manage'),
+      ]);
+      const guards: unknown[] = Reflect.getMetadata('__guards__', StaffAttendanceController) ?? [];
+      expect(guards).toContain(TileActionGuard);
+      keysExist(['attendance.staff_register#view', 'attendance.staff_register#mark']);
+    });
+
+    it('accounts for every route: decorated or left open on purpose with a reason', () => {
+      assertEveryRouteAccountedFor(StaffAttendanceController, {
+        getSummary: 'used by attendance dashboard and summary statistics',
+        getDashboard: 'used by attendance dashboard',
+        getMyAttendance: 'staff self service with assertStaffSelfPermission',
+        getTimeline: 'used by attendance timeline',
+      });
+    });
+
+    it('lets a SUPER_ADMIN narrow a person: deny mark and they keep view', () => {
+      const r = computeEffectiveAccess({
+        ...base,
+        role: StaffRole.EMPLOYEE,
+        roleKeys: ['attendance.staff.mark'],
+        userActionGrants: [{ tileId: 'attendance.staff_register', actionId: 'mark', allow: false }],
+      });
+      expect(r.actionIds).toContain(actionKey('attendance.staff_register', 'view'));
+      expect(r.actionIds).not.toContain(actionKey('attendance.staff_register', 'mark'));
+    });
+
+    it('refuses another campus on getRegister and bulkMark before touching attendance records', async () => {
+      const prisma = {
+        employee_profiles: { findMany: jest.fn().mockResolvedValue([]) },
+        attendance_staff_daily: { findMany: jest.fn().mockResolvedValue([]) },
+        $transaction: jest.fn(),
+      };
+      const holidaySync = { syncCampusForDate: jest.fn() };
+      const s = new StaffAttendanceService(
+        prisma as any,
+        {} as any,
+        holidaySync as any,
+        {} as any,
+        {} as any,
+        { log: jest.fn() } as any,
+        realScope,
+      );
+
+      await expect(
+        s.getRegister({ date: '2026-09-20', campus_id: [9] } as any, scoped),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      await expect(
+        s.bulkMark(
+          { campus_id: 9, date: '2026-09-20', records: [] } as any,
+          scoped,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
 });
+
