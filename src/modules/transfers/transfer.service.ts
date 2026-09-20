@@ -1,5 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import { applyStudentScope } from '../../common/staff-scope';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { StorageService } from '../../common/storage/storage.service';
 import { renderToBuffer } from '@react-pdf/renderer';
 import * as React from 'react';
@@ -21,8 +24,39 @@ export class TransferService {
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
     private readonly progressionHistory: ProgressionHistoryService,
+    private readonly scope: ScopeService,
   ) {}
-  async searchStudents(q: string) {
+
+  /**
+   * Missing and out-of-scope both 404 — a 403 would confirm a student exists
+   * at a campus the caller cannot see. `user` omitted means an internal caller.
+   */
+  private async assertStudentVisible(cc: number, user?: IJwtStaffPayload) {
+    if (!user) return;
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { campus_id: true, class_id: true, section_id: true, classes: { select: { segment_id: true } } },
+    });
+    if (
+      !s ||
+      !this.scope.canSeeStudent(user, {
+        campus_id: s.campus_id,
+        class_id: s.class_id,
+        section_id: s.section_id,
+        segment_id: s.classes?.segment_id ?? null,
+      })
+    ) {
+      throw new NotFoundException(`Student with CC #${cc} not found`);
+    }
+    // Legacy campus / class fields still ride on older tokens; AND them in.
+    const legacy = await this.prisma.students.findFirst({
+      where: applyStudentScope(user, { cc }),
+      select: { cc: true },
+    });
+    if (!legacy) throw new NotFoundException(`Student with CC #${cc} not found`);
+  }
+
+  async searchStudents(q: string, user?: IJwtStaffPayload) {
     if (!q?.trim()) return [];
     const queryStr = q.trim();
     const queryLower = queryStr.toLowerCase();
@@ -43,6 +77,7 @@ export class TransferService {
     const students = await this.prisma.students.findMany({
       where: {
         deleted_at: null,
+        ...(user ? { AND: [this.scope.whereForStudents(user), applyStudentScope(user, {})] } : {}),
         OR: [
           ...(isNumeric ? ccRanges : []),
           { full_name: { contains: queryStr, mode: 'insensitive' as const } },
@@ -132,7 +167,8 @@ export class TransferService {
    * Preview what GR the student would get if transferred to the given campus.
    * Returns null when the GR would not change.
    */
-  async previewTransferGr(cc: number, toCampusId: number, toClassId?: number): Promise<{ new_gr: string; old_gr: string | null; dest_prefix: string; source_prefix: string } | null> {
+  async previewTransferGr(cc: number, toCampusId: number, toClassId?: number, user?: IJwtStaffPayload): Promise<{ new_gr: string; old_gr: string | null; dest_prefix: string; source_prefix: string } | null> {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       select: { campus_id: true, gr_number: true },
@@ -159,7 +195,8 @@ export class TransferService {
     };
   }
 
-  async getAvailableClasses(cc: number) {
+  async getAvailableClasses(cc: number, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: { classes: { select: { description: true, class_code: true, academic_system: true } } },
@@ -221,7 +258,8 @@ export class TransferService {
     return all.filter(c => allowed.includes(normalize(c.description)));
   }
 
-  async executeTransfer(cc: number, dto: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string }, changedBy?: string) {
+  async executeTransfer(cc: number, dto: { to_class_id: number; to_campus_id?: number; to_section_id?: number; discipline?: string; remarks?: string; target_academic_year?: string }, changedBy?: string, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: { classes: { select: { description: true, academic_system: true } } },
@@ -231,9 +269,19 @@ export class TransferService {
 
     const toClass = await this.prisma.classes.findUnique({
       where: { id: dto.to_class_id },
-      select: { description: true, academic_system: true },
+      select: { description: true, academic_system: true, segment_id: true },
     });
     if (!toClass) throw new BadRequestException(`Target class #${dto.to_class_id} not found`);
+
+    // The destination must be inside the caller's scope too: a campus-scoped
+    // user must not be able to push a student into a campus / class / section
+    // they cannot see.
+    if (user) {
+      this.scope.assertCampus(user, dto.to_campus_id ?? student.campus_id);
+      this.scope.assertClass(user, dto.to_class_id);
+      this.scope.assertSegment(user, toClass.segment_id);
+      if (dto.to_section_id) this.scope.assertSection(user, dto.to_section_id);
+    }
 
     if (dto.to_campus_id) {
       const targetCampus = await this.prisma.campuses.findUnique({
@@ -385,8 +433,8 @@ export class TransferService {
     class_name?: string;
     section_name?: string;
     academic_year?: string;
-  }) {
-    const data = await this.getTransferOrderData(cc);
+  }, user?: IJwtStaffPayload) {
+    const data = await this.getTransferOrderData(cc, user);
 
     // Fetch student photo as buffer so it doesn't need CORS in the backend
     let photographUrl: string | null = null;
@@ -470,7 +518,8 @@ export class TransferService {
     }
   }
 
-  async getTransferOrderData(cc: number) {
+  async getTransferOrderData(cc: number, user?: IJwtStaffPayload) {
+    await this.assertStudentVisible(cc, user);
     const student = await this.prisma.students.findUnique({
       where: { cc },
       include: {

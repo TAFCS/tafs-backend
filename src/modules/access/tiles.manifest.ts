@@ -488,6 +488,39 @@ const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
   { id: 'main_receipt', label: 'Print the main-column receipt', description: 'Special admin workflow', implies: ['view'] },
 ];
 
+// Transfers had NO guard of any kind: TransferController carried no
+// @UseGuards, so every route -- including the one that rewrites a student's
+// class, campus and GR number -- was reachable without a login. It is now
+// authenticated and gated per action. Bridged from academic.transfers.execute,
+// the capability that names this power; a role holding only
+// academic.transfers.view (e.g. PRINCIPAL) keeps the page but loses the
+// transfer itself until a SUPER_ADMIN grants `execute`.
+const TRANSFERS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Transfers', description: 'Search a student, see the target-class picker and the GR preview', default: true },
+
+  { id: 'execute', label: 'Execute a transfer', description: 'Moves the student to another class, campus or system; can issue a new GR number', implies: ['view'] },
+  { id: 'print', label: 'Print the transfer order', implies: ['view'] },
+];
+
+// The House Balancer page is listed under two tiles (student.house_balancer and
+// school-setup.house_balancer), so both carry this same action set and every
+// route accepts either. Bridged from academic.campuses.edit, which is exactly
+// what the routes' existing "Update Campus" policy already required.
+const HOUSE_BALANCER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open House Balancer', description: 'See the rebalance history', default: true },
+
+  { id: 'preview', label: 'Preview a rebalance', description: 'Compute the proposed moves without applying them', implies: ['view'] },
+  { id: 'apply', label: 'Apply a rebalance', description: 'Reassigns students to houses', implies: ['view'] },
+];
+
+// Bulk promotion shares POST /students/promotion/bulk and the GR-suggestion
+// route with the Student Directory's `promote`, so those routes accept either.
+const ACADEMIC_ACTIONS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Academic Actions', default: true },
+
+  { id: 'promote', label: 'Promote students in bulk', implies: ['view'] },
+];
+
 // Post-dated Cheques had no permission infrastructure at all: it borrowed
 // finance.vouchers.view, which every voucher viewer holds, and was later locked
 // to SUPER_ADMIN outright. It now has its own capability
@@ -535,10 +568,10 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'] },
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'] },
-  { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'] },
-  { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'] },
+  { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },
+  { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'], actions: ACADEMIC_ACTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.bulk_promote.execute'] },
   { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
-  { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
+  { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
 
   // ?? Finance ??????????????????????????????????????????????????????????????
   { id: 'finance.financial_reports', module: 'finance', label: 'Financial Reports', description: 'Fee heads (accrual), deposits (cash), a student x month fee matrix, and the defaulters list, with filters and exports', href: '/financial-reports', capabilities: ['system.analytics.view'], actions: FINANCIAL_REPORTS_ACTIONS, legacyFullAccessCapabilities: ['system.analytics.finalize'] },
@@ -593,7 +626,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
   { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'] },
-  { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'] },
+  { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'], actions: FEE_TYPES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
   { id: 'school-setup.discount_presets', module: 'school-setup', label: 'Discount Presets', description: 'Standard discount templates', href: '/discount-presets', capabilities: ['fee_admin.fee_types.view'], actions: DISCOUNT_PRESETS_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
   { id: 'school-setup.banks', module: 'school-setup', label: 'Banks', description: 'Banking relationships', href: '/banks', capabilities: ['finance.banks.view'], actions: BANKS_ACTIONS, legacyFullAccessCapabilities: ['finance.banks.edit'] },

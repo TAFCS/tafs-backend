@@ -8,6 +8,8 @@ import { createHash, randomInt } from 'crypto';
 import { Prisma, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { ApplyHouseBalanceDto } from './dto/apply-house-balance.dto';
 import {
   ApplyCampusHouseBalanceDto,
@@ -67,7 +69,23 @@ export class HouseBalancerService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly progressionHistory: ProgressionHistoryService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /**
+   * Every house-balancer operation names a campus (and, for the per-section
+   * flow, a class and section). The caller must be able to act on all of them.
+   * `user` omitted means an internal caller.
+   */
+  private assertScope(
+    user: IJwtStaffPayload | undefined,
+    ids: { campus_id: number; class_id?: number | null; section_id?: number | null },
+  ) {
+    if (!user) return;
+    this.scope.assertCampus(user, ids.campus_id);
+    if (ids.class_id != null) this.scope.assertClass(user, ids.class_id);
+    if (ids.section_id != null) this.scope.assertSection(user, ids.section_id);
+  }
 
   private houseLookup(houses: HouseRow[]): Map<number, HouseRow> {
     return new Map(houses.map((house) => [house.id, house]));
@@ -371,7 +389,8 @@ export class HouseBalancerService {
     return assignments;
   }
 
-  async preview(dto: HouseBalancerScopeDto) {
+  async preview(dto: HouseBalancerScopeDto, user?: IJwtStaffPayload) {
+    this.assertScope(user, dto);
     const meta = await this.loadScopeMeta(dto);
     const [students, houses] = await Promise.all([
       this.loadScopedStudents(dto),
@@ -400,7 +419,8 @@ export class HouseBalancerService {
     };
   }
 
-  async apply(dto: ApplyHouseBalanceDto, changedBy?: string) {
+  async apply(dto: ApplyHouseBalanceDto, changedBy?: string, user?: IJwtStaffPayload) {
+    this.assertScope(user, dto);
     const meta = await this.loadScopeMeta(dto);
     const houses = await this.prisma.houses.findMany({ orderBy: { id: 'asc' } });
     const houseIds = new Set(houses.map((h) => h.id));
@@ -563,7 +583,8 @@ export class HouseBalancerService {
     return result;
   }
 
-  async previewCampus(dto: CampusHouseBalancePreviewDto) {
+  async previewCampus(dto: CampusHouseBalancePreviewDto, user?: IJwtStaffPayload) {
+    this.assertScope(user, dto);
     const campus = await this.prisma.campuses.findUnique({
       where: { id: dto.campus_id },
       select: { id: true, campus_name: true, campus_code: true },
@@ -687,7 +708,9 @@ export class HouseBalancerService {
     };
   }
 
-  async applyCampus(dto: ApplyCampusHouseBalanceDto, changedBy?: string) {
+  async applyCampus(dto: ApplyCampusHouseBalanceDto, changedBy?: string, user?: IJwtStaffPayload) {
+    this.assertScope(user, dto);
+    for (const g of dto.groups ?? []) this.assertScope(user, { campus_id: dto.campus_id, class_id: g.class_id, section_id: g.section_id });
     const campus = await this.prisma.campuses.findUnique({
       where: { id: dto.campus_id },
       select: { id: true, campus_name: true, campus_code: true },
@@ -946,7 +969,8 @@ export class HouseBalancerService {
     return result;
   }
 
-  async listHistory(campusId: number, limit = 20, offset = 0) {
+  async listHistory(campusId: number, limit = 20, offset = 0, user?: IJwtStaffPayload) {
+    this.assertScope(user, { campus_id: campusId });
     const campus = await this.prisma.campuses.findUnique({
       where: { id: campusId },
       select: { id: true },
@@ -1006,7 +1030,7 @@ export class HouseBalancerService {
     };
   }
 
-  async getHistory(id: number) {
+  async getHistory(id: number, user?: IJwtStaffPayload) {
     const row = await this.prisma.audit_logs.findUnique({
       where: { id },
       select: {
@@ -1027,6 +1051,24 @@ export class HouseBalancerService {
       !HISTORY_ACTIONS.includes(row.action as (typeof HISTORY_ACTIONS)[number])
     ) {
       throw new NotFoundException(`House rebalance history #${id} not found`);
+    }
+
+    // entity_id is `<campus>:<class>:<section>`, `campus:<campus>` or
+    // `campus:<campus>:...`. Out-of-scope 404s, same as a missing row.
+    if (user) {
+      const campusId = Number(/^(?:campus:)?(\d+)/.exec(row.entity_id ?? '')?.[1]);
+      if (!Number.isFinite(campusId)) {
+        // Cannot tie the row to a campus: only an unrestricted caller may read it.
+        if (this.scope.scopeOf(user).campuses.length > 0) {
+          throw new NotFoundException(`House rebalance history #${id} not found`);
+        }
+      } else {
+        try {
+          this.scope.assertCampus(user, campusId);
+        } catch {
+          throw new NotFoundException(`House rebalance history #${id} not found`);
+        }
+      }
     }
 
     const payload = this.parseMovesPayload(row.new_value);

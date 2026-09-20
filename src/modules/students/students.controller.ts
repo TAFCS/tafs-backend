@@ -90,7 +90,7 @@ export class StudentsController {
 
   @Post('gr-numbers/suggest-for-promotion')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAction('student.directory#promote')
+  @RequireAnyAction('student.directory#promote', 'student.academic_actions#promote')
   async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto) {
     const assignments = await this.studentsService.suggestGrNumbersForPromotion(
       dto.student_ccs,
@@ -234,7 +234,7 @@ export class StudentsController {
 
   @Post('promotion/bulk')
   @CheckPolicies((ability) => ability.can(Action.Update, 'Student'))
-  @RequireAction('student.directory#promote')
+  @RequireAnyAction('student.directory#promote', 'student.academic_actions#promote')
   async promoteBulk(
     @Body() dto: PromoteBulkStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
