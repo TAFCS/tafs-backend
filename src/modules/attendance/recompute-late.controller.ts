@@ -22,6 +22,7 @@ import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
+import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { AttendanceSource, DevicePersonType } from '@prisma/client';
 
 export class RecomputeLateStatusDto {
@@ -61,6 +62,7 @@ export class RecomputeLateController {
     private readonly prisma: PrismaService,
     private readonly processor: ZkAttendanceProcessorService,
     private readonly scope: ScopeService,
+    private readonly policyResolver: AttendancePolicyResolverService,
   ) {}
 
   // Called only by the Attendance Settings page. It rewrites attendance for a
@@ -134,16 +136,27 @@ export class RecomputeLateController {
       studentTasks.set(key, { studentCc: row.student_cc, date: row.date });
     }
 
+    // Memoized for the run: resolving a student's punch direction needs their
+    // campus+class pairing, which upsertStudentDaily then resolves again for
+    // the expected check-in. Over a date range that is several redundant reads
+    // per student-day against a remote database. Scoped and released below.
     let studentsRecomputed = 0;
-    for (const task of studentTasks.values()) {
-      const seg = await this.processor.recomputeDaySequence(
-        DevicePersonType.STUDENT,
-        null,
-        task.studentCc,
-        task.date,
-      );
-      await this.processor.upsertStudentDaily(task.studentCc, task.date, seg);
-      studentsRecomputed++;
+    this.processor.beginBatch();
+    this.policyResolver.beginBatch();
+    try {
+      for (const task of studentTasks.values()) {
+        const seg = await this.processor.recomputeDaySequence(
+          DevicePersonType.STUDENT,
+          null,
+          task.studentCc,
+          task.date,
+        );
+        await this.processor.upsertStudentDaily(task.studentCc, task.date, seg);
+        studentsRecomputed++;
+      }
+    } finally {
+      this.processor.endBatch();
+      this.policyResolver.endBatch();
     }
 
     // 2. Recompute Staff (only if class_id is not specified)
