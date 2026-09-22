@@ -20,6 +20,12 @@ import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-te
 import { EmployeeNoticeBoardService } from '../employee-notice-board/employee-notice-board.service';
 import { personDayKey, resolvePersonRef } from './device-mapping-resolution.util';
 import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
+import {
+  resolveStudentDayPunches,
+  nextStudentDirection,
+  shouldAnnouncePunch,
+  type StudentDayPunches,
+} from './student-punch-direction.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -67,6 +73,50 @@ export interface DaySegment {
   checkOutAt: Date | null;
   lastScanAt: Date | null;
   scanCount: number;
+  /**
+   * Direction of the day's LAST punch, and whether it is worth telling the
+   * parent about.
+   *
+   * These used to be re-derived from scanCount parity by the caller, which only
+   * worked because every punch flipped the state. Under the student rule a
+   * punch's meaning depends on the clock, not the count (a 2nd morning tap is
+   * another IN, a lone afternoon tap is an OUT), so the resolver that decided it
+   * hands the answer up rather than letting the caller guess again.
+   *
+   * Null when the day has no punches.
+   */
+  lastDirection: ScanDirection | null;
+  announceLast: boolean;
+  /** Punches exist but none is an arrival — see StudentDayPunches.checkOutOnly. */
+  checkOutOnly: boolean;
+}
+
+/** A day with nothing in it. */
+const EMPTY_DAY_SEGMENT: DaySegment = {
+  checkInAt: null,
+  checkOutAt: null,
+  lastScanAt: null,
+  scanCount: 0,
+  lastDirection: null,
+  announceLast: false,
+  checkOutOnly: false,
+};
+
+/**
+ * Fold resolved punches into the DaySegment shape the daily upserts consume.
+ * Staff pass a null intermediate time, which is exactly legacy parity.
+ */
+function toDaySegment(resolved: StudentDayPunches): DaySegment {
+  const last = resolved.directions.length - 1;
+  return {
+    checkInAt: resolved.checkInAt,
+    checkOutAt: resolved.checkOutAt,
+    lastScanAt: resolved.lastScanAt,
+    scanCount: resolved.scanCount,
+    lastDirection: last >= 0 ? resolved.directions[last] : null,
+    announceLast: shouldAnnouncePunch(resolved, last),
+    checkOutOnly: resolved.checkOutOnly,
+  };
 }
 
 /**
@@ -257,25 +307,45 @@ export class ZkAttendanceProcessorService {
     const now = new Date();
     const results: ScanProcessResult[] = [];
 
-    for (const row of rows) {
-      try {
-        const result = await this.processOneScan(
-          {
-            sn,
-            pin: row.pin,
-            scanTime: row.scanTime,
-            status: row.status,
-            verify: row.verify,
-            workCode: row.workCode,
-            pushLogId,
-            now,
-          },
-          options,
-        );
-        if (result) results.push(result);
-      } catch (err: any) {
-        this.logger.error(`Failed to process scan (pin=${row.pin}, sn=${sn}): ${err.message}`);
+    // Memoize the person and policy lookups for the duration of this push.
+    //
+    // A push carries a batch of scans, and resolving a student's punch
+    // direction needs their campus+class pairing — which upsertStudentDaily
+    // then resolves again for the expected check-in. Unmemoized that is two
+    // students reads, two schedule reads and two hr_policy_sets reads (a join)
+    // per scan, against a remote database. The policy-set read fires on every
+    // scan of a class with no schedule row, which is the common case.
+    //
+    // Scoped to one push and released in `finally`, so the staleness the
+    // caches are opt-in to avoid can't happen: a student's campus, class or
+    // schedule cannot change inside a single request. Same contract
+    // ZkScanResolutionService uses around a rebuild.
+    this.beginBatch();
+    this.policyResolver.beginBatch();
+    try {
+      for (const row of rows) {
+        try {
+          const result = await this.processOneScan(
+            {
+              sn,
+              pin: row.pin,
+              scanTime: row.scanTime,
+              status: row.status,
+              verify: row.verify,
+              workCode: row.workCode,
+              pushLogId,
+              now,
+            },
+            options,
+          );
+          if (result) results.push(result);
+        } catch (err: any) {
+          this.logger.error(`Failed to process scan (pin=${row.pin}, sn=${sn}): ${err.message}`);
+        }
       }
+    } finally {
+      this.endBatch();
+      this.policyResolver.endBatch();
     }
 
     return results;
@@ -366,8 +436,26 @@ export class ZkAttendanceProcessorService {
   }
 
   private scanDirectionFromSegment(seg: DaySegment): ScanDirection | null {
-    if (seg.scanCount <= 0) return null;
-    return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;
+    return seg.lastDirection;
+  }
+
+  /**
+   * The internal threshold for this student's campus+class pairing on this day,
+   * or null when the pairing has none (legacy parity).
+   *
+   * Resolved for the day being recomputed, never for today: a rebuild of last
+   * month must decide those punches with the schedule that was in effect then,
+   * which is what effective_from is for.
+   */
+  private async resolveStudentIntermediate(studentCc: number, date: Date): Promise<Date | null> {
+    const student = await this.loadStudentRecord(studentCc);
+    if (student?.campus_id == null) return null;
+    const policy = await this.policyResolver.resolveStudentCheckInPolicy(
+      student.class_id,
+      student.campus_id,
+      date,
+    );
+    return policy.intermediateTime;
   }
 
   private async processOneScan(
@@ -536,12 +624,20 @@ export class ZkAttendanceProcessorService {
     });
 
     if (scans.length === 0) {
-      return { checkInAt: null, checkOutAt: null, lastScanAt: null, scanCount: 0 };
+      return { ...EMPTY_DAY_SEGMENT };
     }
+
+    // Students resolve against their pairing's intermediate time; staff pass
+    // null, which the resolver treats as the strict parity they have always had.
+    const intermediate =
+      personType === DevicePersonType.STUDENT
+        ? await this.resolveStudentIntermediate(studentCc!, attendanceDate)
+        : null;
+    const resolved = resolveStudentDayPunches(scans, intermediate);
 
     const updates = scans
       .map((s, idx) => {
-        const direction: ScanDirection = idx % 2 === 0 ? ScanDirection.IN : ScanDirection.OUT;
+        const direction = resolved.directions[idx];
         return { id: s.id, sequence_no: idx, direction, changed: s.sequence_no !== idx || s.direction !== direction };
       })
       .filter((u) => u.changed);
@@ -557,12 +653,64 @@ export class ZkAttendanceProcessorService {
       );
     }
 
-    const checkInAt = scans[0].scan_time;
-    const lastScanAt = scans[scans.length - 1].scan_time;
-    const lastOutIdx = scans.length % 2 === 0 ? scans.length - 1 : scans.length - 2;
-    const checkOutAt = lastOutIdx >= 0 ? scans[lastOutIdx].scan_time : null;
+    return toDaySegment(resolved);
+  }
 
-    return { checkInAt, checkOutAt, lastScanAt, scanCount: scans.length };
+  /**
+   * One students read plus one schedules read for a whole batch, returning a
+   * (studentCc, date) -> intermediate time lookup.
+   *
+   * Resolution has to stay per-day rather than per-student: schedules carry an
+   * effective_from, so a rebuild spanning a timings change must decide each day
+   * with the schedule that was live on it.
+   */
+  private async loadIntermediateResolver(
+    studentCcs: number[],
+    dates: Date[],
+  ): Promise<(studentCc: number, date: Date) => Date | null> {
+    if (studentCcs.length === 0 || dates.length === 0) return () => null;
+
+    const maxDate = new Date(Math.max(...dates.map((d) => d.getTime())));
+    const students = await this.prisma.students.findMany({
+      where: { cc: { in: studentCcs } },
+      select: { cc: true, campus_id: true, class_id: true },
+    });
+    const byCc = new Map(students.map((s) => [s.cc, s]));
+
+    const campusIds = [...new Set(students.map((s) => s.campus_id).filter((v): v is number => v != null))];
+    const classIds = [...new Set(students.map((s) => s.class_id).filter((v): v is number => v != null))];
+    if (campusIds.length === 0 || classIds.length === 0) return () => null;
+
+    // Over-fetches slightly (every campus x class combination in the batch),
+    // but it is one query and resolveStudentCheckInPolicyFromCache matches the
+    // exact pairing in memory.
+    const schedules = await this.prisma.class_check_in_schedules.findMany({
+      where: {
+        campus_id: { in: campusIds },
+        class_id: { in: classIds },
+        effective_from: { lte: maxDate },
+      },
+      orderBy: { effective_from: 'desc' },
+    });
+    if (schedules.length === 0) return () => null;
+
+    const memo = new Map<string, Date | null>();
+    return (studentCc: number, date: Date): Date | null => {
+      const key = `${studentCc}|${date.getTime()}`;
+      const hit = memo.get(key);
+      if (hit !== undefined) return hit;
+
+      const student = byCc.get(studentCc);
+      const policy = this.policyResolver.resolveStudentCheckInPolicyFromCache(
+        student?.class_id ?? null,
+        student?.campus_id ?? null,
+        date,
+        schedules,
+        [], // no policy-set fallback: hr_policy_sets has no intermediate time
+      );
+      memo.set(key, policy.intermediateTime);
+      return policy.intermediateTime;
+    };
   }
 
   /**
@@ -591,12 +739,7 @@ export class ZkAttendanceProcessorService {
 
     for (const e of entries) {
       assertPersonId(e.personType, e.employeeId, e.studentCc);
-      out.set(segmentKey(e.personType, e.employeeId, e.studentCc, e.date), {
-        checkInAt: null,
-        checkOutAt: null,
-        lastScanAt: null,
-        scanCount: 0,
-      });
+      out.set(segmentKey(e.personType, e.employeeId, e.studentCc, e.date), { ...EMPTY_DAY_SEGMENT });
     }
 
     const staffIds = [...new Set(entries.map((e) => e.employeeId).filter((v): v is number => v != null))];
@@ -640,6 +783,12 @@ export class ZkAttendanceProcessorService {
       else byDay.set(key, [s]);
     }
 
+    // The whole point of this method is that a rebuild collapses to a handful
+    // of queries, so the students' intermediate times are loaded in bulk too —
+    // one students read and one schedules read for the entire batch, then
+    // resolved per day in memory.
+    const intermediateFor = await this.loadIntermediateResolver(studentCcs, dates);
+
     const dupFlips = { true: [] as number[], false: [] as number[] };
     const seqGroups = new Map<string, { sequence_no: number; direction: ScanDirection; ids: number[] }>();
 
@@ -660,8 +809,15 @@ export class ZkAttendanceProcessorService {
 
       if (accepted.length === 0) continue;
 
+      const first = accepted[0];
+      const intermediate =
+        first.person_type === DevicePersonType.STUDENT && first.student_cc != null
+          ? intermediateFor(first.student_cc, first.attendance_date)
+          : null;
+      const resolved = resolveStudentDayPunches(accepted, intermediate);
+
       accepted.forEach((s, idx) => {
-        const direction: ScanDirection = idx % 2 === 0 ? ScanDirection.IN : ScanDirection.OUT;
+        const direction = resolved.directions[idx];
         if (s.sequence_no === idx && s.direction === direction) return;
         const gk = `${idx}|${direction}`;
         const group = seqGroups.get(gk);
@@ -669,13 +825,7 @@ export class ZkAttendanceProcessorService {
         else seqGroups.set(gk, { sequence_no: idx, direction, ids: [s.id] });
       });
 
-      const lastOutIdx = accepted.length % 2 === 0 ? accepted.length - 1 : accepted.length - 2;
-      out.set(key, {
-        checkInAt: accepted[0].scan_time,
-        checkOutAt: lastOutIdx >= 0 ? accepted[lastOutIdx].scan_time : null,
-        lastScanAt: accepted[accepted.length - 1].scan_time,
-        scanCount: accepted.length,
-      });
+      out.set(key, toDaySegment(resolved));
     }
 
     const writes: Prisma.PrismaPromise<unknown>[] = [];
@@ -1139,7 +1289,10 @@ export class ZkAttendanceProcessorService {
       student.campus_id,
       date,
     );
-    const status = this.computeStudentStatus(seg.checkInAt!, policy.expectedCheckIn, policy.graceMinutes);
+    // checkInAt is genuinely null on a check-out-only day (rule 2): the child
+    // was here — they punched on the way out — so the day is PRESENT, there is
+    // just no arrival to measure lateness against.
+    const status = this.computeStudentStatus(seg.checkInAt, policy.expectedCheckIn, policy.graceMinutes);
 
     await this.prisma.attendance_student_daily.upsert({
       where: { student_cc_date: { student_cc: studentCc, date } },
@@ -1186,16 +1339,16 @@ export class ZkAttendanceProcessorService {
       });
     }
 
-    return seg.scanCount % 2 === 0 ? ScanDirection.OUT : ScanDirection.IN;
+    return seg.lastDirection;
   }
 
   private computeStudentStatus(
-    checkInAt: Date,
+    checkInAt: Date | null,
     expectedCheckIn: Date | null,
     graceMinutes: number,
   ): RollRecordStatus {
     // Student LATE marking is paused campus-wide — see STUDENT_LATE_MARKING_ENABLED.
-    if (!STUDENT_LATE_MARKING_ENABLED || !expectedCheckIn) return RollRecordStatus.PRESENT;
+    if (!STUDENT_LATE_MARKING_ENABLED || !expectedCheckIn || !checkInAt) return RollRecordStatus.PRESENT;
     const expectedMinutes = expectedCheckIn.getUTCHours() * 60 + expectedCheckIn.getUTCMinutes();
     const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
     return checkInMinutes > expectedMinutes + graceMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;
@@ -1213,8 +1366,9 @@ export class ZkAttendanceProcessorService {
    * Current state of a student's day, for the gate-desk panel: what the next
    * punch would be, and the times already recorded.
    */
-  async getStudentDayState(studentCc: number, date?: Date) {
-    const attendanceDate = date ?? this.startOfUTCDay(this.nowAsDeviceTime());
+  async getStudentDayState(studentCc: number, date?: Date, at?: Date) {
+    const now = this.nowAsDeviceTime();
+    const attendanceDate = date ?? this.startOfUTCDay(now);
 
     const [scans, daily] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
@@ -1232,10 +1386,18 @@ export class ZkAttendanceProcessorService {
       }),
     ]);
 
+    // Not a parity question any more: with an intermediate time configured the
+    // next punch is an arrival all morning however many times the child has
+    // already tapped, and a departure from the threshold on even if they never
+    // tapped at all. The gate desk has to be told the same thing the device
+    // pipeline would decide, or its conflict check rejects legitimate punches.
+    const intermediate = await this.resolveStudentIntermediate(studentCc, attendanceDate);
+
     return {
       attendance_date: attendanceDate,
-      // Even scan count -> the next punch opens a new IN/OUT pair.
-      next_direction: scans.length % 2 === 0 ? ScanDirection.IN : ScanDirection.OUT,
+      next_direction: nextStudentDirection(scans, intermediate, at ?? now),
+      /** Whether a cut-off time governs this pairing, for the gate desk's wording. */
+      has_cutoff: intermediate != null,
       scan_count: scans.length,
       scans,
       record: daily,
@@ -1264,8 +1426,17 @@ export class ZkAttendanceProcessorService {
     const scanTime = this.nowAsDeviceTime();
     const attendanceDate = this.startOfUTCDay(scanTime);
 
-    const state = await this.getStudentDayState(studentCc, attendanceDate);
+    const state = await this.getStudentDayState(studentCc, attendanceDate, scanTime);
     if (state.next_direction !== direction) {
+      // Two different reasons to reject, and the operator needs to know which:
+      // under a cut-off the clock decides, without one the day's pairing does.
+      if (state.has_cutoff) {
+        throw new ConflictException(
+          direction === ScanDirection.IN
+            ? "It is past this class's cut-off time — the next punch can only be a check-out."
+            : "It is before this class's cut-off time — the next punch can only be a check-in.",
+        );
+      }
       throw new ConflictException(
         direction === ScanDirection.IN
           ? 'This student is already checked in — record a check-out first.'

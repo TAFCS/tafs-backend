@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import {
+  resolveStudentDayPunches,
+  buildStudentSessions,
+} from '../attendance/student-punch-direction.util';
 import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from '../attendance/student-attendance-status.util';
@@ -270,29 +274,22 @@ export class AppPortalService {
         source: 'DEFAULT',
       };
 
-      const sessions: any[] = [];
-      for (let i = 0; i + 1 < dayScans.length; i += 2) {
-        sessions.push({
-          clock_in: dayScans[i].scan_time,
-          clock_out: dayScans[i + 1].scan_time,
-        });
-      }
-      if (dayScans.length % 2 !== 0) {
-        sessions.push({
-          clock_in: dayScans[dayScans.length - 1].scan_time,
-          clock_out: null,
-        });
-      }
-
       const { holiday_type, holiday_description } = this.calendarResolver.toHolidayDisplay(resolved);
 
-      // Resolve check-in policy in memory
-      const { expectedCheckIn, graceMinutes } = this.policyResolver.resolveStudentCheckInPolicyFromCache(
-        student?.class_id ?? null,
-        d,
-        schedules,
-        policySets,
-      );
+      // Resolve the pairing's policy in memory. The intermediate time is what
+      // decides whether a punch is an arrival or a departure — never sent to
+      // the app, only used here to pair the day up the same way the ingest
+      // pipeline stored it.
+      const { expectedCheckIn, graceMinutes, intermediateTime } =
+        this.policyResolver.resolveStudentCheckInPolicyFromCache(
+          student?.class_id ?? null,
+          student?.campus_id ?? null,
+          d,
+          schedules,
+          policySets,
+        );
+
+      const sessions = buildStudentSessions(resolveStudentDayPunches(dayScans, intermediateTime));
 
       const hasCheckIn = !!record?.check_in_at || dayScans.length > 0;
       const status = resolveStudentAttendanceStatus({
@@ -322,7 +319,50 @@ export class AppPortalService {
       student_cc: studentCc,
       month: monthStr,
       mode: 'BIOMETRIC_DAILY',
+      timings: await this.resolveParentVisibleTimings(student, dateTo),
       days,
+    };
+  }
+
+  /**
+   * The school-day timings the parent app shows in its calendar tab.
+   *
+   * Start and end only. The intermediate time is an internal punch-direction
+   * threshold and must never leave the back office — it is not in this shape
+   * at all, so it cannot be leaked by a careless spread further down.
+   *
+   * Resolved for today when the requested month has not finished, and for the
+   * month's last day otherwise, so a past month shows the timings that actually
+   * applied to it rather than whatever is current.
+   */
+  private async resolveParentVisibleTimings(
+    student: { campus_id: number | null; class_id: number | null } | null,
+    dateTo: Date,
+  ): Promise<{ start_time: string; end_time: string | null; effective_from: string } | null> {
+    if (student?.campus_id == null || student.class_id == null) return null;
+
+    const today = new Date();
+    const asOfMs = Math.min(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+      dateTo.getTime(),
+    );
+
+    const schedule = await this.prisma.class_check_in_schedules.findFirst({
+      where: {
+        campus_id: student.campus_id,
+        class_id: student.class_id,
+        effective_from: { lte: new Date(asOfMs) },
+      },
+      orderBy: { effective_from: 'desc' },
+      select: { expected_check_in: true, end_time: true, effective_from: true },
+    });
+    if (!schedule) return null;
+
+    const hhmm = (d: Date) => d.toISOString().slice(11, 16);
+    return {
+      start_time: hhmm(schedule.expected_check_in),
+      end_time: schedule.end_time ? hhmm(schedule.end_time) : null,
+      effective_from: schedule.effective_from.toISOString().slice(0, 10),
     };
   }
 
@@ -445,6 +485,7 @@ export class AppPortalService {
       student_cc: studentCc,
       month: monthStr,
       mode: 'ROLL_CALL_SESSION',
+      timings: await this.resolveParentVisibleTimings(student, dateTo),
       days,
     };
   }

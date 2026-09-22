@@ -5,6 +5,27 @@ import {
   ExpectedTimesResult,
 } from '../timetables/employee-expected-times.service';
 
+/**
+ * What a student's campus+class pairing says about their day.
+ *
+ * `endTime` and `intermediateTime` only ever come from a class_check_in_schedules
+ * row — hr_policy_sets has no notion of either, so a campus-default fallback
+ * yields nulls for both and the punch resolver keeps legacy parity.
+ */
+export type StudentCheckInPolicy = {
+  expectedCheckIn: Date | null;
+  endTime: Date | null;
+  intermediateTime: Date | null;
+  graceMinutes: number;
+};
+
+const NO_STUDENT_POLICY: StudentCheckInPolicy = {
+  expectedCheckIn: null,
+  endTime: null,
+  intermediateTime: null,
+  graceMinutes: 0,
+};
+
 type PolicyRuleRow = {
   rule_type: string;
   value_json: unknown;
@@ -99,7 +120,7 @@ export class AttendancePolicyResolverService {
    */
   private resolveStudentRulesFromPolicySets(
     sets: Array<{ hr_policy_rules: PolicyRuleRow[] }>,
-  ): { expectedCheckIn: Date | null; graceMinutes: number } {
+  ): StudentCheckInPolicy {
     for (const set of sets) {
       const rules = set.hr_policy_rules;
       const expectedCheckIn = this.parseTimeRule(
@@ -113,10 +134,10 @@ export class AttendancePolicyResolverService {
           'LATE_GRACE_PERIOD_MINS_STUDENT',
           'LATE_GRACE_PERIOD_MINS',
         );
-        return { expectedCheckIn, graceMinutes };
+        return { expectedCheckIn, endTime: null, intermediateTime: null, graceMinutes };
       }
     }
-    return { expectedCheckIn: null, graceMinutes: 0 };
+    return NO_STUDENT_POLICY;
   }
 
   private resolveStaffRulesFromPolicySets(
@@ -141,17 +162,41 @@ export class AttendancePolicyResolverService {
     return { expectedCheckIn: null, graceMinutes: 0 };
   }
 
+  /**
+   * Pick the pairing's schedule out of an already-loaded list.
+   *
+   * `campusId` is required. It used to be absent here while the uncached path
+   * filtered on it, so the two could resolve different schedules for the same
+   * student — and since classes are shared across campuses via campus_classes,
+   * a cached lookup would happily hand back another campus's timings.
+   *
+   * Schedules are dated, so take the newest one that has come into effect, not
+   * merely the first match in the array.
+   */
   resolveStudentCheckInPolicyFromCache(
     classId: number | null,
+    campusId: number | null,
     date: Date,
-    schedules: Array<{ class_id: number; expected_check_in: Date; late_grace_minutes: number; effective_from: Date }>,
+    schedules: Array<{
+      class_id: number;
+      campus_id: number;
+      expected_check_in: Date;
+      end_time?: Date | null;
+      intermediate_time?: Date | null;
+      late_grace_minutes: number;
+      effective_from: Date;
+    }>,
     policySets: Array<{ effective_from: Date; hr_policy_rules: PolicyRuleRow[] }>,
-  ): { expectedCheckIn: Date | null; graceMinutes: number } {
-    if (classId != null) {
-      const schedule = schedules.find((s) => s.class_id === classId && s.effective_from <= date);
+  ): StudentCheckInPolicy {
+    if (classId != null && campusId != null) {
+      const schedule = schedules
+        .filter((s) => s.class_id === classId && s.campus_id === campusId && s.effective_from <= date)
+        .sort((a, b) => b.effective_from.getTime() - a.effective_from.getTime())[0];
       if (schedule) {
         return {
           expectedCheckIn: schedule.expected_check_in,
+          endTime: schedule.end_time ?? null,
+          intermediateTime: schedule.intermediate_time ?? null,
           graceMinutes: schedule.late_grace_minutes,
         };
       }
@@ -162,14 +207,14 @@ export class AttendancePolicyResolverService {
       return this.resolveStudentRulesFromPolicySets(activePolicySets);
     }
 
-    return { expectedCheckIn: null, graceMinutes: 0 };
+    return NO_STUDENT_POLICY;
   }
 
   async resolveStudentCheckInPolicy(
     classId: number | null,
     campusId: number,
     date: Date,
-  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+  ): Promise<StudentCheckInPolicy> {
     return this.memoPolicy(`stu:${classId ?? '-'}:${campusId}:${date.toISOString().slice(0, 10)}`, () =>
       this.resolveStudentCheckInPolicyUncached(classId, campusId, date),
     );
@@ -179,7 +224,7 @@ export class AttendancePolicyResolverService {
     classId: number | null,
     campusId: number,
     date: Date,
-  ): Promise<{ expectedCheckIn: Date | null; graceMinutes: number }> {
+  ): Promise<StudentCheckInPolicy> {
     if (classId != null) {
       const schedule = await this.prisma.class_check_in_schedules.findFirst({
         where: {
@@ -193,6 +238,8 @@ export class AttendancePolicyResolverService {
       if (schedule) {
         return {
           expectedCheckIn: schedule.expected_check_in,
+          endTime: schedule.end_time,
+          intermediateTime: schedule.intermediate_time,
           graceMinutes: schedule.late_grace_minutes,
         };
       }
@@ -203,7 +250,7 @@ export class AttendancePolicyResolverService {
       return this.resolveStudentRulesFromPolicySets(policySets);
     }
 
-    return { expectedCheckIn: null, graceMinutes: 0 };
+    return NO_STUDENT_POLICY;
   }
 
   async resolveStaffCheckInPolicy(

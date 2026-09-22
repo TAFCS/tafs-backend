@@ -32,6 +32,7 @@ import { ZkPushService } from './zk-push.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { ClassCheckInScheduleService } from './class-check-in-schedule.service';
 import { ClassCheckInScheduleController } from './class-check-in-schedule.controller';
+import { ClassTimingNotificationService } from './class-timing-notification.service';
 import { RecomputeLateController } from './recompute-late.controller';
 import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
 import { Coral9SchedulerService } from './coral9-scheduler.service';
@@ -78,6 +79,7 @@ import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.ser
     AttendanceNotificationsService,
     AttendancePolicyResolverService,
     ClassCheckInScheduleService,
+    ClassTimingNotificationService,
     Coral9AttendanceWriterService,
     Coral9SchedulerService,
     ZkDeviceResendSchedulerService,

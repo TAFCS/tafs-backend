@@ -50,6 +50,40 @@ export class ClassCheckInScheduleController {
     return createApiResponse(data, HttpStatus.OK, 'Class schedules retrieved successfully');
   }
 
+  /**
+   * The exact wording parents would get, without sending anything. The dialog
+   * shows this beside the Notify toggle so nobody fires a push blind.
+   */
+  @Post('preview-notification')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
+  @RequireAction('attendance.settings#schedules.manage')
+  async previewNotification(
+    @Body()
+    dto: {
+      campus_id: number;
+      class_id: number;
+      expected_check_in: string;
+      end_time?: string | null;
+      effective_from: string;
+    },
+    @Req() req: { user: IJwtStaffPayload },
+  ) {
+    if (!dto?.campus_id || !dto?.class_id) {
+      throw new BadRequestException('campus_id and class_id are required');
+    }
+    const data = await this.service.previewNotification(
+      {
+        campusId: dto.campus_id,
+        classId: dto.class_id,
+        expectedCheckIn: dto.expected_check_in,
+        endTime: dto.end_time,
+        effectiveFrom: dto.effective_from,
+      },
+      req.user,
+    );
+    return createApiResponse(data, HttpStatus.OK, 'Notification preview generated');
+  }
+
   @Post()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Policy'))
   @RequireAction('attendance.settings#schedules.manage')

@@ -131,6 +131,7 @@ model campuses {
   campus_sections               campus_sections[]
   campus_segments               campus_segments[]
   class_check_in_schedules      class_check_in_schedules[]
+  class_timing_notifications    class_timing_notifications[]
   class_fee_schedule            class_fee_schedule[]
   class_timetable_periods       class_timetable_periods[]
   employee_profiles             employee_profiles[]
@@ -175,6 +176,7 @@ model classes {
   campus_sections                    campus_sections[]
   class_attendance_modes             class_attendance_modes?
   class_check_in_schedules           class_check_in_schedules[]
+  class_timing_notifications         class_timing_notifications[]
   class_fee_schedule                 class_fee_schedule[]
   class_timetable_periods            class_timetable_periods[]
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
@@ -2151,19 +2153,53 @@ model audit_logs {
 }
 
 model class_check_in_schedules {
-  id                 Int      @id @default(autoincrement())
-  class_id           Int
-  campus_id          Int
-  expected_check_in  DateTime @db.Time(0)
-  late_grace_minutes Int      @default(0)
-  effective_from     DateTime @db.Date
-  created_by         String?
-  created_at         DateTime @default(now()) @db.Timestamp(6)
-  campuses           campuses @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes            classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  id                         Int                          @id @default(autoincrement())
+  class_id                   Int
+  campus_id                  Int
+  /// The START of the student day, and the threshold LATE is measured from.
+  expected_check_in          DateTime                     @db.Time(0)
+  /// The END of the student day. Parent-visible alongside the start.
+  end_time                   DateTime?                    @db.Time(0)
+  /// Internal only — never shown to parents. Splits the day for punch
+  /// direction: see resolveStudentDirections in student-punch-direction.util.ts.
+  /// NULL means no intermediate rule, which keeps the old strict IN/OUT parity.
+  intermediate_time          DateTime?                    @db.Time(0)
+  late_grace_minutes         Int                          @default(0)
+  effective_from             DateTime                     @db.Date
+  created_by                 String?
+  created_at                 DateTime                     @default(now()) @db.Timestamp(6)
+  campuses                   campuses                     @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes                    classes                      @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  class_timing_notifications class_timing_notifications[]
 
-  @@unique([class_id, effective_from])
+  @@unique([campus_id, class_id, effective_from], map: "class_check_in_schedules_campus_class_effective_key")
   @@index([campus_id, effective_from])
+}
+
+/// One "the school day timings changed" announcement, fanned out to every
+/// family in a campus+class pairing. start_time / end_time are copied rather
+/// than joined — this records what parents were actually told, so editing the
+/// schedule afterwards must not rewrite it. intermediate_time is deliberately
+/// absent: it is internal and never leaves the back office.
+model class_timing_notifications {
+  id                       Int                       @id @default(autoincrement())
+  schedule_id              Int?
+  campus_id                Int
+  class_id                 Int
+  start_time               DateTime                  @db.Time(0)
+  end_time                 DateTime?                 @db.Time(0)
+  effective_from           DateTime                  @db.Date
+  students_matched         Int                       @default(0)
+  families_notified        Int                       @default(0)
+  title                    String                    @db.VarChar(255)
+  body                     String
+  created_by               String?
+  created_at               DateTime                  @default(now()) @db.Timestamp(6)
+  campuses                 campuses                  @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes                  classes                   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  class_check_in_schedules class_check_in_schedules? @relation(fields: [schedule_id], references: [id])
+
+  @@index([campus_id, class_id, created_at(sort: Desc)], map: "idx_class_timing_notifications_pairing")
 }
 
 model employee_notice_posts {

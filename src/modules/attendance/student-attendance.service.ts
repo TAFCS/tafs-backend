@@ -2,6 +2,10 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma, RollRecordStatus, zk_attendance_scans, AttendanceSource } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
+import {
+  resolveStudentDayPunches,
+  buildStudentSessions,
+} from './student-punch-direction.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
@@ -207,6 +211,11 @@ export class StudentAttendanceService {
       if (record.status === RollRecordStatus.LATE) late++;
       if (record.status === RollRecordStatus.EXCUSED) excused++;
       if (record.status === RollRecordStatus.ABSENT) absent++;
+      // A record can now exist with no arrival on it: under the intermediate-
+      // time rule a child who only punched on the way out gets a check-out and
+      // a null check-in. That is a missing clock-in and the board must say so,
+      // not quietly count it as a complete day.
+      if (!record.check_in_at && record.check_out_at) noClockIn++;
       if (record.check_in_at && !record.check_out_at) noClockOut++;
     }
 
@@ -352,24 +361,56 @@ export class StudentAttendanceService {
   // Derives Working time (IN->OUT) and Break (OUT->IN gaps) segments from the
   // persisted scan sequence. Students don't have reporting/leaving times like
   // staff, so there's no OVERTIME/DAY_OFF distinction here.
-  private buildDaySegments(scans: zk_attendance_scans[]): { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean }[] {
-    const segments: { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean }[] = [];
+  //
+  // Pairing goes through the same resolver the ingest pipeline used to write
+  // the day, so this timeline and the stored check-in/check-out can't disagree.
+  // It used to walk the scans two at a time on its own, which quietly stopped
+  // being correct the moment a pairing had an intermediate time: a morning
+  // re-tap is not the end of a work segment.
+  private buildDaySegments(
+    scans: zk_attendance_scans[],
+    intermediateTime: Date | null = null,
+  ): { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean; isMissingIn?: boolean }[] {
+    const segments: { type: 'WORK' | 'BREAK'; start: string; end: string; isMissingOut?: boolean; isMissingIn?: boolean }[] = [];
+    const sessions = buildStudentSessions(resolveStudentDayPunches(scans, intermediateTime));
 
-    for (let i = 0; i + 1 < scans.length; i += 2) {
-      const inTime = scans[i].scan_time;
-      const outTime = scans[i + 1].scan_time;
-      segments.push({ type: 'WORK', start: inTime.toISOString(), end: outTime.toISOString() });
-
-      if (i + 2 < scans.length) {
-        segments.push({ type: 'BREAK', start: outTime.toISOString(), end: scans[i + 2].scan_time.toISOString() });
+    const STUB_MS = 10 * 60 * 1000;
+    sessions.forEach((session, i) => {
+      if (i > 0) {
+        const previousEnd = sessions[i - 1].clock_out;
+        if (previousEnd && session.clock_in) {
+          segments.push({
+            type: 'BREAK',
+            start: previousEnd.toISOString(),
+            end: session.clock_in.toISOString(),
+          });
+        }
       }
-    }
 
-    if (scans.length > 0 && scans.length % 2 !== 0) {
-      const lastInTime = scans[scans.length - 1].scan_time;
-      const syntheticEnd = new Date(lastInTime.getTime() + 10 * 60 * 1000);
-      segments.push({ type: 'WORK', start: lastInTime.toISOString(), end: syntheticEnd.toISOString(), isMissingOut: true });
-    }
+      if (session.clock_in && session.clock_out) {
+        segments.push({
+          type: 'WORK',
+          start: session.clock_in.toISOString(),
+          end: session.clock_out.toISOString(),
+        });
+      } else if (session.clock_in) {
+        // Still inside, or never punched out — a stub so the day renders.
+        segments.push({
+          type: 'WORK',
+          start: session.clock_in.toISOString(),
+          end: new Date(session.clock_in.getTime() + STUB_MS).toISOString(),
+          isMissingOut: true,
+        });
+      } else if (session.clock_out) {
+        // Punched out having never punched in (the intermediate-time rule).
+        segments.push({
+          type: 'WORK',
+          start: new Date(session.clock_out.getTime() - STUB_MS).toISOString(),
+          end: session.clock_out.toISOString(),
+          isMissingIn: true,
+        });
+      }
+    });
 
     return segments;
   }
@@ -468,13 +509,15 @@ export class StudentAttendanceService {
       };
       const holidayDisplay = this.calendarResolver.toHolidayDisplay(resolved);
 
-      // Resolve check-in policy in memory
-      const { expectedCheckIn, graceMinutes } = this.policyResolver.resolveStudentCheckInPolicyFromCache(
-        student.class_id,
-        d,
-        schedules,
-        policySets,
-      );
+      // Resolve the pairing's policy in memory.
+      const { expectedCheckIn, graceMinutes, intermediateTime } =
+        this.policyResolver.resolveStudentCheckInPolicyFromCache(
+          student.class_id,
+          student.campus_id,
+          d,
+          schedules,
+          policySets,
+        );
 
       const hasCheckIn = !!record?.check_in_at || dayScans.length > 0;
       const status = resolveStudentAttendanceStatus({
@@ -507,7 +550,7 @@ export class StudentAttendanceService {
             const syntheticEnd = new Date(record.check_in_at.getTime() + 10 * 60 * 1000);
             return [{ type: 'WORK' as const, start: inISO, end: syntheticEnd.toISOString(), isMissingOut: true }];
           }
-          return this.buildDaySegments(dayScans);
+          return this.buildDaySegments(dayScans, intermediateTime);
         })(),
       });
     }
@@ -570,7 +613,7 @@ export class StudentAttendanceService {
 
     const ccs = students.map((s) => s.cc);
 
-    const [records, scans, mappings] = await Promise.all([
+    const [records, scans, mappings, schedules] = await Promise.all([
       this.prisma.attendance_student_daily.findMany({
         where: { student_cc: { in: ccs }, date: { gte: periodStart, lte: periodEnd } },
       }),
@@ -586,6 +629,13 @@ export class StudentAttendanceService {
       this.prisma.device_user_mappings.findMany({
         where: { student_cc: { in: ccs }, person_type: 'STUDENT', is_active: true },
         select: { student_cc: true },
+      }),
+      // One read for the whole campus; the pairing is matched per student-day
+      // in memory. Needed here because how a day pairs up depends on the class's
+      // intermediate time, and this view spans many classes at once.
+      this.prisma.class_check_in_schedules.findMany({
+        where: { campus_id: campusId, effective_from: { lte: periodEnd } },
+        orderBy: { effective_from: 'desc' },
       }),
     ]);
 
@@ -637,6 +687,15 @@ export class StudentAttendanceService {
         const dayScans = scansByDate.get(key) ?? [];
         const isManual = record?.source === AttendanceSource.MANUAL;
 
+        const { intermediateTime } = this.policyResolver.resolveStudentCheckInPolicyFromCache(
+          student.class_id,
+          campusId,
+          d,
+          schedules,
+          [], // no policy-set fallback: hr_policy_sets carries no intermediate time
+        );
+        const punches = resolveStudentDayPunches(dayScans, intermediateTime);
+
         let classification: DayBreakdownEntry['classification'];
         if (!resolved.isWorkingDay) {
           classification = 'DAY_OFF';
@@ -644,7 +703,10 @@ export class StudentAttendanceService {
           classification = record.status as DayBreakdownEntry['classification'];
         } else if (dayScans.length === 0 && !record?.check_in_at) {
           classification = 'ABSENT';
-        } else if (dayScans.length % 2 !== 0 && !record?.check_out_at) {
+        } else if (!punches.checkOutAt && !record?.check_out_at) {
+          // Came in and never punched out. A morning re-tap no longer resolves
+          // this — under the intermediate-time rule it is still an arrival —
+          // so ask the resolver whether a departure exists rather than counting.
           classification = 'UNRESOLVED';
         } else if (record?.status === RollRecordStatus.LATE) {
           classification = 'LATE';
@@ -662,7 +724,7 @@ export class StudentAttendanceService {
             segments = [{ type: 'WORK', start: inISO, end: syntheticEnd.toISOString(), isMissingOut: true }];
           }
         } else {
-          segments = this.buildDaySegments(dayScans);
+          segments = this.buildDaySegments(dayScans, intermediateTime);
         }
         if (!resolved.isWorkingDay && segments.length === 0) {
           segments = [{ type: 'DAY_OFF', start: '00:00', end: '24:00' }];
@@ -670,12 +732,10 @@ export class StudentAttendanceService {
 
         const checkInAt = isManual
           ? (record?.check_in_at ?? null)
-          : (dayScans[0]?.scan_time ?? record?.check_in_at ?? null);
+          : (punches.checkInAt ?? record?.check_in_at ?? null);
         const checkOutAt = isManual
           ? (record?.check_out_at ?? null)
-          : dayScans.length > 0 && dayScans.length % 2 === 0
-            ? dayScans[dayScans.length - 1].scan_time
-            : (record?.check_out_at ?? null);
+          : (punches.checkOutAt ?? record?.check_out_at ?? null);
 
         const breakMinutes = Math.round(
           segments
@@ -862,6 +922,10 @@ export class StudentAttendanceService {
       is_working_day: day?.isWorkingDay ?? true,
       day_description: day?.description ?? day?.dayType ?? null,
       next_direction: state.next_direction,
+      // Tells the gate desk WHY the other button is disabled: under a cut-off
+      // it is the clock, not the day's pairing, and the operator can't infer
+      // that from a greyed-out button.
+      has_cutoff: state.has_cutoff,
       scan_count: state.scan_count,
       status: state.record?.status ?? null,
       source: state.record?.source ?? null,
