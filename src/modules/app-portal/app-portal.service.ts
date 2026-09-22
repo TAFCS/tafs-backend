@@ -4,6 +4,7 @@ import {
   resolveStudentDayPunches,
   buildStudentSessions,
 } from '../attendance/student-punch-direction.util';
+import { SCHEDULE_WITH_DAYS_INCLUDE } from '../attendance/attendance-policy-resolver.service';
 import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from '../attendance/student-attendance-status.util';
@@ -214,6 +215,7 @@ export class AppPortalService {
               effective_from: { lte: dateTo },
             },
             orderBy: { effective_from: 'desc' },
+            include: SCHEDULE_WITH_DAYS_INCLUDE,
           }),
           this.prisma.hr_policy_sets.findMany({
             where: {
@@ -338,7 +340,13 @@ export class AppPortalService {
   private async resolveParentVisibleTimings(
     student: { campus_id: number | null; class_id: number | null } | null,
     dateTo: Date,
-  ): Promise<{ start_time: string; end_time: string | null; effective_from: string } | null> {
+  ): Promise<{
+    start_time: string;
+    end_time: string | null;
+    effective_from: string;
+    /** Weekdays that run to different times — Friday, at TAFS. */
+    days: { day_of_week: number; start_time: string; end_time: string | null }[];
+  } | null> {
     if (student?.campus_id == null || student.class_id == null) return null;
 
     const today = new Date();
@@ -354,7 +362,17 @@ export class AppPortalService {
         effective_from: { lte: new Date(asOfMs) },
       },
       orderBy: { effective_from: 'desc' },
-      select: { expected_check_in: true, end_time: true, effective_from: true },
+      select: {
+        expected_check_in: true,
+        end_time: true,
+        effective_from: true,
+        // Only the parent-visible pair. intermediate_time is not selected at
+        // all, so it cannot reach the app by accident.
+        class_check_in_schedule_days: {
+          select: { day_of_week: true, expected_check_in: true, end_time: true },
+          orderBy: { day_of_week: 'asc' },
+        },
+      },
     });
     if (!schedule) return null;
 
@@ -363,6 +381,11 @@ export class AppPortalService {
       start_time: hhmm(schedule.expected_check_in),
       end_time: schedule.end_time ? hhmm(schedule.end_time) : null,
       effective_from: schedule.effective_from.toISOString().slice(0, 10),
+      days: schedule.class_check_in_schedule_days.map((d) => ({
+        day_of_week: d.day_of_week,
+        start_time: hhmm(d.expected_check_in),
+        end_time: d.end_time ? hhmm(d.end_time) : null,
+      })),
     };
   }
 

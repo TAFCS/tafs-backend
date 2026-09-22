@@ -26,6 +26,58 @@ const NO_STUDENT_POLICY: StudentCheckInPolicy = {
   graceMinutes: 0,
 };
 
+/** A weekday override, as loaded alongside its schedule. */
+export type ScheduleDayRow = {
+  day_of_week: number;
+  expected_check_in: Date;
+  end_time: Date | null;
+  intermediate_time: Date | null;
+};
+
+export type ScheduleRow = {
+  class_id: number;
+  campus_id: number;
+  expected_check_in: Date;
+  end_time?: Date | null;
+  intermediate_time?: Date | null;
+  late_grace_minutes: number;
+  effective_from: Date;
+  class_check_in_schedule_days?: ScheduleDayRow[];
+};
+
+/**
+ * Apply the weekday override for `date`, if the pairing has one.
+ *
+ * A day row replaces the schedule's times wholesale — see the model comment.
+ * Grace minutes are deliberately not overridable per day: lateness is measured
+ * from whichever start applies, and nobody has asked for a different tolerance
+ * on a Friday.
+ */
+function applyDayOverride(schedule: ScheduleRow, date: Date): StudentCheckInPolicy {
+  const override = schedule.class_check_in_schedule_days?.find(
+    (d) => d.day_of_week === date.getUTCDay(),
+  );
+  if (override) {
+    return {
+      expectedCheckIn: override.expected_check_in,
+      endTime: override.end_time ?? null,
+      intermediateTime: override.intermediate_time ?? null,
+      graceMinutes: schedule.late_grace_minutes,
+    };
+  }
+  return {
+    expectedCheckIn: schedule.expected_check_in,
+    endTime: schedule.end_time ?? null,
+    intermediateTime: schedule.intermediate_time ?? null,
+    graceMinutes: schedule.late_grace_minutes,
+  };
+}
+
+/** Schedules and their weekday overrides, for the cached resolution paths. */
+export const SCHEDULE_WITH_DAYS_INCLUDE = {
+  class_check_in_schedule_days: true,
+} as const;
+
 type PolicyRuleRow = {
   rule_type: string;
   value_json: unknown;
@@ -177,15 +229,7 @@ export class AttendancePolicyResolverService {
     classId: number | null,
     campusId: number | null,
     date: Date,
-    schedules: Array<{
-      class_id: number;
-      campus_id: number;
-      expected_check_in: Date;
-      end_time?: Date | null;
-      intermediate_time?: Date | null;
-      late_grace_minutes: number;
-      effective_from: Date;
-    }>,
+    schedules: ScheduleRow[],
     policySets: Array<{ effective_from: Date; hr_policy_rules: PolicyRuleRow[] }>,
   ): StudentCheckInPolicy {
     if (classId != null && campusId != null) {
@@ -193,12 +237,7 @@ export class AttendancePolicyResolverService {
         .filter((s) => s.class_id === classId && s.campus_id === campusId && s.effective_from <= date)
         .sort((a, b) => b.effective_from.getTime() - a.effective_from.getTime())[0];
       if (schedule) {
-        return {
-          expectedCheckIn: schedule.expected_check_in,
-          endTime: schedule.end_time ?? null,
-          intermediateTime: schedule.intermediate_time ?? null,
-          graceMinutes: schedule.late_grace_minutes,
-        };
+        return applyDayOverride(schedule, date);
       }
     }
 
@@ -233,15 +272,11 @@ export class AttendancePolicyResolverService {
           effective_from: { lte: date },
         },
         orderBy: { effective_from: 'desc' },
+        include: SCHEDULE_WITH_DAYS_INCLUDE,
       });
 
       if (schedule) {
-        return {
-          expectedCheckIn: schedule.expected_check_in,
-          endTime: schedule.end_time,
-          intermediateTime: schedule.intermediate_time,
-          graceMinutes: schedule.late_grace_minutes,
-        };
+        return applyDayOverride(schedule, date);
       }
     }
 

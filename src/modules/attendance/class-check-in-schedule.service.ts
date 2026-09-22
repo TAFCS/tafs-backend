@@ -13,7 +13,8 @@ import {
 const toTime = (value?: string | null) => (value ? new Date(`1970-01-01T${value}:00Z`) : null);
 const fmtTime = (d: Date | null | undefined) => (d ? d.toISOString().slice(11, 16) : '—');
 
-import { IsBoolean, IsDateString, IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, Matches, Max, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /** "HH:MM" or "HH:MM:SS" — what an <input type="time"> sends. */
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -49,6 +50,13 @@ export class CreateClassScheduleDto {
   @IsDateString()
   effective_from: string;
 
+  /** Weekday overrides. Omitted means none. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleDayDto)
+  days?: ScheduleDayDto[];
+
   /** Opt-in per save — see ClassTimingNotificationService. */
   @IsOptional()
   @IsBoolean()
@@ -80,14 +88,50 @@ export class UpdateClassScheduleDto {
   @IsDateString()
   effective_from?: string;
 
+  /**
+   * Replaces the whole override set when present. An empty array clears every
+   * override; omitting the key leaves them untouched.
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleDayDto)
+  days?: ScheduleDayDto[];
+
   @IsOptional()
   @IsBoolean()
   notify_parents?: boolean;
 }
 
+/** One weekday that runs to different times. Replaces the base for that day. */
+export class ScheduleDayDto {
+  /** 0 = Sunday … 6 = Saturday. */
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  day_of_week: number;
+
+  @IsString()
+  @Matches(TIME_PATTERN, { message: 'expected_check_in must be HH:MM' })
+  expected_check_in: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_PATTERN, { message: 'end_time must be HH:MM' })
+  end_time?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_PATTERN, { message: 'intermediate_time must be HH:MM' })
+  intermediate_time?: string | null;
+}
+
 const SCHEDULE_INCLUDE = {
   classes: { select: { id: true, description: true, class_code: true } },
+  class_check_in_schedule_days: { orderBy: { day_of_week: 'asc' } },
 } as const;
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 @Injectable()
 export class ClassCheckInScheduleService {
@@ -219,6 +263,56 @@ export class ClassCheckInScheduleService {
     }
   }
 
+  /**
+   * Replace a schedule's weekday overrides.
+   *
+   * Each day is validated against its own times, not the base's — a Friday
+   * that ends at 11:30 needs its cut-off inside *Friday*, and checking it
+   * against the ordinary day's window would reject a perfectly good row.
+   */
+  private async replaceDays(scheduleId: number, days: ScheduleDayDto[]): Promise<void> {
+    const seen = new Set<number>();
+    for (const day of days) {
+      if (seen.has(day.day_of_week)) {
+        throw new BadRequestException(`Duplicate override for ${DAY_NAMES[day.day_of_week]}`);
+      }
+      seen.add(day.day_of_week);
+
+      const start = toTime(day.expected_check_in);
+      if (!start) {
+        throw new BadRequestException(`Invalid start time for ${DAY_NAMES[day.day_of_week]}`);
+      }
+      try {
+        this.assertTimesOrdered(start, toTime(day.intermediate_time), toTime(day.end_time));
+      } catch (err: any) {
+        throw new BadRequestException(`${DAY_NAMES[day.day_of_week]}: ${err.message}`);
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.class_check_in_schedule_days.deleteMany({ where: { schedule_id: scheduleId } }),
+      ...days.map((day) =>
+        this.prisma.class_check_in_schedule_days.create({
+          data: {
+            schedule_id: scheduleId,
+            day_of_week: day.day_of_week,
+            expected_check_in: toTime(day.expected_check_in)!,
+            end_time: toTime(day.end_time),
+            intermediate_time: toTime(day.intermediate_time),
+          },
+        }),
+      ),
+    ]);
+  }
+
+  /** "Fri 08:00–11:30" per override, for the audit note. */
+  private describeDays(days: ScheduleDayDto[]): string {
+    if (days.length === 0) return 'none';
+    return days
+      .map((d) => `${DAY_NAMES[d.day_of_week]} ${d.expected_check_in}–${d.end_time ?? '—'}`)
+      .join(', ');
+  }
+
   private startOfDay(value: string): Date {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
@@ -316,12 +410,24 @@ export class ClassCheckInScheduleService {
         `grace ${dto.late_grace_minutes}m, effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
     });
 
+    if (dto.days?.length) {
+      await this.replaceDays(record.id, dto.days);
+      await this.auditLogs.log({
+        entity_type: 'CLASS_CHECK_IN_SCHEDULE',
+        entity_id: String(record.id),
+        action: 'UPDATED',
+        changed_by: changedBy ?? createdBy ?? 'system',
+        note: `Check-in schedule #${record.id} day overrides set: ${this.describeDays(dto.days)}.`,
+      });
+    }
+
     const announced = await this.announceIfRequested(
       dto.notify_parents,
       record,
       changedBy ?? createdBy,
     );
-    return { ...record, notification_report: announced.report, notification_warning: announced.warning };
+    const withDays = await this.findOne(record.id);
+    return { ...withDays, notification_report: announced.report, notification_warning: announced.warning };
   }
 
   async update(id: number, dto: UpdateClassScheduleDto, changedBy?: string, user?: IJwtStaffPayload) {
@@ -392,6 +498,13 @@ export class ClassCheckInScheduleService {
       changes.push(`effective ${oldEff} → ${newEff}`);
     }
 
+    // Written before the audit log, so a day-override-only edit is still
+    // recorded — the change list is what the note is built from.
+    if (dto.days !== undefined) {
+      await this.replaceDays(id, dto.days);
+      changes.push(`day overrides → ${this.describeDays(dto.days)}`);
+    }
+
     if (changes.length > 0) {
       await this.auditLogs.log({
         entity_type: 'CLASS_CHECK_IN_SCHEDULE',
@@ -403,7 +516,8 @@ export class ClassCheckInScheduleService {
     }
 
     const announced = await this.announceIfRequested(dto.notify_parents, updated, changedBy);
-    return { ...updated, notification_report: announced.report, notification_warning: announced.warning };
+    const withDays = await this.findOne(id);
+    return { ...withDays, notification_report: announced.report, notification_warning: announced.warning };
   }
 
   async remove(id: number, changedBy?: string, user?: IJwtStaffPayload) {

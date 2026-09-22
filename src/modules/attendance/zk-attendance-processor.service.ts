@@ -13,7 +13,10 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FcmService } from '../../common/fcm/fcm.service';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
-import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
+import {
+  AttendancePolicyResolverService,
+  SCHEDULE_WITH_DAYS_INCLUDE,
+} from './attendance-policy-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
 import { resolveTemplate, isTemplateDisabled } from '../../utils/notification-templates.util';
@@ -691,6 +694,7 @@ export class ZkAttendanceProcessorService {
         effective_from: { lte: maxDate },
       },
       orderBy: { effective_from: 'desc' },
+      include: SCHEDULE_WITH_DAYS_INCLUDE,
     });
     if (schedules.length === 0) return () => null;
 

@@ -6,6 +6,7 @@ import {
   resolveStudentDayPunches,
   buildStudentSessions,
 } from './student-punch-direction.util';
+import { SCHEDULE_WITH_DAYS_INCLUDE } from './attendance-policy-resolver.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
@@ -439,6 +440,7 @@ export class StudentAttendanceService {
               effective_from: { lte: dateTo },
             },
             orderBy: { effective_from: 'desc' },
+            include: SCHEDULE_WITH_DAYS_INCLUDE,
           }),
           this.prisma.hr_policy_sets.findMany({
             where: {
@@ -636,6 +638,7 @@ export class StudentAttendanceService {
       this.prisma.class_check_in_schedules.findMany({
         where: { campus_id: campusId, effective_from: { lte: periodEnd } },
         orderBy: { effective_from: 'desc' },
+        include: SCHEDULE_WITH_DAYS_INCLUDE,
       }),
     ]);
 

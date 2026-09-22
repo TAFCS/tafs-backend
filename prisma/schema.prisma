@@ -2153,27 +2153,48 @@ model audit_logs {
 }
 
 model class_check_in_schedules {
-  id                         Int                          @id @default(autoincrement())
-  class_id                   Int
-  campus_id                  Int
+  id                           Int                            @id @default(autoincrement())
+  class_id                     Int
+  campus_id                    Int
   /// The START of the student day, and the threshold LATE is measured from.
-  expected_check_in          DateTime                     @db.Time(0)
+  expected_check_in            DateTime                       @db.Time(0)
   /// The END of the student day. Parent-visible alongside the start.
-  end_time                   DateTime?                    @db.Time(0)
+  end_time                     DateTime?                      @db.Time(0)
   /// Internal only — never shown to parents. Splits the day for punch
   /// direction: see resolveStudentDirections in student-punch-direction.util.ts.
   /// NULL means no intermediate rule, which keeps the old strict IN/OUT parity.
-  intermediate_time          DateTime?                    @db.Time(0)
-  late_grace_minutes         Int                          @default(0)
-  effective_from             DateTime                     @db.Date
-  created_by                 String?
-  created_at                 DateTime                     @default(now()) @db.Timestamp(6)
-  campuses                   campuses                     @relation(fields: [campus_id], references: [id], onDelete: Cascade)
-  classes                    classes                      @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  class_timing_notifications class_timing_notifications[]
+  intermediate_time            DateTime?                      @db.Time(0)
+  late_grace_minutes           Int                            @default(0)
+  effective_from               DateTime                       @db.Date
+  created_by                   String?
+  created_at                   DateTime                       @default(now()) @db.Timestamp(6)
+  campuses                     campuses                       @relation(fields: [campus_id], references: [id], onDelete: Cascade)
+  classes                      classes                        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  class_timing_notifications   class_timing_notifications[]
+  class_check_in_schedule_days class_check_in_schedule_days[]
 
   @@unique([campus_id, class_id, effective_from], map: "class_check_in_schedules_campus_class_effective_key")
   @@index([campus_id, effective_from])
+}
+
+/// A weekday that runs to different times than the pairing's ordinary day —
+/// Friday, at TAFS. A row REPLACES the base schedule for that weekday
+/// wholesale rather than merging field by field, so "inherit" (no row) and
+/// "this day genuinely has no end time" (a row with a null end_time) stay
+/// distinguishable.
+model class_check_in_schedule_days {
+  id                       Int                      @id @default(autoincrement())
+  schedule_id              Int
+  /// 0 = Sunday … 6 = Saturday, matching JS getUTCDay().
+  day_of_week              Int                      @db.SmallInt
+  expected_check_in        DateTime                 @db.Time(0)
+  end_time                 DateTime?                @db.Time(0)
+  intermediate_time        DateTime?                @db.Time(0)
+  created_at               DateTime                 @default(now()) @db.Timestamp(6)
+  updated_at               DateTime                 @default(now()) @updatedAt @db.Timestamp(6)
+  class_check_in_schedules class_check_in_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+
+  @@unique([schedule_id, day_of_week], map: "class_check_in_schedule_days_schedule_dow_key")
 }
 
 /// One "the school day timings changed" announcement, fanned out to every
