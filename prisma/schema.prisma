@@ -2164,7 +2164,6 @@ model class_check_in_schedules {
   /// direction: see resolveStudentDirections in student-punch-direction.util.ts.
   /// NULL means no intermediate rule, which keeps the old strict IN/OUT parity.
   intermediate_time            DateTime?                      @db.Time(0)
-  late_grace_minutes           Int                            @default(0)
   effective_from               DateTime                       @db.Date
   created_by                   String?
   created_at                   DateTime                       @default(now()) @db.Timestamp(6)

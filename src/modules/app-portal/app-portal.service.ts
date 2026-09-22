@@ -282,7 +282,7 @@ export class AppPortalService {
       // decides whether a punch is an arrival or a departure — never sent to
       // the app, only used here to pair the day up the same way the ingest
       // pipeline stored it.
-      const { expectedCheckIn, graceMinutes, intermediateTime } =
+      const { expectedCheckIn, intermediateTime } =
         this.policyResolver.resolveStudentCheckInPolicyFromCache(
           student?.class_id ?? null,
           student?.campus_id ?? null,
@@ -303,7 +303,6 @@ export class AppPortalService {
         hasCheckIn,
         checkInAt: record?.check_in_at ?? dayScans[0]?.scan_time ?? null,
         expectedCheckIn,
-        graceMinutes,
       });
 
       days.push({

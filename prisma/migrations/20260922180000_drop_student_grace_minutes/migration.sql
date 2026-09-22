@@ -1,0 +1,13 @@
+-- Students have no grace period. There is no such concept for them: a child is
+-- either at school or not, and lateness is not something the school tracks per
+-- minute the way it does for staff.
+--
+-- The column was carried over from the staff model when class_check_in_schedules
+-- was first written. It only ever fed computeStudentStatus, which has been
+-- inert since STUDENT_LATE_MARKING_ENABLED was turned off, so nothing has
+-- depended on its value.
+--
+-- Staff grace is untouched: employee_profiles.late_relaxation_minutes,
+-- attendance_staff_daily.expected_grace_minutes_snapshot and the
+-- LATE_GRACE_PERIOD_MINS_STAFF policy rule all stay exactly as they are.
+ALTER TABLE "class_check_in_schedules" DROP COLUMN IF EXISTS "late_grace_minutes";

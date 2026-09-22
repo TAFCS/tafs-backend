@@ -19,7 +19,6 @@ export function resolveStudentAttendanceStatus(input: {
   hasCheckIn: boolean;      // record.check_in_at OR any scan session
   checkInAt?: Date | null;
   expectedCheckIn?: Date | null;
-  graceMinutes?: number;
 }): RollRecordStatus | null {
   // 1. Non-working day -> EXCUSED
   if (!input.isWorkingDay) {
@@ -42,10 +41,10 @@ export function resolveStudentAttendanceStatus(input: {
   if (input.hasCheckIn) {
     // Student LATE marking is paused campus-wide — see STUDENT_LATE_MARKING_ENABLED.
     if (STUDENT_LATE_MARKING_ENABLED && input.checkInAt && input.expectedCheckIn) {
+      // No grace: students have no tolerance window, unlike staff.
       const expectedMinutes = input.expectedCheckIn.getUTCHours() * 60 + input.expectedCheckIn.getUTCMinutes();
       const actualMinutes = input.checkInAt.getUTCHours() * 60 + input.checkInAt.getUTCMinutes();
-      const grace = input.graceMinutes ?? 0;
-      if (actualMinutes > expectedMinutes + grace) {
+      if (actualMinutes > expectedMinutes) {
         return RollRecordStatus.LATE;
       }
     }

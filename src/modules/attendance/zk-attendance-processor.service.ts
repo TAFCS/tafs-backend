@@ -1296,7 +1296,7 @@ export class ZkAttendanceProcessorService {
     // checkInAt is genuinely null on a check-out-only day (rule 2): the child
     // was here — they punched on the way out — so the day is PRESENT, there is
     // just no arrival to measure lateness against.
-    const status = this.computeStudentStatus(seg.checkInAt, policy.expectedCheckIn, policy.graceMinutes);
+    const status = this.computeStudentStatus(seg.checkInAt, policy.expectedCheckIn);
 
     await this.prisma.attendance_student_daily.upsert({
       where: { student_cc_date: { student_cc: studentCc, date } },
@@ -1346,16 +1346,16 @@ export class ZkAttendanceProcessorService {
     return seg.lastDirection;
   }
 
+  /** No grace parameter: students have no tolerance window, unlike staff. */
   private computeStudentStatus(
     checkInAt: Date | null,
     expectedCheckIn: Date | null,
-    graceMinutes: number,
   ): RollRecordStatus {
     // Student LATE marking is paused campus-wide — see STUDENT_LATE_MARKING_ENABLED.
     if (!STUDENT_LATE_MARKING_ENABLED || !expectedCheckIn || !checkInAt) return RollRecordStatus.PRESENT;
     const expectedMinutes = expectedCheckIn.getUTCHours() * 60 + expectedCheckIn.getUTCMinutes();
     const checkInMinutes = checkInAt.getUTCHours() * 60 + checkInAt.getUTCMinutes();
-    return checkInMinutes > expectedMinutes + graceMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;
+    return checkInMinutes > expectedMinutes ? RollRecordStatus.LATE : RollRecordStatus.PRESENT;
   }
 
   /**

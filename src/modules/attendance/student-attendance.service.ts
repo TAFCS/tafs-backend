@@ -512,7 +512,7 @@ export class StudentAttendanceService {
       const holidayDisplay = this.calendarResolver.toHolidayDisplay(resolved);
 
       // Resolve the pairing's policy in memory.
-      const { expectedCheckIn, graceMinutes, intermediateTime } =
+      const { expectedCheckIn, intermediateTime } =
         this.policyResolver.resolveStudentCheckInPolicyFromCache(
           student.class_id,
           student.campus_id,
@@ -531,7 +531,6 @@ export class StudentAttendanceService {
         hasCheckIn,
         checkInAt: record?.check_in_at ?? dayScans[0]?.scan_time ?? null,
         expectedCheckIn,
-        graceMinutes,
       });
 
       days.push({

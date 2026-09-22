@@ -11,7 +11,6 @@ const BASE = {
   expected_check_in: time('08:00'),
   end_time: time('13:30'),
   intermediate_time: time('12:30'),
-  late_grace_minutes: 10,
   effective_from: new Date(Date.UTC(2026, 8, 1)),
 };
 
@@ -38,8 +37,6 @@ describe('weekday overrides', () => {
     const r = resolve(dayAfterMonday(4), [{ ...BASE, class_check_in_schedule_days: [FRIDAY] }]);
     expect(r.endTime).toEqual(time('12:30'));
     expect(r.intermediateTime).toEqual(time('11:30'));
-    // Grace is not per-day — it still comes from the schedule.
-    expect(r.graceMinutes).toBe(10);
   });
 
   it.each([

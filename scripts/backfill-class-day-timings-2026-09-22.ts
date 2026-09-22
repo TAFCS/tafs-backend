@@ -26,7 +26,6 @@ const APPLY = process.env.APPLY === '1';
 
 /** The date these timings are treated as having taken effect from. */
 const EFFECTIVE_FROM = new Date(Date.UTC(2026, 8, 22)); // 2026-09-22
-const GRACE_MINUTES = 10;
 const FRIDAY = 5;
 
 /** class_code -> start, Mon–Thu end, Friday end. Times are 24h. */
@@ -45,7 +44,20 @@ const SHEET: Record<string, { start: string; weekEnd: string; fridayEnd: string 
   OI:    { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
   OII:   { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
   OIII:  { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
+  VI:    { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
+  VII:   { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
+  VIII:  { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
+  IX:    { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
+  X:     { start: '07:45', weekEnd: '13:30', fridayEnd: '12:30' },
 };
+
+/**
+ * Pairings to skip even when the class is on the sheet.
+ *
+ * KNF's class IX is test data, not a real cohort — it should not get timings
+ * any more than it should show up in campus segment offerings.
+ */
+const SKIP_PAIRINGS = new Set(['KNF/IX']);
 
 const toTime = (hhmm: string) => new Date(`1970-01-01T${hhmm}:00Z`);
 const hhmm = (d: Date | null) => (d ? d.toISOString().slice(11, 16) : '—');
@@ -74,9 +86,10 @@ async function main() {
 
   for (const pairing of pairings) {
     const klass = classes.find((c) => c.id === pairing.class_id);
+    const pairKey = `${pairing.campuses.campus_code}/${klass?.class_code ?? pairing.class_id}`;
     const sheet = klass?.class_code ? SHEET[klass.class_code] : undefined;
-    if (!sheet) {
-      skipped.push(`${pairing.campuses.campus_code}/${klass?.class_code ?? pairing.class_id}`);
+    if (!sheet || SKIP_PAIRINGS.has(pairKey)) {
+      skipped.push(pairKey);
       continue;
     }
 
@@ -118,7 +131,6 @@ async function main() {
         expected_check_in: toTime(sheet.start),
         end_time: toTime(sheet.weekEnd),
         intermediate_time: toTime(weekCut),
-        late_grace_minutes: GRACE_MINUTES,
         effective_from: EFFECTIVE_FROM,
         created_by: 'backfill-2026-09-22',
       },

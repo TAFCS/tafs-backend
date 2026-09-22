@@ -10,7 +10,6 @@ const EXISTING = {
   expected_check_in: time('08:00'),
   end_time: time('14:00'),
   intermediate_time: time('11:30'),
-  late_grace_minutes: 10,
   effective_from: new Date('2026-09-01T00:00:00.000Z'),
   classes: { id: 6, description: 'Class VI', class_code: 'VI' },
 };
@@ -71,7 +70,6 @@ const baseCreate = {
   expected_check_in: '08:00',
   end_time: '14:00',
   intermediate_time: '11:30',
-  late_grace_minutes: 10,
   effective_from: '2026-09-01',
 };
 

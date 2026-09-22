@@ -146,12 +146,19 @@ describe('resolveStudentAttendanceStatus', () => {
       hasCheckIn: true,
       checkInAt: new Date('2026-06-22T08:10:00.000Z'), // 08:10 UTC
       expectedCheckIn: new Date('1970-01-01T08:00:00.000Z'), // 08:00 UTC
-      graceMinutes: 15,
     });
     expect(result).toBe(RollRecordStatus.PRESENT);
   });
 
-  it('past working day with check-in scan after grace limit should return LATE', () => {
+  // Students have no grace period — there is no tolerance window to fall
+  // inside, unlike staff. A late arrival still reads PRESENT only because
+  // STUDENT_LATE_MARKING_ENABLED is off campus-wide; flip that back on and
+  // every one of these becomes LATE with no minutes of slack.
+  it.each([
+    ['one minute after', '08:01'],
+    ['ten minutes after', '08:10'],
+    ['twenty minutes after', '08:20'],
+  ])('a check-in %s the expected time is PRESENT while LATE marking is paused', (_label, clock) => {
     const result = resolveStudentAttendanceStatus({
       dateKey: '2026-06-22',
       todayKey,
@@ -159,11 +166,10 @@ describe('resolveStudentAttendanceStatus', () => {
       recordStatus: null,
       recordSource: null,
       hasCheckIn: true,
-      checkInAt: new Date('2026-06-22T08:20:00.000Z'), // 08:20 UTC
-      expectedCheckIn: new Date('1970-01-01T08:00:00.000Z'), // 08:00 UTC
-      graceMinutes: 15,
+      checkInAt: new Date(`2026-06-22T${clock}:00.000Z`),
+      expectedCheckIn: new Date('1970-01-01T08:00:00.000Z'),
     });
-    expect(result).toBe(RollRecordStatus.LATE);
+    expect(result).toBe(RollRecordStatus.PRESENT);
   });
 });
 

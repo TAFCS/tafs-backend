@@ -43,10 +43,6 @@ export class CreateClassScheduleDto {
   @Matches(TIME_PATTERN, { message: 'intermediate_time must be HH:MM' })
   intermediate_time?: string | null;
 
-  @IsInt()
-  @Min(0)
-  late_grace_minutes: number;
-
   @IsDateString()
   effective_from: string;
 
@@ -78,11 +74,6 @@ export class UpdateClassScheduleDto {
   @IsString()
   @Matches(TIME_PATTERN, { message: 'intermediate_time must be HH:MM' })
   intermediate_time?: string | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  late_grace_minutes?: number;
 
   @IsOptional()
   @IsDateString()
@@ -389,7 +380,6 @@ export class ClassCheckInScheduleService {
         expected_check_in: start,
         end_time: end,
         intermediate_time: intermediate,
-        late_grace_minutes: dto.late_grace_minutes,
         effective_from: effectiveFrom,
         created_by: createdBy ?? null,
       },
@@ -407,7 +397,7 @@ export class ClassCheckInScheduleService {
       note:
         `Check-in schedule #${record.id} for class ${classLabel} at campus #${dto.campus_id}: ` +
         `start ${fmtTime(start)}, end ${fmtTime(end)}, cut-off ${fmtTime(intermediate)}, ` +
-        `grace ${dto.late_grace_minutes}m, effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
+        `effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
     });
 
     if (dto.days?.length) {
@@ -437,7 +427,6 @@ export class ClassCheckInScheduleService {
       expected_check_in?: Date;
       end_time?: Date | null;
       intermediate_time?: Date | null;
-      late_grace_minutes?: number;
       effective_from?: Date;
     } = {};
 
@@ -464,9 +453,6 @@ export class ClassCheckInScheduleService {
       dto.end_time !== undefined ? data.end_time! : existing.end_time,
     );
 
-    if (dto.late_grace_minutes !== undefined) {
-      data.late_grace_minutes = dto.late_grace_minutes;
-    }
     if (dto.effective_from !== undefined) {
       const effectiveFrom = this.startOfDay(dto.effective_from);
       await this.assertNoDuplicate(existing.campus_id, existing.class_id, effectiveFrom, id);
@@ -488,9 +474,6 @@ export class ClassCheckInScheduleService {
     }
     if (fmtTime(existing.intermediate_time) !== fmtTime(updated.intermediate_time)) {
       changes.push(`cut-off ${fmtTime(existing.intermediate_time)} → ${fmtTime(updated.intermediate_time)}`);
-    }
-    if (existing.late_grace_minutes !== updated.late_grace_minutes) {
-      changes.push(`grace ${existing.late_grace_minutes}m → ${updated.late_grace_minutes}m`);
     }
     const oldEff = existing.effective_from.toISOString().slice(0, 10);
     const newEff = updated.effective_from.toISOString().slice(0, 10);

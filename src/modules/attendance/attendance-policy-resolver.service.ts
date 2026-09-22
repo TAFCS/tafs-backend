@@ -16,14 +16,12 @@ export type StudentCheckInPolicy = {
   expectedCheckIn: Date | null;
   endTime: Date | null;
   intermediateTime: Date | null;
-  graceMinutes: number;
 };
 
 const NO_STUDENT_POLICY: StudentCheckInPolicy = {
   expectedCheckIn: null,
   endTime: null,
   intermediateTime: null,
-  graceMinutes: 0,
 };
 
 /** A weekday override, as loaded alongside its schedule. */
@@ -40,7 +38,6 @@ export type ScheduleRow = {
   expected_check_in: Date;
   end_time?: Date | null;
   intermediate_time?: Date | null;
-  late_grace_minutes: number;
   effective_from: Date;
   class_check_in_schedule_days?: ScheduleDayRow[];
 };
@@ -49,9 +46,6 @@ export type ScheduleRow = {
  * Apply the weekday override for `date`, if the pairing has one.
  *
  * A day row replaces the schedule's times wholesale — see the model comment.
- * Grace minutes are deliberately not overridable per day: lateness is measured
- * from whichever start applies, and nobody has asked for a different tolerance
- * on a Friday.
  */
 function applyDayOverride(schedule: ScheduleRow, date: Date): StudentCheckInPolicy {
   const override = schedule.class_check_in_schedule_days?.find(
@@ -62,14 +56,12 @@ function applyDayOverride(schedule: ScheduleRow, date: Date): StudentCheckInPoli
       expectedCheckIn: override.expected_check_in,
       endTime: override.end_time ?? null,
       intermediateTime: override.intermediate_time ?? null,
-      graceMinutes: schedule.late_grace_minutes,
     };
   }
   return {
     expectedCheckIn: schedule.expected_check_in,
     endTime: schedule.end_time ?? null,
     intermediateTime: schedule.intermediate_time ?? null,
-    graceMinutes: schedule.late_grace_minutes,
   };
 }
 
@@ -181,12 +173,9 @@ export class AttendancePolicyResolverService {
         'EXPECTED_CHECK_IN_TIME',
       );
       if (expectedCheckIn) {
-        const graceMinutes = this.parseGraceRule(
-          rules,
-          'LATE_GRACE_PERIOD_MINS_STUDENT',
-          'LATE_GRACE_PERIOD_MINS',
-        );
-        return { expectedCheckIn, endTime: null, intermediateTime: null, graceMinutes };
+        // No grace for students — LATE_GRACE_PERIOD_MINS_STUDENT is deliberately
+        // not read. Staff keep theirs via resolveStaffRulesFromPolicySets.
+        return { expectedCheckIn, endTime: null, intermediateTime: null };
       }
     }
     return NO_STUDENT_POLICY;
