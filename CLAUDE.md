@@ -13,6 +13,7 @@ Voucher-issuance code duplication is documented in
 
 ## Post-run checklist
 
+
 Run this after any change in scope above. Each item is a hard invariant — if a
 change makes one false, the change is wrong, not the rule.
 
