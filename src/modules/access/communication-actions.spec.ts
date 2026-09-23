@@ -54,23 +54,30 @@ const scopedUser = {
 describe('Support Tickets', () => {
   const t = tile('communication.support_tickets');
 
-  it('is bridged from communication.support_tickets.approve, so a view-only role gets view and an approver gets all actions', () => {
+  it('gives responders view/respond/reassign by default; approve bridges manage_replies', () => {
     expect(t.legacyFullAccessCapabilities).toEqual(['communication.support_tickets.approve']);
-    const viewOnly = computeEffectiveAccess({
+    const responder = computeEffectiveAccess({
       ...base,
       role: StaffRole.GENERAL_RESPONDENT,
       roleKeys: ['communication.support_tickets.view'],
     });
-    const held = viewOnly.actionIds.filter((k) => k.startsWith('communication.support_tickets#'));
-    expect(held).toEqual([actionKey('communication.support_tickets', 'view')]);
+    const held = responder.actionIds.filter((k) => k.startsWith('communication.support_tickets#'));
+    expect(held.sort()).toEqual(
+      [
+        actionKey('communication.support_tickets', 'view'),
+        actionKey('communication.support_tickets', 'respond'),
+        actionKey('communication.support_tickets', 'reassign'),
+      ].sort(),
+    );
+    expect(held).not.toContain(actionKey('communication.support_tickets', 'manage_replies'));
 
-    const fullAccess = computeEffectiveAccess({
+    const approver = computeEffectiveAccess({
       ...base,
-      role: StaffRole.SUPER_ADMIN,
+      role: StaffRole.CAMPUS_ADMIN,
       roleKeys: ['communication.support_tickets.view', 'communication.support_tickets.approve'],
     });
     for (const a of t.actions!) {
-      expect(fullAccess.actionIds).toContain(actionKey('communication.support_tickets', a.id));
+      expect(approver.actionIds).toContain(actionKey('communication.support_tickets', a.id));
     }
   });
 

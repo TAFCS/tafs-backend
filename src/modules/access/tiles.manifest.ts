@@ -778,10 +778,12 @@ const PARENT_CHANGE_REQUESTS_ACTIONS: TileAction[] = [
 ];
 
 const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
+  // respond + reassign are default: anyone holding communication.support_tickets.view
+  // is a responder (principals, finance clerks, general respondent). Only
+  // manage_replies stays opt-in — bridged from communication.support_tickets.approve.
   { id: 'view', label: 'Open Support Tickets', description: 'See assigned, queue, and closed support tickets', default: true },
-
-  { id: 'respond', label: 'Send messages and close tickets', description: 'Post replies, attach files, and close resolved tickets', implies: ['view'] },
-  { id: 'reassign', label: 'Claim, transfer, or forward tickets', description: 'Reassign tickets between staff members', implies: ['view'] },
+  { id: 'respond', label: 'Send messages and close tickets', description: 'Post replies, attach files, and close resolved tickets', default: true, implies: ['view'] },
+  { id: 'reassign', label: 'Claim, transfer, or forward tickets', description: 'Reassign tickets between staff members', default: true, implies: ['view'] },
   { id: 'manage_replies', label: 'Review and approve staff replies', description: 'Approve, edit, or reject pending staff replies before delivery to parents', implies: ['view'] },
 ];
 
