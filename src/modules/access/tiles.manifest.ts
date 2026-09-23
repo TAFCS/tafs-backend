@@ -35,6 +35,16 @@ export type TileManifestEntry = {
   /**
    * Omit entirely and the tile behaves exactly as it did before
    * sub-permissions existed: granting the tile grants the whole tile.
+   *
+   * MAINTENANCE RULE, for every tile that has one of these: sub-permissions do
+   * not extend themselves. When a new route or feature is added to a tile that
+   * already has actions, that new surface is UNGATED by default -- add a
+   * matching TileAction here and decorate the new route with
+   * `@RequireAction`/`@RequireAnyAction`, or it is reachable by anyone who
+   * merely holds the tile (or, if the route is left undecorated entirely, by
+   * anyone authenticated). This is why each `*_ACTIONS` block below repeats a
+   * one-line pointer back to this paragraph -- so it's visible at the point
+   * someone is actually editing, not just here.
    */
   actions?: TileAction[];
   /**
@@ -70,6 +80,7 @@ export type TileManifestEntry = {
  * is one thing, seeing their money is another, and moving or promoting them is
  * a third.
  */
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the student list, search it, and open a record', default: true },
 
@@ -94,6 +105,7 @@ const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
  * The three at the bottom are the danger zone -- they rewrite or destroy heads
  * that may already be paid and receipted.
  */
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_OVERRIDES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open student fees', description: 'Search a student and read their fee schedule, discounts, installments and bundles', default: true },
 
@@ -114,6 +126,7 @@ const STUDENT_OVERRIDES_ACTIONS: TileAction[] = [
   { id: 'reset', label: 'Reset every head for a student', description: 'Danger zone: deletes the student\'s whole schedule', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the employee list and open a record', default: true },
 
@@ -162,6 +175,7 @@ const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
 // enforce scope on every write (a campus-scoped admin may only change their
 // own campus, and may not create one); the section-mapping PUT is shared with
 // Student Overrides, so it is scoped but carries no Campuses action.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const CAMPUSES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View campuses', default: true },
 
@@ -171,6 +185,7 @@ const CAMPUSES_ACTIONS: TileAction[] = [
   { id: 'classes.manage', label: 'Add/remove classes and sections at a campus', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const CLASSES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View classes', default: true },
 
@@ -179,6 +194,7 @@ const CLASSES_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a class', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SECTIONS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View sections', default: true },
 
@@ -189,6 +205,7 @@ const SECTIONS_ACTIONS: TileAction[] = [
 
 // `edit` covers renaming a segment AND the campus-map (which segments run at
 // which campus — scoped: a campus-scoped admin may only map their own campus).
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SEGMENTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View segments', default: true },
 
@@ -197,6 +214,7 @@ const SEGMENTS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a segment', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const FEE_TYPES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View fee types', default: true },
 
@@ -205,6 +223,7 @@ const FEE_TYPES_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a fee type', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View discount presets', default: true },
 
@@ -216,6 +235,7 @@ const DISCOUNT_PRESETS_ACTIONS: TileAction[] = [
 // Route-shaped, not tab-shaped — Payroll has no multi-field write to
 // field-partition, so actions follow the routes directly. See the
 // scope/tile-permission handoff §5b for why that's the right unit here.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PAYROLL_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open payroll', description: 'See runs, open a run, and view a payslip', default: true },
 
@@ -231,6 +251,7 @@ const PAYROLL_ACTIONS: TileAction[] = [
 // Route-shaped, minimal CRUD. No scope step here — payroll_statutory_rules
 // carries no campus_id at all (EOBI/SESSI/income tax rates are organisation-
 // wide, not per-campus), and this tile shares no route with any other tile.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PAYROLL_RULES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View statutory rules', default: true },
 
@@ -243,6 +264,7 @@ const PAYROLL_RULES_ACTIONS: TileAction[] = [
 // route here is ALSO reachable from EmployeeSecurityDepositTab.tsx inside the
 // Employee Directory (gated on hr.employee_directory#security_deposit.edit),
 // so write routes use @RequireAnyAction across both tiles.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SECURITY_DEPOSITS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View security deposits', description: 'See the open-plans list and a single employee\'s plan', default: true },
 
@@ -258,6 +280,7 @@ const SECURITY_DEPOSITS_ACTIONS: TileAction[] = [
 // hr.employee_directory#loan.edit) — controllers decorate each write route
 // with @RequireAnyAction(this tile's action, 'hr.employee_directory#loan.edit')
 // so a Directory-only holder isn't locked out of their own employee's loan.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_LOANS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View loans', description: 'See the open-loans list and a single employee\'s loan', default: true },
 
@@ -275,6 +298,7 @@ const EMPLOYEE_LOANS_ACTIONS: TileAction[] = [
 // Employee Directory (gated there on hr.employee_directory#schedule_pay.edit)
 // — those two use @RequireAnyAction; `due`/`analytics`/`preview`/settings-edit
 // are standalone-only.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SALARY_INCREMENTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View increment queue, analytics & settings', default: true },
 
@@ -288,6 +312,7 @@ const SALARY_INCREMENTS_ACTIONS: TileAction[] = [
 // dropdown, unrelated to who administers the department list itself. No
 // scope step: departments carry no campus_id — organisation-wide, like
 // Payroll Rules.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const DEPARTMENTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View departments', default: true },
 
@@ -302,6 +327,7 @@ const DEPARTMENTS_ACTIONS: TileAction[] = [
 // with @RequireAnyAction so someone granted only this narrower "can register
 // people" tile (e.g. a receptionist who shouldn't browse the whole
 // directory) doesn't need the full Employee Directory tile too.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open registration form', default: true },
 
@@ -315,6 +341,7 @@ const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
 // longer leave a restricted targeting dimension empty (empty = whole school),
 // address specific students outside their scope, or edit/delete/inspect a post
 // (or holiday notice) aimed outside it — 404, never 403.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const NOTICE_BOARD_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View posts and read stats', default: true },
 
@@ -331,6 +358,7 @@ const NOTICE_BOARD_ACTIONS: TileAction[] = [
 // 'EmployeeNotice' subject for it (subjects.ts, casl-ability.factory.ts) and
 // added scope: a scoped admin can no longer send an org-wide notice (empty
 // campus_ids = every campus) or target a campus outside their own.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View sent notices', default: true },
 
@@ -351,6 +379,7 @@ const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
 // within, and granting scope no wider than, their own scope — see
 // AccessService.assertCanManageUser/assertGrantableScope and the
 // scope/tile-permission handoff §8, which left this as an open decision.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record', default: true },
 
@@ -372,6 +401,7 @@ const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
 // could simply omit campus_id from the query to bypass even that. Both
 // helpers now AND the universal scope fragment on top, same pattern as
 // students.service.ts.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View reports', default: true },
 
@@ -386,6 +416,7 @@ const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
 // it stays visible to everyone rather than being hidden by scope; a scoped
 // caller may also never create/move a row TO campus_id null (that would let
 // them affect every campus). See ClassFeeScheduleService.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const CLASS_FEE_SCHEDULE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View class fee schedules', default: true },
 
@@ -402,6 +433,7 @@ const CLASS_FEE_SCHEDULE_ACTIONS: TileAction[] = [
 // create() had no target-student check at all; VouchersService.
 // assertCanIssueFor() closes it without touching create() itself, since
 // create() is also called in-process by the bulk pipeline's async job.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SINGLE_VOUCHER_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Single Voucher Issuance', default: true },
 
@@ -415,6 +447,7 @@ const SINGLE_VOUCHER_ACTIONS: TileAction[] = [
 // here was scope, not just actions: preview/startJob had NO campus/student
 // scope enforcement at all — a client could request/generate vouchers for
 // any campus, or any student cc directly, bypassing campus_ids entirely.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const BULK_VOUCHER_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View bulk voucher jobs', default: true },
 
@@ -431,6 +464,7 @@ const BULK_VOUCHER_ACTIONS: TileAction[] = [
 // other not-yet-rolled-out tile — decorating them here would lock out users
 // of the OTHER tiles that depend on them without giving them an equivalent
 // grant. Widen this only alongside a matching rollout of those other tiles.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const VOUCHERS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open vouchers', description: 'See the voucher list and open a record', default: true },
 
@@ -444,6 +478,7 @@ const VOUCHERS_ACTIONS: TileAction[] = [
 // release (make visible to parents) a voucher at any campus by id. Now the
 // list is floor-scoped and release silently skips out-of-scope candidates,
 // the same way it already silently skips already-released ones.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PENDING_RELEASE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View held vouchers', default: true },
 
@@ -459,6 +494,7 @@ const PENDING_RELEASE_ACTIONS: TileAction[] = [
 // own action directly. Real scope fix alongside: getPaymentHistory had no
 // scope check at all — any campus's student payment history was readable by
 // id; now 404 not 403, same as everywhere else.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PAYMENT_HISTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View payment history', default: true },
 
@@ -478,6 +514,7 @@ const PAYMENT_HISTORY_ACTIONS: TileAction[] = [
 //                Vouchers -> @RequireAnyAction with finance.vouchers#edit.
 // Bridged from finance.deposits.record, the capability that already opens this
 // tile, so everyone who holds the tile today keeps every action.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Receive Deposit', description: 'Search a student and see their vouchers and deposits', default: true },
 
@@ -495,6 +532,7 @@ const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
 // the capability that names this power; a role holding only
 // academic.transfers.view (e.g. PRINCIPAL) keeps the page but loses the
 // transfer itself until a SUPER_ADMIN grants `execute`.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Transfers', description: 'Search a student, see the target-class picker and the GR preview', default: true },
 
@@ -509,6 +547,7 @@ const TRANSFERS_ACTIONS: TileAction[] = [
 // SUPER_ADMIN holds, so nothing changes for anyone today. A pack only describes
 // tiles and actions: nobody gains any of them until a pack is ASSIGNED, which is
 // People & Access's `access.edit`.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACCESS_PACKS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles', default: true },
 
@@ -522,6 +561,7 @@ const ACCESS_PACKS_ACTIONS: TileAction[] = [
 // there is NO legacy bridge, so nobody else inherits anything. Downloading a
 // backup exposes every campus's data at once, and deleting one is irreversible,
 // so each is its own action a SUPER_ADMIN grants deliberately.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const BACKUPS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Database Backups', description: 'See the list of backups', default: true },
 
@@ -546,24 +586,28 @@ const BACKUPS_ACTIONS: TileAction[] = [
 // ALSO used by ShiftHolidayOverridesPanel (the Shift Overrides page and the
 // Employee Directory's shift-overrides tab), so those routes accept the
 // directory's shift_overrides.view / .edit as well.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SATURDAY_SCHEDULES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Saturday Schedules', default: true },
 
   { id: 'manage', label: 'Create and delete Saturday schedules', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SHIFT_OVERRIDES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Shift Overrides', default: true },
 
   { id: 'manage', label: 'Create and delete shift overrides and staff holidays', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACADEMIC_CALENDAR_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Academic Calendar', description: 'See holidays and events, and the notification reports', default: true },
 
   { id: 'manage', label: 'Edit the calendar', description: 'Create, bulk-create, change and delete days, and sync attendance', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ATTENDANCE_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Attendance Settings', description: 'See policy sets and their rules', default: true },
 
@@ -573,6 +617,7 @@ const ATTENDANCE_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'recompute', label: 'Recompute late status', description: 'Rewrites attendance for a campus over a date range', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const CLASS_MODES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Class Modes', default: true },
 
@@ -585,6 +630,7 @@ const CLASS_MODES_ACTIONS: TileAction[] = [
 // here lists it), so nobody who holds a tile loses anything. Each route is called
 // by exactly one of Student Attendance, its Cycle view or Quick Check-In; the
 // roll-session routes are shared with the Timetables page's roll-marking mode.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_ATTENDANCE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Student Attendance', description: 'See the summary, dashboard and a student\'s timeline', default: true },
 
@@ -592,18 +638,21 @@ const STUDENT_ATTENDANCE_ACTIONS: TileAction[] = [
   { id: 'resolve', label: 'Resolve a student\'s attendance for a day', description: 'Overrides what the device recorded', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Student Attendance by Cycle', description: 'See the cycle matrix', default: true },
 
   { id: 'export', label: 'Export the cycle matrix', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const QUICK_CHECK_IN_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Quick Check-In', description: 'Look a student up and see today\'s state', default: true },
 
   { id: 'scan', label: 'Record a manual check-in or check-out', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ALEVEL_ROLL_CALL_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open A-Level Roll Call', description: 'See roll sessions', default: true },
 
@@ -622,6 +671,7 @@ const ALEVEL_ROLL_CALL_ACTIONS: TileAction[] = [
 // routes keep their policy check and carry no action here. All of these reach
 // every campus at once, so they also need an unrestricted caller. The device
 // protocol endpoints (/iclock/*) are the hardware's own and are untouched.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ZK_DEVICE_LOGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open ZK Device Logs', description: 'See the raw device push log', default: true },
 
@@ -640,6 +690,7 @@ const ZK_DEVICE_LOGS_ACTIONS: TileAction[] = [
 // no webapp caller (`blocks`, `day-slots`, `teachers/:id/...`) and the one the
 // A-Level Roll Call page also reads (`group-day-slots`) are left to their
 // policy check, as is the subject LIST that Teaching Groups also uses.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const TIMETABLES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Timetables', description: 'See the period list and the class and group grids', default: true },
 
@@ -648,6 +699,7 @@ const TIMETABLES_ACTIONS: TileAction[] = [
 ];
 
 // Teaching Groups: the /teaching-groups API is used only by this page.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const TEACHING_GROUPS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Teaching Groups', description: 'See groups, their rosters and a student\'s subject enrolments', default: true },
 
@@ -662,6 +714,7 @@ const TEACHING_GROUPS_ACTIONS: TileAction[] = [
 // policy already required. The page reads its roster from GET /students and
 // moves students with PATCH /students/:id/assignment, both Student Directory
 // routes, so those now also accept this tile's `view` / `move`.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SECTION_ALLOCATION_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Section Allocation Rules', description: 'See each campus\'s sections, their rules and the students in them', default: true },
 
@@ -676,6 +729,7 @@ const SECTION_ALLOCATION_ACTIONS: TileAction[] = [
 // directory.edit). A role holding only students.registration.view keeps the
 // read-only side. by-cc and guardians/by-cnic are called only by the
 // registration and admission-form pages, so they take `view`.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const REGISTRATION_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Registration', description: 'Look up an admission by CC and an existing guardian by CNIC', default: true },
 
@@ -691,6 +745,7 @@ const REGISTRATION_ACTIONS: TileAction[] = [
 // grants it per role or person in People & Access. The deposit slip is also
 // printed from the Student Directory's Certificates tab, so it carries no
 // action of this tile; it is scoped instead.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const QUICK_REGISTRATION_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Quick Registration', default: true },
 
@@ -705,6 +760,7 @@ const QUICK_REGISTRATION_ACTIONS: TileAction[] = [
 // enroll / pursuit_status until a SUPER_ADMIN grants them.
 // The certificate, admission-order and houses routes are ALSO used by Student
 // Directory tabs and the Register page, so they carry no action of this tile.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ENROLLMENTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Enrollments', description: 'See the admission candidates and the suggested GR number and house', default: true },
 
@@ -716,6 +772,7 @@ const ENROLLMENTS_ACTIONS: TileAction[] = [
 // school-setup.house_balancer), so both carry this same action set and every
 // route accepts either. Bridged from academic.campuses.edit, which is exactly
 // what the routes' existing "Update Campus" policy already required.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const HOUSE_BALANCER_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open House Balancer', description: 'See the rebalance history', default: true },
 
@@ -725,6 +782,7 @@ const HOUSE_BALANCER_ACTIONS: TileAction[] = [
 
 // Bulk promotion shares POST /students/promotion/bulk and the GR-suggestion
 // route with the Student Directory's `promote`, so those routes accept either.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACADEMIC_ACTIONS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Academic Actions', default: true },
 
@@ -738,6 +796,7 @@ const ACADEMIC_ACTIONS_ACTIONS: TileAction[] = [
 // actions, so a SUPER_ADMIN can hand it to a role or a person in People &
 // Access. There is deliberately NO legacyFullAccessCapabilities bridge: nobody
 // held a dedicated permission before, so nobody inherits any of this.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const POSTDATED_CHEQUES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Post-dated Cheques', description: 'See the cheque list, due and overdue alerts, and a student\'s cheques', default: true },
 
@@ -755,6 +814,7 @@ const POSTDATED_CHEQUES_ACTIONS: TileAction[] = [
 // GET /bank-accounts (list) is deliberately left uncovered here — it's read
 // by fee-challan, the deposit page and the Vouchers page just to populate a
 // bank picker, unrelated to who may administer bank accounts.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const BANKS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View bank accounts', default: true },
 
@@ -763,6 +823,7 @@ const BANKS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a bank account', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const FAMILIES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Family Directory', description: 'See the family list, search it, view stats, and open family records', default: true },
 
@@ -771,12 +832,14 @@ const FAMILIES_ACTIONS: TileAction[] = [
   { id: 'assign_student', label: 'Move / assign students', description: 'Assign or transfer students into a family household', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PARENT_CHANGE_REQUESTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Parent Change Requests', description: 'See pending and processed profile change requests', default: true },
 
   { id: 'process', label: 'Approve or reject requests', description: 'Process guardian and student profile change requests in full or partially', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
   // respond + reassign are default: anyone holding communication.support_tickets.view
   // is a responder (principals, finance clerks, general respondent). Only
@@ -787,32 +850,38 @@ const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
   { id: 'manage_replies', label: 'Review and approve staff replies', description: 'Approve, edit, or reject pending staff replies before delivery to parents', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STAFF_REGISTER_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View staff register', description: 'See staff attendance for any date and campus', default: true },
   { id: 'mark', label: 'Mark staff attendance', description: 'Mark present/absent/late/excused and save daily attendance', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_ATTENDANCE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View employee attendance', description: 'Daily attendance board, summary stats, and employee timeline', default: true },
   { id: 'mark', label: 'Mark or resolve attendance', description: 'Bulk mark attendance status, apply clock-out times, and resolve missing punches', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View cycle attendance', description: 'See employee lines and punch card matrix over date range', default: true },
   { id: 'export', label: 'Export cycle attendance', description: 'Export employee lines and punch matrix to Excel', implies: ['view'] },
   { id: 'mark', label: 'Resolve or edit attendance', description: 'Mark status, set clock-out times, and resolve missing punches', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const OBJECTIONS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View attendance objections', description: 'See pending and reviewed attendance disputes and stats', default: true },
   { id: 'review', label: 'Review attendance objections', description: 'Accept or reject employee attendance objections', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const LEAVE_REQUESTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View leave requests', description: 'See pending, approved, and rejected leave applications', default: true },
   { id: 'approve', label: 'Approve, reject, or revoke leave', description: 'Review employee leave applications and revoke approved leaves', implies: ['view'] },
 ];
 
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const NOTIFICATION_TEMPLATES_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View notification templates', description: 'See push notification template texts and enabled/disabled status', default: true },
 
