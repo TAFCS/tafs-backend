@@ -5,7 +5,7 @@ import { CheckInSource, EmployeeStatus, Prisma, StaffRole } from '@prisma/client
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
-  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail,
+  IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail, IsDateString,
   ValidateNested, Min, MinLength, MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -275,6 +275,20 @@ export class UpdateEmployeeStatusDto {
   @IsString()
   @MaxLength(255)
   notes?: string;
+
+  /**
+   * Last day the employee worked (YYYY-MM-DD). Only meaningful for LEFT /
+   * TERMINATED; defaults to today when omitted. Payroll pays the cycle from its
+   * start up to and including this date.
+   */
+  @IsOptional()
+  @IsDateString()
+  date_of_leaving?: string;
+}
+
+export class UpdateEmployeeLeavingDateDto {
+  @IsDateString()
+  date_of_leaving: string;
 }
 
 export class PreviousEmployerDto {
@@ -1702,7 +1716,16 @@ export class EmployeesService {
     const existing = await this.findOne(id);
     const nextStatus = dto.status;
 
+    const leavingNow = nextStatus === EmployeeStatus.LEFT || nextStatus === EmployeeStatus.TERMINATED;
+    const nextLeavingDate = leavingNow
+      ? new Date(`${dto.date_of_leaving ?? new Date().toISOString().slice(0, 10)}T00:00:00.000Z`)
+      : null;
+
     if (existing.employment_status === nextStatus) {
+      // Same status re-submitted with a date: treat as an edit of the leaving date.
+      if (leavingNow && dto.date_of_leaving) {
+        return this.updateLeavingDate(id, { date_of_leaving: dto.date_of_leaving }, caller);
+      }
       return existing;
     }
 
@@ -1735,6 +1758,8 @@ export class EmployeesService {
         data: {
           employment_status: nextStatus,
           is_permanent_employee: nextStatus === EmployeeStatus.PERMANENT,
+          // Cleared again if the employee is brought back.
+          date_of_leaving: nextLeavingDate,
         },
         include: includeRelations,
       });
@@ -1762,6 +1787,38 @@ export class EmployeesService {
       changed_by: caller.username || caller.sub || 'system',
     });
 
+    return updated;
+  }
+
+  /** Edits the date of leaving of an employee who is already marked LEFT / TERMINATED. */
+  async updateLeavingDate(id: number, dto: UpdateEmployeeLeavingDateDto, caller: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
+    if (caller.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only super admins can change the date of leaving');
+    }
+    const existing = await this.findOne(id);
+    if (
+      existing.employment_status !== EmployeeStatus.LEFT &&
+      existing.employment_status !== EmployeeStatus.TERMINATED
+    ) {
+      throw new BadRequestException('Date of leaving can only be set on an employee marked as left or terminated.');
+    }
+    const next = new Date(`${dto.date_of_leaving}T00:00:00.000Z`);
+    const updated = await this.prisma.employee_profiles.update({
+      where: { id },
+      data: { date_of_leaving: next },
+      include: includeRelations,
+    });
+    this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(id),
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'Date of Leaving',
+      old_value: (existing as any).date_of_leaving?.toISOString().slice(0, 10) ?? undefined,
+      new_value: dto.date_of_leaving,
+      changed_by: caller.username || caller.sub || 'system',
+    });
     return updated;
   }
 

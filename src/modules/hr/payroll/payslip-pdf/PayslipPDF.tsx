@@ -161,6 +161,7 @@ export interface PayslipPDFProps {
     lateDeduction: number;
     breakDeduction: number;
     sandwichDeduction: number;
+    afterLeavingDeduction: number;
     consecutiveLateDeduction: number;
     eobiDeduction: number;
     incomeTaxDeduction: number;
@@ -295,6 +296,12 @@ export const PayslipPDF = ({ employee, period, attendance, pay, overtime, netPai
           <View style={styles.tableRow}>
             <Text style={styles.colLabel}>Off-Day Deduction (absent the working day before &amp; after this break)</Text>
             <Text style={styles.deductionValue}>-{money(pay.sandwichDeduction)}</Text>
+          </View>
+        )}
+        {pay.afterLeavingDeduction > 0 && (
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>Days After Date of Leaving (not employed for the rest of this period)</Text>
+            <Text style={styles.deductionValue}>-{money(pay.afterLeavingDeduction)}</Text>
           </View>
         )}
         {pay.consecutiveLateDeduction > 0 && (

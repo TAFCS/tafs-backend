@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -128,6 +128,18 @@ export class EmployeesController {
   ) {
     const data = await this.employeesService.updateStatus(id, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee status updated successfully');
+  }
+
+  @Patch(':id/leaving-date')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#status.change')
+  async updateLeavingDate(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateEmployeeLeavingDateDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.updateLeavingDate(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Date of leaving updated successfully');
   }
 
   @Patch(':id/account')

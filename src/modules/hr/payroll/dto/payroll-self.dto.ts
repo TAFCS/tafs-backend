@@ -1,4 +1,4 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OvertimeRateType } from '@prisma/client';
 
@@ -11,6 +11,11 @@ export class ExcludePayrollLineDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+
+export class SetFullPayDto {
+  @IsBoolean()
+  enabled: boolean;
 }
 
 export class DisbursePayrollLineDto {

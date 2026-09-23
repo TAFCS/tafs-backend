@@ -1279,6 +1279,7 @@ model employee_profiles {
   segment_id                         Int?
   secondary_phone                    String?                              @db.VarChar(60)
   payroll_enabled                    Boolean                              @default(true)
+  date_of_leaving                    DateTime?                            @db.Date
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
   attendance_roll_sessions           attendance_roll_sessions[]
@@ -1610,6 +1611,8 @@ model payroll_run_lines {
   sessi_employer_cost           Decimal                                  @default(0) @db.Decimal(12, 2)
   security_deposit_deduction    Decimal                                  @default(0) @db.Decimal(12, 2)
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
+  after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
+  full_pay_override             Boolean                                  @default(false)
   loan_transactions             employee_loan_transactions[]
   security_deposit_transactions employee_security_deposit_transactions[]
   disbursed_by_user             users?                                   @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)

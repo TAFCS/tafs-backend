@@ -334,6 +334,7 @@ export class SecurityDepositsService {
       .plus(line.eobi_deduction)
       .plus(line.income_tax_deduction)
       .plus(line.sandwich_deduction)
+      .plus(line.after_leaving_deduction)
       .plus(line.consecutive_late_deduction);
 
     const monthly = money(line.monthly_pay);

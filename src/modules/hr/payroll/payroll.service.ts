@@ -38,6 +38,7 @@ interface EmployeeLineInput {
   days_per_week: number | null;
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
   check_in_source?: CheckInSource | null;
+  date_of_leaving?: Date | null;
 }
 
 type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'SICK_LEAVE' | 'CASUAL_LEAVE' | 'ANNUAL_LEAVE' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
@@ -87,6 +88,8 @@ interface ComputedLine {
   sessi_employer_cost: Prisma.Decimal;
   total_deductions: Prisma.Decimal;
   net_pay: Prisma.Decimal;
+  after_leaving_deduction: Prisma.Decimal;
+  full_pay_override: boolean;
   daily_breakdown: DayBreakdownEntry[];
 }
 
@@ -161,6 +164,7 @@ export class PayrollService {
     days_per_week: true,
     employee_work_schedules: { select: { day_of_week: true, is_working: true } },
     check_in_source: true,
+    date_of_leaving: true,
   } as const;
 
   constructor(
@@ -340,6 +344,7 @@ export class PayrollService {
     isMapped: boolean,
     mandatorySaturdayDates?: Set<string>,
     shiftOverridesForEmployee?: Map<string, { start: Date | null; end: Date | null }>,
+    fullPayOverride = false,
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -382,9 +387,17 @@ export class PayrollService {
     // scan count -> a clock-in with no matching clock-out -> unresolved, not
     // guessed at. Only a clean, paired day falls back to the biometric status.
     const dailyBreakdown: DayBreakdownEntry[] = [];
+    // An employee who left mid-cycle is only evaluated up to (and including)
+    // their date of leaving. Days after it are never classified, so they can't
+    // become absences, and a weekend/holiday right after the last day worked
+    // has no "next working day" to be sandwiched against. Those days are
+    // simply not paid — see afterLeavingDeduction below.
+    const fullPeriodDays = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+    const leavingDate = employee.date_of_leaving ?? null;
+    const lastPaidDay = leavingDate && leavingDate < periodEnd ? leavingDate : periodEnd;
     for (
       let d = new Date(periodStart);
-      d <= periodEnd;
+      d <= lastPaidDay;
       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
     ) {
       const key = d.toISOString().slice(0, 10);
@@ -508,7 +521,9 @@ export class PayrollService {
     }
 
     const scheduledWorkingDays = dailyBreakdown.filter((d) => d.is_working_day).length;
-    const totalCalendarDays = dailyBreakdown.length;
+    // Divisor for the daily rate stays the full cycle length even when the
+    // breakdown was cut short at the date of leaving.
+    const totalCalendarDays = fullPeriodDays;
     const presentDays = dailyBreakdown.filter((d) => d.classification === 'PRESENT' || d.classification === 'LATE').length;
     const lateDays = dailyBreakdown.filter((d) => d.classification === 'LATE').length;
     const halfDays = dailyBreakdown.filter((d) => d.classification === 'HALF_DAY').length;
@@ -564,10 +579,17 @@ export class PayrollService {
     }
     const perMinuteRate = scheduledMinutes > 0 ? dailyRate.dividedBy(scheduledMinutes) : new Prisma.Decimal(0);
 
-    const absenceDeduction = dailyRate.times(absentDays + unpaidLeaveDays);
-    const halfDayDeduction = dailyRate.dividedBy(2).times(halfDays);
-    const lateDeduction = perMinuteRate.times(totalLateMinutes);
-    const breakDeduction = perMinuteRate.times(totalBreakMinutes);
+    // "Pay full salary" waives every attendance-based deduction (and the
+    // mid-cycle leaving proration). Statutory EOBI/income tax and loan/deposit
+    // installments are not attendance-based and still apply.
+    const zero = new Prisma.Decimal(0);
+    const absenceDeduction = fullPayOverride ? zero : dailyRate.times(absentDays + unpaidLeaveDays);
+    const halfDayDeduction = fullPayOverride ? zero : dailyRate.dividedBy(2).times(halfDays);
+    const lateDeduction = fullPayOverride ? zero : perMinuteRate.times(totalLateMinutes);
+    const breakDeduction = fullPayOverride ? zero : perMinuteRate.times(totalBreakMinutes);
+    const afterLeavingDeduction = fullPayOverride
+      ? zero
+      : dailyRate.times(Math.max(0, fullPeriodDays - dailyBreakdown.length));
 
     const [eobiRule, sessiRule, incomeTaxRule] = await Promise.all([
       this.payrollRules.findEffective('EOBI', periodEnd),
@@ -595,6 +617,7 @@ export class PayrollService {
       .plus(halfDayDeduction)
       .plus(lateDeduction)
       .plus(breakDeduction)
+      .plus(afterLeavingDeduction)
       .plus(eobiDeduction)
       .plus(incomeTaxDeduction);
     const netPay = monthlyPay.minus(totalDeductions);
@@ -633,6 +656,8 @@ export class PayrollService {
       sessi_employer_cost: sessiEmployerCost,
       total_deductions: totalDeductions.toDecimalPlaces(2),
       net_pay: netPay.toDecimalPlaces(2),
+      after_leaving_deduction: afterLeavingDeduction.toDecimalPlaces(2),
+      full_pay_override: fullPayOverride,
       daily_breakdown: dailyBreakdown,
     };
   }
@@ -659,6 +684,11 @@ export class PayrollService {
   // Temporarily disabled — do not detect new 3-consecutive-late flags at all.
   // Flip back to true to re-enable; sandwich detection is untouched either way.
   private readonly CONSECUTIVE_LATE_RULE_ENABLED = false;
+
+  /** A "pay full salary" line never raises sandwich/late flags — nothing is deducted for them. */
+  private detectFlagsForLine(line: { full_pay_override: boolean; daily_breakdown: DayBreakdownEntry[] }): DetectedFlag[] {
+    return line.full_pay_override ? [] : this.detectPayrollFlags(line.daily_breakdown);
+  }
 
   private detectPayrollFlags(dailyBreakdown: DayBreakdownEntry[]): DetectedFlag[] {
     const flags: DetectedFlag[] = [];
@@ -872,6 +902,7 @@ export class PayrollService {
     campusId: number,
     periodStart: Date,
     periodEnd: Date,
+    fullPayEmployeeIds: ReadonlySet<number> = new Set(),
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
     const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows] = await Promise.all([
@@ -927,6 +958,7 @@ export class PayrollService {
           mappedEmployeeIds.has(employee.id),
           mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
           shiftOverridesByEmployee.get(employee.id),
+          fullPayEmployeeIds.has(employee.id),
         )),
       })),
     );
@@ -939,7 +971,7 @@ export class PayrollService {
    * called with a single-employee roster, and upserts (never delete+recreate)
    * so the line keeps its id.
    */
-  async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+  async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload, fullPay?: boolean) {
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -950,11 +982,12 @@ export class PayrollService {
 
     const existingLine = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { finalized_at: true },
+      select: { finalized_at: true, full_pay_override: true },
     });
     if (existingLine?.finalized_at) {
       throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
     }
+    const fullPayFlag = fullPay ?? existingLine?.full_pay_override ?? false;
 
     const excluded = await this.prisma.payroll_run_exclusions.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -977,8 +1010,9 @@ export class PayrollService {
       run.campus_id,
       run.period_start,
       run.period_end,
+      fullPayFlag ? new Set([employeeId]) : undefined,
     );
-    const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+    const detected = this.detectFlagsForLine(lineData);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.payroll_run_lines.upsert({
@@ -1001,6 +1035,26 @@ export class PayrollService {
     });
 
     return this.getRun(runId, user);
+  }
+
+  /**
+   * Turns "pay full salary" on or off for one employee's still-open line and
+   * recomputes it. On: every attendance-based deduction (absence, half-day,
+   * late, break, sandwich, consecutive-late) and any leaving-date proration is
+   * waived; statutory deductions and loan/deposit installments still apply.
+   */
+  async setFullPayOverride(runId: number, employeeId: number, enabled: boolean, user: IJwtStaffPayload) {
+    const result = await this.regenerateLine(runId, employeeId, user, enabled);
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_FULL_PAY_OVERRIDE',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `${enabled ? 'Enabled' : 'Disabled'} "pay full salary" for employee ${employeeId} on this payroll run.`,
+    });
+    return result;
   }
 
   /**
@@ -1158,7 +1212,7 @@ export class PayrollService {
         run.period_start,
         run.period_end,
       );
-      const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+      const detected = this.detectFlagsForLine(lineData);
 
       await this.prisma.$transaction(async (tx) => {
         await tx.payroll_run_lines.upsert({
@@ -1204,7 +1258,12 @@ export class PayrollService {
             campus_id: dto.campus_id,
             monthly_pay: { not: null },
             payroll_enabled: true,
-            employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+            OR: [
+              { employment_status: { in: ['ACTIVE', 'PERMANENT'] } },
+              // Left/terminated mid-cycle: still owed pay up to their date of
+              // leaving, so they stay on the roster for the cycle it falls in.
+              { employment_status: { in: ['LEFT', 'TERMINATED'] }, date_of_leaving: { gte: periodStart } },
+            ],
           },
           select: this.employeeLineSelect,
         });
@@ -1276,7 +1335,7 @@ export class PayrollService {
         data: computedLines.map((line) => ({ payroll_run_id: run.id, ...line })) as unknown as Prisma.payroll_run_linesCreateManyInput[],
       });
       for (const line of computedLines) {
-        const detected = this.detectPayrollFlags(line.daily_breakdown);
+        const detected = this.detectFlagsForLine(line);
         await this.syncPayrollFlagsForEmployee(run.id, line.employee_id, detected, line.daily_rate);
       }
     } else {
@@ -1289,7 +1348,7 @@ export class PayrollService {
       const [existingLines, exclusions] = await Promise.all([
         this.prisma.payroll_run_lines.findMany({
           where: { payroll_run_id: run.id },
-          select: { employee_id: true, finalized_at: true },
+          select: { employee_id: true, finalized_at: true, full_pay_override: true },
         }),
         this.prisma.payroll_run_exclusions.findMany({
           where: { payroll_run_id: run.id },
@@ -1298,18 +1357,20 @@ export class PayrollService {
       ]);
       const lockedIds = new Set(existingLines.filter((l) => l.finalized_at).map((l) => l.employee_id));
       const excludedIds = new Set(exclusions.map((e) => e.employee_id));
+      // Regen keeps each open line's "pay full salary" choice.
+      const fullPayIds = new Set(existingLines.filter((l) => l.full_pay_override).map((l) => l.employee_id));
       const toCompute = employees.filter((e) => !lockedIds.has(e.id) && !excludedIds.has(e.id));
       touchedCount = toCompute.length;
 
       if (toCompute.length > 0) {
-        const computedLines = await this.computeEmployeeLinesForRange(toCompute, dto.campus_id, periodStart, periodEnd);
+        const computedLines = await this.computeEmployeeLinesForRange(toCompute, dto.campus_id, periodStart, periodEnd, fullPayIds);
         for (const { employee_id, ...lineData } of computedLines) {
           await this.prisma.payroll_run_lines.upsert({
             where: { payroll_run_id_employee_id: { payroll_run_id: run.id, employee_id } },
             create: { payroll_run_id: run.id, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
             update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
           });
-          const detected = this.detectPayrollFlags(lineData.daily_breakdown);
+          const detected = this.detectFlagsForLine(lineData);
           await this.syncPayrollFlagsForEmployee(run.id, employee_id, detected, lineData.daily_rate);
         }
       }
@@ -1894,6 +1955,7 @@ export class PayrollService {
       late_deduction: Number(line.late_deduction),
       break_deduction: Number(line.break_deduction),
       sandwich_deduction: Number(line.sandwich_deduction),
+      after_leaving_deduction: Number(line.after_leaving_deduction),
       consecutive_late_deduction: Number(line.consecutive_late_deduction),
       eobi_deduction: Number(line.eobi_deduction),
       income_tax_deduction: Number(line.income_tax_deduction),
@@ -2122,6 +2184,7 @@ export class PayrollService {
           lateDeduction: Number(line.late_deduction),
           breakDeduction: Number(line.break_deduction),
           sandwichDeduction: Number(line.sandwich_deduction),
+          afterLeavingDeduction: Number(line.after_leaving_deduction),
           consecutiveLateDeduction: Number(line.consecutive_late_deduction),
           eobiDeduction: Number(line.eobi_deduction),
           incomeTaxDeduction: Number(line.income_tax_deduction),
