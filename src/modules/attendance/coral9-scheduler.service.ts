@@ -81,6 +81,19 @@ export class Coral9SchedulerService {
   }
 
   /**
+   * Discord board-activity digests.
+   *
+   * Routine ticket activity (new tickets, ordinary moves, comments) is batched
+   * into one Discord message per project every fifteen minutes instead of one
+   * message per event. Busy projects flush themselves as events arrive; this
+   * tick delivers the last batch of a project that has gone quiet.
+   */
+  @Cron('*/15 * * * *', { name: 'coral9-discord-digest' })
+  async discordDigest(): Promise<void> {
+    await this.call('/api/cron/discord-digest', 'discord digest');
+  }
+
+  /**
    * One authenticated GET. Never throws — a scheduled job that throws can take
    * the scheduler down with it, and none of this work is worth that.
    */
