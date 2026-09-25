@@ -10,7 +10,7 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { SecurityDepositsService } from './security-deposits.service';
-import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 // Every route here is ALSO reachable from EmployeeSecurityDepositTab.tsx
 // inside the Employee Directory (gated there on
@@ -77,6 +77,18 @@ export class SecurityDepositsController {
   ) {
     const data = await this.securityDeposits.forfeit(employeeId, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Security deposit forfeiture recorded');
+  }
+
+  @Post('close')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAnyAction('hr.security_deposits#cancel', 'hr.employee_directory#security_deposit.edit')
+  async close(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: ClosePlanDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.securityDeposits.closePlan(employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Security deposit collection stopped');
   }
 
   @Post('cancel')

@@ -1,16 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SecurityDepositStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
-
-const OPEN_STATUS_FILTER = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED] as const;
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class ListSecurityDepositsQueryDto {
-  @ApiPropertyOptional({ enum: OPEN_STATUS_FILTER, description: 'Filter open plans by status' })
+  @ApiPropertyOptional({ enum: SecurityDepositStatus, description: 'Filter by one status. Omit for open plans (ACTIVE + COMPLETED).' })
   @IsOptional()
   @IsEnum(SecurityDepositStatus)
-  @IsIn(OPEN_STATUS_FILTER)
   status?: SecurityDepositStatus;
+}
+
+export class ClosePlanDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  notes?: string;
 }
 
 export class CreateSecurityDepositDto {
@@ -62,6 +67,11 @@ export class RefundSecurityDepositDto {
   @IsString()
   @MaxLength(500)
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'Also stop collecting the rest of an unfinished plan (target drops to what was recovered).' })
+  @IsOptional()
+  @IsBoolean()
+  stop_collection?: boolean;
 }
 
 export class ForfeitSecurityDepositDto {
@@ -76,4 +86,9 @@ export class ForfeitSecurityDepositDto {
   @MinLength(1)
   @MaxLength(500)
   reason: string;
+
+  @ApiPropertyOptional({ description: 'Also stop collecting the rest of an unfinished plan (target drops to what was recovered).' })
+  @IsOptional()
+  @IsBoolean()
+  stop_collection?: boolean;
 }

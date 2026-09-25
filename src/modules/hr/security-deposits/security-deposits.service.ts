@@ -16,11 +16,11 @@ import {
   buildEqualSchedule,
   money,
   nextScheduledAmount,
+  parseInstallmentSchedule,
   scheduleAsNumbers,
   scheduleJson,
-  shiftScheduleAfterCollection,
 } from '../installment-schedule.util';
-import { CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: SecurityDepositStatus[] = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED];
@@ -34,6 +34,34 @@ function dateOnly(value: Date): string {
 function currentCycleStart(): Date {
   const { year, month } = parsePayrollPeriod(currentPayrollPeriodLabel());
   return computePayrollWindow(year, month).periodStart;
+}
+
+/** Start (the 26th) of the cycle after the one starting on `periodStart`. */
+function nextCycleStart(periodStart: Date): Date {
+  return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 26));
+}
+
+/** Snaps any date to the start of the 26th-25th cycle that contains it. */
+function snapToCycleStart(date: Date): Date {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth();
+  return date.getUTCDate() >= 26 ? new Date(Date.UTC(y, m, 26)) : new Date(Date.UTC(y, m - 1, 26));
+}
+
+function shiftCycleStart(periodStart: Date, months: number): Date {
+  return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + months, 26));
+}
+
+/** The plan's queue of cycles is popped once per finalized payroll line, so the next one to collect follows the last finalized deduction — not the wall clock. */
+function nextCollectionPeriodStart(startPeriodStart: Date, lastDeductedPeriodStart: Date | null): Date {
+  if (!lastDeductedPeriodStart) return startPeriodStart;
+  const next = nextCycleStart(lastDeductedPeriodStart);
+  return next > startPeriodStart ? next : startPeriodStart;
+}
+
+const NOTES_MAX = 500;
+function appendNote(existing: string | null, addition: string): string {
+  return [existing, addition].filter(Boolean).join(' | ').slice(0, NOTES_MAX);
 }
 
 @Injectable()
@@ -68,8 +96,28 @@ export class SecurityDepositsService {
     return {
       current: current ? this.serializePlan(current) : null,
       history: history.map((p) => this.serializePlan(p)),
-      default_start_period_start: dateOnly(currentCycleStart()),
+      default_start_period_start: dateOnly(await this.defaultStartFor(employeeId)),
     };
+  }
+
+  /**
+   * The current cycle — unless the cycle that just ended is still an open
+   * (unfinalized) real draft for this employee, in which case that payroll
+   * is about to run and would otherwise skip the deposit. A cycle paid
+   * outside the system has no draft, so it is never picked by mistake.
+   */
+  private async defaultStartFor(employeeId: number): Promise<Date> {
+    const current = currentCycleStart();
+    const previous = shiftCycleStart(current, -1);
+    const openDraft = await this.prisma.payroll_run_lines.findFirst({
+      where: {
+        employee_id: employeeId,
+        finalized_at: null,
+        payroll_runs: { period_start: previous, is_test: false },
+      },
+      select: { id: true },
+    });
+    return openDraft ? previous : current;
   }
 
   async listOpen(user: IJwtStaffPayload, status?: SecurityDepositStatus) {
@@ -104,6 +152,10 @@ export class SecurityDepositsService {
             campuses: { select: { campus_name: true } },
           },
         },
+        transactions: {
+          where: { type: SecurityDepositTransactionType.DEDUCTION, payroll_run_line_id: { not: null } },
+          select: { payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } } },
+        },
       },
       orderBy: [{ status: 'asc' }, { start_period_start: 'desc' }, { id: 'desc' }],
     });
@@ -112,6 +164,13 @@ export class SecurityDepositsService {
 
   async create(employeeId: number, dto: CreateSecurityDepositDto, user: IJwtStaffPayload) {
     await this.assertEmployee(employeeId, user);
+    const profile = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { employment_status: true, monthly_pay: true, payroll_enabled: true },
+    });
+    if (profile && (profile.employment_status === 'LEFT' || profile.employment_status === 'TERMINATED')) {
+      throw new BadRequestException('This employee has left — a new security deposit plan cannot be started for them.');
+    }
     const open = await this.prisma.employee_security_deposits.findFirst({
       where: { employee_id: employeeId, status: { in: OPEN_STATUSES } },
     });
@@ -125,8 +184,22 @@ export class SecurityDepositsService {
       throw new BadRequestException('Installment amount must be greater than zero. Increase the total or reduce the number of months.');
     }
     const start = dto.start_period_start
-      ? new Date(`${dto.start_period_start.slice(0, 10)}T00:00:00.000Z`)
-      : currentCycleStart();
+      ? snapToCycleStart(new Date(`${dto.start_period_start.slice(0, 10)}T00:00:00.000Z`))
+      : await this.defaultStartFor(employeeId);
+    const thisCycle = currentCycleStart();
+    if (start < shiftCycleStart(thisCycle, -12) || start > shiftCycleStart(thisCycle, 12)) {
+      throw new BadRequestException('Start cycle must be within a year of the current payroll cycle.');
+    }
+
+    const warnings: string[] = [];
+    const monthlyPay = profile?.monthly_pay ? money(profile.monthly_pay) : ZERO;
+    if (profile && (!profile.payroll_enabled || monthlyPay.lte(0))) {
+      warnings.push('This employee has no monthly pay or is not on payroll, so nothing will be collected until that is set.');
+    } else if (monthlyPay.gt(0) && money(schedule[0]).gt(monthlyPay)) {
+      warnings.push(
+        `The installment of ${money(schedule[0]).toFixed(2)} is more than the monthly pay of ${monthlyPay.toFixed(2)}; each cycle will collect only what pay allows and the rest carries forward.`,
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
       try {
@@ -159,12 +232,13 @@ export class SecurityDepositsService {
       note: `Started security deposit of ${total.toFixed(2)} over ${schedule.length} month(s), starting ${dateOnly(start)}.`,
     });
 
-    return this.getForEmployee(employeeId);
+    return { ...(await this.getForEmployee(employeeId)), warnings };
   }
 
   async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
+      await this.lockEmployeePlans(employeeId, tx);
       const plan = await tx.employee_security_deposits.findFirst({
         where: { employee_id: employeeId, status: SecurityDepositStatus.ACTIVE },
       });
@@ -209,7 +283,8 @@ export class SecurityDepositsService {
       }
       const refunded = money(plan.refunded_amount).plus(amount);
       const heldAfter = money(plan.recovered_amount).minus(refunded).minus(plan.forfeited_amount);
-      const status = this.nextStatus(plan.total_amount, plan.recovered_amount, refunded, plan.forfeited_amount);
+      const stop = (await this.wantsStopCollection(dto.stop_collection, employeeId, tx)) ? this.stopCollectionFields(plan) : null;
+      const status = this.nextStatus(stop?.total_amount ?? plan.total_amount, plan.recovered_amount, refunded, plan.forfeited_amount);
 
       await tx.employee_security_deposit_transactions.create({
         data: {
@@ -218,13 +293,13 @@ export class SecurityDepositsService {
           due_amount: amount,
           amount,
           running_balance: heldAfter.lt(0) ? ZERO : heldAfter,
-          reason: dto.notes?.trim() || null,
+          reason: [dto.notes?.trim(), stop?.note].filter(Boolean).join(' — ').slice(0, NOTES_MAX) || null,
           created_by: user.sub,
         },
       });
       await tx.employee_security_deposits.update({
         where: { id: plan.id },
-        data: { refunded_amount: refunded, status },
+        data: { refunded_amount: refunded, status, ...(stop?.data ?? {}) },
       });
       await this.recapOpenDraftLines(employeeId, tx);
     });
@@ -255,7 +330,8 @@ export class SecurityDepositsService {
       }
       const forfeited = money(plan.forfeited_amount).plus(amount);
       const heldAfter = money(plan.recovered_amount).minus(plan.refunded_amount).minus(forfeited);
-      const status = this.nextStatus(plan.total_amount, plan.recovered_amount, plan.refunded_amount, forfeited);
+      const stop = (await this.wantsStopCollection(dto.stop_collection, employeeId, tx)) ? this.stopCollectionFields(plan) : null;
+      const status = this.nextStatus(stop?.total_amount ?? plan.total_amount, plan.recovered_amount, plan.refunded_amount, forfeited);
 
       await tx.employee_security_deposit_transactions.create({
         data: {
@@ -264,13 +340,13 @@ export class SecurityDepositsService {
           due_amount: amount,
           amount,
           running_balance: heldAfter.lt(0) ? ZERO : heldAfter,
-          reason,
+          reason: (stop?.note ? `${reason} — ${stop.note}` : reason).slice(0, NOTES_MAX),
           created_by: user.sub,
         },
       });
       await tx.employee_security_deposits.update({
         where: { id: plan.id },
-        data: { forfeited_amount: forfeited, status },
+        data: { forfeited_amount: forfeited, status, ...(stop?.data ?? {}) },
       });
       await this.recapOpenDraftLines(employeeId, tx);
     });
@@ -284,6 +360,72 @@ export class SecurityDepositsService {
     });
 
     return this.getForEmployee(employeeId);
+  }
+
+  /**
+   * Stops collecting the rest of an unfinished plan (employee left, or the
+   * remaining balance is being written off). The target drops to what was
+   * actually recovered, so payroll stops deducting and a new plan can be
+   * started. Whatever is held is still refunded or forfeited separately.
+   */
+  async closePlan(employeeId: number, dto: ClosePlanDto, user: IJwtStaffPayload) {
+    let uncollected = ZERO;
+    await this.prisma.$transaction(async (tx) => {
+      const plan = await this.requireOpenPlan(employeeId, user, tx);
+      uncollected = Prisma.Decimal.max(ZERO, money(plan.total_amount).minus(plan.recovered_amount));
+      if (uncollected.lte(0)) {
+        throw new BadRequestException('Nothing is left to collect on this plan.');
+      }
+      if (money(plan.recovered_amount).lte(0)) {
+        throw new BadRequestException('Nothing has been recovered yet — use Cancel plan instead.');
+      }
+      const stop = this.stopCollectionFields(plan);
+      const status = this.nextStatus(stop.total_amount, plan.recovered_amount, plan.refunded_amount, plan.forfeited_amount);
+      await tx.employee_security_deposits.update({
+        where: { id: plan.id },
+        data: {
+          ...stop.data,
+          status,
+          notes: appendNote(plan.notes, `${stop.note}${dto.notes?.trim() ? ` ${dto.notes.trim()}` : ''}`),
+        },
+      });
+      await this.recapOpenDraftLines(employeeId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'SECURITY_DEPOSIT_COLLECTION_STOPPED',
+      changed_by: auditActorLabel(user),
+      note: `Stopped collecting security deposit; ${uncollected.toFixed(2)} will not be collected.${dto.notes ? ` ${dto.notes}` : ''}`,
+    });
+
+    return this.getForEmployee(employeeId);
+  }
+
+  /** Explicit choice wins; otherwise an employee who has already left is never charged the rest of the plan. */
+  private async wantsStopCollection(explicit: boolean | undefined, employeeId: number, tx: Tx): Promise<boolean> {
+    if (explicit !== undefined) return explicit;
+    const profile = await tx.employee_profiles.findUnique({ where: { id: employeeId }, select: { employment_status: true } });
+    return profile?.employment_status === 'LEFT' || profile?.employment_status === 'TERMINATED';
+  }
+
+  /** Target drops to the amount already recovered and the remaining queue is cleared. */
+  private stopCollectionFields(plan: employee_security_deposits) {
+    const uncollected = Prisma.Decimal.max(ZERO, money(plan.total_amount).minus(plan.recovered_amount));
+    return {
+      total_amount: money(plan.recovered_amount),
+      note: uncollected.gt(0)
+        ? `Collection stopped on ${dateOnly(new Date())}; ${uncollected.toFixed(2)} of the ${money(plan.total_amount).toFixed(2)} target was not collected.`
+        : '',
+      data: {
+        total_amount: money(plan.recovered_amount),
+        carried_forward_amount: ZERO,
+        installment_schedule: scheduleJson([]),
+        installment_count: 0,
+        installment_amount: ZERO,
+      },
+    };
   }
 
   async cancel(employeeId: number, user: IJwtStaffPayload) {
@@ -370,6 +512,7 @@ export class SecurityDepositsService {
     });
     if (!line || line.payroll_runs.is_test) return;
 
+    await this.lockEmployeePlans(line.employee_id, tx);
     const plan = await this.findCollectingPlan(line.employee_id, tx);
     if (!plan) return;
     if (line.payroll_runs.period_start < plan.start_period_start) return;
@@ -391,18 +534,21 @@ export class SecurityDepositsService {
 
     const recovered = money(plan.recovered_amount).plus(amount);
     const heldAfter = recovered.minus(plan.refunded_amount).minus(plan.forfeited_amount);
-    const carry = recovered.gte(plan.total_amount)
-      ? ZERO
-      : Prisma.Decimal.max(ZERO, due.minus(amount)).toDecimalPlaces(2);
     const status = this.nextStatus(plan.total_amount, recovered, plan.refunded_amount, plan.forfeited_amount);
     const remainingAfter = money(plan.total_amount).minus(recovered);
-    const collectedFullDue = amount.gte(due) || remainingAfter.lte(0);
-    const shifted = shiftScheduleAfterCollection(
-      plan.installment_schedule,
-      money(plan.installment_amount),
-      collectedFullDue,
-      remainingAfter,
-    );
+    // Every finalized cycle consumes its slot. A shortfall (pay could not
+    // cover the due amount) moves into carry, so schedule + carry always
+    // adds up to what is still left — the Edit plan screen opens valid.
+    let nextSchedule = parseInstallmentSchedule(plan.installment_schedule, money(plan.installment_amount))
+      .slice(1)
+      .map((n) => Number(n.toFixed(2)));
+    let carry = remainingAfter.lte(0) ? ZERO : Prisma.Decimal.max(ZERO, due.minus(amount)).toDecimalPlaces(2);
+    if (remainingAfter.lte(0)) {
+      nextSchedule = [];
+    } else if (nextSchedule.length === 0) {
+      nextSchedule = [Number(remainingAfter.toFixed(2))];
+      carry = ZERO;
+    }
 
     try {
       await tx.employee_security_deposit_transactions.create({
@@ -427,11 +573,15 @@ export class SecurityDepositsService {
         recovered_amount: recovered,
         carried_forward_amount: carry,
         status,
-        installment_schedule: scheduleJson(shifted.schedule),
-        installment_count: shifted.installment_count,
-        installment_amount: shifted.installment_amount,
+        installment_schedule: scheduleJson(nextSchedule),
+        installment_count: nextSchedule.length,
+        installment_amount: money(nextSchedule[0] ?? 0),
       },
     });
+
+    // Later cycles' drafts were snapshotted before this one collected (or
+    // fell short); refresh them so they show the real next installment.
+    await this.recapOpenDraftLines(plan.employee_id, tx);
   }
 
   private async recapOpenDraftLines(employeeId: number, tx: Tx): Promise<void> {
@@ -442,6 +592,39 @@ export class SecurityDepositsService {
     for (const line of lines) {
       await this.applySnapshotToLine(line.payroll_run_id, employeeId, tx);
     }
+  }
+
+  /** Row lock so two simultaneous refunds/forfeits/finalizes serialize instead of both reading the same balance. No-op outside a transaction. */
+  private async lockEmployeePlans(employeeId: number, tx: Tx): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM employee_security_deposits WHERE employee_id = ${employeeId} FOR UPDATE`;
+  }
+
+  /** Remaining months as the next payroll will really collect them: carry folded into the first slot, always summing to what is left. */
+  private effectiveSchedule(plan: employee_security_deposits): number[] {
+    const remaining = Prisma.Decimal.max(ZERO, money(plan.total_amount).minus(plan.recovered_amount));
+    if (remaining.lte(0)) return [];
+    const slots = parseInstallmentSchedule(plan.installment_schedule, money(plan.installment_amount));
+    if (slots.length === 0) return [Number(remaining.toFixed(2))];
+    const out = slots.map((n) => money(n));
+    out[0] = out[0].plus(plan.carried_forward_amount);
+    const diff = remaining.minus(out.reduce((a, b) => a.plus(b), ZERO));
+    if (!diff.isZero()) {
+      const last = out[out.length - 1].plus(diff);
+      if (last.lt(0)) return [Number(remaining.toFixed(2))];
+      out[out.length - 1] = last;
+    }
+    return out.map((n) => Number(n.toFixed(2)));
+  }
+
+  private lastDeductedPeriodStart(
+    transactions: { payroll_run_line?: { payroll_runs: { period_start: Date } } | null }[],
+  ): Date | null {
+    let last: Date | null = null;
+    for (const txn of transactions) {
+      const start = txn.payroll_run_line?.payroll_runs.period_start;
+      if (start && (!last || start > last)) last = start;
+    }
+    return last;
   }
 
   private cycleDue(plan: employee_security_deposits): Prisma.Decimal {
@@ -487,6 +670,7 @@ export class SecurityDepositsService {
 
   private async requireOpenPlan(employeeId: number, user: IJwtStaffPayload | undefined, tx: Tx): Promise<employee_security_deposits> {
     await this.assertEmployee(employeeId, user, tx);
+    await this.lockEmployeePlans(employeeId, tx);
     const plan = await tx.employee_security_deposits.findFirst({
       where: { employee_id: employeeId, status: { in: OPEN_STATUSES } },
     });
@@ -515,6 +699,7 @@ export class SecurityDepositsService {
       employee_code: string | null;
       campuses: { campus_name: string } | null;
     };
+    transactions: { payroll_run_line: { payroll_runs: { period_start: Date } } | null }[];
   }) {
     const recovered = Number(plan.recovered_amount);
     const refunded = Number(plan.refunded_amount);
@@ -533,8 +718,12 @@ export class SecurityDepositsService {
       carried_forward_amount: Number(plan.carried_forward_amount),
       installment_amount: Number(plan.installment_amount),
       installment_count: plan.installment_count,
-      installment_schedule: scheduleAsNumbers(plan.installment_schedule, money(plan.installment_amount)),
+      installment_schedule: this.effectiveSchedule(plan),
       start_period_start: dateOnly(plan.start_period_start),
+      next_collection_period_start: dateOnly(
+        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.transactions)),
+      ),
+      next_due_amount: plan.status === SecurityDepositStatus.ACTIVE ? Number(this.cycleDue(plan)) : 0,
       status: plan.status,
     };
   }
@@ -567,8 +756,12 @@ export class SecurityDepositsService {
       total_amount: total,
       installment_count: plan.installment_count,
       installment_amount: Number(plan.installment_amount),
-      installment_schedule: scheduleAsNumbers(plan.installment_schedule, money(plan.installment_amount)),
+      installment_schedule: this.effectiveSchedule(plan),
       start_period_start: dateOnly(plan.start_period_start),
+      next_collection_period_start: dateOnly(
+        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.transactions)),
+      ),
+      next_due_amount: plan.status === SecurityDepositStatus.ACTIVE ? Number(this.cycleDue(plan)) : 0,
       recovered_amount: recovered,
       refunded_amount: refunded,
       forfeited_amount: forfeited,
