@@ -11,6 +11,13 @@ Voucher-issuance code duplication is documented in
 
 ---
 
+## Coral9 tickets
+This repo is Coral9 project `tafs-digital-transformation`. The coral9 MCP server is connected.
+Before any task that changes code: search_tickets, then start_work (existing ticket or a new one).
+When the work is done: finish_work with a summary. Keep ticket status true to reality.
+
+---
+
 ## Post-run checklist
 
 
