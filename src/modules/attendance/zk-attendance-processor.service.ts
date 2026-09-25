@@ -179,6 +179,7 @@ export type NotificationSkipReason =
   | 'duplicate_scan'
   | 'not_live'
   | 'no_direction'
+  | 'repeat_arrival'
   | 'no_family_id'
   | 'no_user_account';
 
@@ -577,11 +578,15 @@ export class ZkAttendanceProcessorService {
     const scanDirection = this.scanDirectionFromSegment(seg);
     await this.upsertStudentDaily(studentCc!, attendanceDate, seg);
 
-    const shouldNotify = (isLive || options?.forceNotify) && scanDirection;
+    // announceLast is false for the 2nd, 3rd … tap before the cut-off: the
+    // child is already in, so only the first of those tells the parent anything.
+    const shouldNotify = (isLive || options?.forceNotify) && scanDirection && seg.announceLast;
     if (!shouldNotify) {
       const skipReason: NotificationSkipReason = !scanDirection
         ? 'no_direction'
-        : 'not_live';
+        : !seg.announceLast
+          ? 'repeat_arrival'
+          : 'not_live';
       this.logger.debug(
         `Notification skipped for student ${studentCc} (scan ${scanRow.id}): ${skipReason}`,
       );
@@ -1485,7 +1490,9 @@ export class ZkAttendanceProcessorService {
     );
     await this.upsertStudentDaily(studentCc, attendanceDate, seg, actor);
 
-    const notified = await this.sendScanNotification(studentCc, scanRow, direction);
+    // Same rule as device ingest: a repeat check-in before the cut-off is
+    // recorded but not re-announced.
+    const notified = seg.announceLast && (await this.sendScanNotification(studentCc, scanRow, direction));
     if (notified) {
       await this.prisma.zk_attendance_scans.update({
         where: { id: scanRow.id },
