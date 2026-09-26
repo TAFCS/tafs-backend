@@ -33,7 +33,7 @@ export class SalaryIncrementsService {
   async getSettings() { return this.settings(); }
   async updateSettings(dto: UpdateSalaryIncrementSettingsDto, user: IJwtStaffPayload) { return this.prisma.salary_increment_settings.upsert({ where: { id: 1 }, create: { id: 1, ...dto, updated_by: user.username ?? user.sub }, update: { ...dto, updated_by: user.username ?? user.sub } }); }
   private status(employee: any, defaultCycle: number, windowDays: number) { const cycle = employee.increment_cycle_months ?? defaultCycle; const anchor = employee.last_increment_at ?? employee.join_date; if (!anchor) return { cycle_months: cycle, anchor_date: null, next_due_date: null, months_remaining: null, days_remaining: null, status: 'MISSING_ANCHOR' }; const today = dateOnly(new Date()); const next = addMonthsSafe(dateOnly(anchor), cycle); const left = monthsRemaining(today, next); const days = daysBetween(today, next); return { cycle_months: cycle, anchor_date: isoDate(dateOnly(anchor)), next_due_date: isoDate(next), months_remaining: left, days_remaining: days, status: left <= 0 ? 'DUE' : days <= windowDays ? 'UPCOMING' : 'OK' }; }
-  async due(query: DueSalaryIncrementsQueryDto, user: IJwtStaffPayload) { const setting = await this.settings(); const filters: Prisma.employee_profilesWhereInput = { employment_status: 'ACTIVE', ...(user.campusId != null ? { campus_id: user.campusId } : query.campus_ids?.length ? { campus_id: { in: query.campus_ids } } : {}), ...(query.department_ids?.length ? { department_id: { in: query.department_ids } } : {}), ...(query.segment_ids?.length ? { segment_id: { in: query.segment_ids } } : {}), ...(query.staff_category_ids?.length ? { staff_category_id: { in: query.staff_category_ids } } : {}), ...(query.employment_types?.length ? { employment_type: { in: query.employment_types } } : {}), ...(query.search ? { OR: [{ full_name: { contains: query.search, mode: 'insensitive' } }, { employee_code: { contains: query.search, mode: 'insensitive' } }] } : {}) };
+  async due(query: DueSalaryIncrementsQueryDto, user: IJwtStaffPayload) { const setting = await this.settings(); const filters: Prisma.employee_profilesWhereInput = { employment_status: 'ACTIVE', ...((() => { const ids = this.scope.campusIdsFor(user, query.campus_ids); return ids ? { campus_id: { in: ids } } : {}; })()), ...(query.department_ids?.length ? { department_id: { in: query.department_ids } } : {}), ...(query.segment_ids?.length ? { segment_id: { in: query.segment_ids } } : {}), ...(query.staff_category_ids?.length ? { staff_category_id: { in: query.staff_category_ids } } : {}), ...(query.employment_types?.length ? { employment_type: { in: query.employment_types } } : {}), ...(query.search ? { OR: [{ full_name: { contains: query.search, mode: 'insensitive' } }, { employee_code: { contains: query.search, mode: 'insensitive' } }] } : {}) };
     // Universal scope ANDed on top, never merged into `filters` — it's the
     // floor a scoped caller cannot opt out of by simply omitting a query
     // filter (e.g. leaving department_ids empty would otherwise show every
@@ -46,11 +46,7 @@ export class SalaryIncrementsService {
   async history(id: number, user?: IJwtStaffPayload) { await this.assertEmployee(id, user); return this.prisma.salary_increments.findMany({ where: { employee_id: id }, orderBy: [{ effective_from: 'desc' }, { id: 'desc' }] }); }
   /** Organisation-level history and headline figures for the increment workspace. */
   async analytics(user: IJwtStaffPayload) {
-    // Legacy single-campus check kept and ANDed with the universal scope
-    // fragment (via a real AND on the nested relation, not a shallow merge —
-    // both may key on campus_id).
     const employeeProfileClauses: Prisma.employee_profilesWhereInput[] = [];
-    if (user.campusId != null) employeeProfileClauses.push({ campus_id: user.campusId });
     const universalScope = this.scope.whereForEmployees(user);
     if (Object.keys(universalScope).length > 0) employeeProfileClauses.push(universalScope);
     const where: Prisma.salary_incrementsWhereInput = employeeProfileClauses.length > 0

@@ -14,6 +14,9 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SectionsService } from './sections.service';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { ScopeService } from '../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
@@ -28,12 +31,20 @@ import { SECTIONS_MESSAGES } from '../../constants/api-response/sections.constan
 @Controller('sections')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class SectionsController {
-  constructor(private readonly sectionsService: SectionsService) {}
+  constructor(
+    private readonly sectionsService: SectionsService,
+    private readonly scope: ScopeService,
+  ) {}
 
+  // Reference data for pickers: any signed-in staff member may list it,
+  // trimmed to their scope. Gating it on a capability broke every page for
+  // users granted tiles without that capability.
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Section'))
-  async findAll() {
-    const sections = await this.sectionsService.findAll();
+  async findAll(@CurrentUser() user: IJwtStaffPayload) {
+    const { sections: scoped } = this.scope.scopeOf(user);
+    const sections = await this.sectionsService.findAll(
+      scoped.length > 0 ? { id: { in: scoped } } : undefined,
+    );
     return createApiResponse(
       sections,
       HttpStatus.OK,

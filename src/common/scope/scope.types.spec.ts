@@ -1,5 +1,7 @@
+import { StaffRole } from '@prisma/client';
 import {
   EMPTY_SCOPE,
+  effectiveScopeOf,
   isFullyUnrestricted,
   scopeAllows,
   scopeFromEntries,
@@ -86,5 +88,26 @@ describe('scope semantics', () => {
         section_id: { in: [9] },
       });
     });
+  });
+});
+
+describe('effectiveScopeOf', () => {
+  const empty = { campuses: [], segments: [], classes: [], sections: [], departments: [], staffCategories: [] };
+
+  it('uses the scope claim, never the home campus', () => {
+    expect(effectiveScopeOf({ role: StaffRole.PRINCIPAL, campusId: 1, scope: { ...empty, campuses: [2, 3] } }).campuses).toEqual([2, 3]);
+    expect(effectiveScopeOf({ role: StaffRole.PRINCIPAL, campusId: 1, allowedClassIds: [4], scope: empty })).toEqual(empty);
+  });
+
+  it('reads a pre-scope session (no scope claim) from its legacy claims, so it is not widened', () => {
+    expect(effectiveScopeOf({ role: StaffRole.PRINCIPAL, campusId: 1, allowedClassIds: [4, 5] })).toEqual({
+      ...empty,
+      campuses: [1],
+      classes: [4, 5],
+    });
+  });
+
+  it('never restricts SUPER_ADMIN', () => {
+    expect(effectiveScopeOf({ role: StaffRole.SUPER_ADMIN, campusId: 1, scope: { ...empty, campuses: [2] } })).toEqual(empty);
   });
 });

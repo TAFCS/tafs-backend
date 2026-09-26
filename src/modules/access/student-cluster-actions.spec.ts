@@ -686,13 +686,6 @@ describe('Registration', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('refuses a legacy campus-bound caller naming another campus', async () => {
-    const { s, prisma } = svc({});
-    const legacy = { ...scopedUser, campusId: 2 };
-    await expect(s.registerAdmission({ admission: { campus_id: 3 } } as any, 'u', legacy)).rejects.toBeInstanceOf(ForbiddenException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
   it('checks the class and section it registers into, and the quick admission it completes', async () => {
     const { s, scope } = svc({ student: stu, canSee: false });
     await expect(

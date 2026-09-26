@@ -1,6 +1,9 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ClassesService } from './classes.service';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { ScopeService } from '../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
@@ -13,12 +16,21 @@ import { CreateClassDto } from './dto/create-class.dto';
 @Controller('classes')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class ClassesController {
-  constructor(private readonly classesService: ClassesService) {}
+  constructor(
+    private readonly classesService: ClassesService,
+    private readonly scope: ScopeService,
+  ) {}
 
+  // Reference data for pickers: any signed-in staff member may list it,
+  // trimmed to their scope. Gating it on a capability broke every page for
+  // users granted tiles without that capability.
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Class'))
-  async findAll() {
-    const classes = await this.classesService.findAll();
+  async findAll(@CurrentUser() user: IJwtStaffPayload) {
+    const scope = this.scope.scopeOf(user);
+    const classes = await this.classesService.findAll({
+      ...(scope.classes.length > 0 ? { id: { in: scope.classes } } : {}),
+      ...(scope.segments.length > 0 ? { segment_id: { in: scope.segments } } : {}),
+    });
     return {
       success: true,
       message: 'Classes list retrieved successfully',

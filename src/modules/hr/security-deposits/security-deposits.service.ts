@@ -125,14 +125,7 @@ export class SecurityDepositsService {
     const where: Prisma.employee_security_depositsWhereInput = {
       status: { in: statuses },
     };
-    // Legacy single-campus check stays — ANDed with the universal scope
-    // fragment via a real AND (not a shallow merge, which would let one
-    // silently overwrite the other on campus_id instead of intersecting).
-    // See the scope/tile-permission handoff §5b.
     const employeeProfileClauses: Prisma.employee_profilesWhereInput[] = [];
-    if (user.campusId != null) {
-      employeeProfileClauses.push({ campus_id: user.campusId });
-    }
     const universal = this.scope.whereForEmployees(user);
     if (Object.keys(universal).length > 0) {
       employeeProfileClauses.push(universal);

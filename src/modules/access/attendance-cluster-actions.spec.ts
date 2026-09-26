@@ -346,7 +346,8 @@ describe('Scope on the policy tiles', () => {
     }) as any;
   const scoped = restricted([3]);
   const admin = { ...restricted([]), role: 'SUPER_ADMIN' } as any;
-  const legacy = { ...restricted([]), campusId: 3 } as any;
+  // A session minted before scope shipped: no scope claim, only campusId.
+  const legacy = { ...restricted([]), scope: undefined, campusId: 3 } as any;
 
   describe('Attendance Settings: policy sets and rules', () => {
     function svc(setCampus: number | null) {
@@ -905,7 +906,8 @@ describe('ZK Device Logs', () => {
       ({ sub: 'u', role, campusId: null, allowedClassIds: [], userType: 'STAFF', permissions: [], actions: [Z + '#*'],
          scope: { campuses: [], segments: [], classes: [], sections: [], departments: [], staffCategories: [] }, ...extra }) as any;
     const scoped = user('PRINCIPAL', { scope: { campuses: [3], segments: [], classes: [], sections: [], departments: [], staffCategories: [] } });
-    const legacy = user('PRINCIPAL', { campusId: 3 });
+    // A session minted before scope shipped: no scope claim, only campusId.
+    const legacy = user('PRINCIPAL', { scope: undefined, campusId: 3 });
 
     it('the device log', async () => {
       const zk: any = { getLogs: jest.fn().mockResolvedValue({ logs: [], nextCursor: null }), getDistinctDevices: jest.fn().mockResolvedValue([]) };

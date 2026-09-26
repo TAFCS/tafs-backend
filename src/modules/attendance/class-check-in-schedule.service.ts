@@ -134,16 +134,12 @@ export class ClassCheckInScheduleService {
   ) {}
 
   /**
-   * The caller must be able to act on this campus (and class): universal scope
-   * AND the legacy campus field older tokens still carry. `user` omitted means
-   * an internal caller.
+   * The caller must be able to act on this campus (and class), per their
+   * scope. `user` omitted means an internal caller.
    */
   private assertCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined, classId?: number | null) {
     if (!user) return;
     this.scope.assertCampus(user, campusId ?? null);
-    if (user.campusId != null && campusId != null && campusId !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     if (classId != null) this.scope.assertClass(user, classId);
   }
 

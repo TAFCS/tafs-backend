@@ -4,7 +4,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
 import {
-  EMPTY_SCOPE,
+  effectiveScopeOf,
+  isFullyUnrestricted,
   SCOPE_DIMENSION_LABEL,
   SCOPE_FIELD_BY_DIMENSION,
   scopeAllows,
@@ -78,14 +79,40 @@ export class ScopeService {
     return this.resolve(userId);
   }
 
+  /** The scope the session is held to — see effectiveScopeOf. */
+  scopeOf(user: Pick<IJwtStaffPayload, 'role'> & Partial<Pick<IJwtStaffPayload, 'campusId' | 'allowedClassIds'>> & { scope?: UserScope }): UserScope {
+    return effectiveScopeOf(user);
+  }
+
   /**
-   * The scope carried on the session. Absent on tokens issued before scope
-   * shipped, which resolves to unrestricted — the behaviour those sessions
-   * already had.
+   * Campus ids a list/aggregate query should cover. An explicit request is
+   * asserted id by id and returned as-is; otherwise the caller's campus scope,
+   * or `undefined` for "every campus" when campus is unrestricted.
    */
-  scopeOf(user: Pick<IJwtStaffPayload, 'role'> & { scope?: UserScope }): UserScope {
-    if (user.role === StaffRole.SUPER_ADMIN) return EMPTY_SCOPE;
-    return user.scope ?? EMPTY_SCOPE;
+  campusIdsFor(
+    user: Parameters<ScopeService['assertDimension']>[0],
+    requested?: number | number[] | null,
+  ): number[] | undefined {
+    const ids = requested == null ? [] : Array.isArray(requested) ? requested : [requested];
+    if (ids.length > 0) {
+      for (const id of ids) this.assertCampus(user, id);
+      return ids;
+    }
+    const campuses = this.scopeOf(user).campuses;
+    return campuses.length > 0 ? [...campuses] : undefined;
+  }
+
+  /** The campus to assume when a request names none: the caller's only scoped
+   * campus, else undefined (the caller must pick). Never the home campus. */
+  defaultCampusId(user: Parameters<ScopeService['assertDimension']>[0]): number | undefined {
+    const campuses = this.scopeOf(user).campuses;
+    return campuses.length === 1 ? campuses[0] : undefined;
+  }
+
+  /** Class ids the caller is restricted to, or `undefined` when unrestricted. */
+  classIdsFor(user: Parameters<ScopeService['assertDimension']>[0]): number[] | undefined {
+    const classes = this.scopeOf(user).classes;
+    return classes.length > 0 ? [...classes] : undefined;
   }
 
   /** SUPER_ADMIN is never scoped. */
@@ -96,7 +123,7 @@ export class ScopeService {
   // ─── Assertions ────────────────────────────────────────────────────────────
 
   private assertDimension(
-    user: Pick<IJwtStaffPayload, 'role'> & { scope?: UserScope },
+    user: Pick<IJwtStaffPayload, 'role'> & Partial<Pick<IJwtStaffPayload, 'campusId' | 'allowedClassIds'>> & { scope?: UserScope },
     dimension: ScopeDimension,
     id: number | null | undefined,
   ) {
@@ -199,19 +226,9 @@ export class ScopeService {
    * any dimension and no legacy campus / class field on an older token. For
    * routes that reach every campus at once and cannot be cut down per row.
    */
-  isUnrestricted(user: Parameters<ScopeService['assertDimension']>[0] & { campusId?: number | null; allowedClassIds?: number[] }): boolean {
+  isUnrestricted(user: Parameters<ScopeService['assertDimension']>[0]): boolean {
     if (this.isExempt(user)) return true;
-    const s = this.scopeOf(user);
-    return (
-      s.campuses.length === 0 &&
-      s.segments.length === 0 &&
-      s.classes.length === 0 &&
-      s.sections.length === 0 &&
-      s.departments.length === 0 &&
-      s.staffCategories.length === 0 &&
-      user.campusId == null &&
-      (user.allowedClassIds?.length ?? 0) === 0
-    );
+    return isFullyUnrestricted(this.scopeOf(user));
   }
 
   /** Non-throwing counterpart, for turning a 403 into a 404 on lookups. */

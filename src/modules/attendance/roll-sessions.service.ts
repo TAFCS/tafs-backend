@@ -51,12 +51,7 @@ export class RollSessionsService {
     return d;
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -176,7 +171,7 @@ export class RollSessionsService {
 
   async findAll(query: ListRollSessionsQueryDto, user: IJwtStaffPayload) {
     const sessionDate = this.parseDate(query.date);
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    const campusId = query.campus_id ?? this.scope.defaultCampusId(user);
     if (!campusId) {
       throw new BadRequestException('campus_id is required');
     }
@@ -186,28 +181,14 @@ export class RollSessionsService {
       this.scope.assertClass(user, query.class_id);
     }
 
-    const allowed = user.allowedClassIds ?? [];
-    // Universal class scope ANDed with the legacy allowedClassIds list: intersect
-    // when both restrict, defer to whichever one actually restricts otherwise.
-    // See the scope-sweep handoff before removing `allowed`.
-    const universalClasses = this.scope.scopeOf(user).classes;
-    const effectiveAllowed =
-      universalClasses.length > 0
-        ? allowed.length > 0
-          ? allowed.filter((id) => universalClasses.includes(id))
-          : universalClasses
-        : allowed;
-    // Whether EITHER axis restricts, not whether the intersection is
-    // non-empty — an empty intersection (legacy and universal scope disagree
-    // entirely) must still deny, not silently fall through to unrestricted.
-    const classIsRestricted = allowed.length > 0 || universalClasses.length > 0;
+    const allowedClasses = this.scope.classIdsFor(user);
     const where: Prisma.attendance_roll_sessionsWhereInput = {
       session_date: sessionDate,
       campus_id: campusId,
       ...(query.class_id
         ? { class_id: query.class_id }
-        : classIsRestricted
-          ? { class_id: { in: effectiveAllowed } }
+        : allowedClasses
+          ? { class_id: { in: allowedClasses } }
           : {}),
       ...(query.section_id ? { section_id: query.section_id } : {}),
       ...(query.period ? { period: query.period } : {}),

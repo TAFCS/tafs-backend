@@ -146,23 +146,12 @@ export class AuditLogsService {
   ) {}
 
   /**
-   * Whether the caller's data scope narrows anything at all: a universal scope
-   * on any dimension, or the legacy campus / class fields older tokens carry.
+   * Whether the caller's data scope narrows anything at all, on any dimension.
    * SUPER_ADMIN and internal callers are never restricted.
    */
   private isScopeRestricted(user?: IJwtStaffPayload): boolean {
     if (!user || this.scope.isExempt(user)) return false;
-    const s = this.scope.scopeOf(user);
-    return (
-      s.campuses.length > 0 ||
-      s.segments.length > 0 ||
-      s.classes.length > 0 ||
-      s.sections.length > 0 ||
-      s.departments.length > 0 ||
-      s.staffCategories.length > 0 ||
-      user.campusId != null ||
-      (user.allowedClassIds?.length ?? 0) > 0
-    );
+    return !this.scope.isUnrestricted(user);
   }
 
   /**

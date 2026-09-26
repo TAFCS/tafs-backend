@@ -40,14 +40,7 @@ export class AttendanceObjectionsService {
     return d;
   }
 
-  // Legacy single-campus check, kept standing per the scope-sweep handoff:
-  // deleting it before 90-day-old tokens rotate would silently widen access
-  // for anyone whose session predates universal scope. this.scope.assertCampus
-  // is ANDed alongside it — both must agree.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -94,12 +87,7 @@ export class AttendanceObjectionsService {
   }
 
   async listForReview(query: ListAttendanceObjectionsQueryDto, user: IJwtStaffPayload) {
-    const campusIds =
-      query.campus_id?.length
-        ? query.campus_id
-        : user.campusId != null
-          ? [user.campusId]
-          : undefined;
+    const campusIds = query.campus_id?.length ? query.campus_id : undefined;
     if (campusIds?.length) {
       for (const campusId of campusIds) {
         this.assertCampusAccess(user, campusId);
@@ -343,22 +331,10 @@ export class AttendanceObjectionsService {
   }
 
   async countPending(user: IJwtStaffPayload): Promise<{ count: number }> {
-    const campusIds = user.campusId != null ? [user.campusId] : undefined;
-    const { campus_id: universalCampusFilter, ...restUniversalScope } =
-      this.scope.whereForEmployees(user);
-    const universalCampusIds = universalCampusFilter?.in;
-    const effectiveCampusIds = universalCampusIds
-      ? campusIds?.length
-        ? campusIds.filter((id) => universalCampusIds.includes(id))
-        : universalCampusIds
-      : campusIds;
     const count = await this.prisma.attendance_objections.count({
       where: {
         status: AttendanceObjectionStatus.PENDING,
-        employee: {
-          ...(effectiveCampusIds !== undefined ? { campus_id: { in: effectiveCampusIds } } : {}),
-          ...restUniversalScope,
-        },
+        employee: this.scope.whereForEmployees(user),
       },
     });
     return { count };

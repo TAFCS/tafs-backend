@@ -78,12 +78,7 @@ export class StudentAttendanceService {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), h, m, 0));
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -97,31 +92,15 @@ export class StudentAttendanceService {
       assertClassInScope(user, classId);
       this.scope.assertClass(user, classId);
     }
-    const allowed = user.allowedClassIds ?? [];
-    // Universal scope ANDed with the legacy campus/allowedClassIds filters
-    // below. class_id is intersected rather than spread, so it never silently
-    // overwrites the legacy allowedClassIds list. See the scope-sweep handoff
-    // before removing `allowed`.
     const universalScope = this.scope.scopeOf(user);
-    const effectiveAllowed =
-      universalScope.classes.length > 0
-        ? allowed.length > 0
-          ? allowed.filter((id) => universalScope.classes.includes(id))
-          : universalScope.classes
-        : allowed;
-
-    // Whether EITHER axis restricts, not whether the intersection is
-    // non-empty — an empty intersection (legacy and universal scope disagree
-    // entirely) must still deny, not silently fall through to unrestricted.
-    const classIsRestricted = allowed.length > 0 || universalScope.classes.length > 0;
     const where: Prisma.studentsWhereInput = {
       campus_id: campusId,
       status: 'ENROLLED',
       deleted_at: null,
       ...(classId
         ? { class_id: classId }
-        : classIsRestricted
-          ? { class_id: { in: effectiveAllowed } }
+        : universalScope.classes.length > 0
+          ? { class_id: { in: universalScope.classes } }
           : {}),
       ...(sectionId
         ? { section_id: sectionId }
@@ -225,7 +204,7 @@ export class StudentAttendanceService {
 
   async getSummary(query: GetStudentAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    const campusId = query.campus_id ?? this.scope.defaultCampusId(user);
     if (!campusId) throw new BadRequestException('campus_id is required');
     this.assertCampusAccess(user, campusId);
 
@@ -255,7 +234,7 @@ export class StudentAttendanceService {
 
   async getDashboard(query: GetStudentAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    const campusId = query.campus_id ?? this.scope.defaultCampusId(user);
     if (!campusId) throw new BadRequestException('campus_id is required');
     this.assertCampusAccess(user, campusId);
 
@@ -579,19 +558,14 @@ export class StudentAttendanceService {
     return { periodStart, periodEnd };
   }
 
-  // campus_id omitted -> "every campus the caller can see": a campus-scoped
-  // user (has user.campusId) is pinned to their own campus regardless; only
-  // a multi-campus user (SUPER_ADMIN, user.campusId null) sees every campus
-  // combined, same convention as the HR payroll matrix.
+  // campus_id omitted -> every campus the caller's scope covers, or every
+  // active campus when campus is unrestricted. Same convention as the HR
+  // payroll matrix.
   private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusId?: number): Promise<number[]> {
     if (requestedCampusId != null) {
       this.assertCampusAccess(user, requestedCampusId);
       return [requestedCampusId];
     }
-    if (user.campusId != null) return [user.campusId];
-    // A user unrestricted by the legacy single campusId may still carry a
-    // universal multi-campus scope — an export is exactly the hole the
-    // scope-sweep handoff warns gets forgotten, so it's checked here too.
     const universalCampuses = this.scope.scopeOf(user).campuses;
     if (universalCampuses.length > 0) return universalCampuses;
     const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });

@@ -408,25 +408,11 @@ export class LeaveRequestsService {
     queryCampusIds: number[] | undefined,
     user: IJwtStaffPayload,
   ): number[] | undefined {
-    if (user.role === StaffRole.SUPER_ADMIN) {
-      return queryCampusIds;
-    }
-    if (user.campusId) {
-      if (queryCampusIds?.some((id) => id !== user.campusId)) {
-        throw new ForbiddenException('You do not have access to this campus');
-      }
-      return [user.campusId];
-    }
-    return queryCampusIds;
+    return this.scope.campusIdsFor(user, queryCampusIds);
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
-    if (user.campusId && employeeCampusId && user.campusId !== employeeCampusId) {
-      throw new ForbiddenException('You do not have access to this leave request');
-    }
     this.scope.assertCampus(user, employeeCampusId);
   }
 

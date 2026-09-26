@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -11,8 +12,9 @@ export class SectionsService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async findAll() {
+  async findAll(where?: Prisma.sectionsWhereInput) {
     return this.prisma.sections.findMany({
+      where,
       orderBy: { description: 'asc' },
     });
   }

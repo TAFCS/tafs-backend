@@ -150,8 +150,10 @@ export class CampusesService {
         };
     }
 
-    async findAll() {
+    async findAll(user?: IJwtStaffPayload) {
+        const scoped = user ? this.scope.campusIdsFor(user) : undefined;
         const campuses = await this.prisma.campuses.findMany({
+            where: scoped ? { id: { in: scoped } } : undefined,
             orderBy: { campus_name: 'asc' },
             include: this.campusIncludes,
         });

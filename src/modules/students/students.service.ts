@@ -479,9 +479,8 @@ export class StudentsService {
       (query.is_abnormal === '1' || query.is_abnormal === 'true' ? 'abnormal' : null);
 
     if (class_id?.length || section_id?.length || house_id?.length || auditType) return null;
-    if ((user?.allowedClassIds?.length ?? 0) > 0) return null;
-    // A user restricted only via universal scope (not the legacy field) must
-    // bail the same way — this shortcut has no class filter of its own.
+    // This shortcut has no class filter of its own, so a class-scoped caller
+    // bails rather than seeing unconfirmed rows from every class.
     if (user && this.scope.scopeOf(user).classes.length > 0) return null;
     if (query.had_quick_admission === 'false') return null;
 
@@ -496,10 +495,9 @@ export class StudentsService {
       ];
     }
 
-    if (user?.campusId != null) {
-      where.campus_id = user.campusId;
-    } else if (campus_id?.length) {
-      where.campus_id = campus_id.length === 1 ? campus_id[0] : { in: campus_id };
+    const campusIds = user ? this.scope.campusIdsFor(user, campus_id) : campus_id?.length ? campus_id : undefined;
+    if (campusIds) {
+      where.campus_id = campusIds.length === 1 ? campusIds[0] : { in: campusIds };
     }
 
     if (has_photo === 'true') {
@@ -1869,9 +1867,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user && user.campusId != null && student.campus_id !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this student\'s campus');
-    }
+    if (user) this.scope.assertCampus(user, student.campus_id);
 
     if (!isDepartureStatus(student.status)) {
       throw new BadRequestException(
@@ -2089,9 +2085,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user && user.campusId != null && student.campus_id !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this student\'s campus');
-    }
+    if (user) this.scope.assertCampus(user, student.campus_id);
 
     if ((student.status as any) === newStatus) {
       throw new BadRequestException(`Student is already in ${newStatus} status`);
@@ -3806,8 +3800,8 @@ export class StudentsService {
     const horizon = new Date(today);
     horizon.setUTCDate(horizon.getUTCDate() + days);
 
-    const campusFilter =
-      user?.campusId != null ? { campus_id: user.campusId } : {};
+    const scopedCampusIds = user ? this.scope.campusIdsFor(user) : undefined;
+    const campusFilter = scopedCampusIds ? { campus_id: { in: scopedCampusIds } } : {};
 
     const students = await this.prisma.students.findMany({
       where: {

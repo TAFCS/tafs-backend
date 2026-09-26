@@ -1,4 +1,4 @@
-import { ScopeDimension } from '@prisma/client';
+import { ScopeDimension, StaffRole } from '@prisma/client';
 
 /**
  * A user's universal data scope — "which records may this person touch".
@@ -66,6 +66,33 @@ export function scopeFromEntries(
     scope[SCOPE_FIELD_BY_DIMENSION[entry.dimension]].push(entry.ref_id);
   }
   return scope;
+}
+
+/**
+ * The scope a session is held to — the ONLY source of "which records may this
+ * person touch" on the dashboard. `users.campus_id` / `employee_profiles.
+ * campus_id` say where someone works (payroll, the staff app), never what they
+ * may access, so no access check should read `user.campusId` directly.
+ *
+ * The single fallback: a token issued before scope shipped carries no `scope`
+ * claim, only the legacy `campusId` / `allowedClassIds` it was minted with.
+ * Those claims ARE that session's scope, so they are read as one rather than
+ * widening an old session to everything. Tokens refresh on every webapp load,
+ * so this path dies out on its own.
+ */
+export function effectiveScopeOf(user: {
+  role: StaffRole;
+  scope?: UserScope;
+  campusId?: number | null;
+  allowedClassIds?: number[] | null;
+}): UserScope {
+  if (user.role === StaffRole.SUPER_ADMIN) return EMPTY_SCOPE;
+  if (user.scope) return user.scope;
+  return {
+    ...EMPTY_SCOPE,
+    campuses: user.campusId != null ? [user.campusId] : [],
+    classes: [...(user.allowedClassIds ?? [])],
+  };
 }
 
 /** True when the dimension places no restriction on this user. */

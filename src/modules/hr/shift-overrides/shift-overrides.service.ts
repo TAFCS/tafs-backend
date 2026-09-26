@@ -199,19 +199,7 @@ export class ShiftOverridesService {
       }
       where.employee_id = query.employee_id;
     } else {
-      // campus_id is pulled out and intersected, not spread, so it never
-      // silently overwrites (or gets overwritten by) the legacy campusId
-      // filter below. See the scope-sweep handoff — this branch previously
-      // applied no filter at all for a user unrestricted by the legacy
-      // single campusId but still carrying a universal multi-campus scope.
-      const { campus_id: universalCampusFilter, ...restUniversalScope } =
-        this.scope.whereForEmployees(user);
-      const employeeFilter: Prisma.employee_profilesWhereInput = { ...restUniversalScope };
-      if (user.role !== StaffRole.SUPER_ADMIN && user.campusId) {
-        employeeFilter.campus_id = user.campusId;
-      } else if (universalCampusFilter) {
-        employeeFilter.campus_id = universalCampusFilter;
-      }
+      const employeeFilter: Prisma.employee_profilesWhereInput = this.scope.whereForEmployees(user);
       if (Object.keys(employeeFilter).length > 0) where.employee_profiles = employeeFilter;
     }
 
@@ -288,15 +276,10 @@ export class ShiftOverridesService {
     throw new ForbiddenException('Only super admins and campus admins can manage shift overrides');
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, employeeCampusId: number | null) {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (employeeCampusId == null) {
       throw new ForbiddenException('You do not have access to this employee');
-    }
-    if (user.campusId && user.campusId !== employeeCampusId) {
-      throw new ForbiddenException('You do not have access to this campus');
     }
     this.scope.assertCampus(user, employeeCampusId);
   }

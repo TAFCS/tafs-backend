@@ -65,9 +65,6 @@ export class IdentityService {
     if (user) {
       const a = dto.admission;
       this.scope.assertCampus(user, a?.campus_id ?? null);
-      if (user.campusId != null && a?.campus_id != null && a.campus_id !== user.campusId) {
-        throw new ForbiddenException('You do not have access to this campus');
-      }
       if (a?.class_id) this.scope.assertClass(user, a.class_id);
       if (a?.section_id) this.scope.assertSection(user, a.section_id);
       if (dto.existing_cc) await this.assertCcVisible(dto.existing_cc, user);

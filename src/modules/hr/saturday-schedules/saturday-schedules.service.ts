@@ -362,16 +362,7 @@ export class SaturdaySchedulesService {
     const monthStart = new Date(Date.UTC(year, month - 1, 1));
     const monthEnd = new Date(Date.UTC(year, month, 0));
 
-    const campusIds = query.campusId?.length
-      ? query.campusId
-      : user.role === StaffRole.CAMPUS_ADMIN && user.campusId != null
-        ? [user.campusId]
-        : undefined;
-    if (user.role === StaffRole.CAMPUS_ADMIN && campusIds?.length) {
-      for (const campusId of campusIds) {
-        this.assertCampusAccess(user, campusId);
-      }
-    }
+    const campusIds = this.scope.campusIdsFor(user, query.campusId);
 
     // campus_id is pulled out and intersected, not spread, so it never
     // silently overwrites (or gets overwritten by) the legacy campusIds
@@ -473,8 +464,6 @@ export class SaturdaySchedulesService {
     throw new ForbiddenException('Only super admins and campus admins can manage Saturday schedules');
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(
     user: IJwtStaffPayload,
     employeeCampusId: number | null,
@@ -482,9 +471,6 @@ export class SaturdaySchedulesService {
     if (user.role === StaffRole.SUPER_ADMIN) return;
     if (employeeCampusId == null) {
       throw new ForbiddenException('You do not have access to this employee');
-    }
-    if (user.campusId && user.campusId !== employeeCampusId) {
-      throw new ForbiddenException('You do not have access to this campus');
     }
     this.scope.assertCampus(user, employeeCampusId);
   }

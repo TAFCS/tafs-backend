@@ -53,14 +53,10 @@ export class CalendarController {
   ) {}
 
   // Scope. Calendar days belong to a campus, so every route is limited to the
-  // caller's campuses (universal scope AND the legacy campus field older tokens
-  // carry). SUPER_ADMIN, who holds `manage` by default, is exempt. Routes that
+  // caller's campus scope. SUPER_ADMIN, who holds `manage` by default, is exempt. Routes that
   // reach every campus at once need an unrestricted caller.
   private assertCampus(user: IJwtStaffPayload, campusId: number | null | undefined, classId?: number | null, sectionId?: number | null) {
     this.scope.assertCampus(user, campusId ?? null);
-    if (user.campusId != null && campusId != null && campusId !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     if (classId != null) this.scope.assertClass(user, classId);
     if (sectionId != null) this.scope.assertSection(user, sectionId);
   }
@@ -76,7 +72,7 @@ export class CalendarController {
 
   private assertAllCampuses(user: IJwtStaffPayload) {
     const restricted =
-      !this.scope.isExempt(user) && (this.scope.scopeOf(user).campuses.length > 0 || user.campusId != null);
+      !this.scope.isExempt(user) && this.scope.scopeOf(user).campuses.length > 0;
     if (restricted) {
       throw new ForbiddenException('Only a caller with access to every campus can do this');
     }

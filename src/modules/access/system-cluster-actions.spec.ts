@@ -169,7 +169,8 @@ describe('Activity Logs: delegation and scope', () => {
     it('adds a student-scope clause for a campus-scoped caller, and for a legacy campus-bound one', async () => {
       for (const u of [
         user('CAMPUS_ADMIN', { scope: { campuses: [3], segments: [], classes: [], sections: [], departments: [], staffCategories: [] } }),
-        user('CAMPUS_ADMIN', { campusId: 3 }),
+        // pre-scope session: no scope claim, only campusId
+        user('CAMPUS_ADMIN', { scope: undefined, campusId: 3 }),
       ]) {
         const { svc, prisma } = mk();
         await svc.findAll({} as any, u);
@@ -185,7 +186,7 @@ describe('Activity Logs: delegation and scope', () => {
     });
     it('applies the scope to one student\'s timeline too', async () => {
       const { svc, prisma } = mk();
-      await svc.findAll({ student_id: '5' } as any, user('CAMPUS_ADMIN', { campusId: 3 }));
+      await svc.findAll({ student_id: '5' } as any, user('CAMPUS_ADMIN', { scope: undefined, campusId: 3 }));
       expect(whereOf(prisma)).toContain('"students"');
     });
   });

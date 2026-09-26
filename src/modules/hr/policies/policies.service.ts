@@ -46,16 +46,13 @@ export class PoliciesService {
   ) {}
 
   /**
-   * The caller must be able to act on this campus: universal scope AND the
-   * legacy campus field older tokens still carry. `user` omitted means an
+   * The caller must be able to act on this campus (their campus scope).
+   * `user` omitted means an
    * internal caller.
    */
   private assertCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined) {
     if (!user) return;
     this.scope.assertCampus(user, campusId ?? null);
-    if (user.campusId != null && campusId != null && campusId !== user.campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
   }
 
   private canSeeCampus(user: IJwtStaffPayload | undefined, campusId: number | null | undefined) {

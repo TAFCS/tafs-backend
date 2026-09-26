@@ -169,12 +169,7 @@ export class ClassSessionReschedulesService {
     return updated;
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -733,7 +728,8 @@ export class ClassSessionReschedulesService {
   }
 
   async findAll(query: ListClassReschedulesQueryDto, user: IJwtStaffPayload) {
-    const campusId = query.campus_id ?? user.campusId ?? undefined;
+    const campusId = query.campus_id;
+    if (campusId) this.assertCampusAccess(user, campusId);
     const where: Record<string, unknown> = {};
 
     if (query.teaching_group_id) {
@@ -748,8 +744,7 @@ export class ClassSessionReschedulesService {
         ...(query.to ? { lte: this.parseDate(query.to) } : {}),
       };
     }
-    // Universal scope (campus + class) merged alongside the legacy single-value
-    // campusId filter above — AND'd, never replacing it. See the scope-sweep handoff.
+    // Campus + class scope; an explicit campus_id was asserted in scope above.
     const universalScope = this.scope.scopeOf(user);
     const teachingGroupsFilter: Record<string, unknown> = {};
     if (campusId) teachingGroupsFilter.campus_id = campusId;

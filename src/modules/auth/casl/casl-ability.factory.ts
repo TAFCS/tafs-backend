@@ -54,10 +54,6 @@ export class CaslAbilityFactory {
         const subject: AppSubjects = 'StaffAttendance';
         can(Action.Manage, subject);
         can(Action.Read, subject);
-        if (user.campusId) {
-          can(Action.Manage, subject, { campus_id: user.campusId } as any);
-          can(Action.Read, subject, { campus_id: user.campusId } as any);
-        }
         return;
       }
 
@@ -80,7 +76,6 @@ export class CaslAbilityFactory {
       // Manage on Voucher (create/edit/delete) via the generic 3-part mapper.
       if (parts[0] === 'finance' && parts[1] === 'vouchers' && parts[2] === 'release') {
         can(Action.Manage, 'VoucherRelease');
-        if (user.campusId) can(Action.Manage, 'VoucherRelease', { campus_id: user.campusId } as any);
         return;
       }
 
@@ -93,9 +88,6 @@ export class CaslAbilityFactory {
             : Action.Manage;
         const subject: AppSubjects = 'RollSession';
         can(caslAction, subject);
-        if (user.campusId) {
-          can(caslAction, subject, { campus_id: user.campusId } as any);
-        }
         return;
       }
 
@@ -143,16 +135,10 @@ export class CaslAbilityFactory {
         return;
       }
 
-      subjects.forEach((subject) => {
-        // Apply campus scoping for non-Super Admins
-        const isAdminOrPrincipal = ([StaffRole.CAMPUS_ADMIN, StaffRole.PRINCIPAL] as StaffRole[]).includes(user.role);
-        
-        can(caslAction, subject);
-        if (user.campusId && subject !== 'all' && subject !== 'User') {
-           // For Student, Fee, Voucher, etc., restrict to campus_id
-           can(caslAction, subject, { campus_id: user.campusId } as any);
-        }
-      });
+      // CASL answers "may this person do X to Y at all". Which campuses'
+      // records they may touch is the universal scope's job (ScopeService),
+      // never a campus condition here.
+      subjects.forEach((subject) => can(caslAction, subject));
     });
 
     return build();

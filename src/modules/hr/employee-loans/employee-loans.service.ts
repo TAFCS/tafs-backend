@@ -81,15 +81,7 @@ export class EmployeeLoansService {
     const where: Prisma.employee_loansWhereInput = {
       status: { in: statuses },
     };
-    // Legacy single-campus check stays — ANDed with the universal scope
-    // fragment (via a real AND, not a shallow merge — both may key on
-    // campus_id, and a merge would let one silently overwrite the other
-    // instead of intersecting), never replaced, so an unrotated token isn't
-    // widened by this change. See the scope/tile-permission handoff §5b.
     const employeeProfileClauses: Prisma.employee_profilesWhereInput[] = [];
-    if (user.campusId != null) {
-      employeeProfileClauses.push({ campus_id: user.campusId });
-    }
     const universal = this.scope.whereForEmployees(user);
     if (Object.keys(universal).length > 0) {
       employeeProfileClauses.push(universal);

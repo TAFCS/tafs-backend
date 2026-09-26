@@ -39,10 +39,13 @@ import { CAMPUSES_MESSAGES } from '../../constants/api-response/campuses.constan
 export class CampusesController {
     constructor(private readonly campusesService: CampusesService) { }
 
+    // Reference data for every campus picker, so any signed-in staff member
+    // may list campuses — gating it on `academic.campuses.*` broke every page
+    // for users granted tiles without it (Payroll alone, for one). What they
+    // get back is trimmed to their campus scope.
     @Get()
-    @CheckPolicies((ability) => ability.can(Action.Read, 'Campus'))
-    async findAll() {
-        const campuses = await this.campusesService.findAll();
+    async findAll(@CurrentUser() user: IJwtStaffPayload) {
+        const campuses = await this.campusesService.findAll(user);
         return createApiResponse(
             campuses,
             HttpStatus.OK,

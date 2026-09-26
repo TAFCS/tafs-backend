@@ -205,28 +205,11 @@ export class PayrollService {
     return computePayrollWindow(year, month);
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside
-  // it. Payroll runs are campus-level entities with no segment/department/
+  // Payroll runs are campus-level entities with no segment/department/
   // staff-category attribute of their own, so campus is the only dimension
   // that applies here.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    const legacyCampusId = this.legacyCampusId(user);
-    if (legacyCampusId && legacyCampusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
-  }
-
-  /** The legacy single campus (users.campus_id) to pin the caller to, or null.
-   * Once the universal scope restricts campuses it is authoritative and the
-   * legacy field is ignored — otherwise someone scoped to every campus stays
-   * pinned to their home campus, and someone scoped to other campuses is
-   * refused everything. A token without a campus scope (issued before scope
-   * shipped, or never scoped) keeps the legacy pin. */
-  private legacyCampusId(user: IJwtStaffPayload): number | null {
-    if (this.scope.scopeOf(user).campuses.length > 0) return null;
-    return user.campusId ?? null;
   }
 
   /** Non-throwing counterpart of assertCampusAccess, for turning a 403 into a
@@ -1424,19 +1407,13 @@ export class PayrollService {
     return { periodStart, periodEnd };
   }
 
-  // campus_id omitted -> "all employees" view: a user pinned to a legacy
-  // campus sees only that one; a user with a universal campus scope sees
-  // those campuses; an unrestricted user sees every campus combined.
+  // campus_id omitted -> "all employees" view over every campus the caller's
+  // scope covers, or every active campus when campus is unrestricted.
   private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusId?: number): Promise<number[]> {
     if (requestedCampusId != null) {
       this.assertCampusAccess(user, requestedCampusId);
       return [requestedCampusId];
     }
-    const legacyCampusId = this.legacyCampusId(user);
-    if (legacyCampusId != null) return [legacyCampusId];
-    // A user unrestricted by the legacy single campusId may still carry a
-    // universal multi-campus scope — an export/matrix is exactly the hole the
-    // scope-sweep handoff warns gets forgotten, so it's checked here too.
     const universalCampuses = this.scope.scopeOf(user).campuses;
     if (universalCampuses.length > 0) return universalCampuses;
     const campuses = await this.prisma.campuses.findMany({ where: { is_active: true }, select: { id: true } });
@@ -1617,10 +1594,8 @@ export class PayrollService {
   }
 
   async listRuns(query: ListPayrollRunsQueryDto, user: IJwtStaffPayload) {
-    const campusId = query.campus_id ?? this.legacyCampusId(user) ?? undefined;
+    const campusId = query.campus_id;
     if (campusId) this.assertCampusAccess(user, campusId);
-    // A user unrestricted by the legacy single campusId may still carry a
-    // universal multi-campus scope — the same hole resolveMatrixCampusIds had.
     const universalCampuses = this.scope.scopeOf(user).campuses;
     const campusFilter = campusId
       ? { campus_id: campusId }

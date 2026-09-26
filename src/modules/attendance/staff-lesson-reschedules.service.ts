@@ -76,13 +76,7 @@ export class StaffLessonReschedulesService {
     );
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.role === 'SUPER_ADMIN') return;
-    if (user.campusId != null && user.campusId !== campusId) {
-      throw new ForbiddenException('Campus out of scope');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -662,8 +656,9 @@ export class StaffLessonReschedulesService {
     if (query.campus_id) {
       this.assertCampusAccess(user, query.campus_id);
       where.campus_id = query.campus_id;
-    } else if (user.campusId && user.role !== 'SUPER_ADMIN') {
-      where.campus_id = user.campusId;
+    } else {
+      const scoped = this.scope.campusIdsFor(user);
+      if (scoped) where.campus_id = { in: scoped };
     }
     if (query.employee_id) where.employee_id = query.employee_id;
     if (query.status) where.status = query.status;

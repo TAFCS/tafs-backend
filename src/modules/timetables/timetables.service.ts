@@ -24,12 +24,7 @@ export class TimetablesService {
     private readonly scope: ScopeService,
   ) {}
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 

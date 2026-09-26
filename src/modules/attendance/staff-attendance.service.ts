@@ -41,12 +41,7 @@ export class StaffAttendanceService {
     return d;
   }
 
-  // Legacy check kept standing per the scope-sweep handoff (do not delete until
-  // 90-day-old tokens have rotated); this.scope.assertCampus is ANDed alongside it.
   private assertCampusAccess(user: IJwtStaffPayload, campusId: number) {
-    if (user.campusId && user.campusId !== campusId) {
-      throw new ForbiddenException('You do not have access to this campus');
-    }
     this.scope.assertCampus(user, campusId);
   }
 
@@ -60,12 +55,7 @@ export class StaffAttendanceService {
   async getRegister(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
 
-    const campusIds =
-      query.campus_id?.length
-        ? query.campus_id
-        : user.campusId != null
-          ? [user.campusId]
-          : [];
+    const campusIds = this.scope.campusIdsFor(user, query.campus_id) ?? [];
     if (!campusIds.length) throw new BadRequestException('campus_id is required');
     for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
@@ -301,12 +291,7 @@ export class StaffAttendanceService {
 
   async getSummary(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusIds =
-      query.campus_id?.length
-        ? query.campus_id
-        : user.campusId != null
-          ? [user.campusId]
-          : [];
+    const campusIds = this.scope.campusIdsFor(user, query.campus_id) ?? [];
     if (!campusIds.length) throw new BadRequestException('campus_id is required');
     for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
@@ -349,12 +334,7 @@ export class StaffAttendanceService {
 
   async getDashboard(query: GetStaffAttendanceQueryDto, user: IJwtStaffPayload) {
     const date = this.parseDate(query.date);
-    const campusIds =
-      query.campus_id?.length
-        ? query.campus_id
-        : user.campusId != null
-          ? [user.campusId]
-          : [];
+    const campusIds = this.scope.campusIdsFor(user, query.campus_id) ?? [];
     if (!campusIds.length) throw new BadRequestException('campus_id is required');
     for (const campusId of campusIds) this.assertCampusAccess(user, campusId);
 
