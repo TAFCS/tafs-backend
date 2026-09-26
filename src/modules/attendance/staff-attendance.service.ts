@@ -766,23 +766,38 @@ export class StaffAttendanceService {
     // Accept either employee_profiles.campus_id (dummy/direct employees) or
     // users.campus_id (normal accounts), since payroll generation uses the latter.
     const employeeIds = dto.records.map((r) => r.employee_id);
-    const employees = await this.prisma.employee_profiles.findMany({
-      where: {
-        id: { in: employeeIds },
-        OR: [
-          { campus_id: dto.campus_id },
-          { users: { campus_id: dto.campus_id } },
-        ],
-        ...this.scope.whereForEmployees(user),
-      },
-      select: { id: true },
-    });
+    const onCampus = {
+      id: { in: employeeIds },
+      OR: [
+        { campus_id: dto.campus_id },
+        { users: { campus_id: dto.campus_id } },
+      ],
+    };
+    const [atCampus, inScope] = await Promise.all([
+      this.prisma.employee_profiles.findMany({ where: onCampus, select: { id: true } }),
+      this.prisma.employee_profiles.findMany({
+        where: { ...onCampus, ...this.scope.whereForEmployees(user) },
+        select: { id: true },
+      }),
+    ]);
 
-    const validIds = new Set(employees.map((e) => e.id));
-    const invalid = employeeIds.filter((id) => !validIds.has(id));
-    if (invalid.length > 0) {
+    // Two different refusals, reported separately: "not at this campus" and
+    // "outside your scope" used to share one message, which sent people
+    // hunting for a campus problem when the cause was, say, a segment scope
+    // that excludes staff with no segment.
+    const atCampusIds = new Set(atCampus.map((e) => e.id));
+    const notAtCampus = employeeIds.filter((id) => !atCampusIds.has(id));
+    if (notAtCampus.length > 0) {
       throw new BadRequestException(
-        `Employee IDs not found on this campus: ${invalid.join(', ')}`,
+        `Employee IDs not found on this campus: ${notAtCampus.join(', ')}`,
+      );
+    }
+    const inScopeIds = new Set(inScope.map((e) => e.id));
+    const outOfScope = employeeIds.filter((id) => !inScopeIds.has(id));
+    if (outOfScope.length > 0) {
+      throw new ForbiddenException(
+        `Outside your access scope (segment / department / staff category): employee ${outOfScope.join(', ')}. ` +
+          'Widen the scope in People & Access — a dimension with every option ticked still excludes staff with no value on it; use "All".',
       );
     }
 
