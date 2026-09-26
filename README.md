@@ -1,3 +1,15 @@
+## Project docs
+
+Read these before changing anything:
+
+- [`CLAUDE.md`](CLAUDE.md) — finance invariants and the Coral9 ticket workflow
+- [`CODING_PRACTICES.md`](CODING_PRACTICES.md) — general backend conventions
+- [`src/modules/vouchers/CLAUDE.md`](src/modules/vouchers/CLAUDE.md) — voucher-issuance code paths
+
+Everything below is the NestJS starter README.
+
+---
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
