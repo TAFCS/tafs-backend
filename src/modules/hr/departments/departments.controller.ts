@@ -4,6 +4,9 @@ import {
   CreateDepartmentDto,
   CreateStaffCategoryDto,
 } from './departments.service';
+import { CurrentUser } from '../../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
+import { ScopeService } from '../../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
@@ -18,12 +21,21 @@ import { createApiResponse } from '../../../utils/serializer.util';
 @Controller('hr/departments')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class DepartmentsController {
-  constructor(private readonly departmentsService: DepartmentsService) {}
+  constructor(
+    private readonly departmentsService: DepartmentsService,
+    private readonly scope: ScopeService,
+  ) {}
 
+  // Reference data for pickers: any signed-in staff member may list it,
+  // trimmed to their scope. Gating it on a capability broke every page for
+  // users granted tiles without that capability.
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
-  async findAll() {
-    const data = await this.departmentsService.findAll();
+  async findAll(@CurrentUser() user: IJwtStaffPayload) {
+    const { departments, staffCategories } = this.scope.scopeOf(user);
+    const data = await this.departmentsService.findAll({
+      departmentIds: departments.length > 0 ? departments : undefined,
+      staffCategoryIds: staffCategories.length > 0 ? staffCategories : undefined,
+    });
     return createApiResponse(data, HttpStatus.OK, 'Departments retrieved successfully');
   }
 

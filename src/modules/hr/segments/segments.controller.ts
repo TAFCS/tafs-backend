@@ -16,6 +16,7 @@ import { SegmentsService } from './segments.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SetCampusSegmentsDto } from './dto/set-campus-segments.dto';
+import { ScopeService } from '../../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
@@ -32,17 +33,22 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 @Controller('hr/segments')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class SegmentsController {
-  constructor(private readonly segmentsService: SegmentsService) {}
+  constructor(
+    private readonly segmentsService: SegmentsService,
+    private readonly scope: ScopeService,
+  ) {}
 
+  // Reference data for pickers: any signed-in staff member may list it,
+  // trimmed to their scope. Gating it on a capability broke every page for
+  // users granted tiles without that capability.
   @Get()
-  @CheckPolicies(
-    (ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Class'),
-  )
-  async findAll(@Query('campus_id') campusId?: string) {
+  async findAll(@CurrentUser() user: IJwtStaffPayload, @Query('campus_id') campusId?: string) {
     const parsedCampusId = campusId ? parseInt(campusId, 10) : undefined;
-    const data = await this.segmentsService.findAll(
+    const all = await this.segmentsService.findAll(
       isNaN(parsedCampusId as number) ? undefined : parsedCampusId,
     );
+    const { segments } = this.scope.scopeOf(user);
+    const data = segments.length > 0 ? all.filter((s) => segments.includes(s.id)) : all;
     return createApiResponse(data, HttpStatus.OK, 'Segments retrieved successfully');
   }
 

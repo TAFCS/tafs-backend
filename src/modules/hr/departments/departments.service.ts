@@ -49,10 +49,12 @@ export class DepartmentsService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async findAll() {
+  async findAll(filter: { departmentIds?: number[]; staffCategoryIds?: number[] } = {}) {
     return this.prisma.departments.findMany({
+      where: filter.departmentIds ? { id: { in: filter.departmentIds } } : undefined,
       include: {
         staff_categories: {
+          where: filter.staffCategoryIds ? { id: { in: filter.staffCategoryIds } } : undefined,
           include: { _count: { select: { employee_profiles: true } } },
           orderBy: { name: 'asc' },
         },
