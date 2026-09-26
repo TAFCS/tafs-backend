@@ -117,11 +117,43 @@ export class AccessService {
   }
 
   /**
+   * Departments whose staff carry segments — in practice the teaching
+   * department. Derived from the data rather than a name so a rename can't
+   * break it: a segment restriction can only ever match staff in these.
+   */
+  private async segmentBearingDepartmentIds(): Promise<Set<number>> {
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: { segment_id: { not: null }, department_id: { not: null } },
+      select: { department_id: true },
+      distinct: ['department_id'],
+    });
+    return new Set(rows.map((r) => r.department_id as number));
+  }
+
+  /**
+   * Segments are academic: only teaching staff have one. A segment restriction
+   * on a scope whose Departments exclude every segment-bearing department
+   * would select no staff at all and silently hide the rest, so it is refused.
+   * Departments on "All" (empty) always include them.
+   */
+  private async assertSegmentsFitDepartments(scope: Partial<UserScope>) {
+    const segments = scope.segments ?? [];
+    const departments = scope.departments ?? [];
+    if (segments.length === 0 || departments.length === 0) return;
+    const bearing = await this.segmentBearingDepartmentIds();
+    if (departments.some((d) => bearing.has(d))) return;
+    throw new BadRequestException(
+      'Segments only apply to teaching staff. Add the teaching department (e.g. Academics) to Departments, ' +
+        'or leave Segments on All.',
+    );
+  }
+
+  /**
    * Everything a scope picker can offer. Small, stable reference data -- the
    * panel fetches it once and filters client-side.
    */
   async getScopeOptions() {
-    const [campuses, segments, classes, sections, departments, staffCategories] =
+    const [campuses, segments, classes, sections, departments, staffCategories, segmentBearing] =
       await Promise.all([
         this.prisma.campuses.findMany({
           where: { is_active: true },
@@ -148,6 +180,7 @@ export class AccessService {
           select: { id: true, name: true, code: true, department_id: true },
           orderBy: { name: 'asc' },
         }),
+        this.segmentBearingDepartmentIds(),
       ]);
 
     return {
@@ -160,7 +193,9 @@ export class AccessService {
         segmentId: c.segment_id,
       })),
       sections: sections.map((s) => ({ id: s.id, label: s.description })),
-      departments: departments.map((d) => ({ id: d.id, label: d.name })),
+      // hasSegments: this department's staff carry segments (the teaching
+      // department) — the Scope tab only allows segments alongside one.
+      departments: departments.map((d) => ({ id: d.id, label: d.name, hasSegments: segmentBearing.has(d.id) })),
       staffCategories: staffCategories.map((c) => ({
         id: c.id,
         label: c.name,
@@ -364,6 +399,7 @@ export class AccessService {
     this.assertCanManageUser(actingUser, user.campus_id, userId);
     if (dto.scope !== undefined) {
       this.assertGrantableScope(actingUser, dto.scope);
+      await this.assertSegmentsFitDepartments(dto.scope);
     }
 
     const packIds = [...new Set(dto.packIds ?? [])];
