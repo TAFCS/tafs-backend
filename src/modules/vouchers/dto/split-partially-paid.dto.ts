@@ -39,6 +39,14 @@ export class SplitPartiallyPaidDto {
     @IsOptional()
     validity_date?: string;
 
+    // PAY IMMEDIATELY vouchers normally get issue_date + 4 days (Sunday -> Monday)
+    // forced as both due and validity date. true = keep the dates sent here
+    // instead; the PAY IMMEDIATELY watermark still applies (TAFSD-174).
+    @Transform(({ value }) => (value === 'true' || value === true))
+    @IsBoolean()
+    @IsOptional()
+    pay_immediately_custom_dates?: boolean;
+
     // Explicit admin override for the fee_date the new "BALANCE PAYMENT OF" head(s)
     // should carry. If omitted (and use_nearest_future_fee_date is false/unset), the
     // balance head keeps its original fee_date — the default, backwards-compatible

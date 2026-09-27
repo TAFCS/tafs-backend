@@ -91,12 +91,13 @@ describe('isPayImmediate', () => {
 describe('payImmediateDueDate', () => {
   const due = (issue: string) => payImmediateDueDate(new Date(issue)).toISOString().slice(0, 10);
 
-  it('is issue_date + 4 days when no Sunday falls in between', () => {
+  it('is issue_date + 4 days when that is not a Sunday', () => {
     expect(due('2026-09-08')).toBe('2026-09-12'); // Tue -> Sat
+    expect(due('2026-09-11')).toBe('2026-09-15'); // Fri -> Tue: a Sunday in between is not skipped
   });
 
-  it('does not count Sundays: issued Friday, due the next Wednesday (+5)', () => {
-    expect(due('2026-09-11')).toBe('2026-09-16'); // Fri -> Sat, (Sun), Mon, Tue, Wed
+  it('moves a Sunday due date to Monday (+5)', () => {
+    expect(due('2026-09-09')).toBe('2026-09-14'); // Wed -> (Sun) -> Mon
   });
 
   it('matches the rule for every issue weekday', () => {
@@ -104,10 +105,10 @@ describe('payImmediateDueDate', () => {
     expect(due('2026-09-06')).toBe('2026-09-10'); // Sun -> Thu  (+4)
     expect(due('2026-09-07')).toBe('2026-09-11'); // Mon -> Fri  (+4)
     expect(due('2026-09-08')).toBe('2026-09-12'); // Tue -> Sat  (+4)
-    expect(due('2026-09-09')).toBe('2026-09-14'); // Wed -> Mon  (+5)
-    expect(due('2026-09-10')).toBe('2026-09-15'); // Thu -> Tue  (+5)
-    expect(due('2026-09-11')).toBe('2026-09-16'); // Fri -> Wed  (+5)
-    expect(due('2026-09-12')).toBe('2026-09-17'); // Sat -> Thu  (+5)
+    expect(due('2026-09-09')).toBe('2026-09-14'); // Wed -> Mon  (+5, +4 is a Sunday)
+    expect(due('2026-09-10')).toBe('2026-09-14'); // Thu -> Mon  (+4)
+    expect(due('2026-09-11')).toBe('2026-09-15'); // Fri -> Tue  (+4)
+    expect(due('2026-09-12')).toBe('2026-09-16'); // Sat -> Wed  (+4)
   });
 
   it('never lands on a Sunday', () => {
@@ -119,7 +120,7 @@ describe('payImmediateDueDate', () => {
 
   it('rolls over month and year ends', () => {
     expect(due('2026-09-28')).toBe('2026-10-02'); // Mon -> Fri
-    expect(due('2026-12-30')).toBe('2027-01-04'); // Wed -> Mon, skipping Sun 3 Jan
+    expect(due('2026-12-30')).toBe('2027-01-04'); // Wed -> Mon: +4 is Sun 3 Jan
   });
 
   it('does not mutate the issue date passed in', () => {

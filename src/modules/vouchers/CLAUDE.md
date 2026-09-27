@@ -81,25 +81,30 @@ fee_date an unpaid voucher. That is the rule as specified, not a rounding bug.
 
 ### Rule 2 — what a PAY IMMEDIATELY voucher gets
 
-- **`due_date` = `validity_date` = `issue_date` + 4 days, not counting Sundays.** Both are
-  forced, overriding whatever the user typed or the bulk job / split form sent. The family has
-  four days to pay before the voucher expires. Count forward from the issue date and skip every
-  Sunday, so any window that crosses a Sunday becomes **+5** — issued on a **Friday**, it is due
-  the next **Wednesday**. The due date is never a Sunday. Only Sundays are skipped (not
-  Saturdays, not holidays).
+- **Default `due_date` = `validity_date` = `issue_date` + 4 days; if that is a Sunday, + 5 (the
+  Monday).** Sundays in between are *not* skipped — only a Sunday due date moves. The due date is
+  never a Sunday. (Until TAFSD-174 every Sunday in the window was skipped; that rule is gone.)
 
-  | Issued | Days counted | Due | Offset |
+  | Issued | +4 lands on | Due | Offset |
   |---|---|---|---|
-  | Sun | Mon Tue Wed Thu | Thu | +4 |
-  | Mon | Tue Wed Thu Fri | Fri | +4 |
-  | Tue | Wed Thu Fri Sat | Sat | +4 |
-  | Wed | Thu Fri Sat ~~Sun~~ Mon | Mon | +5 |
-  | Thu | Fri Sat ~~Sun~~ Mon Tue | Tue | +5 |
-  | Fri | Sat ~~Sun~~ Mon Tue Wed | Wed | +5 |
-  | Sat | ~~Sun~~ Mon Tue Wed Thu | Thu | +5 |
+  | Sun | Thu | Thu | +4 |
+  | Mon | Fri | Fri | +4 |
+  | Tue | Sat | Sat | +4 |
+  | Wed | ~~Sun~~ | Mon | +5 |
+  | Thu | Mon | Mon | +4 |
+  | Fri | Tue | Tue | +4 |
+  | Sat | Wed | Wed | +4 |
 
   Computed only by `payImmediateDueDate()`, in UTC (`getUTCDay() === 0` is Sunday — the columns
   are `@db.Date` at UTC midnight).
+
+  **The issuer may override it.** All three sources accept `pay_immediately_custom_dates: true`
+  (`CreateVoucherDto`, `StartBulkJobDto`, `SplitPartiallyPaidDto`). With it, the voucher keeps the
+  due/validity dates the caller sent; the watermark and `pay_immediately = true` still apply.
+  Without it (the default, and every caller that predates it) the dates above are forced. The
+  webapp prefills the default and only sends the flag when the admin ticks "use my own dates":
+  `/fee-challan` asks `GET /v1/vouchers/pay-immediate-preview`, the split modal asks
+  `split-preview`, and bulk offers a job-wide checkbox (it can't preview per student).
 - **`vouchers.pay_immediately = true`**, written once at issuance and never recomputed — a
   reprint shows what was issued, even if the family has since paid the older vouchers.
 - **One big diagonal red "PAY IMMEDIATELY" watermark across the whole page** — one mark for the
@@ -135,7 +140,7 @@ re-inline the rule at a call site.**
 | # | Source | Where | What it does |
 |---|---|---|---|
 | 1 | `/fee-challan` single | `create()`, right after `computeArrears()` | `isPayImmediate(arrearsInfo) && isPayImmediateEnabled(tx)` → forces dates, sets `pay_immediately` |
-| 2 | Bulk job | same code — bulk calls `create()` once per student | same; decided **per student**, so one bulk job can mix PAY IMMEDIATELY and normal vouchers |
+| 2 | Bulk job | same code — bulk calls `create()` once per student | same; decided **per student**, so one bulk job can mix PAY IMMEDIATELY and normal vouchers. The job's `pay_immediately_custom_dates` applies to every PAY IMMEDIATELY voucher it issues |
 | 3 | Split balance voucher | `splitPayImmediate()`, called **first** in the split's transaction — before Step 1 re-dates anything | same rule + toggle, arrears relative to the balance voucher's fee_date, read-only; applied to the `unpaid` insert only |
 
 **Why the split decides before Step 1.** `use_nearest_future_fee_date` / `balance_fee_date` move a
@@ -145,7 +150,7 @@ must not.
 
 **Deposit page prefill.** `GET /v1/vouchers/:id/split-preview?issue_date=YYYY-MM-DD` →
 `previewSplitPayImmediate()` calls the same `splitPayImmediate()` and `payImmediateDueDate()`,
-so the split modal can prefill (and lock) the due/validity date the split will enforce. It
+so the split modal can prefill the default due/validity date (editable once the admin opts into custom dates). It
 writes nothing. Never compute the rule in the webapp — ask this endpoint.
 
 **The watermark is decided in `prepareVoucherPdfData()`, from the voucher row** —
@@ -172,8 +177,9 @@ Both in `FeeChallanPDF.tsx` (mirrored in `FeeChallanPDF_MeezanBank.tsx`):
    never a Sunday), including the annual-billing case.
 2. With the toggle **on**, issue for a student with two unpaid vouchers from each source:
    `/fee-challan`, a bulk job, and a split's balance voucher. All three: due = validity =
-   issue + 4 days with Sundays not counted (a Friday issue is due Wednesday),
-   `pay_immediately = true`, watermark on top, **one page**.
+   issue + 4 days, moved to Monday if that is a Sunday (a Wednesday issue is due Monday, a
+   Friday issue Tuesday), `pay_immediately = true`, watermark on top, **one page**. Repeat with
+   "use my own dates": the typed dates stick, the watermark stays.
 3. Same student with the toggle **off**: all three issue normally.
 4. A student whose arrears are one annual voucher: never PAY IMMEDIATELY.
 

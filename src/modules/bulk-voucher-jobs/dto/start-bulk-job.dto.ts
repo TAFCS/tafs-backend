@@ -68,6 +68,13 @@ export class StartBulkJobDto {
     @IsOptional()
     validity_date?: string;
 
+    // PAY IMMEDIATELY vouchers normally get issue_date + 4 days (Sunday -> Monday)
+    // forced as both due and validity date. true = keep the dates sent here
+    // instead; the PAY IMMEDIATELY watermark still applies (TAFSD-174).
+    @IsBoolean()
+    @IsOptional()
+    pay_immediately_custom_dates?: boolean;
+
     // ── Bank ───────────────────────────────────────────────────────────────
     @Type(() => Number)
     @IsInt()

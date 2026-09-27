@@ -122,7 +122,7 @@ const VOUCHER_INCLUDE = {
 // payImmediateDueDate() — they share no other code, so do not re-inline the
 // rule at either call site. Full spec: src/modules/vouchers/CLAUDE.md.
 const PAY_IMMEDIATE_MIN_UNPAID_VOUCHERS = 2;
-const PAY_IMMEDIATE_DUE_DAYS = 4; // days to pay, Sundays not counted — see payImmediateDueDate
+const PAY_IMMEDIATE_DUE_DAYS = 4; // default days to pay; a Sunday due date moves to Monday — see payImmediateDueDate
 
 /**
  * True when the student has not paid the last two vouchers issued to them.
@@ -153,21 +153,19 @@ export function isPayImmediate(arrears: {
 }
 
 /**
- * Due date AND validity date for a PAY IMMEDIATELY voucher: issue_date + 4 days,
- * not counting Sundays. Any window that crosses a Sunday becomes +5 — issued on
- * a Friday, it is due the next Wednesday (Sat, Mon, Tue, Wed). The result is
- * never a Sunday.
+ * Default due date AND validity date for a PAY IMMEDIATELY voucher: issue_date
+ * + 4 days, and if that lands on a Sunday, + 5 so it falls on the Monday
+ * (issued Wednesday, due the next Monday). Sundays in between are not skipped.
+ * The result is never a Sunday. Only a default: the issuer may send their own
+ * dates with pay_immediately_custom_dates (TAFSD-174).
  */
 export function payImmediateDueDate(issueDate: Date): Date {
     // UTC arithmetic — these are @db.Date columns stored at UTC midnight, and
     // local-time setDate()/getDay() would drift a day on a server with a
     // negative offset.
     const d = new Date(issueDate);
-    let counted = 0;
-    while (counted < PAY_IMMEDIATE_DUE_DAYS) {
-        d.setUTCDate(d.getUTCDate() + 1);
-        if (d.getUTCDay() !== 0) counted++; // Sundays don't count
-    }
+    d.setUTCDate(d.getUTCDate() + PAY_IMMEDIATE_DUE_DAYS);
+    if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1); // Sunday -> Monday
     return d;
 }
 
@@ -623,6 +621,31 @@ export class VouchersService {
         return { pay_immediately: true, due_date: due, validity_date: due };
     }
 
+    /**
+     * /fee-challan prefill: would a voucher for this student and fee_date be
+     * PAY IMMEDIATELY, and what are the default due/validity dates for
+     * `issue_date`? Same rule and toggle create() applies; writes nothing.
+     */
+    async previewPayImmediate(studentId: number, feeDateStr: string, issueDateStr?: string) {
+        const ymd = /^\d{4}-\d{2}-\d{2}$/;
+        if (!Number.isInteger(studentId) || studentId <= 0) {
+            throw new BadRequestException('student_id is required.');
+        }
+        if (!feeDateStr || !ymd.test(feeDateStr)) {
+            throw new BadRequestException('fee_date must be YYYY-MM-DD.');
+        }
+        if (issueDateStr && !ymd.test(issueDateStr)) {
+            throw new BadRequestException('issue_date must be YYYY-MM-DD.');
+        }
+        const arrears = await this.computeArrears(studentId, new Date(feeDateStr), false);
+        if (!(isPayImmediate(arrears) && (await this.isPayImmediateEnabled(this.prisma)))) {
+            return { pay_immediately: false, due_date: null, validity_date: null };
+        }
+        const issueDate = new Date(issueDateStr ?? new Date().toISOString().slice(0, 10));
+        const due = payImmediateDueDate(issueDate).toISOString().slice(0, 10);
+        return { pay_immediately: true, due_date: due, validity_date: due };
+    }
+
     async create(
         dto: CreateVoucherDto,
         pdfBuffer?: Buffer,
@@ -694,7 +717,9 @@ export class VouchersService {
                 arrearsInfo !== null &&
                 isPayImmediate(arrearsInfo) &&
                 (await this.isPayImmediateEnabled(tx));
-            if (payImmediate) {
+            // The issuer may keep their own dates (pay_immediately_custom_dates);
+            // otherwise the default is forced. The watermark applies either way.
+            if (payImmediate && !dto.pay_immediately_custom_dates) {
                 dueDate = payImmediateDueDate(issueDate);
                 validityDate = dueDate;
             }
@@ -5154,7 +5179,7 @@ export class VouchersService {
             //    re-dates anything. See splitPayImmediate(); the deposit page's
             //    prefill (previewSplitPayImmediate) asks the very same question.
             const payImmediate = await this.splitPayImmediate(tx, original, allHeads);
-            if (payImmediate) {
+            if (payImmediate && !dto.pay_immediately_custom_dates) {
                 dueDate = payImmediateDueDate(issueDate);
                 validityDate = dueDate;
             }

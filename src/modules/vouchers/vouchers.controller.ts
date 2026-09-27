@@ -109,6 +109,29 @@ export class VouchersController {
         };
     }
 
+    /**
+     * Would a voucher for this student and fee_date be PAY IMMEDIATELY, and what
+     * are its default due/validity dates for issue_date? Read-only — lets
+     * /fee-challan prefill the dates and offer the override (TAFSD-174).
+     */
+    @Get('pay-immediate-preview')
+    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async previewPayImmediate(
+        @Query('student_id') studentIdStr: string,
+        @Query('fee_date') feeDateStr: string,
+        @Query('issue_date') issueDateStr?: string,
+    ) {
+        return {
+            success: true,
+            data: await this.vouchersService.previewPayImmediate(parseInt(studentIdStr, 10), feeDateStr, issueDateStr),
+        };
+    }
+
     @Get()
     @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
