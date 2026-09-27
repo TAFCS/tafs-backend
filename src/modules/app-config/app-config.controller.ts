@@ -29,6 +29,17 @@ export class AppConfigController {
     return createApiResponse(data, HttpStatus.OK, 'App status retrieved successfully');
   }
 
+  // Any signed-in staff member may read this one value: the payroll and
+  // attendance screens that gate same-day overrides need it, and their users
+  // don't hold developer-settings access.
+  @ApiBearerAuth()
+  @Get('attendance-override-cutoff')
+  @UseGuards(JwtStaffGuard)
+  async getAttendanceOverrideCutoff() {
+    const cutoff = await this.appConfigService.getAttendanceOverrideCutoff();
+    return createApiResponse({ cutoff }, HttpStatus.OK, 'Attendance override cut-off retrieved successfully');
+  }
+
   @ApiBearerAuth()
   @Get()
   @UseGuards(JwtStaffGuard, TileActionGuard)
