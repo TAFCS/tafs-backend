@@ -453,6 +453,33 @@ const listSelect = {
 /** Accepts HH:MM or HH:MM:SS. Throws BadRequestException for unparseable values. */
 const TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Monday-first, matching how HR reads a week.
+const WEEKDAY_LOG_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+/** Working days as a readable list for audit logs, e.g. "Tue, Thu (2 days/week)". */
+function describeWorkingDays(working: Set<number>): string {
+  const days = WEEKDAY_LOG_ORDER.filter((d) => working.has(d)).map((d) => WEEKDAY_LABELS[d]);
+  if (days.length === 0) return 'no working days';
+  return `${days.join(', ')} (${days.length} day${days.length === 1 ? '' : 's'}/week)`;
+}
+
+/** The weekday set the attendance/payroll fallback assumes from days_per_week alone. */
+function defaultWorkingDays(daysPerWeek: number | null): Set<number> {
+  const n = daysPerWeek ?? 5;
+  const set = new Set([1, 2, 3, 4, 5]);
+  if (n >= 6) set.add(6);
+  if (n >= 7) set.add(0);
+  return set;
+}
+
+/** Normalises a stored TIME column or an "HH:MM[:SS]" input to "HH:MM" so diffs compare like with like. */
+function timeForLog(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) return value.toISOString().slice(11, 16);
+  return String(value).slice(0, 5);
+}
+
 function toTime(value?: string | null, fieldLabel = 'time'): Date | null {
   if (value == null) return null;
   const raw = String(value).trim();
@@ -1421,7 +1448,15 @@ export class EmployeesService {
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
       { key: 'payroll_enabled', label: 'On Payroll' },
+      { key: 'days_per_week', label: 'Working Days / Week' },
+      { key: 'check_in_source', label: 'Check-in Source' },
+      { key: 'reporting_time', label: 'Expected Check-in' },
+      { key: 'leaving_time', label: 'Expected Check-out' },
+      { key: 'late_relaxation_minutes', label: 'Late Relaxation (min)' },
+      { key: 'account_number', label: 'Bank Account' },
+      { key: 'bank_name', label: 'Bank Name' },
     ];
+    const timeKeys = new Set(['reporting_time', 'leaving_time']);
 
     const changes: string[] = [];
     for (const { key, label, oldKey } of trackedFields) {
@@ -1435,8 +1470,9 @@ export class EmployeesService {
         continue;
       }
       if (key in rest && rest[key as keyof typeof rest] !== undefined) {
-        const oldVal = String((existing as any)[sourceKey] ?? '');
-        const newVal = String(rest[key as keyof typeof rest] ?? '');
+        const isTime = timeKeys.has(sourceKey);
+        const oldVal = isTime ? timeForLog((existing as any)[sourceKey]) : String((existing as any)[sourceKey] ?? '');
+        const newVal = isTime ? timeForLog(rest[key as keyof typeof rest]) : String(rest[key as keyof typeof rest] ?? '');
         if (oldVal !== newVal) {
           changes.push(`${label}: ${oldVal || '—'} → ${newVal || '—'}`);
         }
@@ -1824,7 +1860,10 @@ export class EmployeesService {
 
   async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto, caller?: IJwtStaffPayload) {
     await this.assertCanTouch(employeeId, caller);
-    const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { full_name: true, days_per_week: true, employee_work_schedules: true },
+    });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
     for (const day of dto.days) {
@@ -1832,6 +1871,8 @@ export class EmployeesService {
         throw new BadRequestException('day_of_week must be between 0 (Sunday) and 6 (Saturday)');
       }
     }
+
+    const before = this.describeSchedule(employee.days_per_week, employee.employee_work_schedules);
 
     await this.prisma.$transaction([
       this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } }),
@@ -1846,41 +1887,64 @@ export class EmployeesService {
       ),
     ]);
 
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const scheduleNote = dto.days
-      .map((d) => `${dayNames[d.day_of_week]}${(d.is_working ?? true) ? '' : ' (off)'}`)
-      .join(', ');
-    this.auditLogs.log({
-      entity_type: 'EMPLOYEE',
-      entity_id: String(employeeId),
-      action: 'UPDATED',
-      section: 'hr',
-      field: 'work_schedule',
-      note: `${employee.full_name ?? `#${employeeId}`} — work schedule set: ${scheduleNote || 'none'}`,
-      changed_by: caller?.username || caller?.sub || 'system',
-    });
+    const after = this.describeSchedule(
+      employee.days_per_week,
+      dto.days.map((d) => ({ day_of_week: d.day_of_week, is_working: d.is_working ?? true })),
+    );
+    if (before !== after) {
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(employeeId),
+        action: 'UPDATED',
+        section: 'hr',
+        field: 'Working Days',
+        old_value: before,
+        new_value: after,
+        note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
+        changed_by: caller?.username || caller?.sub || 'system',
+      });
+    }
 
     return this.getWorkSchedule(employeeId);
   }
 
   async clearWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
     await this.assertCanTouch(employeeId, caller);
-    const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId } });
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { full_name: true, days_per_week: true, employee_work_schedules: true },
+    });
     if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
+    // Nothing custom to clear: no write, no log entry.
+    if (employee.employee_work_schedules.length === 0) return this.getWorkSchedule(employeeId);
+
+    const before = this.describeSchedule(employee.days_per_week, employee.employee_work_schedules);
     await this.prisma.employee_work_schedules.deleteMany({ where: { employee_id: employeeId } });
+    const after = this.describeSchedule(employee.days_per_week, []);
 
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
       entity_id: String(employeeId),
       action: 'UPDATED',
       section: 'hr',
-      field: 'work_schedule',
-      note: `${employee.full_name ?? `#${employeeId}`} — work schedule cleared`,
+      field: 'Working Days',
+      old_value: before,
+      new_value: after,
+      note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
       changed_by: caller?.username || caller?.sub || 'system',
     });
 
     return this.getWorkSchedule(employeeId);
+  }
+
+  /** Effective working days, the way attendance and payroll resolve them. */
+  private describeSchedule(
+    daysPerWeek: number | null,
+    rows: { day_of_week: number; is_working: boolean }[],
+  ): string {
+    if (rows.length === 0) return describeWorkingDays(defaultWorkingDays(daysPerWeek));
+    return describeWorkingDays(new Set(rows.filter((r) => r.is_working).map((r) => r.day_of_week)));
   }
 
   async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto, caller: IJwtStaffPayload) {
