@@ -426,6 +426,55 @@ export class CalendarDayResolverService {
   }
 
   /**
+   * Batched loadStaffTimetableActiveDays + loadStaffMakeupRescheduleDates +
+   * loadStaffShiftOverrideDates for many TIMETABLE employees at once — three
+   * queries total instead of three per employee.
+   */
+  async loadStaffTimetableContextForEmployees(
+    employeeIds: number[],
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<
+    Map<number, { timetableActiveDays: Set<number>; makeupRescheduleDates: Set<string>; shiftOverrideDates: Set<string> }>
+  > {
+    const map = new Map<
+      number,
+      { timetableActiveDays: Set<number>; makeupRescheduleDates: Set<string>; shiftOverrideDates: Set<string> }
+    >();
+    if (employeeIds.length === 0) return map;
+    for (const id of employeeIds) {
+      map.set(id, { timetableActiveDays: new Set(), makeupRescheduleDates: new Set(), shiftOverrideDates: new Set() });
+    }
+
+    const [slots, makeups, overrides] = await Promise.all([
+      this.prisma.timetable_slots.findMany({
+        where: { employee_id: { in: employeeIds }, timetables: { is_active: true } },
+        select: { employee_id: true, day_of_week: true },
+      }),
+      this.prisma.staff_lesson_reschedules.findMany({
+        where: {
+          employee_id: { in: employeeIds },
+          makeup_date: { gte: dateFrom, lte: dateTo },
+          status: { in: ['SCHEDULED', 'COMPLETED'] },
+        },
+        select: { employee_id: true, makeup_date: true },
+      }),
+      this.prisma.employee_shift_overrides.findMany({
+        where: {
+          employee_id: { in: employeeIds },
+          date: { gte: dateFrom, lte: dateTo },
+          OR: [{ override_start_time: { not: null } }, { override_end_time: { not: null } }],
+        },
+        select: { employee_id: true, date: true },
+      }),
+    ]);
+    for (const s of slots) map.get(s.employee_id)?.timetableActiveDays.add(s.day_of_week);
+    for (const m of makeups) map.get(m.employee_id)?.makeupRescheduleDates.add(m.makeup_date.toISOString().slice(0, 10));
+    for (const o of overrides) map.get(o.employee_id)?.shiftOverrideDates.add(o.date.toISOString().slice(0, 10));
+    return map;
+  }
+
+  /**
    * Batched equivalent of resolveStaffDay() for running it over many
    * employees x many days (e.g. payroll generation) without one DB round
    * trip per employee per day. Callers load `rows` once via

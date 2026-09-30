@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { AttendanceSource, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
+import { AttendanceSource, CheckInSource, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
 import { CalendarNotificationService } from './calendar-notification.service';
@@ -141,6 +141,7 @@ export class HolidayAttendanceSyncService {
         department_id: true,
         staff_category_id: true,
         days_per_week: true,
+        check_in_source: true,
         staff_categories: { select: { code: true } },
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
       },
@@ -159,6 +160,15 @@ export class HolidayAttendanceSyncService {
         date.getUTCDay() === 6
           ? await this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, date, date)
           : new Map<number, Set<string>>();
+      // TIMETABLE teachers work the days they have slots (plus makeups and
+      // shift overrides), not a days_per_week default. Without this, a
+      // teacher with Saturday slots was stamped EXCUSED – Weekend every
+      // Saturday and their punches never counted.
+      const timetableContext = await this.calendarResolver.loadStaffTimetableContextForEmployees(
+        employees.filter((e) => e.check_in_source === CheckInSource.TIMETABLE).map((e) => e.id),
+        date,
+        date,
+      );
 
       const staffWrites: (() => Promise<unknown>)[] = [];
       for (const employee of employees) {
@@ -173,6 +183,10 @@ export class HolidayAttendanceSyncService {
           employee.days_per_week,
           employee.employee_work_schedules,
           mandatorySaturdayMap.get(employee.id),
+          employee.check_in_source,
+          timetableContext.get(employee.id)?.timetableActiveDays,
+          timetableContext.get(employee.id)?.makeupRescheduleDates,
+          timetableContext.get(employee.id)?.shiftOverrideDates,
         );
         const existing = existingByEmployee.get(employee.id);
 
