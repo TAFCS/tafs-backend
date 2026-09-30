@@ -23,6 +23,7 @@ import { createApiResponse } from '../../utils/serializer.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
+import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
 import { AttendanceSource, DevicePersonType } from '@prisma/client';
 
 export class RecomputeLateStatusDto {
@@ -63,6 +64,7 @@ export class RecomputeLateController {
     private readonly processor: ZkAttendanceProcessorService,
     private readonly scope: ScopeService,
     private readonly policyResolver: AttendancePolicyResolverService,
+    private readonly holidaySync: HolidayAttendanceSyncService,
   ) {}
 
   // Called only by the Attendance Settings page. It rewrites attendance for a
@@ -91,6 +93,20 @@ export class RecomputeLateController {
     // Set dates to start of UTC day for proper matching
     const start = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
     const end = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
+
+    // 0. Re-sync day-off rows against the CURRENT calendar and schedules.
+    // SYSTEM "EXCUSED – Weekend/Holiday" rows are written once and never
+    // revisited, and upsert*Daily deliberately won't overwrite them — so after
+    // e.g. a 5-day employee is corrected to 6 days, their past Saturdays stayed
+    // EXCUSED even with punches on them. The sync deletes SYSTEM rows for days
+    // that now resolve as working (and adds them for days that became off),
+    // leaving MANUAL/LEAVE rows alone; the recompute below then rebuilds those
+    // days from the scans.
+    let staleDayOffCleared = 0;
+    for (let d = new Date(start); d <= end; d = new Date(d.getTime() + 86_400_000)) {
+      const synced = await this.holidaySync.syncCampusForDate(dto.campus_id, d);
+      staleDayOffCleared += synced.cleared_staff + synced.cleared_students;
+    }
 
     // 1. Recompute Students
     // Query active student scans and existing student daily biometric records in the date range
@@ -214,7 +230,7 @@ export class RecomputeLateController {
     }
 
     return createApiResponse(
-      { studentsRecomputed, staffRecomputed },
+      { studentsRecomputed, staffRecomputed, staleDayOffCleared },
       HttpStatus.OK,
       'Recomputation of late status completed successfully',
     );
