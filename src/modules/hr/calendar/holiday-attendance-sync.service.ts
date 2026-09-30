@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { AttendanceSource, CheckInSource, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
+import { AttendanceSource, CheckInSource, Prisma, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
 import { CalendarNotificationService } from './calendar-notification.service';
@@ -45,7 +45,15 @@ export class HolidayAttendanceSyncService {
   async syncCampusForDate(
     campusId: number,
     date: Date,
-    options?: { force?: boolean },
+    options?: {
+      force?: boolean;
+      /** Skip the student half (staff-only recompute). */
+      skipStudents?: boolean;
+      /** Skip the staff half (students-only recompute). */
+      skipStaff?: boolean;
+      /** Narrow the staff half, e.g. to one department or staff category. */
+      employeeWhere?: Prisma.employee_profilesWhereInput;
+    },
   ): Promise<HolidaySyncResult> {
     let students = 0;
     let staff = 0;
@@ -59,14 +67,16 @@ export class HolidayAttendanceSyncService {
     // (instead of two DB round trips per student), then writes run with bounded
     // concurrency instead of fully sequential — this used to be the dominant
     // cost of a calendar-change sync on campuses with large rosters.
-    const enrolledStudents = await this.prisma.students.findMany({
-      where: {
-        campus_id: campusId,
-        status: student_status.ENROLLED,
-        deleted_at: null,
-      },
-      select: { cc: true, class_id: true, section_id: true, campus_id: true },
-    });
+    const enrolledStudents = options?.skipStudents
+      ? []
+      : await this.prisma.students.findMany({
+          where: {
+            campus_id: campusId,
+            status: student_status.ENROLLED,
+            deleted_at: null,
+          },
+          select: { cc: true, class_id: true, section_id: true, campus_id: true },
+        });
 
     if (enrolledStudents.length > 0) {
       const studentCalendarRows = await this.calendarResolver.loadStudentCalendarRowsForDate(campusId, date);
@@ -138,22 +148,25 @@ export class HolidayAttendanceSyncService {
     }
 
     // ── Staff ─────────────────────────────────────────────────────────────
-    const employees = await this.prisma.employee_profiles.findMany({
-      where: {
-        campus_id: campusId,
-        users: { is_active: true, deleted_at: null },
-      },
-      select: {
-        id: true,
-        campus_id: true,
-        department_id: true,
-        staff_category_id: true,
-        days_per_week: true,
-        check_in_source: true,
-        staff_categories: { select: { code: true } },
-        employee_work_schedules: { select: { day_of_week: true, is_working: true } },
-      },
-    });
+    const employees = options?.skipStaff
+      ? []
+      : await this.prisma.employee_profiles.findMany({
+          where: {
+            ...(options?.employeeWhere ?? {}),
+            campus_id: campusId,
+            users: { is_active: true, deleted_at: null },
+          },
+          select: {
+            id: true,
+            campus_id: true,
+            department_id: true,
+            staff_category_id: true,
+            days_per_week: true,
+            check_in_source: true,
+            staff_categories: { select: { code: true } },
+            employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+          },
+        });
 
     if (employees.length > 0) {
       const staffCalendarRows = await this.calendarResolver.loadStaffCalendarRows(campusId, date, date);
@@ -254,7 +267,7 @@ export class HolidayAttendanceSyncService {
     // never push "school is closed on <a date weeks ago>" to parents — and
     // these two steps resolve every student one by one, which made a range
     // re-sync take ~45s per day.
-    if (date.getTime() >= this.todayUtcDate().getTime()) {
+    if (!options?.skipStudents && date.getTime() >= this.todayUtcDate().getTime()) {
       await this.notificationService.clearStaleDayOffAlerts(campusId, date);
       await this.notificationService.notifyDayOffForCampusDate(campusId, date);
     }

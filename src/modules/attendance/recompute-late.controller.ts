@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString, IsISO8601 } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsISO8601 } from 'class-validator';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
@@ -24,7 +24,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { AttendancePolicyResolverService } from './attendance-policy-resolver.service';
 import { HolidayAttendanceSyncService } from '../hr/calendar/holiday-attendance-sync.service';
-import { AttendanceSource, DevicePersonType } from '@prisma/client';
+import { AttendanceSource, DevicePersonType, Prisma } from '@prisma/client';
 
 export class RecomputeLateStatusDto {
   @Type(() => Number)
@@ -41,6 +41,23 @@ export class RecomputeLateStatusDto {
   @Type(() => Number)
   @IsInt()
   class_id?: number;
+
+  /** Who to recompute. Defaults to everyone (or students only when class_id is set). */
+  @IsOptional()
+  @IsIn(['ALL', 'STAFF', 'STUDENTS'])
+  target?: 'ALL' | 'STAFF' | 'STUDENTS';
+
+  /** Staff filter — setting it makes the run staff-only. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  department_id?: number;
+
+  /** Staff filter — setting it makes the run staff-only. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  staff_category_id?: number;
 
   /**
    * Deliberate override: recompute staff expected check-in/out from the
@@ -79,6 +96,23 @@ export class RecomputeLateController {
       throw new ForbiddenException('You do not have access to this campus');
     }
     if (dto.class_id != null) this.scope.assertClass(user, dto.class_id);
+    if (dto.department_id != null) this.scope.assertDepartment(user, dto.department_id);
+    if (dto.staff_category_id != null) this.scope.assertStaffCategory(user, dto.staff_category_id);
+
+    // A class narrows to students; a department/category narrows to staff.
+    const hasStaffFilter = dto.department_id != null || dto.staff_category_id != null;
+    if (hasStaffFilter && (dto.class_id != null || dto.target === 'STUDENTS')) {
+      throw new BadRequestException('Department and staff category filters apply to staff — remove the class / students-only selection.');
+    }
+    if (dto.class_id != null && dto.target === 'STAFF') {
+      throw new BadRequestException('A class filter applies to students — remove it for a staff-only recompute.');
+    }
+    const includeStaff = dto.target !== 'STUDENTS' && dto.class_id == null;
+    const includeStudents = dto.target !== 'STAFF' && !hasStaffFilter;
+    const employeeWhere: Prisma.employee_profilesWhereInput = {
+      ...(dto.department_id != null ? { department_id: dto.department_id } : {}),
+      ...(dto.staff_category_id != null ? { staff_category_id: dto.staff_category_id } : {}),
+    };
     const fromDate = new Date(dto.date_from);
     const toDate = new Date(dto.date_to);
 
@@ -104,13 +138,17 @@ export class RecomputeLateController {
     // days from the scans.
     let staleDayOffCleared = 0;
     for (let d = new Date(start); d <= end; d = new Date(d.getTime() + 86_400_000)) {
-      const synced = await this.holidaySync.syncCampusForDate(dto.campus_id, d);
+      const synced = await this.holidaySync.syncCampusForDate(dto.campus_id, d, {
+        skipStudents: !includeStudents,
+        skipStaff: !includeStaff,
+        employeeWhere,
+      });
       staleDayOffCleared += synced.cleared_staff + synced.cleared_students;
     }
 
     // 1. Recompute Students
     // Query active student scans and existing student daily biometric records in the date range
-    const studentScans = await this.prisma.zk_attendance_scans.findMany({
+    const studentScans = !includeStudents ? [] : await this.prisma.zk_attendance_scans.findMany({
       where: {
         person_type: DevicePersonType.STUDENT,
         attendance_date: { gte: start, lte: end },
@@ -126,7 +164,7 @@ export class RecomputeLateController {
       },
     });
 
-    const studentDailyRows = await this.prisma.attendance_student_daily.findMany({
+    const studentDailyRows = !includeStudents ? [] : await this.prisma.attendance_student_daily.findMany({
       where: {
         campus_id: dto.campus_id,
         date: { gte: start, lte: end },
@@ -177,13 +215,14 @@ export class RecomputeLateController {
 
     // 2. Recompute Staff (only if class_id is not specified)
     let staffRecomputed = 0;
-    if (!dto.class_id) {
+    if (includeStaff) {
       const staffScans = await this.prisma.zk_attendance_scans.findMany({
         where: {
           person_type: DevicePersonType.STAFF,
           attendance_date: { gte: start, lte: end },
           is_duplicate: false,
           employee_profiles: {
+            ...employeeWhere,
             campus_id: dto.campus_id,
           },
         },
@@ -198,6 +237,7 @@ export class RecomputeLateController {
           campus_id: dto.campus_id,
           date: { gte: start, lte: end },
           source: AttendanceSource.BIOMETRIC,
+          ...(hasStaffFilter ? { employee_profiles: employeeWhere } : {}),
         },
         select: {
           employee_id: true,
