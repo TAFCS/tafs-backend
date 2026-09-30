@@ -59,6 +59,12 @@ export class RecomputeLateStatusDto {
   @IsInt()
   staff_category_id?: number;
 
+  /** One employee only — makes the run staff-only. Must belong to campus_id. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  employee_id?: number;
+
   /**
    * Deliberate override: recompute staff expected check-in/out from the
    * CURRENT timetable/policy state, overwriting any existing snapshot.
@@ -100,9 +106,21 @@ export class RecomputeLateController {
     if (dto.staff_category_id != null) this.scope.assertStaffCategory(user, dto.staff_category_id);
 
     // A class narrows to students; a department/category narrows to staff.
-    const hasStaffFilter = dto.department_id != null || dto.staff_category_id != null;
+    if (dto.employee_id != null) {
+      const employee = await this.prisma.employee_profiles.findUnique({
+        where: { id: dto.employee_id },
+        select: { campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
+      });
+      if (!employee) throw new BadRequestException('Employee not found');
+      this.scope.assertEmployee(user, employee);
+      if (employee.campus_id !== dto.campus_id) {
+        throw new BadRequestException("The selected campus is not this employee's campus.");
+      }
+    }
+    const hasStaffFilter =
+      dto.department_id != null || dto.staff_category_id != null || dto.employee_id != null;
     if (hasStaffFilter && (dto.class_id != null || dto.target === 'STUDENTS')) {
-      throw new BadRequestException('Department and staff category filters apply to staff — remove the class / students-only selection.');
+      throw new BadRequestException('Employee, department and staff category filters apply to staff — remove the class / students-only selection.');
     }
     if (dto.class_id != null && dto.target === 'STAFF') {
       throw new BadRequestException('A class filter applies to students — remove it for a staff-only recompute.');
@@ -112,6 +130,7 @@ export class RecomputeLateController {
     const employeeWhere: Prisma.employee_profilesWhereInput = {
       ...(dto.department_id != null ? { department_id: dto.department_id } : {}),
       ...(dto.staff_category_id != null ? { staff_category_id: dto.staff_category_id } : {}),
+      ...(dto.employee_id != null ? { id: dto.employee_id } : {}),
     };
     const fromDate = new Date(dto.date_from);
     const toDate = new Date(dto.date_to);
