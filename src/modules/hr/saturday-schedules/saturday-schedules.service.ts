@@ -21,6 +21,10 @@ import {
   isTemplateDisabled,
 } from '../../../utils/notification-templates.util';
 import { actionsCover } from '../../access/tiles.manifest';
+import {
+  computePayrollWindow,
+  currentPayrollPeriodLabel,
+} from '../payroll/payroll-period.util';
 
 // Max mandatory Saturdays that can be assigned to one employee in one payroll
 // month. Employees already at this count are skipped (and reported back in
@@ -84,14 +88,15 @@ export class SaturdaySchedulesService {
       ...new Map(rawDates.map((d) => [this.dateKey(d), d])).values(),
     ];
 
+    // Keyed by payroll cycle (26th of previous month – 25th), e.g. 26 Sep
+    // falls in the '2026-10' cycle — the same window payroll deducts over.
     const monthRanges = new Map<string, { start: Date; end: Date }>();
     for (const d of uniqueDates) {
-      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+      const key = currentPayrollPeriodLabel(d);
       if (!monthRanges.has(key)) {
-        monthRanges.set(key, {
-          start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)),
-          end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)),
-        });
+        const [y, m] = key.split('-').map(Number);
+        const { periodStart, periodEnd } = computePayrollWindow(y, m);
+        monthRanges.set(key, { start: periodStart, end: periodEnd });
       }
     }
     const overallStart = new Date(
@@ -139,7 +144,7 @@ export class SaturdaySchedulesService {
     const monthCountMap = new Map<string, number>();
     const alreadyScheduled = new Set<string>();
     for (const row of existingRows) {
-      const monthKey = `${row.date.getUTCFullYear()}-${row.date.getUTCMonth()}`;
+      const monthKey = currentPayrollPeriodLabel(row.date);
       const countKey = `${row.employee_id}:${monthKey}`;
       monthCountMap.set(countKey, (monthCountMap.get(countKey) ?? 0) + 1);
       alreadyScheduled.add(`${row.employee_id}:${this.dateKey(row.date)}`);
@@ -154,7 +159,7 @@ export class SaturdaySchedulesService {
     }>[] = [];
 
     for (const date of uniqueDates) {
-      const monthKey = `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+      const monthKey = currentPayrollPeriodLabel(date);
       const dateKey = this.dateKey(date);
 
       for (const employee of employees) {
@@ -240,12 +245,11 @@ export class SaturdaySchedulesService {
 
     for (const [monthKey, range] of monthRanges) {
       const createdInMonth = created.filter(
-        (row) =>
-          `${row.date.getUTCFullYear()}-${row.date.getUTCMonth()}` === monthKey,
+        (row) => currentPayrollPeriodLabel(row.date) === monthKey,
       );
       if (createdInMonth.length === 0) continue;
 
-      const monthLabel = this.formatMonthLabel(range.start);
+      const monthLabel = this.formatMonthLabel(range.end);
       const affectedCampusIds = new Set<number>();
       for (const row of createdInMonth) {
         if (row.employee_profiles.campus_id != null)
@@ -278,7 +282,7 @@ export class SaturdaySchedulesService {
         employeeIdsInMonth,
         range.start,
         range.end,
-        range.start,
+        range.end,
       ).catch((err) =>
         console.error(
           '[SaturdaySchedules] Monthly summary notice failed:',
@@ -359,8 +363,9 @@ export class SaturdaySchedulesService {
       throw new BadRequestException('month must be YYYY-MM');
     }
 
-    const monthStart = new Date(Date.UTC(year, month - 1, 1));
-    const monthEnd = new Date(Date.UTC(year, month, 0));
+    // `month` names a payroll cycle: 26th of the previous month – 25th.
+    const { periodStart: monthStart, periodEnd: monthEnd } =
+      computePayrollWindow(year, month);
 
     const campusIds = this.scope.campusIdsFor(user, query.campusId);
 

@@ -34,7 +34,7 @@ export class CreateSaturdayScheduleDto {
 }
 
 export class ListSaturdaySchedulesQueryDto {
-  @ApiProperty({ example: '2026-03', description: 'YYYY-MM month filter' })
+  @ApiProperty({ example: '2026-03', description: 'YYYY-MM payroll cycle (26th of previous month – 25th of this month)' })
   @IsString()
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'month must be YYYY-MM' })
   month: string;
