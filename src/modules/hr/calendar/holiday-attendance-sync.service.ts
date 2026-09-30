@@ -90,8 +90,8 @@ export class HolidayAttendanceSyncService {
           if (existing?.source === AttendanceSource.SYSTEM) {
             clearedStudents++;
             studentWrites.push(() =>
-              this.prisma.attendance_student_daily.delete({
-                where: { student_cc_date: { student_cc: student.cc, date } },
+              this.prisma.attendance_student_daily.deleteMany({
+                where: { student_cc: student.cc, date, source: AttendanceSource.SYSTEM },
               }),
             );
           }
@@ -107,6 +107,14 @@ export class HolidayAttendanceSyncService {
 
         const description = resolved.description ?? 'Holiday';
         students++;
+        // Already the row we'd write — re-syncing an unchanged day is read-only.
+        if (
+          existing?.source === AttendanceSource.SYSTEM &&
+          existing.status === RollRecordStatus.EXCUSED &&
+          existing.notes === description
+        ) {
+          continue;
+        }
         studentWrites.push(() =>
           this.prisma.attendance_student_daily.upsert({
             where: { student_cc_date: { student_cc: student.cc, date } },
@@ -194,8 +202,8 @@ export class HolidayAttendanceSyncService {
           if (existing?.source === AttendanceSource.SYSTEM) {
             clearedStaff++;
             staffWrites.push(() =>
-              this.prisma.attendance_staff_daily.delete({
-                where: { employee_id_date: { employee_id: employee.id, date } },
+              this.prisma.attendance_staff_daily.deleteMany({
+                where: { employee_id: employee.id, date, source: AttendanceSource.SYSTEM },
               }),
             );
           }
@@ -212,6 +220,13 @@ export class HolidayAttendanceSyncService {
 
         const description = resolved.description ?? 'Day off';
         staff++;
+        if (
+          existing?.source === AttendanceSource.SYSTEM &&
+          existing.status === StaffAttendanceStatus.EXCUSED &&
+          existing.notes === description
+        ) {
+          continue;
+        }
         staffWrites.push(() =>
           this.prisma.attendance_staff_daily.upsert({
             where: { employee_id_date: { employee_id: employee.id, date } },
@@ -234,8 +249,15 @@ export class HolidayAttendanceSyncService {
       await this.runInBatches(staffWrites);
     }
 
-    await this.notificationService.clearStaleDayOffAlerts(campusId, date);
-    await this.notificationService.notifyDayOffForCampusDate(campusId, date);
+    // Day-off alerts are for today and upcoming days only. Re-syncing a past
+    // date (Recompute Status over a range, opening an old register day) must
+    // never push "school is closed on <a date weeks ago>" to parents — and
+    // these two steps resolve every student one by one, which made a range
+    // re-sync take ~45s per day.
+    if (date.getTime() >= this.todayUtcDate().getTime()) {
+      await this.notificationService.clearStaleDayOffAlerts(campusId, date);
+      await this.notificationService.notifyDayOffForCampusDate(campusId, date);
+    }
 
     return {
       students,
