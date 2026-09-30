@@ -284,6 +284,15 @@ export class UpdateEmployeeStatusDto {
   @IsOptional()
   @IsDateString()
   date_of_leaving?: string;
+
+  /**
+   * Date of rejoining (YYYY-MM-DD). Only meaningful when a LEFT / TERMINATED
+   * employee is brought back: it replaces their date of joining. Omitted, the
+   * original date of joining is kept.
+   */
+  @IsOptional()
+  @IsDateString()
+  join_date?: string;
 }
 
 export class UpdateEmployeeLeavingDateDto {
@@ -1776,6 +1785,19 @@ export class EmployeesService {
         nextStatus === EmployeeStatus.PERMANENT ||
         nextStatus === EmployeeStatus.FAMILY);
 
+    // Rejoining: the date asked for on the status change becomes the new date
+    // of joining. It can't fall on or before the day they left.
+    const previousLeavingDate: Date | null = (existing as any).date_of_leaving ?? null;
+    const rejoinDate =
+      wasOffboarded && !leavingNow && dto.join_date
+        ? new Date(`${dto.join_date.slice(0, 10)}T00:00:00.000Z`)
+        : null;
+    if (rejoinDate && previousLeavingDate && rejoinDate <= previousLeavingDate) {
+      throw new BadRequestException(
+        `Date of rejoining must be after the date of leaving (${previousLeavingDate.toISOString().slice(0, 10)}).`,
+      );
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       if (existing.user_id && deactivatePortal) {
         await tx.users.update({
@@ -1796,6 +1818,7 @@ export class EmployeesService {
           is_permanent_employee: nextStatus === EmployeeStatus.PERMANENT,
           // Cleared again if the employee is brought back.
           date_of_leaving: nextLeavingDate,
+          ...(rejoinDate ? { join_date: rejoinDate } : {}),
         },
         include: includeRelations,
       });
@@ -1822,6 +1845,24 @@ export class EmployeesService {
       note: dto.notes ?? undefined,
       changed_by: caller.username || caller.sub || 'system',
     });
+
+    if (rejoinDate) {
+      // The cleared date of leaving would otherwise be lost, so it rides along
+      // on the joining-date entry.
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(id),
+        action: 'UPDATED',
+        section: 'hr',
+        field: 'Date of Joining',
+        old_value: (existing as any).join_date?.toISOString().slice(0, 10) ?? undefined,
+        new_value: dto.join_date!.slice(0, 10),
+        note: previousLeavingDate
+          ? `Rejoined; previous date of leaving ${previousLeavingDate.toISOString().slice(0, 10)}`
+          : 'Rejoined',
+        changed_by: caller.username || caller.sub || 'system',
+      });
+    }
 
     return updated;
   }
