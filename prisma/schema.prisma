@@ -905,6 +905,8 @@ model users {
   staff_lesson_reschedules_created                                         staff_lesson_reschedules[]
   tickets_closed                                                           support_tickets[]            @relation("TicketClosedByUser")
   tickets_assigned                                                         support_tickets[]            @relation("TicketCurrentAssignee")
+  ticket_queue_memberships                                                 ticket_queue_members[]
+  ticket_routing_rules_targeted                                            ticket_routing_rules[]       @relation("TicketRoutingRuleTargetUser")
   teacher_saturday_schedules_marked                                        teacher_saturday_schedules[] @relation("SaturdayScheduleMarkedBy")
   ticket_events_actor                                                      ticket_events[]              @relation("TicketEventActorUser")
   ticket_events_from                                                       ticket_events[]              @relation("TicketEventFromUser")
@@ -1106,38 +1108,43 @@ model fcm_device_tokens {
 }
 
 model support_tickets {
-  id                      String            @id @default(uuid())
+  id                      String                @id @default(uuid())
   family_id               Int
   category                TicketCategory
-  subtopic                String?           @db.VarChar(100)
+  subtopic                String?               @db.VarChar(100)
   student_id              Int?
   description             String
-  status                  TicketStatus      @default(OPEN)
+  status                  TicketStatus          @default(OPEN)
   current_assignee_id     String?
   routed_role             StaffRole
   opened_by_guardian_id   Int?
   closed_by_user_id       String?
   closed_by_guardian_id   Int?
   closed_at               DateTime?
-  last_message_at         DateTime          @default(now())
-  last_message_snippet    String?           @db.VarChar(255)
-  unread_by_staff         Int               @default(0)
-  unread_by_parent        Int               @default(0)
+  last_message_at         DateTime              @default(now())
+  last_message_snippet    String?               @db.VarChar(255)
+  unread_by_staff         Int                   @default(0)
+  unread_by_parent        Int                   @default(0)
   staff_last_read_at      DateTime?
   parent_last_read_at     DateTime?
-  created_at              DateTime          @default(now())
-  updated_at              DateTime          @updatedAt
-  last_family_snippet     String?           @db.VarChar(255)
-  last_staff_snippet      String?           @db.VarChar(255)
-  last_family_sender_name String?           @db.VarChar(100)
-  last_staff_sender_id    String?           @db.VarChar(36)
-  last_staff_sender_name  String?           @db.VarChar(100)
-  closed_by_guardian      guardians?        @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
-  closed_by_user          users?            @relation("TicketClosedByUser", fields: [closed_by_user_id], references: [id])
-  current_assignee        users?            @relation("TicketCurrentAssignee", fields: [current_assignee_id], references: [id])
-  families                families          @relation(fields: [family_id], references: [id])
-  opened_by_guardian      guardians?        @relation("TicketOpenedByGuardian", fields: [opened_by_guardian_id], references: [id])
-  students                students?         @relation(fields: [student_id], references: [cc])
+  created_at              DateTime              @default(now())
+  updated_at              DateTime              @updatedAt
+  last_family_snippet     String?               @db.VarChar(255)
+  last_staff_snippet      String?               @db.VarChar(255)
+  last_family_sender_name String?               @db.VarChar(100)
+  last_staff_sender_id    String?               @db.VarChar(36)
+  last_staff_sender_name  String?               @db.VarChar(100)
+  routed_queue_id         Int?
+  routed_rule_id          Int?
+  routing_note            String?               @db.VarChar(500)
+  routed_queue            ticket_queues?        @relation(fields: [routed_queue_id], references: [id], onDelete: SetNull)
+  routed_rule             ticket_routing_rules? @relation(fields: [routed_rule_id], references: [id], onDelete: SetNull)
+  closed_by_guardian      guardians?            @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
+  closed_by_user          users?                @relation("TicketClosedByUser", fields: [closed_by_user_id], references: [id])
+  current_assignee        users?                @relation("TicketCurrentAssignee", fields: [current_assignee_id], references: [id])
+  families                families              @relation(fields: [family_id], references: [id])
+  opened_by_guardian      guardians?            @relation("TicketOpenedByGuardian", fields: [opened_by_guardian_id], references: [id])
+  students                students?             @relation(fields: [student_id], references: [cc])
   events                  ticket_events[]
   messages                ticket_messages[]
 
@@ -1146,6 +1153,7 @@ model support_tickets {
   @@index([current_assignee_id, status])
   @@index([last_message_at(sort: Desc)])
   @@index([closed_at(sort: Desc)])
+  @@index([routed_queue_id, status])
 }
 
 model ticket_messages {
@@ -1172,6 +1180,64 @@ model ticket_messages {
   @@index([ticket_id, created_at(sort: Desc)])
   @@index([status, sender_type])
   @@index([deleted_at])
+}
+
+/// A named pool of staff that support tickets can be routed to (e.g. Finance, General desk).
+model ticket_queues {
+  id            Int                    @id @default(autoincrement())
+  name          String                 @unique @db.VarChar(100)
+  category      TicketCategory
+  assignment    TicketQueueAssignment  @default(POOL)
+  /// Members holding a ticket from this queue may forward it to any staff member.
+  allow_forward Boolean                @default(false)
+  /// The last-resort destination for its category. At most one per category.
+  is_fallback   Boolean                @default(false)
+  is_active     Boolean                @default(true)
+  created_at    DateTime               @default(now()) @db.Timestamp(6)
+  updated_at    DateTime               @updatedAt @db.Timestamp(6)
+  updated_by    String?                @db.VarChar(255)
+  members       ticket_queue_members[]
+  rules         ticket_routing_rules[]
+  tickets       support_tickets[]
+}
+
+model ticket_queue_members {
+  queue_id   Int
+  user_id    String
+  /// Order AUTO queues try members in.
+  sort_order Int           @default(0)
+  created_at DateTime      @default(now()) @db.Timestamp(6)
+  queue      ticket_queues @relation(fields: [queue_id], references: [id], onDelete: Cascade)
+  user       users         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([queue_id, user_id])
+  @@index([user_id])
+}
+
+/// Where a new support ticket goes. The most specific matching active rule wins; priority breaks ties.
+model ticket_routing_rules {
+  id              Int               @id @default(autoincrement())
+  name            String            @db.VarChar(120)
+  category        TicketCategory
+  child_match     TicketChildMatch  @default(ANY)
+  campus_id       Int?
+  segment_id      Int?
+  /// Empty = any class.
+  class_ids       Int[]             @default([])
+  subtopic        String?           @db.VarChar(100)
+  target_user_id  String?
+  target_queue_id Int?
+  /// Lower runs first among equally specific rules.
+  priority        Int               @default(100)
+  is_active       Boolean           @default(true)
+  created_at      DateTime          @default(now()) @db.Timestamp(6)
+  updated_at      DateTime          @updatedAt @db.Timestamp(6)
+  updated_by      String?           @db.VarChar(255)
+  target_user     users?            @relation("TicketRoutingRuleTargetUser", fields: [target_user_id], references: [id], onDelete: SetNull)
+  target_queue    ticket_queues?    @relation(fields: [target_queue_id], references: [id], onDelete: SetNull)
+  tickets         support_tickets[]
+
+  @@index([category, is_active])
 }
 
 model ticket_events {
@@ -2545,6 +2611,19 @@ enum TicketStatus {
 enum TicketSenderType {
   GUARDIAN
   STAFF
+}
+
+enum TicketQueueAssignment {
+  /// Tickets wait unassigned until a member claims them.
+  POOL
+  /// Tickets go straight to the first active member who can see the student.
+  AUTO
+}
+
+enum TicketChildMatch {
+  ANY
+  WITH_CHILD
+  NO_CHILD
 }
 
 enum TicketEventType {
