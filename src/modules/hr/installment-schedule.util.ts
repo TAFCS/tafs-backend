@@ -113,3 +113,21 @@ export function assertScheduleMatchesRemaining(amounts: number[], remaining: Pri
   }
   return schedule;
 }
+
+/**
+ * Schedule for a new plan: the explicit month-by-month amounts when the caller
+ * picked months (0 = skipped cycle), otherwise an equal split over `count`.
+ * An explicit schedule must open with a collecting month — the plan's start
+ * cycle is the first month picked.
+ */
+export function buildCreateSchedule(total: Prisma.Decimal, count: number, explicit?: number[]): number[] {
+  if (!explicit) return buildEqualSchedule(total, count);
+  if (explicit.length !== count) {
+    throw new BadRequestException('installment_count must match the number of monthly amounts.');
+  }
+  const schedule = assertScheduleMatchesRemaining(explicit, total);
+  if (schedule[0] <= 0) {
+    throw new BadRequestException('The first month of the plan must collect something.');
+  }
+  return schedule;
+}

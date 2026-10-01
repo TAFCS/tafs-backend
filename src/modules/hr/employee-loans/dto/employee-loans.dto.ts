@@ -44,6 +44,16 @@ export class CreateLoanDto {
   @IsDateString()
   start_period_start?: string;
 
+  @ApiPropertyOptional({ type: [Number], example: [10000, 0, 10000], description: 'Explicit monthly amounts starting at start_period_start, one per consecutive cycle. Use 0 to skip a cycle; the first month must collect. Must sum to total_amount minus amount_repaid_opening. When given, installment_count must equal its length.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(120)
+  @Transform(({ value }) => (Array.isArray(value) ? value.map((item: unknown) => Number(item)) : value))
+  @IsNumber({ maxDecimalPlaces: 2 }, { each: true })
+  @Min(0, { each: true })
+  installment_amounts?: number[];
+
   @ApiPropertyOptional({ description: 'What the loan is for' })
   @IsOptional()
   @IsString()
