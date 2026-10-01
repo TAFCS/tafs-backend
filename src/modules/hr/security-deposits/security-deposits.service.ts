@@ -13,7 +13,7 @@ import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } from '../payroll/payroll-period.util';
 import {
   assertScheduleMatchesRemaining,
-  buildEqualSchedule,
+  buildCreateSchedule,
   money,
   nextScheduledAmount,
   parseInstallmentSchedule,
@@ -172,7 +172,7 @@ export class SecurityDepositsService {
     }
 
     const total = money(dto.total_amount);
-    const schedule = buildEqualSchedule(total, dto.installment_count);
+    const schedule = buildCreateSchedule(total, dto.installment_count, dto.installment_amounts);
     if (schedule.length === 0) {
       throw new BadRequestException('Installment amount must be greater than zero. Increase the total or reduce the number of months.');
     }
@@ -188,9 +188,9 @@ export class SecurityDepositsService {
     const monthlyPay = profile?.monthly_pay ? money(profile.monthly_pay) : ZERO;
     if (profile && (!profile.payroll_enabled || monthlyPay.lte(0))) {
       warnings.push('This employee has no monthly pay or is not on payroll, so nothing will be collected until that is set.');
-    } else if (monthlyPay.gt(0) && money(schedule[0]).gt(monthlyPay)) {
+    } else if (monthlyPay.gt(0) && money(Math.max(...schedule)).gt(monthlyPay)) {
       warnings.push(
-        `The installment of ${money(schedule[0]).toFixed(2)} is more than the monthly pay of ${monthlyPay.toFixed(2)}; each cycle will collect only what pay allows and the rest carries forward.`,
+        `An installment of ${money(Math.max(...schedule)).toFixed(2)} is more than the monthly pay of ${monthlyPay.toFixed(2)}; each cycle will collect only what pay allows and the rest carries forward.`,
       );
     }
 

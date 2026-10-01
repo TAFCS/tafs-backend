@@ -15,7 +15,7 @@ import { computePayrollWindow, currentPayrollPeriodLabel, parsePayrollPeriod } f
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
 import {
   assertScheduleMatchesRemaining,
-  buildEqualSchedule,
+  buildCreateSchedule,
   money,
   nextScheduledAmount,
   scheduleAsNumbers,
@@ -37,6 +37,31 @@ function dateOnly(value: Date): string {
 function currentCycleStart(): Date {
   const { year, month } = parsePayrollPeriod(currentPayrollPeriodLabel());
   return computePayrollWindow(year, month).periodStart;
+}
+
+/** Snaps any date to the start of the 26th-25th cycle that contains it. */
+function snapToCycleStart(date: Date): Date {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth();
+  return date.getUTCDate() >= 26 ? new Date(Date.UTC(y, m, 26)) : new Date(Date.UTC(y, m - 1, 26));
+}
+
+/** Same rule as security deposits: the schedule is popped per finalized payroll line, so the next cycle follows the last deduction — not the wall clock. */
+function nextCollectionPeriodStart(startPeriodStart: Date, lastDeductedPeriodStart: Date | null): Date {
+  if (!lastDeductedPeriodStart) return startPeriodStart;
+  const next = new Date(Date.UTC(lastDeductedPeriodStart.getUTCFullYear(), lastDeductedPeriodStart.getUTCMonth() + 1, 26));
+  return next > startPeriodStart ? next : startPeriodStart;
+}
+
+function lastDeductedPeriodStart(
+  transactions: { payroll_run_line?: { payroll_runs: { period_start: Date } } | null }[],
+): Date | null {
+  let last: Date | null = null;
+  for (const txn of transactions) {
+    const start = txn.payroll_run_line?.payroll_runs.period_start;
+    if (start && (!last || start > last)) last = start;
+  }
+  return last;
 }
 
 @Injectable()
@@ -101,6 +126,10 @@ export class EmployeeLoansService {
             campuses: { select: { campus_name: true } },
           },
         },
+        transactions: {
+          where: { type: LoanTransactionType.DEDUCTION, payroll_run_line_id: { not: null } },
+          select: { payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } } },
+        },
       },
       orderBy: [{ status: 'asc' }, { start_period_start: 'desc' }, { id: 'desc' }],
     });
@@ -122,7 +151,7 @@ export class EmployeeLoansService {
       throw new BadRequestException('Opening repaid amount must be less than the total loan amount.');
     }
     const remaining = total.minus(opening);
-    const schedule = buildEqualSchedule(remaining, dto.installment_count);
+    const schedule = buildCreateSchedule(remaining, dto.installment_count, dto.installment_amounts);
     if (schedule.length === 0) {
       throw new BadRequestException('Installment amount must be greater than zero. Increase the total or reduce the number of months.');
     }
@@ -130,7 +159,7 @@ export class EmployeeLoansService {
       ? new Date(`${dto.disbursement_date.slice(0, 10)}T00:00:00.000Z`)
       : new Date(`${dateOnly(new Date())}T00:00:00.000Z`);
     const start = dto.start_period_start
-      ? new Date(`${dto.start_period_start.slice(0, 10)}T00:00:00.000Z`)
+      ? snapToCycleStart(new Date(`${dto.start_period_start.slice(0, 10)}T00:00:00.000Z`))
       : currentCycleStart();
 
     await this.prisma.$transaction(async (tx) => {
@@ -595,6 +624,7 @@ export class EmployeeLoansService {
       employee_code: string | null;
       campuses: { campus_name: string } | null;
     };
+    transactions: { payroll_run_line: { payroll_runs: { period_start: Date } } | null }[];
   }) {
     const total = Number(loan.total_amount);
     return {
@@ -615,6 +645,9 @@ export class EmployeeLoansService {
       installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
+      next_collection_period_start: dateOnly(
+        nextCollectionPeriodStart(loan.start_period_start, lastDeductedPeriodStart(loan.transactions)),
+      ),
       status: loan.status,
     };
   }
@@ -647,6 +680,12 @@ export class EmployeeLoansService {
       installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
+      next_collection_period_start: dateOnly(
+        nextCollectionPeriodStart(
+          loan.start_period_start,
+          lastDeductedPeriodStart(loan.transactions.filter((txn) => txn.type === LoanTransactionType.DEDUCTION)),
+        ),
+      ),
       recovered_amount: Number(loan.recovered_amount),
       lump_sum_repaid_amount: Number(loan.lump_sum_repaid_amount),
       written_off_amount: Number(loan.written_off_amount),
