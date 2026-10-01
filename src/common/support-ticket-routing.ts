@@ -23,6 +23,51 @@ export function pickPrincipal<
   )[0];
 }
 
+/** app_config key holding the child-ticket routing overrides (JSON array). */
+export const ROUTING_OVERRIDES_CONFIG_KEY = 'support_tickets.routing_overrides';
+
+/** Sends child tickets for a campus (optionally only some classes) to a fixed staff member. */
+export interface RoutingOverride {
+  campus_id: number;
+  /** Empty or missing = every class on the campus. */
+  class_ids?: number[];
+  user_id: string;
+}
+
+/** Parses the overrides config; a malformed value yields no overrides. */
+export function parseRoutingOverrides(raw: string | null | undefined): RoutingOverride[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (o): o is RoutingOverride =>
+        !!o &&
+        typeof o.campus_id === 'number' &&
+        typeof o.user_id === 'string' &&
+        (o.class_ids === undefined ||
+          (Array.isArray(o.class_ids) && o.class_ids.every((c: unknown) => typeof c === 'number'))),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Overrides matching a campus/class, class-specific ones before campus-wide ones. */
+export function matchRoutingOverrides(
+  overrides: RoutingOverride[],
+  campusId: number,
+  classId: number,
+): RoutingOverride[] {
+  return overrides
+    .filter(
+      (o) =>
+        o.campus_id === campusId &&
+        (!o.class_ids?.length || o.class_ids.includes(classId)),
+    )
+    .sort((a, b) => (b.class_ids?.length ? 1 : 0) - (a.class_ids?.length ? 1 : 0));
+}
+
 const RESPONDER_ROLES: StaffRole[] = [
   'PRINCIPAL',
   'FINANCE_CLERK',
