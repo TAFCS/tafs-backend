@@ -1,7 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { MessageStatus, TicketCategory, TicketStatus } from '@prisma/client';
 import { SupportTicketsService } from './support-tickets.service';
-import { pickPrincipal } from '../../common/support-ticket-routing';
 
 describe('SupportTicketsService leak-proofing', () => {
   const mockGateway = {
@@ -20,6 +19,12 @@ describe('SupportTicketsService leak-proofing', () => {
 
   const mockFcm = { sendToFamily: jest.fn(), sendToUsers: jest.fn() };
   const mockAuditLogs = { log: jest.fn() };
+  const mockScope = { isExempt: jest.fn().mockReturnValue(true), canSeeStudent: jest.fn() };
+  const mockRouting = {
+    resolve: jest.fn(),
+    queueIdsFor: jest.fn().mockResolvedValue([]),
+    activeMembers: jest.fn().mockResolvedValue([]),
+  };
 
   const prisma = {
     support_tickets: {
@@ -47,7 +52,8 @@ describe('SupportTicketsService leak-proofing', () => {
       findFirst: jest.fn(),
     },
     students: { findFirst: jest.fn() },
-    app_config: { findUnique: jest.fn() },
+    classes: { findUnique: jest.fn() },
+    ticket_queues: { findUnique: jest.fn() },
     $transaction: jest.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
 
@@ -57,11 +63,16 @@ describe('SupportTicketsService leak-proofing', () => {
     jest.clearAllMocks();
     mockGateway.isParentInTicketRoom.mockReturnValue(false);
     mockGateway.isStaffInTicketRoom.mockResolvedValue(false);
+    mockScope.isExempt.mockReturnValue(true);
+    mockRouting.queueIdsFor.mockResolvedValue([]);
+    mockRouting.activeMembers.mockResolvedValue([]);
     service = new SupportTicketsService(
       prisma as any,
       mockFcm as any,
       mockGateway as any,
       mockAuditLogs as any,
+      mockScope as any,
+      mockRouting as any,
     );
   });
 
@@ -385,7 +396,8 @@ describe('SupportTicketsService leak-proofing', () => {
     ).rejects.toThrow('Reply has already been reviewed');
   });
 
-  it('finance claim uses atomic updateMany', async () => {
+  it('queue claim uses atomic updateMany limited to the caller\'s queues', async () => {
+    mockRouting.queueIdsFor.mockResolvedValue([1]);
     prisma.support_tickets.updateMany.mockResolvedValue({ count: 1 });
     prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({
       id: 't1',
@@ -404,9 +416,18 @@ describe('SupportTicketsService leak-proofing', () => {
 
     expect(prisma.support_tickets.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ current_assignee_id: null }),
+        where: expect.objectContaining({
+          current_assignee_id: null,
+          routed_queue_id: { in: [1] },
+        }),
       }),
     );
+  });
+
+  it('refuses claims from staff outside every queue', async () => {
+    await expect(
+      service.claimTicket('t1', { sub: 'teacher', role: 'TEACHER', userType: 'STAFF' } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('staff close notifies parent via FCM when parent is offline', async () => {
@@ -736,51 +757,36 @@ describe('SupportTicketsService leak-proofing', () => {
     expect(result.is_read).not.toBe(true);
   });
 
-  describe('resolveRouting for child tickets', () => {
-    const dto = { category: TicketCategory.GENERAL, studentId: 77 } as any;
+  describe('resolveRouting', () => {
+    const decision = { routedRole: 'PRINCIPAL', assigneeId: 'u', status: TicketStatus.ASSIGNED, queueId: null, ruleId: 3, note: null };
 
-    beforeEach(() => {
-      prisma.students.findFirst.mockResolvedValue({ cc: 77, campus_id: 2, class_id: 4 });
-    });
+    it('hands the routing service the child placement including segment', async () => {
+      prisma.students.findFirst.mockResolvedValue({ cc: 77, campus_id: 1, class_id: 15 });
+      prisma.classes.findUnique.mockResolvedValue({ segment_id: 6 });
+      mockRouting.resolve.mockResolvedValue(decision);
 
-    it('sends to an active override target before the principal lookup', async () => {
-      prisma.app_config.findUnique.mockResolvedValue({
-        value: JSON.stringify([{ campus_id: 2, user_id: 'nimla' }]),
+      const routing = await (service as any).resolveRouting(1, {
+        category: TicketCategory.GENERAL,
+        studentId: 77,
+        subtopic: 'Academics / Classwork',
       });
-      prisma.users.findFirst.mockResolvedValue({ id: 'nimla' });
 
-      const routing = await (service as any).resolveRouting(1, dto);
-
-      expect(routing).toEqual({
-        routedRole: 'PRINCIPAL',
-        assigneeId: 'nimla',
-        status: TicketStatus.ASSIGNED,
-      });
-      expect(prisma.users.findMany).not.toHaveBeenCalled();
-    });
-
-    it('falls back to the General Respondent when no principal is active', async () => {
-      prisma.app_config.findUnique.mockResolvedValue(null);
-      prisma.users.findMany.mockResolvedValue([]);
-      prisma.users.findFirst.mockResolvedValue({ id: 'desk' });
-
-      const routing = await (service as any).resolveRouting(1, dto);
-
-      expect(routing).toEqual({
-        routedRole: 'GENERAL_RESPONDENT',
-        assigneeId: 'desk',
-        status: TicketStatus.ASSIGNED,
+      expect(routing).toBe(decision);
+      expect(mockRouting.resolve).toHaveBeenCalledWith({
+        category: TicketCategory.GENERAL,
+        subtopic: 'Academics / Classwork',
+        student: { campus_id: 1, class_id: 15, segment_id: 6 },
       });
     });
-  });
-});
 
-describe('pickPrincipal integration', () => {
-  it('matches roster shape campus-wide over class-band', () => {
-    const result = pickPrincipal([
-      { id: 'hira', allowed_class_ids: [15, 16, 17, 18, 19] },
-      { id: 'samia', allowed_class_ids: [] },
-    ]);
-    expect(result?.id).toBe('samia');
+    it('routes family-level tickets without a student', async () => {
+      mockRouting.resolve.mockResolvedValue(decision);
+      await (service as any).resolveRouting(1, { category: TicketCategory.GENERAL, subtopic: 'Transport' });
+      expect(mockRouting.resolve).toHaveBeenCalledWith({
+        category: TicketCategory.GENERAL,
+        subtopic: 'Transport',
+        student: null,
+      });
+    });
   });
 });

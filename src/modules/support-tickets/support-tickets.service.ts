@@ -28,13 +28,10 @@ import { ChatGateway } from '../chat/chat.gateway';
 import { FcmService } from '../../common/fcm/fcm.service';
 import {
   ORIGINATION_OPTIONS,
-  ROUTING_OVERRIDES_CONFIG_KEY,
+  canSeeClosedTicket,
   closedTicketVisibilityWhere,
-  matchRoutingOverrides,
-  parseRoutingOverrides,
-  pickPrincipal,
-  principalLookupWhere,
 } from '../../common/support-ticket-routing';
+import { TicketRoutingService } from './routing/ticket-routing.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
@@ -96,6 +93,7 @@ export class SupportTicketsService {
     private readonly chatGateway: ChatGateway,
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
+    private readonly routing: TicketRoutingService,
   ) {}
 
   private studentScopeWhere(staff?: IJwtStaffPayload) {
@@ -174,14 +172,17 @@ export class SupportTicketsService {
     return { items, total, take, skip };
   }
 
+  /**
+   * Open tickets waiting in the queues the caller belongs to (claimed or not).
+   * Kept at /finance-queue for app compatibility; super admins see every queue.
+   */
   async listFinanceQueue(staff: IJwtStaffPayload, take = 50, skip = 0) {
-    if (staff.role !== 'FINANCE_CLERK' && staff.role !== 'SUPER_ADMIN') {
-      throw new ForbiddenException('Finance queue access denied');
-    }
+    const queueIds =
+      staff.role === 'SUPER_ADMIN' ? null : await this.routing.queueIdsFor(staff.sub);
+    if (queueIds && queueIds.length === 0) return { items: [], total: 0, take, skip };
 
     const where = {
-      category: TicketCategory.FINANCIAL,
-      routed_role: StaffRole.FINANCE_CLERK,
+      routed_queue_id: queueIds ? { in: queueIds } : { not: null },
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
       ...this.studentScopeWhere(staff),
     };
@@ -198,6 +199,23 @@ export class SupportTicketsService {
     ]);
 
     return { items, total, take, skip };
+  }
+
+  /** The caller's ticket queues, so clients know whether to show a queue tab. */
+  listMyQueues(staff: IJwtStaffPayload) {
+    return this.routing.queuesFor(staff.sub);
+  }
+
+  /** Who the current assignee can transfer this ticket to: the other active members of its queue. */
+  async listTransferTargets(ticketId: string, staff: IJwtStaffPayload) {
+    const ticket = await this.prisma.support_tickets.findUnique({
+      where: { id: ticketId },
+      select: { routed_queue_id: true, current_assignee_id: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (!ticket.routed_queue_id) return [];
+    const members = await this.routing.activeMembers(ticket.routed_queue_id);
+    return members.filter((m) => m.id !== staff.sub);
   }
 
   async listOversightQueue(staff: IJwtStaffPayload, take = 50, skip = 0) {
@@ -225,9 +243,9 @@ export class SupportTicketsService {
   }
 
   async listClosedTickets(staff: IJwtStaffPayload, take = 50, skip = 0) {
+    const queueIds = await this.routing.queueIdsFor(staff.sub);
     const where = {
-      ...closedTicketVisibilityWhere(staff),
-      ...this.studentScopeWhere(staff),
+      AND: [closedTicketVisibilityWhere(staff, queueIds), this.studentScopeWhere(staff)],
     };
 
     const [items, total] = await Promise.all([
@@ -309,7 +327,7 @@ export class SupportTicketsService {
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
 
-    this.assertCanViewTicket(ticket, actor);
+    const queueIds = await this.assertCanViewTicket(ticket, actor);
 
     const messageWhere = this.messageVisibilityWhere(actor, ticket);
 
@@ -361,7 +379,54 @@ export class SupportTicketsService {
       }),
       messageTotal,
       events,
+      viewer_actions:
+        actor.userType === 'PARENT'
+          ? null
+          : await this.viewerActions(ticket, actor as IJwtStaffPayload, queueIds),
     };
+  }
+
+  /**
+   * What the staff viewer may do on this ticket. Clients render actions from
+   * this instead of re-deriving them from role names, so routing changes made
+   * on the dashboard reach the apps without a release.
+   */
+  private async viewerActions(
+    ticket: {
+      status: TicketStatus;
+      current_assignee_id: string | null;
+      routed_queue_id: number | null;
+      routed_role: StaffRole;
+    },
+    staff: IJwtStaffPayload,
+    queueIds: number[],
+  ) {
+    const open = ticket.status !== TicketStatus.CLOSED;
+    const isAssignee = ticket.current_assignee_id === staff.sub;
+    const inQueue = ticket.routed_queue_id != null && queueIds.includes(ticket.routed_queue_id);
+    const queue =
+      inQueue && ticket.routed_queue_id != null
+        ? await this.prisma.ticket_queues.findUnique({
+            where: { id: ticket.routed_queue_id },
+            select: { allow_forward: true },
+          })
+        : null;
+    return {
+      claim: open && inQueue && ticket.current_assignee_id === null,
+      transfer: open && inQueue && isAssignee,
+      forward: open && isAssignee && this.canForward(staff, ticket, queue?.allow_forward ?? false),
+      reply: open && (isAssignee || staff.role === 'SUPER_ADMIN'),
+    };
+  }
+
+  private canForward(
+    staff: IJwtStaffPayload,
+    ticket: { routed_queue_id: number | null },
+    queueAllowsForward: boolean,
+  ) {
+    // Tickets routed before queues existed still forward the old way.
+    if (ticket.routed_queue_id == null) return staff.role === 'GENERAL_RESPONDENT';
+    return queueAllowsForward;
   }
 
   async createTicket(parent: IJwtParentPayload, dto: CreateTicketDto) {
@@ -378,6 +443,9 @@ export class SupportTicketsService {
     }
 
     const routing = await this.resolveRouting(parent.familyId, dto);
+    if (routing.note) {
+      this.logger.warn(`Ticket for family ${parent.familyId} routed with fallback: ${routing.note}`);
+    }
 
     const guardian = await this.prisma.guardians.findFirst({
       where: {
@@ -400,6 +468,9 @@ export class SupportTicketsService {
           status: routing.status,
           current_assignee_id: routing.assigneeId,
           routed_role: routing.routedRole,
+          routed_queue_id: routing.queueId,
+          routed_rule_id: routing.ruleId,
+          routing_note: routing.note,
           opened_by_guardian_id: guardian?.id ?? null,
           last_message_snippet: dto.description.slice(0, 50),
         },
@@ -461,14 +532,15 @@ export class SupportTicketsService {
   }
 
   async claimTicket(ticketId: string, staff: IJwtStaffPayload) {
-    if (staff.role !== 'FINANCE_CLERK') {
-      throw new ForbiddenException('Only finance clerks can claim tickets');
+    const queueIds = await this.routing.queueIdsFor(staff.sub);
+    if (queueIds.length === 0) {
+      throw new ForbiddenException('Only members of a ticket queue can claim tickets');
     }
 
     const result = await this.prisma.support_tickets.updateMany({
       where: {
         id: ticketId,
-        category: TicketCategory.FINANCIAL,
+        routed_queue_id: { in: queueIds },
         status: TicketStatus.OPEN,
         current_assignee_id: null,
       },
@@ -513,29 +585,27 @@ export class SupportTicketsService {
     targetUserId: string,
     staff: IJwtStaffPayload,
   ) {
-    if (staff.role !== 'FINANCE_CLERK') {
-      throw new ForbiddenException('Only finance clerks can transfer tickets');
-    }
-
-    const target = await this.prisma.users.findFirst({
-      where: {
-        id: targetUserId,
-        role: StaffRole.FINANCE_CLERK,
-        is_active: true,
-        deleted_at: null,
-      },
+    const current = await this.prisma.support_tickets.findUnique({
+      where: { id: ticketId },
+      select: { routed_queue_id: true },
     });
-    if (!target) {
-      throw new BadRequestException('Target must be an active finance clerk');
+    if (!current) throw new NotFoundException('Ticket not found');
+    const queueId = current.routed_queue_id;
+    if (queueId == null || !(await this.routing.queueIdsFor(staff.sub)).includes(queueId)) {
+      throw new ForbiddenException('Only members of this ticket\'s queue can transfer it');
     }
     if (targetUserId === staff.sub) {
       throw new BadRequestException('Cannot transfer to yourself');
+    }
+    const target = (await this.routing.activeMembers(queueId)).find((m) => m.id === targetUserId);
+    if (!target) {
+      throw new BadRequestException('Target must be an active member of this ticket\'s queue');
     }
 
     const result = await this.prisma.support_tickets.updateMany({
       where: {
         id: ticketId,
-        category: TicketCategory.FINANCIAL,
+        routed_queue_id: queueId,
         current_assignee_id: staff.sub,
         status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
       },
@@ -581,14 +651,14 @@ export class SupportTicketsService {
     targetUserId: string,
     staff: IJwtStaffPayload,
   ) {
-    if (staff.role !== 'GENERAL_RESPONDENT') {
-      throw new ForbiddenException('Only the General Respondent can forward tickets');
-    }
-
     const ticket = await this.prisma.support_tickets.findUnique({
       where: { id: ticketId },
+      include: { routed_queue: { select: { allow_forward: true } } },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
+    if (!this.canForward(staff, ticket, ticket.routed_queue?.allow_forward ?? false)) {
+      throw new ForbiddenException('Tickets in this queue cannot be forwarded');
+    }
     if (ticket.current_assignee_id !== staff.sub) {
       throw new ForbiddenException('You are not the current assignee');
     }
@@ -1074,7 +1144,7 @@ export class SupportTicketsService {
       where: { id: ticketId },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
-    this.assertCanViewTicket(ticket, actor);
+    await this.assertCanViewTicket(ticket, actor);
 
     if (actor.userType === 'PARENT') {
       const updated = await this.prisma.support_tickets.update({
@@ -1401,98 +1471,27 @@ export class SupportTicketsService {
   }
 
   private async resolveRouting(familyId: number, dto: CreateTicketDto) {
-    if (dto.category === TicketCategory.FINANCIAL) {
-      if (dto.studentId) {
-        await this.assertStudentInFamily(dto.studentId, familyId);
-      }
-      return {
-        routedRole: StaffRole.FINANCE_CLERK,
-        assigneeId: null as string | null,
-        status: TicketStatus.OPEN,
-      };
-    }
-
+    let student: { campus_id: number | null; class_id: number | null; segment_id: number | null } | null =
+      null;
     if (dto.studentId) {
-      const student = await this.assertStudentInFamily(dto.studentId, familyId);
-      if (!student.campus_id || !student.class_id) {
-        throw new UnprocessableEntityException(
-          'Student is missing campus or class assignment',
-        );
+      const row = await this.assertStudentInFamily(dto.studentId, familyId);
+      if (dto.category !== TicketCategory.FINANCIAL && (!row.campus_id || !row.class_id)) {
+        throw new UnprocessableEntityException('Student is missing campus or class assignment');
       }
-
-      const overrideTarget = await this.resolveRoutingOverride(
-        student.campus_id,
-        student.class_id,
-      );
-      if (overrideTarget) {
-        return {
-          routedRole: StaffRole.PRINCIPAL,
-          assigneeId: overrideTarget,
-          status: TicketStatus.ASSIGNED,
-        };
-      }
-
-      const candidates = await this.prisma.users.findMany({
-        where: principalLookupWhere(student.campus_id, student.class_id),
-        orderBy: { created_at: 'asc' },
-      });
-      const principal = pickPrincipal(candidates);
-      if (principal) {
-        return {
-          routedRole: StaffRole.PRINCIPAL,
-          assigneeId: principal.id,
-          status: TicketStatus.ASSIGNED,
-        };
-      }
-      // No active principal covers this campus/class — fall through to the
-      // General Respondent, who can forward it, rather than rejecting the parent.
-      this.logger.warn(
-        `No principal for campus ${student.campus_id} class ${student.class_id}; routing to General Respondent`,
-      );
+      const cls = row.class_id
+        ? await this.prisma.classes.findUnique({
+            where: { id: row.class_id },
+            select: { segment_id: true },
+          })
+        : null;
+      student = { campus_id: row.campus_id, class_id: row.class_id, segment_id: cls?.segment_id ?? null };
     }
 
-    const respondent = await this.prisma.users.findFirst({
-      where: {
-        role: StaffRole.GENERAL_RESPONDENT,
-        is_active: true,
-        deleted_at: null,
-      },
-      orderBy: { created_at: 'asc' },
+    return this.routing.resolve({
+      category: dto.category,
+      subtopic: dto.subtopic,
+      student,
     });
-    if (!respondent) {
-      throw new UnprocessableEntityException(
-        'General Respondent account is not configured',
-      );
-    }
-
-    return {
-      routedRole: StaffRole.GENERAL_RESPONDENT,
-      assigneeId: respondent.id,
-      status: TicketStatus.ASSIGNED,
-    };
-  }
-
-  /** First active staff member named by a matching app_config routing override. */
-  private async resolveRoutingOverride(
-    campusId: number,
-    classId: number,
-  ): Promise<string | null> {
-    const row = await this.prisma.app_config.findUnique({
-      where: { key: ROUTING_OVERRIDES_CONFIG_KEY },
-    });
-    const matches = matchRoutingOverrides(
-      parseRoutingOverrides(row?.value),
-      campusId,
-      classId,
-    );
-    for (const override of matches) {
-      const target = await this.prisma.users.findFirst({
-        where: { id: override.user_id, is_active: true, deleted_at: null },
-        select: { id: true },
-      });
-      if (target) return target.id;
-    }
-    return null;
   }
 
   private async assertStudentInFamily(studentId: number, familyId: number) {
@@ -1661,26 +1660,28 @@ export class SupportTicketsService {
       where: { id: ticketId },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
-    this.assertCanViewTicket(ticket, actor);
+    await this.assertCanViewTicket(ticket, actor);
   }
 
-  private assertCanViewTicket(
+  /** Throws unless the actor may see the ticket; returns the staff caller's queue ids. */
+  private async assertCanViewTicket(
     ticket: {
       family_id: number;
       status: TicketStatus;
       current_assignee_id: string | null;
       category: TicketCategory;
       routed_role: StaffRole;
+      routed_queue_id: number | null;
       students?: any;
       families?: any;
     },
     actor: IJwtStaffPayload | IJwtParentPayload,
-  ) {
+  ): Promise<number[]> {
     if (actor.userType === 'PARENT') {
       if (ticket.family_id !== actor.familyId) {
         throw new ForbiddenException('Access denied');
       }
-      return;
+      return [];
     }
 
     const staff = actor as IJwtStaffPayload;
@@ -1709,28 +1710,19 @@ export class SupportTicketsService {
       }
     }
 
-    if (staff.role === 'SUPER_ADMIN') return;
+    const queueIds = await this.routing.queueIdsFor(staff.sub);
+    if (staff.role === 'SUPER_ADMIN') return queueIds;
+
+    const inQueue = ticket.routed_queue_id != null && queueIds.includes(ticket.routed_queue_id);
 
     if (ticket.status === TicketStatus.CLOSED) {
-      const where = closedTicketVisibilityWhere(staff);
-      if ('id' in where && where.id === '__none__') {
+      if (!canSeeClosedTicket(staff, ticket, queueIds)) {
         throw new ForbiddenException('Access denied');
       }
-      if ('routed_role' in where && where.routed_role !== ticket.routed_role) {
-        throw new ForbiddenException('Access denied');
-      }
-      return;
+      return queueIds;
     }
 
-    if (ticket.current_assignee_id === staff.sub) return;
-
-    if (
-      staff.role === 'FINANCE_CLERK' &&
-      ticket.category === TicketCategory.FINANCIAL &&
-      ticket.routed_role === StaffRole.FINANCE_CLERK
-    ) {
-      return;
-    }
+    if (ticket.current_assignee_id === staff.sub || inQueue) return queueIds;
 
     throw new ForbiddenException('Access denied');
   }
@@ -1836,6 +1828,7 @@ export class SupportTicketsService {
     id: string;
     current_assignee_id: string | null;
     routed_role: StaffRole;
+    routed_queue_id: number | null;
     subtopic?: string | null;
     description: string;
     families?: { household_name?: string | null } | null;
@@ -1854,17 +1847,10 @@ export class SupportTicketsService {
 
     if (ticket.current_assignee_id) {
       recipientIds.add(ticket.current_assignee_id);
-    } else if (ticket.routed_role === StaffRole.FINANCE_CLERK) {
-      // Unclaimed finance tickets have no assignee — notify the finance queue.
-      const clerks = await this.prisma.users.findMany({
-        where: {
-          role: StaffRole.FINANCE_CLERK,
-          is_active: true,
-          deleted_at: null,
-        },
-        select: { id: true },
-      });
-      for (const clerk of clerks) recipientIds.add(clerk.id);
+    } else if (ticket.routed_queue_id != null) {
+      // Unclaimed pool tickets have no assignee — notify the whole queue.
+      const members = await this.routing.activeMembers(ticket.routed_queue_id);
+      for (const m of members) recipientIds.add(m.id);
     }
 
     if (recipientIds.size === 0) return;
@@ -1905,13 +1891,6 @@ export class SupportTicketsService {
     }
     if (ticket.current_assignee_id !== staff.sub && staff.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('You are not the assigned responder');
-    }
-    if (
-      ticket.category === TicketCategory.FINANCIAL &&
-      staff.role !== 'FINANCE_CLERK' &&
-      staff.role !== 'SUPER_ADMIN'
-    ) {
-      throw new ForbiddenException('Only finance clerks can respond to financial tickets');
     }
   }
 }
