@@ -67,6 +67,18 @@ export class AttendanceMatrixQueryDto {
   @IsInt({ each: true })
   department_id?: number[];
 
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  segment_id?: number[];
+
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  staff_category_id?: number[];
+
   @IsDateString()
   period_start: string;
 

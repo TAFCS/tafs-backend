@@ -1424,8 +1424,9 @@ export class PayrollService {
     campusId: number,
     periodStart: Date,
     periodEnd: Date,
-    departmentIds?: number[],
+    filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id'> = {},
   ) {
+    const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds } = filters;
     const [campus, employees] = await Promise.all([
       this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
       this.prisma.employee_profiles.findMany({
@@ -1435,6 +1436,8 @@ export class PayrollService {
           // attendance to show and only inflate the matrix.
           employment_status: { in: ['ACTIVE', 'PERMANENT'] },
           ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
+          ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
+          ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
         },
         select: {
           id: true,
@@ -1495,7 +1498,7 @@ export class PayrollService {
 
     const perCampusLines = await Promise.all(
       campusIds.map((campusId) =>
-        this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd, query.department_id),
+        this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd, query),
       ),
     );
 
