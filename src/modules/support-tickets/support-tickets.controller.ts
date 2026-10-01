@@ -109,6 +109,15 @@ export class SupportTicketsController {
     );
   }
 
+  @Get('my-queues')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
+  @ApiOperation({ summary: 'Ticket queues the current staff member belongs to' })
+  myQueues(@CurrentUser() staff: any) {
+    return this.supportTicketsService.listMyQueues(staff);
+  }
+
   @Get('finance-queue')
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canViewTickets)
@@ -250,6 +259,15 @@ export class SupportTicketsController {
   @RequireAction('communication.support_tickets#reassign')
   claimTicket(@Param('id') id: string, @CurrentUser() staff: any) {
     return this.supportTicketsService.claimTicket(id, staff);
+  }
+
+  @Get(':id/transfer-targets')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
+  @ApiOperation({ summary: 'Active members of the ticket queue the assignee can transfer to' })
+  transferTargets(@CurrentUser() staff: any, @Param('id') id: string) {
+    return this.supportTicketsService.listTransferTargets(id, staff);
   }
 
   @Post(':id/transfer')

@@ -6,6 +6,8 @@ import { FcmModule } from '../../common/fcm/fcm.module';
 import { SupportTicketsController } from './support-tickets.controller';
 import { SupportTicketsService } from './support-tickets.service';
 import { TicketRoutingService } from './routing/ticket-routing.service';
+import { TicketRoutingAdminService } from './routing/ticket-routing-admin.service';
+import { TicketRoutingAdminController } from './routing/ticket-routing-admin.controller';
 import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
 
 @Module({
@@ -15,8 +17,8 @@ import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.g
     FcmModule,
     forwardRef(() => ChatModule),
   ],
-  controllers: [SupportTicketsController],
-  providers: [SupportTicketsService, TicketRoutingService, JwtStaffOrParentGuard],
+  controllers: [SupportTicketsController, TicketRoutingAdminController],
+  providers: [SupportTicketsService, TicketRoutingService, TicketRoutingAdminService, JwtStaffOrParentGuard],
   exports: [SupportTicketsService, TicketRoutingService],
 })
 export class SupportTicketsModule {}

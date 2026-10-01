@@ -293,6 +293,9 @@ export class TicketRoutingService {
     ]);
     const issues: RoutingIssue[] = [];
     const scopes: ScopeCache = new Map();
+    const segmentOfClass = new Map(
+      (await this.prisma.classes.findMany({ select: { id: true, segment_id: true } })).map((c) => [c.id, c.segment_id]),
+    );
 
     for (const rule of rules) {
       if (!rule.target_user && !rule.target_queue) {
@@ -307,15 +310,21 @@ export class TicketRoutingService {
           rule_id: rule.id,
           message: `Rule "${rule.name}" sends tickets to ${user.full_name}, who is inactive. Matching tickets fall through to the next rule.`,
         });
-      } else if (user && rule.campus_id != null) {
+      } else if (user && (rule.campus_id != null || rule.segment_id != null || rule.class_ids.length > 0)) {
+        // Check every class the rule names (or one representative placement).
         const scope = await this.scopeOf(user.id, scopes);
-        const sample = { campus_id: rule.campus_id, class_id: rule.class_ids[0] ?? null, segment_id: rule.segment_id };
-        if (!this.scope.canSeeStudent({ role: user.role, scope }, sample)) {
+        const samples = (rule.class_ids.length > 0 ? rule.class_ids : [null]).map((classId) => ({
+          campus_id: rule.campus_id,
+          class_id: classId,
+          segment_id: rule.segment_id ?? (classId != null ? segmentOfClass.get(classId) ?? null : null),
+        }));
+        const blind = samples.filter((sample) => !this.scope.canSeeStudent({ role: user.role, scope }, sample));
+        if (blind.length > 0) {
           issues.push({
             severity: 'warning',
             code: 'RULE_TARGET_OUT_OF_SCOPE',
             rule_id: rule.id,
-            message: `Rule "${rule.name}" targets ${user.full_name}, whose access scope does not cover the students it matches.`,
+            message: `Rule "${rule.name}" targets ${user.full_name}, whose access scope does not cover all the students it matches.`,
           });
         }
       }
