@@ -55,9 +55,10 @@ export class AttendanceMatrixQueryDto {
   // Omitted -> all employees across every campus the caller can see (see
   // PayrollService#resolveMatrixCampusIds).
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  campus_id?: number;
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campus_id?: number[];
 
   // Omitted -> every department on the resolved campuses. Narrowing here cuts
   // the work in computeEmployeeLinesForRange, not just the rendered row count.
@@ -78,6 +79,14 @@ export class AttendanceMatrixQueryDto {
   @IsArray()
   @IsInt({ each: true })
   staff_category_id?: number[];
+
+  // Keyword search, case-insensitive: split on whitespace, and every word must
+  // match name, employee code, CNIC or job title (same fields as the
+  // employee directory's search).
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || undefined : value))
+  search?: string;
 
   @IsDateString()
   period_start: string;
