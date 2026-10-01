@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
   forwardRef,
@@ -27,7 +28,10 @@ import { ChatGateway } from '../chat/chat.gateway';
 import { FcmService } from '../../common/fcm/fcm.service';
 import {
   ORIGINATION_OPTIONS,
+  ROUTING_OVERRIDES_CONFIG_KEY,
   closedTicketVisibilityWhere,
+  matchRoutingOverrides,
+  parseRoutingOverrides,
   pickPrincipal,
   principalLookupWhere,
 } from '../../common/support-ticket-routing';
@@ -83,6 +87,8 @@ const ticketInclude = {
 
 @Injectable()
 export class SupportTicketsService {
+  private readonly logger = new Logger(SupportTicketsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
@@ -1414,22 +1420,35 @@ export class SupportTicketsService {
         );
       }
 
+      const overrideTarget = await this.resolveRoutingOverride(
+        student.campus_id,
+        student.class_id,
+      );
+      if (overrideTarget) {
+        return {
+          routedRole: StaffRole.PRINCIPAL,
+          assigneeId: overrideTarget,
+          status: TicketStatus.ASSIGNED,
+        };
+      }
+
       const candidates = await this.prisma.users.findMany({
         where: principalLookupWhere(student.campus_id, student.class_id),
         orderBy: { created_at: 'asc' },
       });
       const principal = pickPrincipal(candidates);
-      if (!principal) {
-        throw new UnprocessableEntityException(
-          'No principal found for this student campus and class',
-        );
+      if (principal) {
+        return {
+          routedRole: StaffRole.PRINCIPAL,
+          assigneeId: principal.id,
+          status: TicketStatus.ASSIGNED,
+        };
       }
-
-      return {
-        routedRole: StaffRole.PRINCIPAL,
-        assigneeId: principal.id,
-        status: TicketStatus.ASSIGNED,
-      };
+      // No active principal covers this campus/class — fall through to the
+      // General Respondent, who can forward it, rather than rejecting the parent.
+      this.logger.warn(
+        `No principal for campus ${student.campus_id} class ${student.class_id}; routing to General Respondent`,
+      );
     }
 
     const respondent = await this.prisma.users.findFirst({
@@ -1451,6 +1470,29 @@ export class SupportTicketsService {
       assigneeId: respondent.id,
       status: TicketStatus.ASSIGNED,
     };
+  }
+
+  /** First active staff member named by a matching app_config routing override. */
+  private async resolveRoutingOverride(
+    campusId: number,
+    classId: number,
+  ): Promise<string | null> {
+    const row = await this.prisma.app_config.findUnique({
+      where: { key: ROUTING_OVERRIDES_CONFIG_KEY },
+    });
+    const matches = matchRoutingOverrides(
+      parseRoutingOverrides(row?.value),
+      campusId,
+      classId,
+    );
+    for (const override of matches) {
+      const target = await this.prisma.users.findFirst({
+        where: { id: override.user_id, is_active: true, deleted_at: null },
+        select: { id: true },
+      });
+      if (target) return target.id;
+    }
+    return null;
   }
 
   private async assertStudentInFamily(studentId: number, familyId: number) {

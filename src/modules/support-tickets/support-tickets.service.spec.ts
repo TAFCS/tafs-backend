@@ -46,6 +46,8 @@ describe('SupportTicketsService leak-proofing', () => {
     guardians: {
       findFirst: jest.fn(),
     },
+    students: { findFirst: jest.fn() },
+    app_config: { findUnique: jest.fn() },
     $transaction: jest.fn((fn: (tx: typeof prisma) => unknown) => fn(prisma)),
   };
 
@@ -732,6 +734,44 @@ describe('SupportTicketsService leak-proofing', () => {
 
     expect(mockGateway.broadcastTicketMessagesRead).not.toHaveBeenCalled();
     expect(result.is_read).not.toBe(true);
+  });
+
+  describe('resolveRouting for child tickets', () => {
+    const dto = { category: TicketCategory.GENERAL, studentId: 77 } as any;
+
+    beforeEach(() => {
+      prisma.students.findFirst.mockResolvedValue({ cc: 77, campus_id: 2, class_id: 4 });
+    });
+
+    it('sends to an active override target before the principal lookup', async () => {
+      prisma.app_config.findUnique.mockResolvedValue({
+        value: JSON.stringify([{ campus_id: 2, user_id: 'nimla' }]),
+      });
+      prisma.users.findFirst.mockResolvedValue({ id: 'nimla' });
+
+      const routing = await (service as any).resolveRouting(1, dto);
+
+      expect(routing).toEqual({
+        routedRole: 'PRINCIPAL',
+        assigneeId: 'nimla',
+        status: TicketStatus.ASSIGNED,
+      });
+      expect(prisma.users.findMany).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the General Respondent when no principal is active', async () => {
+      prisma.app_config.findUnique.mockResolvedValue(null);
+      prisma.users.findMany.mockResolvedValue([]);
+      prisma.users.findFirst.mockResolvedValue({ id: 'desk' });
+
+      const routing = await (service as any).resolveRouting(1, dto);
+
+      expect(routing).toEqual({
+        routedRole: 'GENERAL_RESPONDENT',
+        assigneeId: 'desk',
+        status: TicketStatus.ASSIGNED,
+      });
+    });
   });
 });
 

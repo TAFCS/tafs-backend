@@ -1,6 +1,8 @@
 import { CLASS_BAND_IDS } from './class-band-ids';
 import {
   closedTicketVisibilityWhere,
+  matchRoutingOverrides,
+  parseRoutingOverrides,
   pickPrincipal,
   principalLookupWhere,
 } from './support-ticket-routing';
@@ -51,6 +53,35 @@ describe('support-ticket-routing', () => {
         status: 'CLOSED',
         id: '__none__',
       });
+    });
+  });
+
+  describe('routing overrides', () => {
+    it('ignores malformed config', () => {
+      expect(parseRoutingOverrides(null)).toEqual([]);
+      expect(parseRoutingOverrides('not json')).toEqual([]);
+      expect(parseRoutingOverrides('{"campus_id":2}')).toEqual([]);
+      expect(
+        parseRoutingOverrides('[{"campus_id":"2","user_id":"u"},{"campus_id":2,"user_id":"ok"}]'),
+      ).toEqual([{ campus_id: 2, user_id: 'ok' }]);
+    });
+
+    it('matches campus-wide and class-specific overrides, specific first', () => {
+      const overrides = parseRoutingOverrides(
+        JSON.stringify([
+          { campus_id: 2, user_id: 'campus-wide' },
+          { campus_id: 2, class_ids: [5], user_id: 'class-5' },
+          { campus_id: 1, user_id: 'other-campus' },
+        ]),
+      );
+      expect(matchRoutingOverrides(overrides, 2, 5).map((o) => o.user_id)).toEqual([
+        'class-5',
+        'campus-wide',
+      ]);
+      expect(matchRoutingOverrides(overrides, 2, 3).map((o) => o.user_id)).toEqual([
+        'campus-wide',
+      ]);
+      expect(matchRoutingOverrides(overrides, 3, 3)).toEqual([]);
     });
   });
 });
