@@ -238,6 +238,24 @@ export function splitBalanceSurcharges(
     return rows;
 }
 
+/**
+ * The late fee the challan prints between PAYABLE BY and PAYABLE AFTER DUE DATE.
+ * Every writer stores total_payable_after_due = before_due + late fee, so the
+ * stored gap is the truth: the paid half of a split stores no late fee, and
+ * hardcoding 1,000 printed an after-due total the voucher never had (#232).
+ * Vouchers with no stored after-due total fall back to the old flat 1,000.
+ */
+export function pdfLateFeeAmount(voucher: {
+    late_fee_charge: boolean | null;
+    total_payable_before_due: Prisma.Decimal | number | string | null;
+    total_payable_after_due: Prisma.Decimal | number | string | null;
+}): number {
+    if (!voucher.late_fee_charge) return 0;
+    const after = Number(voucher.total_payable_after_due ?? 0);
+    if (after <= 0) return 1000;
+    return Math.max(after - Number(voucher.total_payable_before_due ?? 0), 0);
+}
+
 /** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
 const PDF_FREEZE_SELECT = {
     id: true,
@@ -2139,7 +2157,22 @@ export class VouchersService {
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
 
-        // Standalone installments that are past + unpaid but absent from this voucher's heads
+        // Installments already billed on another live voucher. The paid half of a
+        // split leaves its unpaid installments on the balance voucher; surfacing them
+        // here as "missed" arrears printed an ARREARS line that no longer added up to
+        // PAYABLE BY DUE DATE (#232 — voucher 10260012307).
+        const billedElsewhere = new Set(
+            (await this.prisma.voucher_heads.findMany({
+                where: {
+                    student_fee_id: { in: (studentInstallmentFees as any[]).map((f) => f.id) },
+                    voucher_id: { not: voucher.id },
+                    vouchers: { status: { not: 'VOID' } },
+                },
+                select: { student_fee_id: true },
+            })).map((vh) => vh.student_fee_id),
+        );
+
+        // Standalone installments that are past + unpaid but absent from every live voucher
         // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
         const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
             if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
@@ -2148,6 +2181,7 @@ export class VouchersService {
             // an outstanding "missed arrear" the student still owes.
             if (f.status === 'WAIVED') return false;
             if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
+            if (billedElsewhere.has(f.id)) return false;
             if (f.fee_date && voucher.fee_date) {
                 return new Date(f.fee_date) < new Date(voucher.fee_date);
             }
@@ -2343,7 +2377,7 @@ export class VouchersService {
                 totalAmount,
                 totalPaid: heads.reduce((sum, h) => sum + h.amountDeposited, 0),
                 outstandingBalance: Math.max(totalAmount - heads.reduce((sum, h) => sum + h.amountDeposited, 0), 0),
-                lateFeeAmount: voucher.late_fee_charge ? 1000 : 0,
+                lateFeeAmount: pdfLateFeeAmount(voucher),
                 reprintFeeAmount: voucher.reprint_fee_charge ? Number(voucher.reprint_fee_amount ?? 100) : 0,
                 qrUrl,
                 paidStamp,
