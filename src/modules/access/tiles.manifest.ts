@@ -570,6 +570,17 @@ const BACKUPS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a backup', description: 'Irreversible', implies: ['view'] },
 ];
 
+// Activity Logs. The page only reads the feed -- no export, no writes -- so the
+// tile has one action. Bridged from system.users.view, the capability the tile
+// already requires, so every current holder keeps the page. GET /audit-logs is
+// shared: the Student Directory's timeline calls it with ?student_id, so the
+// route also accepts student.directory#view (AuditLogsGuard still limits that
+// caller to one student's timeline).
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const ACTIVITY_LOGS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Activity Logs', description: 'Read the audit feed, trimmed to your scope', default: true },
+];
+
 // The five "policy" tiles all list hr.policies.manage, which the generic mapper
 // turns into manage on Policy, Calendar and ClassAttendanceMode. Four of them
 // bridge from it, so everyone who holds those tiles keeps every action. The
@@ -981,7 +992,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ?? System ???????????????????????????????????????????????????????????????
   { id: 'system.people_access', module: 'system', label: 'People & Access', description: 'Create people, job assignment and ERP tile access', href: '/system/users', capabilities: ['system.users.view'], actions: PEOPLE_ACCESS_ACTIONS, legacyFullAccessCapabilities: ['system.users.edit', 'system.permissions.manage'] },
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'], actions: ACCESS_PACKS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
-  { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'] },
+  { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'], actions: ACTIVITY_LOGS_ACTIONS, legacyFullAccessCapabilities: ['system.users.view'] },
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'], actions: BACKUPS_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },
 ];
