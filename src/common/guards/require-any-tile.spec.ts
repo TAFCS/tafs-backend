@@ -130,10 +130,10 @@ describe('userHoldsTile', () => {
     const withActions = tokenFor({ allowTileIds: ['finance.receive_deposit'] });
     expect(userHoldsTile(withActions, 'finance.receive_deposit')).toBe(true);
     expect(userHoldsTile(withActions, 'finance.vouchers')).toBe(false);
-    // system.developer_settings has no actions
-    expect(TILES_MANIFEST.find((t) => t.id === 'system.developer_settings')?.actions).toBeUndefined();
-    expect(userHoldsTile(tokenFor({ allowTileIds: ['system.developer_settings'] }), 'system.developer_settings')).toBe(true);
-    expect(userHoldsTile(tokenFor({}), 'system.developer_settings')).toBe(false);
+    // staff_app.timetable has no actions
+    expect(TILES_MANIFEST.find((t) => t.id === 'staff_app.timetable')?.actions).toBeUndefined();
+    expect(userHoldsTile(tokenFor({ allowTileIds: ['staff_app.timetable'] }), 'staff_app.timetable')).toBe(true);
+    expect(userHoldsTile(tokenFor({}), 'staff_app.timetable')).toBe(false);
   });
 
   it('falls back to capabilities for a session issued before the actions claim existed', () => {

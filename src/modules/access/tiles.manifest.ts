@@ -581,6 +581,18 @@ const ACTIVITY_LOGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Activity Logs', description: 'Read the audit feed, trimmed to your scope', default: true },
 ];
 
+// Developer Settings. GET /app-config and PATCH /app-config/:key already asked
+// for these keys (alongside Notification Templates, which shares the routes),
+// but the tile declared no actions, so nobody could hold them and only
+// SUPER_ADMIN could use the page. Bridged from system.permissions.manage, which
+// no default role but SUPER_ADMIN holds, so nobody else gains anything.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const DEVELOPER_SETTINGS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Developer Settings', description: 'See app versions, maintenance mode and system switches', default: true },
+
+  { id: 'edit', label: 'Change developer settings', description: 'Includes maintenance mode, which locks every user out of the apps', implies: ['view'] },
+];
+
 // The five "policy" tiles all list hr.policies.manage, which the generic mapper
 // turns into manage on Policy, Calendar and ClassAttendanceMode. Four of them
 // bridge from it, so everyone who holds those tiles keeps every action. The
@@ -980,7 +992,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'], actions: ACCESS_PACKS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
   { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'], actions: ACTIVITY_LOGS_ACTIONS, legacyFullAccessCapabilities: ['system.users.view'] },
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'], actions: BACKUPS_ACTIONS },
-  { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'] },
+  { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 
 /** Exported so employee-field-tab-map.spec.ts can assert the map lines up. */
