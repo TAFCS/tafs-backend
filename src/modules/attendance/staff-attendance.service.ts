@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { attendance_staff_daily, AttendanceSource, CheckInSource, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
+import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -21,6 +21,32 @@ import {
 } from '../hr/payroll/payroll-period.util';
 import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { ScopeService } from '../../common/scope/scope.service';
+import { effectiveManualStatus } from './manual-late.util';
+import { ZK_DEVICES } from './zk-device-health.util';
+
+const STATUS_LABELS: Partial<Record<StaffAttendanceStatus, string>> = {
+  PRESENT: 'Present',
+  LATE: 'Late',
+  ABSENT: 'Absent',
+  HALF_DAY: 'Half Day',
+  EXCUSED: 'Excused',
+  SICK_LEAVE: 'Sick Leave',
+  CASUAL_LEAVE: 'Casual Leave',
+  ANNUAL_LEAVE: 'Annual Leave',
+  UNPAID_LEAVE: 'Unpaid Leave',
+};
+
+/** "Late, 08:42–14:05 (biometric)" — the day as one readable audit value. */
+function describeDay(row: {
+  status: StaffAttendanceStatus;
+  check_in_at: Date | null;
+  check_out_at: Date | null;
+  source: AttendanceSource;
+}): string {
+  const hm = (d: Date | null) => (d ? d.toISOString().slice(11, 16) : '—');
+  const times = row.check_in_at || row.check_out_at ? `, ${hm(row.check_in_at)}–${hm(row.check_out_at)}` : '';
+  return `${STATUS_LABELS[row.status] ?? row.status}${times} (${row.source.toLowerCase()})`;
+}
 
 @Injectable()
 export class StaffAttendanceService {
@@ -818,8 +844,16 @@ export class StaffAttendanceService {
       }
     }
 
-    // Upsert all records in a transaction
-    const upserts = dto.records.map((mark) => {
+    const existingRows = await this.prisma.attendance_staff_daily.findMany({
+      where: { employee_id: { in: employeeIds }, date },
+    });
+    const existingByEmployee = new Map(existingRows.map((r) => [r.employee_id, r]));
+
+    // Upsert all records in a transaction. The callback returns upsert args,
+    // not the query itself — an async function would await (run) a Prisma
+    // query it returned, outside the transaction.
+    const saved: { employee_id: number; status: StaffAttendanceStatus; check_in_at: Date | null; check_out_at: Date | null }[] = [];
+    const upsertArgs = await Promise.all(dto.records.map(async (mark) => {
       let checkInAt: Date | null | undefined = undefined;
       let checkOutAt: Date | null | undefined = undefined;
       const clearsPunches =
@@ -841,13 +875,25 @@ export class StaffAttendanceService {
         }
       }
 
-      return this.prisma.attendance_staff_daily.upsert({
+      // Times left blank keep whatever the row already had (see the upsert
+      // below), so judge lateness on the check-in the day will end up with.
+      const existing = existingByEmployee.get(mark.employee_id);
+      const finalCheckIn = checkInAt !== undefined ? checkInAt : (existing?.check_in_at ?? null);
+      const finalCheckOut = checkOutAt !== undefined ? checkOutAt : (existing?.check_out_at ?? null);
+      let status = mark.status;
+      if (status === StaffAttendanceStatus.LATE && finalCheckIn) {
+        const expected = await this.expectedTimes.resolveExpectedTimes(mark.employee_id, dto.campus_id, date);
+        status = effectiveManualStatus(status, finalCheckIn, expected.expectedCheckIn, expected.graceMinutes) as StaffAttendanceStatus;
+      }
+      saved.push({ employee_id: mark.employee_id, status, check_in_at: finalCheckIn, check_out_at: finalCheckOut });
+
+      return {
         where: { employee_id_date: { employee_id: mark.employee_id, date } },
         create: {
           employee_id: mark.employee_id,
           campus_id: dto.campus_id,
           date,
-          status: mark.status,
+          status,
           notes: mark.notes ?? null,
           marked_by: user.sub,
           source: AttendanceSource.MANUAL,
@@ -855,31 +901,145 @@ export class StaffAttendanceService {
           ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
         },
         update: {
-          status: mark.status,
+          status,
           notes: mark.notes ?? null,
           marked_by: user.sub,
           source: AttendanceSource.MANUAL,
           ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
           ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
         },
+      } satisfies Prisma.attendance_staff_dailyUpsertArgs;
+    }));
+
+    await this.prisma.$transaction(upsertArgs.map((args) => this.prisma.attendance_staff_daily.upsert(args)));
+
+    // One row per employee-day, entity_id = employee (as the device processor
+    // logs it) with the date in the note, so getDayHistory can read back the
+    // full trail for a single day: device events and every override, in order.
+    const dateKey = date.toISOString().slice(0, 10);
+    const actor = auditActorLabel(user);
+    const names = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: employeeIds } },
+      select: { id: true, full_name: true, employee_code: true },
+    });
+    const nameById = new Map(names.map((e) => [e.id, `${e.full_name}${e.employee_code ? ` (${e.employee_code})` : ''}`]));
+    for (const row of saved) {
+      const existing = existingByEmployee.get(row.employee_id);
+      const after = describeDay({ ...row, source: AttendanceSource.MANUAL });
+      const corrected = dto.records.find((r) => r.employee_id === row.employee_id)?.status !== row.status;
+      void this.auditLogs.log({
+        entity_type: 'STAFF_ATTENDANCE',
+        entity_id: String(row.employee_id),
+        action: existing ? 'UPDATED' : 'CREATED',
+        section: 'attendance',
+        field: 'override',
+        old_value: existing ? describeDay(existing) : null,
+        new_value: after,
+        note:
+          `Manual override for ${nameById.get(row.employee_id) ?? `employee #${row.employee_id}`} on ${dateKey}` +
+          (corrected ? ' — marked Late, saved as Present because the check-in is on time.' : '.'),
+        changed_by: actor,
       });
-    });
-
-    await this.prisma.$transaction(upserts);
-
-    this.auditLogs.log({
-      entity_type: 'STAFF_ATTENDANCE',
-      entity_id: String(dto.campus_id),
-      action: 'CREATED',
-      section: 'attendance',
-      note: `Bulk marked ${dto.records.length} staff for ${dto.date}`,
-      changed_by: auditActorLabel(user),
-    });
+    }
 
     // Avoid reloading the full campus register here — getRegister() runs holiday
     // sync for every enrolled student plus per-employee calendar resolution and
     // can take minutes, causing PUT timeouts from payroll/staff UIs that only
     // need confirmation that the save succeeded.
-    return { saved_count: dto.records.length };
+    return {
+      saved_count: dto.records.length,
+      records: saved.map((r) => ({ employee_id: r.employee_id, status: r.status })),
+    };
+  }
+
+  /**
+   * Everything behind one employee-day: the raw device punches (with device
+   * and campus), the current stored record and who last overrode it, and the
+   * audit trail of every change to that day — device writes and overrides.
+   * Overrides saved before per-day audit rows existed show only the current
+   * record and its marked_by/updated_at.
+   */
+  async getDayHistory(employeeId: number, dateStr: string, user: IJwtStaffPayload) {
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { id: true, campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
+    });
+    if (!employee) throw new NotFoundException('Employee not found');
+    if (employee.campus_id) this.assertCampusAccess(user, employee.campus_id);
+    this.scope.assertEmployee(user, employee);
+
+    const date = this.parseDate(dateStr);
+    const dateKey = date.toISOString().slice(0, 10);
+
+    const [record, scans, audit, campuses] = await Promise.all([
+      this.prisma.attendance_staff_daily.findUnique({
+        where: { employee_id_date: { employee_id: employeeId, date } },
+      }),
+      this.prisma.zk_attendance_scans.findMany({
+        where: { employee_id: employeeId, person_type: 'STAFF', attendance_date: date },
+        orderBy: { scan_time: 'asc' },
+        select: { scan_time: true, device_sn: true, is_duplicate: true, verify_mode: true },
+      }),
+      this.prisma.audit_logs.findMany({
+        where: { entity_type: 'STAFF_ATTENDANCE', entity_id: String(employeeId), note: { contains: dateKey } },
+        orderBy: { changed_at: 'asc' },
+        select: { id: true, action: true, field: true, old_value: true, new_value: true, note: true, changed_by: true, changed_at: true },
+      }),
+      this.prisma.campuses.findMany({ select: { campus_code: true, campus_name: true } }),
+    ]);
+
+    const campusNameByCode = new Map(campuses.map((c) => [c.campus_code, c.campus_name]));
+    const actorIds = [record?.marked_by, ...audit.map((a) => a.changed_by)].filter((v): v is string => !!v);
+    const users = actorIds.length
+      ? await this.prisma.users.findMany({
+          where: { OR: [{ id: { in: actorIds } }, { username: { in: actorIds } }] },
+          select: { id: true, username: true, full_name: true },
+        })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const userByUsername = new Map(users.map((u) => [u.username, u]));
+    const actorName = (v: string | null) => {
+      if (!v) return null;
+      const u = userById.get(v) ?? userByUsername.get(v);
+      return u ? u.full_name?.trim() || u.username : v === 'zk-device' ? 'ZK Device' : v;
+    };
+
+    return {
+      date: dateKey,
+      record: record
+        ? {
+            status: record.status,
+            source: record.source,
+            check_in_at: record.check_in_at?.toISOString() ?? null,
+            check_out_at: record.check_out_at?.toISOString() ?? null,
+            notes: record.notes,
+            marked_by: actorName(record.marked_by),
+            created_at: record.created_at.toISOString(),
+            updated_at: record.updated_at.toISOString(),
+          }
+        : null,
+      punches: scans.map((s) => {
+        const device = ZK_DEVICES[s.device_sn];
+        return {
+          at: s.scan_time.toISOString(),
+          device_sn: s.device_sn,
+          device_name: device?.name ?? s.device_sn,
+          campus_code: device?.campusCode ?? null,
+          campus_name: device ? (campusNameByCode.get(device.campusCode) ?? device.campusCode) : null,
+          is_duplicate: s.is_duplicate,
+          verify_mode: s.verify_mode,
+        };
+      }),
+      audit: audit.map((a) => ({
+        id: a.id,
+        action: a.action,
+        field: a.field,
+        old_value: a.old_value,
+        new_value: a.new_value,
+        note: a.note,
+        changed_by: actorName(a.changed_by),
+        changed_at: a.changed_at.toISOString(),
+      })),
+    };
   }
 }

@@ -15,6 +15,7 @@ import {
   BulkMarkStaffAttendanceDto,
   GetStaffAttendanceQueryDto,
   GetStaffTimelineQueryDto,
+  GetStaffDayHistoryQueryDto,
   GetMyStaffAttendanceQueryDto,
 } from './dto/staff-attendance.dto';
 
@@ -94,5 +95,18 @@ export class StaffAttendanceController {
   ) {
     const data = await this.staffAttendanceService.getTimeline(employeeId, query, user);
     return createApiResponse(data, HttpStatus.OK, 'Staff attendance timeline retrieved');
+  }
+
+  /** Raw punches (device + campus), current override and audit trail for one employee-day. */
+  @Get(':employeeId/day-history')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAnyAction('attendance.employee_attendance#view', 'hr.payroll#view')
+  async getDayHistory(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Query() query: GetStaffDayHistoryQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.staffAttendanceService.getDayHistory(employeeId, query.date, user);
+    return createApiResponse(data, HttpStatus.OK, 'Staff attendance day history retrieved');
   }
 }

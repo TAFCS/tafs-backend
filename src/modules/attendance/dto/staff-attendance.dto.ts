@@ -63,6 +63,11 @@ export class GetStaffTimelineQueryDto {
   date_to: string;
 }
 
+export class GetStaffDayHistoryQueryDto {
+  @IsDateString()
+  date: string;
+}
+
 export class GetMyStaffAttendanceQueryDto {
   @IsString()
   @Matches(/^\d{4}-\d{2}$/, { message: 'period must be YYYY-MM' })

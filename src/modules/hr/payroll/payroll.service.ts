@@ -19,6 +19,8 @@ import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../pa
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
 import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
+import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
+import { effectiveManualStatus } from '../../attendance/manual-late.util';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -55,6 +57,19 @@ export interface DayBreakdownEntry {
   late_minutes: number;
   source: AttendanceSource | null;
   segments?: { type: string; start: string; end: string; isMissingOut?: boolean }[];
+  /** Raw device punches for the day, kept even when a manual override replaces them. */
+  punches?: DayPunch[];
+  /** Who last overrode this day (users.id, resolved to a name before it leaves the service) and when. */
+  overridden_by?: string | null;
+  overridden_at?: string | null;
+}
+
+export interface DayPunch {
+  at: string;
+  device_sn: string;
+  device_name: string;
+  /** Campus the device sits at; null for a device not in ZK_DEVICES. */
+  campus_code: string | null;
 }
 
 interface ComputedLine {
@@ -439,7 +454,18 @@ export class PayrollService {
       ) {
         // A recorded override always wins, even on a holiday/off day — this is
         // what lets HR flip a day off with punches on it to PRESENT/etc.
-        classification = record.status as DayClassification;
+        // A manual LATE whose entered check-in is on time reads as PRESENT
+        // (see effectiveManualStatus) — covers overrides saved before
+        // bulkMark started correcting this itself.
+        classification =
+          record.source === AttendanceSource.MANUAL
+            ? effectiveManualStatus(
+                record.status as DayClassification,
+                record.check_in_at,
+                expected.expectedCheckIn,
+                expected.graceMinutes,
+              )
+            : (record.status as DayClassification);
       } else if (!resolved.isWorkingDay) {
         classification = 'DAY_OFF';
       } else if (dayScans.length === 0) {
@@ -512,6 +538,14 @@ export class PayrollService {
         late_minutes: lateMinutes,
         source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
         segments,
+        punches: dayScans.map((s) => ({
+          at: s.scan_time.toISOString(),
+          device_sn: s.device_sn,
+          device_name: ZK_DEVICES[s.device_sn]?.name ?? s.device_sn,
+          campus_code: ZK_DEVICES[s.device_sn]?.campusCode ?? null,
+        })),
+        overridden_by: record?.source === AttendanceSource.MANUAL ? record.marked_by : null,
+        overridden_at: record?.source === AttendanceSource.MANUAL ? record.updated_at.toISOString() : null,
       });
     }
 
@@ -939,7 +973,7 @@ export class PayrollService {
       else scansByEmployee.set(s.employee_id, [s]);
     }
 
-    return Promise.all(
+    const lines = await Promise.all(
       employees.map(async (employee) => ({
         employee_id: employee.id,
         ...(await this.computeEmployeeLine(
@@ -957,6 +991,27 @@ export class PayrollService {
         )),
       })),
     );
+
+    // marked_by holds users.id — swap it for a name so the UI can say who
+    // overrode the day. One lookup for the whole batch.
+    const markerIds = [
+      ...new Set(
+        lines.flatMap((l) => l.daily_breakdown.map((d) => d.overridden_by).filter((v): v is string => !!v)),
+      ),
+    ];
+    if (markerIds.length > 0) {
+      const users = await this.prisma.users.findMany({
+        where: { id: { in: markerIds } },
+        select: { id: true, full_name: true, username: true },
+      });
+      const nameById = new Map(users.map((u) => [u.id, u.full_name?.trim() || u.username]));
+      for (const line of lines) {
+        for (const day of line.daily_breakdown) {
+          if (day.overridden_by) day.overridden_by = nameById.get(day.overridden_by) ?? day.overridden_by;
+        }
+      }
+    }
+    return lines;
   }
 
   /**
@@ -1409,10 +1464,10 @@ export class PayrollService {
 
   // campus_id omitted -> "all employees" view over every campus the caller's
   // scope covers, or every active campus when campus is unrestricted.
-  private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusId?: number): Promise<number[]> {
-    if (requestedCampusId != null) {
-      this.assertCampusAccess(user, requestedCampusId);
-      return [requestedCampusId];
+  private async resolveMatrixCampusIds(user: IJwtStaffPayload, requestedCampusIds?: number[]): Promise<number[]> {
+    if (requestedCampusIds?.length) {
+      requestedCampusIds.forEach((id) => this.assertCampusAccess(user, id));
+      return [...new Set(requestedCampusIds)];
     }
     const universalCampuses = this.scope.scopeOf(user).campuses;
     if (universalCampuses.length > 0) return universalCampuses;
@@ -1424,9 +1479,10 @@ export class PayrollService {
     campusId: number,
     periodStart: Date,
     periodEnd: Date,
-    filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id'> = {},
+    filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id' | 'search'> = {},
   ) {
-    const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds } = filters;
+    const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
+    const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
     const [campus, employees] = await Promise.all([
       this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
       this.prisma.employee_profiles.findMany({
@@ -1438,6 +1494,19 @@ export class PayrollService {
           ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
           ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
           ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
+          // Keyword search: every word must hit at least one field, in any order.
+          ...(keywords.length
+            ? {
+                AND: keywords.map((word) => ({
+                  OR: [
+                    { full_name: { contains: word, mode: 'insensitive' as const } },
+                    { employee_code: { contains: word, mode: 'insensitive' as const } },
+                    { cnic: { contains: word, mode: 'insensitive' as const } },
+                    { job_title: { contains: word, mode: 'insensitive' as const } },
+                  ],
+                })),
+              }
+            : {}),
         },
         select: {
           id: true,
@@ -1503,7 +1572,8 @@ export class PayrollService {
     );
 
     return {
-      campus_id: query.campus_id ?? null,
+      // Kept as a single id for the response shape; null when the lines span several campuses.
+      campus_id: campusIds.length === 1 ? campusIds[0] : null,
       period_start: query.period_start,
       period_end: query.period_end,
       lines: perCampusLines.flat(),
@@ -1513,10 +1583,10 @@ export class PayrollService {
   // Mirrors the webpage exactly: sheet 1 is the same columns as the
   // Employee Lines table, sheet 2 is the same day-by-day punch card matrix,
   // color-coded to match. Includes a Campus column only when the request
-  // spans more than one campus (i.e. no specific campus_id was requested).
+  // spans more than one campus.
   async exportAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload): Promise<Buffer> {
     const matrix = await this.getAttendanceMatrix(query, user);
-    const includeCampusColumn = query.campus_id == null;
+    const includeCampusColumn = matrix.campus_id == null;
     type Line = (typeof matrix.lines)[number];
 
     const columns: EmployeeLineColumn<Line>[] = [
