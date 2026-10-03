@@ -13,6 +13,7 @@ import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } f
 import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
+import { computeTenureWindows, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../payroll-rules/payroll-tax-calculator.util';
@@ -40,6 +41,12 @@ interface EmployeeLineInput {
   days_per_week: number | null;
   employee_work_schedules: { day_of_week: number; is_working: boolean }[];
   check_in_source?: CheckInSource | null;
+  // Current join_date / date_of_leaving on employee_profiles. Both can change
+  // mid-cycle: join_date is rewritten to the rejoin date on a rejoin, and
+  // date_of_leaving is cleared at the same time. Prior tenure windows inside
+  // the cycle live in employee_progression_periods (passed separately into
+  // computeEmployeeLine via progression).
+  join_date?: Date | null;
   date_of_leaving?: Date | null;
 }
 
@@ -179,6 +186,7 @@ export class PayrollService {
     days_per_week: true,
     employee_work_schedules: { select: { day_of_week: true, is_working: true } },
     check_in_source: true,
+    join_date: true,
     date_of_leaving: true,
   } as const;
 
@@ -355,6 +363,7 @@ export class PayrollService {
     mandatorySaturdayDates?: Set<string>,
     shiftOverridesForEmployee?: Map<string, { start: Date | null; end: Date | null }>,
     fullPayOverride = false,
+    progressionPeriods?: { employment_status: string; valid_from: Date; valid_to: Date | null }[],
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -397,19 +406,26 @@ export class PayrollService {
     // scan count -> a clock-in with no matching clock-out -> unresolved, not
     // guessed at. Only a clean, paired day falls back to the biometric status.
     const dailyBreakdown: DayBreakdownEntry[] = [];
-    // An employee who left mid-cycle is only evaluated up to (and including)
-    // their date of leaving. Days after it are never classified, so they can't
-    // become absences, and a weekend/holiday right after the last day worked
-    // has no "next working day" to be sandwiched against. Those days are
-    // simply not paid — see afterLeavingDeduction below.
+    // Tenure windows are the single source of truth for which days this
+    // employee was *expected to show up at all*. A day outside every window
+    // (before a mid-cycle join, after a mid-cycle leave, or in the gap of a
+    // rejoin) is never classified: it can't become an absence, has no
+    // "next working day" to be sandwiched against, and simply isn't paid —
+    // see afterLeavingDeduction below, which now covers all three cases.
     const fullPeriodDays = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
-    const leavingDate = employee.date_of_leaving ?? null;
-    const lastPaidDay = leavingDate && leavingDate < periodEnd ? leavingDate : periodEnd;
+    const tenureWindows: TenureWindow[] = computeTenureWindows({
+      periodStart,
+      periodEnd,
+      joinDate: employee.join_date ?? null,
+      dateOfLeaving: employee.date_of_leaving ?? null,
+      progression: progressionPeriods,
+    });
     for (
       let d = new Date(periodStart);
-      d <= lastPaidDay;
+      d <= periodEnd;
       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
     ) {
+      if (!isDateInAnyWindow(d, tenureWindows)) continue;
       const key = d.toISOString().slice(0, 10);
       const resolved = this.calendarResolver.resolveStaffDayFromRows(
         calendarRows,
@@ -609,16 +625,25 @@ export class PayrollService {
     const perMinuteRate = scheduledMinutes > 0 ? dailyRate.dividedBy(scheduledMinutes) : new Prisma.Decimal(0);
 
     // "Pay full salary" waives every attendance-based deduction (and the
-    // mid-cycle leaving proration). Statutory EOBI/income tax and loan/deposit
+    // out-of-tenure proration). Statutory EOBI/income tax and loan/deposit
     // installments are not attendance-based and still apply.
     const zero = new Prisma.Decimal(0);
     const absenceDeduction = fullPayOverride ? zero : dailyRate.times(absentDays + unpaidLeaveDays);
     const halfDayDeduction = fullPayOverride ? zero : dailyRate.dividedBy(2).times(halfDays);
     const lateDeduction = fullPayOverride ? zero : perMinuteRate.times(totalLateMinutes);
     const breakDeduction = fullPayOverride ? zero : perMinuteRate.times(totalBreakMinutes);
+    // Prorates the salary for every day the employee was off the roster — the
+    // superset of three cases:
+    //   * joined mid-cycle   — days before the join date
+    //   * left mid-cycle     — days after the leaving date
+    //   * rejoined mid-cycle — days in the gap between leaving and rejoining
+    // Carried on the historical `after_leaving_deduction` column because the
+    // old leaver-only semantics are a strict subset of this one; the column is
+    // renamed only in docs, not on disk, to avoid an inflight schema change.
+    const inTenureDays = totalWindowDays(tenureWindows);
     const afterLeavingDeduction = fullPayOverride
       ? zero
-      : dailyRate.times(Math.max(0, fullPeriodDays - dailyBreakdown.length));
+      : dailyRate.times(Math.max(0, fullPeriodDays - inTenureDays));
 
     const [eobiRule, sessiRule, incomeTaxRule] = await Promise.all([
       this.payrollRules.findEffective('EOBI', periodEnd),
@@ -934,7 +959,7 @@ export class PayrollService {
     fullPayEmployeeIds: ReadonlySet<number> = new Set(),
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
-    const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows] = await Promise.all([
+    const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows, allProgressionRows] = await Promise.all([
       this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd),
       this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
       this.expectedTimes.loadShiftOverridesForEmployees(employeeIds, periodStart, periodEnd),
@@ -956,6 +981,22 @@ export class PayrollService {
         where: { employee_id: { in: employeeIds }, person_type: 'STAFF', is_active: true },
         select: { employee_id: true },
       }),
+      // Progression periods that overlap the payroll cycle — the source of
+      // truth for mid-cycle join/leave/rejoin windows (see tenure-window.util).
+      // Overlap condition: valid_from <= periodEnd AND (valid_to IS NULL OR valid_to > periodStart).
+      this.prisma.employee_progression_periods.findMany({
+        where: {
+          employee_id: { in: employeeIds },
+          valid_from: { lte: periodEnd },
+          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+        },
+        select: {
+          employee_id: true,
+          employment_status: true,
+          valid_from: true,
+          valid_to: true,
+        },
+      }),
     ]);
     const mappedEmployeeIds = new Set(mappedRows.map((m) => m.employee_id));
 
@@ -973,6 +1014,21 @@ export class PayrollService {
       else scansByEmployee.set(s.employee_id, [s]);
     }
 
+    const progressionByEmployee = new Map<
+      number,
+      { employment_status: string; valid_from: Date; valid_to: Date | null }[]
+    >();
+    for (const row of allProgressionRows) {
+      const bucket = progressionByEmployee.get(row.employee_id);
+      const entry = {
+        employment_status: row.employment_status,
+        valid_from: row.valid_from,
+        valid_to: row.valid_to,
+      };
+      if (bucket) bucket.push(entry);
+      else progressionByEmployee.set(row.employee_id, [entry]);
+    }
+
     const lines = await Promise.all(
       employees.map(async (employee) => ({
         employee_id: employee.id,
@@ -988,6 +1044,7 @@ export class PayrollService {
           mandatoryByEmployee.get(employee.id) ?? new Set<string>(),
           shiftOverridesByEmployee.get(employee.id),
           fullPayEmployeeIds.has(employee.id),
+          progressionByEmployee.get(employee.id),
         )),
       })),
     );
@@ -1524,6 +1581,8 @@ export class PayrollService {
           days_per_week: true,
           employee_work_schedules: { select: { day_of_week: true, is_working: true } },
           check_in_source: true,
+          join_date: true,
+          date_of_leaving: true,
         },
       }),
     ]);
