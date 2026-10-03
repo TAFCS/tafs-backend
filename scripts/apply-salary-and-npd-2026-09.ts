@@ -147,11 +147,25 @@ function readSheet() {
       if (!cols) continue;
       const code = clean(r[cols.code]);
       if (!code || !/\d/.test(code)) continue;
-      const rec: Row = { code, name: clean(r[cols.name]), salary: num(r[cols.sal]), sheet: sheetName };
-      if (!rec.name && rec.salary == null) continue; // empty filler row
       if (sheetName === 'NPD DETAILS') {
+        const rec: Row = { code, name: clean(r[cols.name]), salary: num(r[cols.sal]), sheet: sheetName };
+        if (!rec.name && rec.salary == null) continue; // empty filler row
         if (monthStart != null) npd.push({ ...rec, months: MONTHS.map((_, i) => num(r[monthStart! + i])) });
       } else {
+        /**
+         * Salary sheets: find the name and salary by what they look like, not
+         * by offset from the code. KANEEZ FATIMA puts them two columns further
+         * right (under duplicate EMPLOYEES NAME / SALARY headers), and reading
+         * code+1 / code+2 there found empty cells — every Kaneez Fatima row
+         * was dropped as "no salary" on the first run (fixed 2026-09-27,
+         * TAFSD-210). Name = first text cell after the code; salary = first
+         * number after the name.
+         */
+        const ci = cols.code;
+        const ni = r.findIndex((c, j) => j > ci && typeof c === 'string' && clean(c) !== '');
+        const si = ni < 0 ? -1 : r.findIndex((c, j) => j > ni && typeof c === 'number');
+        const rec: Row = { code, name: ni < 0 ? '' : clean(r[ni]), salary: si < 0 ? null : r[si], sheet: sheetName };
+        if (!rec.name && rec.salary == null) continue; // empty filler row
         salary.push(rec);
       }
     }
@@ -391,6 +405,10 @@ async function applySalarySet(r: any, kind: 'CORRECTION' | 'FIRST_SALARY') {
  */
 async function applyDeposit(d: any) {
   return prisma.$transaction(async (tx) => {
+    // Added 2026-09-27 (TAFSD-210): the first run created a plan for Maha Fatima
+    // a day after she left, because nothing checked status here.
+    const who = await tx.employee_profiles.findUniqueOrThrow({ where: { id: d.id }, select: { employment_status: true } });
+    if (who.employment_status !== 'ACTIVE') throw new Skip(`status is ${who.employment_status}`);
     const open = await tx.employee_security_deposits.findFirst({
       where: { employee_id: d.id, status: { in: [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED] } },
     });
