@@ -84,7 +84,10 @@ describe('HouseBalancerService', () => {
       $executeRaw: jest.fn(),
     };
 
-    const auditLogs = { log: jest.fn().mockResolvedValue(undefined) };
+    const auditLogs = {
+      log: jest.fn().mockResolvedValue(undefined),
+      logGroup: jest.fn().mockResolvedValue(undefined),
+    };
     const progressionHistory = {
       recordProgressionChange: jest.fn().mockResolvedValue(undefined),
       resolveChangeType: jest.fn().mockReturnValue('HOUSE_CHANGED'),
@@ -156,11 +159,12 @@ describe('HouseBalancerService', () => {
       expect(move.old_house?.id ?? null).not.toBe(move.new_house.id);
       expect(move.student_name).toBeTruthy();
     }
-    expect(auditLogs.log).toHaveBeenCalledWith(
+    expect(auditLogs.logGroup).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'REBALANCED',
         new_value: expect.stringContaining('"moves"'),
       }),
+      expect.any(Array),
     );
 
     await expect(
@@ -210,11 +214,12 @@ describe('HouseBalancerService', () => {
     expect(applied.group_count).toBe(1);
     expect(Array.isArray(applied.moves)).toBe(true);
     expect(applied.moves_count).toBe(applied.moves.length);
-    expect(auditLogs.log).toHaveBeenCalledWith(
+    expect(auditLogs.logGroup).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'CAMPUS_REBALANCED',
         new_value: expect.stringContaining('"moves"'),
       }),
+      expect.any(Array),
     );
   });
 
@@ -246,11 +251,12 @@ describe('HouseBalancerService', () => {
 
     expect(applied.total_students).toBe(students.length);
     expect(applied.group_count).toBe(1);
-    expect(auditLogs.log).toHaveBeenCalledWith(
+    expect(auditLogs.logGroup).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'CAMPUS_REBALANCED',
         entity_id: 'campus:1:class:2',
       }),
+      expect.any(Array),
     );
   });
 

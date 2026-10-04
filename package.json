@@ -127,12 +127,16 @@
     "moduleFileExtensions": [
       "js",
       "json",
-      "ts"
+      "ts",
+      "tsx"
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)sx?$": "ts-jest"
+    },
+    "moduleNameMapper": {
+      "^@react-pdf/renderer$": "<rootDir>/../test/stubs/react-pdf-renderer.ts"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
