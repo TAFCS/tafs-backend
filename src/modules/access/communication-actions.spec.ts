@@ -168,12 +168,14 @@ describe('Support Tickets', () => {
     const fcmService = { sendPush: jest.fn() };
     const chatGateway = { broadcastApprovedTicketMessage: jest.fn() };
     const auditLogs = { log: jest.fn() };
+    const routing = { queueIdsFor: jest.fn().mockResolvedValue([1]) };
     const s = new SupportTicketsService(
       prisma as any,
       fcmService as any,
       chatGateway as any,
       auditLogs as any,
       scope as any,
+      routing as any,
     );
     return { s, prisma, scope };
   }
@@ -190,7 +192,7 @@ describe('Support Tickets', () => {
 
     await s.listClosedTickets(scopedUser);
     const closedWhere = prisma.support_tickets.findMany.mock.calls[2][0].where;
-    expect(JSON.stringify(closedWhere.OR)).toContain('"campus_id":{"in":[3]}');
+    expect(JSON.stringify(closedWhere)).toContain('"campus_id":{"in":[3]}');
   });
 
   it('404s an out-of-scope ticket on getTicketById', async () => {

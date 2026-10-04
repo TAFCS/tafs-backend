@@ -428,7 +428,16 @@ describe('Scope on the policy tiles', () => {
   describe('Attendance Settings: recompute late status', () => {
     const mk = () => {
       const prisma = { zk_attendance_scans: { findMany: jest.fn().mockResolvedValue([]) }, attendance_student_daily: { findMany: jest.fn().mockResolvedValue([]) }, attendance_staff_daily: { findMany: jest.fn().mockResolvedValue([]) } };
-      return { c: new RecomputeLateController(prisma as any, {} as any, realScope), prisma };
+      const processor = {
+        beginBatch: jest.fn(),
+        endBatch: jest.fn(),
+        recomputeDaySequence: jest.fn().mockResolvedValue({}),
+        upsertStudentDaily: jest.fn().mockResolvedValue(undefined),
+        upsertStaffDaily: jest.fn().mockResolvedValue(undefined),
+      } as any;
+      const policyResolver = { beginBatch: jest.fn(), endBatch: jest.fn() } as any;
+      const holidaySync = { syncCampusForDate: jest.fn().mockResolvedValue({ changed: 0 }) } as any;
+      return { c: new RecomputeLateController(prisma as any, processor, realScope, policyResolver, holidaySync), prisma };
     };
     const dto = (campus_id: number, class_id?: number) => ({ campus_id, class_id, date_from: '2026-01-01', date_to: '2026-01-02' }) as any;
 

@@ -219,6 +219,7 @@ describe('VoucherNotificationService', () => {
       fee_date: null,
       class_id: null,
       status: 'UNPAID',
+      released_to_parent_at: dateFromPktKey('2026-09-01'),
       students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
       voucher_heads: [
         {
@@ -251,6 +252,7 @@ describe('VoucherNotificationService', () => {
       fee_date: null,
       class_id: null,
       status: 'UNPAID',
+      released_to_parent_at: dateFromPktKey('2026-09-01'),
       students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
       voucher_heads: [
         {
@@ -291,6 +293,7 @@ describe('VoucherNotificationService', () => {
       fee_date: null,
       class_id: null,
       status: 'UNPAID',
+      released_to_parent_at: dateFromPktKey('2026-07-01'),
       students: { full_name: 'Ali Khan', family_id: 42, deleted_at: null },
       voucher_heads: [],
     });
