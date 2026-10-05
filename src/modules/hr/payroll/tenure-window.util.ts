@@ -74,13 +74,26 @@ export function computeTenureWindows(inputs: TenureInputs): TenureWindow[] {
   }));
 
   if (progression.length > 0) {
+    // When join_date is null, we don't know when the employee actually started.
+    // If the earliest known progression entry is an active status, treat it as
+    // if it had always been in effect — otherwise long-tenured employees who
+    // got a new progression row mid-cycle would silently disappear from the
+    // first part of the cycle. We only back-fill when the earliest entry is
+    // active: a leading LEFT/TERMINATED row means they were legitimately gone.
+    const earliestEntry = progression.reduce(
+      (min, p) => (p.valid_from.getTime() < min.valid_from.getTime() ? p : min),
+      progression[0],
+    );
+    const backfillEarliestActive = !joinDate && !OFF_PAYROLL_STATUSES.has(earliestEntry.employment_status);
+
     for (const period of progression) {
       if (OFF_PAYROLL_STATUSES.has(period.employment_status)) continue;
       // valid_to is exclusive upper bound in the DB (the next period opens on
       // the same timestamp), so the ACTIVE window's last paid day is
       // valid_to - 1 day; a null valid_to means still open, so the window
       // extends to the end of the cycle.
-      const windowStart = period.valid_from;
+      const isEarliest = period.valid_from.getTime() === earliestEntry.valid_from.getTime();
+      const windowStart = backfillEarliestActive && isEarliest ? periodStart : period.valid_from;
       const windowEnd = period.valid_to
         ? new Date(period.valid_to.getTime() - 86_400_000)
         : periodEnd;

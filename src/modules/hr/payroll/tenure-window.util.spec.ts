@@ -177,6 +177,50 @@ describe('computeTenureWindows', () => {
     expect(windows).toEqual([{ start: periodStart, end: d('2026-09-10') }]);
   });
 
+  it('back-fills to periodStart when joinDate is null and the earliest active progression starts mid-cycle', () => {
+    // Long-tenured employee with no join_date on file. A new progression row
+    // was added on Sep 5 (e.g. a status snapshot) — without the back-fill,
+    // Aug 26 → Sep 4 would silently drop out of the matrix even though they
+    // were employed the whole time.
+    const windows = computeTenureWindows({
+      periodStart,
+      periodEnd,
+      joinDate: null,
+      dateOfLeaving: null,
+      progression: [
+        { employment_status: 'ACTIVE', valid_from: d('2026-09-05'), valid_to: null },
+      ],
+    });
+    expect(windows).toEqual([{ start: periodStart, end: periodEnd }]);
+  });
+
+  it('does not back-fill when the earliest progression entry is LEFT (legitimate gap)', () => {
+    const windows = computeTenureWindows({
+      periodStart,
+      periodEnd,
+      joinDate: null,
+      dateOfLeaving: null,
+      progression: [
+        { employment_status: 'LEFT', valid_from: d('2026-07-01'), valid_to: d('2026-09-05') },
+        { employment_status: 'ACTIVE', valid_from: d('2026-09-05'), valid_to: null },
+      ],
+    });
+    expect(windows).toEqual([{ start: d('2026-09-05'), end: periodEnd }]);
+  });
+
+  it('does not back-fill when joinDate is set (mid-cycle new hire is unchanged)', () => {
+    const windows = computeTenureWindows({
+      periodStart,
+      periodEnd,
+      joinDate: d('2026-09-10'),
+      dateOfLeaving: null,
+      progression: [
+        { employment_status: 'ACTIVE', valid_from: d('2026-09-10'), valid_to: null },
+      ],
+    });
+    expect(windows).toEqual([{ start: d('2026-09-10'), end: periodEnd }]);
+  });
+
   it('returns empty when periodEnd is before periodStart', () => {
     const windows = computeTenureWindows({
       periodStart: periodEnd,
