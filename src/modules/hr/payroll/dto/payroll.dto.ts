@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsPositive, IsString, Max, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { toNumberArray } from '../../../../common/transforms/query-array.transform';
 
@@ -93,4 +93,17 @@ export class AttendanceMatrixQueryDto {
 
   @IsDateString()
   period_end: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number;
 }

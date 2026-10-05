@@ -1532,18 +1532,54 @@ export class PayrollService {
     return campuses.map((c) => c.id);
   }
 
+  /** Returns sorted employee IDs matching the given filters for a campus — used by getAttendanceMatrix to paginate before computing lines. */
+  private async getMatchingEmployeeIds(
+    campusId: number,
+    filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id' | 'search'>,
+  ): Promise<number[]> {
+    const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
+    const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: {
+        campus_id: campusId,
+        employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+        ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
+        ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
+        ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
+        ...(keywords.length
+          ? {
+              AND: keywords.map((word) => ({
+                OR: [
+                  { full_name: { contains: word, mode: 'insensitive' as const } },
+                  { employee_code: { contains: word, mode: 'insensitive' as const } },
+                  { cnic: { contains: word, mode: 'insensitive' as const } },
+                  { job_title: { contains: word, mode: 'insensitive' as const } },
+                ],
+              })),
+            }
+          : {}),
+      },
+      select: { id: true },
+      orderBy: { full_name: 'asc' },
+    });
+    return rows.map((r) => r.id);
+  }
+
   private async computeMatrixLinesForCampus(
     campusId: number,
     periodStart: Date,
     periodEnd: Date,
     filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id' | 'search'> = {},
+    employeeIdOverride?: number[],
   ) {
     const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
     const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
     const [campus, employees] = await Promise.all([
       this.prisma.campuses.findUnique({ where: { id: campusId }, select: { campus_name: true } }),
       this.prisma.employee_profiles.findMany({
-        where: {
+        where: employeeIdOverride
+          ? { id: { in: employeeIdOverride } }
+          : {
           campus_id: campusId,
           // Matches generateRun's employee scope — terminated staff have no
           // attendance to show and only inflate the matrix.
@@ -1623,19 +1659,45 @@ export class PayrollService {
   async getAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload) {
     const { periodStart, periodEnd } = this.parseMatrixPeriod(query.period_start, query.period_end);
     const campusIds = await this.resolveMatrixCampusIds(user, query.campus_id);
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
 
+    // First pass: fetch only IDs (cheap) so we can paginate before the expensive line computation.
+    const campusEmployeeIds = await Promise.all(
+      campusIds.map(async (campusId) => {
+        const ids = await this.getMatchingEmployeeIds(campusId, query);
+        return { campusId, ids };
+      }),
+    );
+
+    const allEntries = campusEmployeeIds.flatMap(({ campusId, ids }) =>
+      ids.map((id) => ({ campusId, employeeId: id })),
+    );
+    const total = allEntries.length;
+    const pageEntries = allEntries.slice((page - 1) * limit, page * limit);
+
+    // Group this page's employees by campus for the second pass.
+    const byCampus = new Map<number, number[]>();
+    for (const { campusId, employeeId } of pageEntries) {
+      if (!byCampus.has(campusId)) byCampus.set(campusId, []);
+      byCampus.get(campusId)!.push(employeeId);
+    }
+
+    // Second pass: compute attendance lines only for this page's employees.
     const perCampusLines = await Promise.all(
-      campusIds.map((campusId) =>
-        this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd, query),
+      [...byCampus.entries()].map(([campusId, employeeIds]) =>
+        this.computeMatrixLinesForCampus(campusId, periodStart, periodEnd, query, employeeIds),
       ),
     );
 
     return {
-      // Kept as a single id for the response shape; null when the lines span several campuses.
       campus_id: campusIds.length === 1 ? campusIds[0] : null,
       period_start: query.period_start,
       period_end: query.period_end,
       lines: perCampusLines.flat(),
+      total,
+      page,
+      limit,
     };
   }
 
