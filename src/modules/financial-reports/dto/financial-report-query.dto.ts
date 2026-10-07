@@ -402,6 +402,16 @@ export class ListDefaultersQueryDto extends StudentScopeFilterQueryDto {
   @Type(() => Number)
   @IsInt()
   cc?: number;
+
+  /**
+   * "YYYY-MM". Narrows the report to students who still owe a fee head whose
+   * fee_date falls in that calendar month (and before as_of_date) — "who
+   * defaulted on the August fee". By fee_date, i.e. the month the money was
+   * expected, not the head's target month.
+   */
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'arrear_month must be YYYY-MM' })
+  arrear_month?: string;
 }
 
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {

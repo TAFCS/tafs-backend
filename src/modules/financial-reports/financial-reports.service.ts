@@ -1790,6 +1790,18 @@ export class FinancialReportsService {
       const wanted = new Set(query.severity);
       rows = rows.filter((r) => wanted.has(r.severity));
     }
+    // A named month: only students carrying an arrear that fell due that month
+    // (by fee_date). EXPIRING students have nothing rolled into arrears yet, so
+    // they are not in it — same reasoning as the months-behind range above.
+    let owedInMonth: Map<number, number> | null = null;
+    if (query.arrear_month) {
+      owedInMonth = await this.loadOwedInFeeMonth(
+        rows.filter((r) => r.category !== 'EXPIRING').map((r) => r.student_id),
+        query.arrear_month,
+        asOfDate,
+      );
+      rows = rows.filter((r) => r.category !== 'EXPIRING' && owedInMonth!.has(r.student_id));
+    }
 
     const shared = {
       as_of_date: asOfDate,
@@ -1827,7 +1839,9 @@ export class FinancialReportsService {
     // with the strip and payment-behaviour figures.
     const sorted = this.sortDefaulterRows(rows, query.sort_by, query.sort_dir);
     const pageRows = sorted.slice((page - 1) * limit, page * limit);
-    const items = await this.buildDefaulterStudentRows(pageRows, columns, classTerms, asOfDate);
+    const items = (await this.buildDefaulterStudentRows(pageRows, columns, classTerms, asOfDate)).map(
+      (item) => ({ ...item, arrear_month_owed: owedInMonth?.get(item.cc) ?? null }),
+    );
 
     return {
       ...shared,
@@ -1982,6 +1996,42 @@ export class FinancialReportsService {
         newest_arrear_fee_date: r.newest_arrear_fee_date,
       });
     }
+    return result;
+  }
+
+  /**
+   * Per student, what is still owed on heads whose fee_date falls in `month`
+   * ("YYYY-MM") and before as_of — the same head predicate as
+   * loadDefaulterMoney, narrowed to one billing month. Students owing nothing
+   * that month are absent.
+   */
+  private async loadOwedInFeeMonth(
+    ids: number[],
+    month: string,
+    asOfDate: string,
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (ids.length === 0) return result;
+    const [y, m] = month.split('-').map(Number);
+    const from = `${month}-01`;
+    const to = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}-01`;
+    const rows = await this.prisma.$queryRaw<Array<{ student_id: number; owed: number }>>(Prisma.sql`
+      SELECT sf.student_id,
+             SUM(COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8 AS owed
+      FROM public.student_fees sf
+      WHERE sf.student_id IN (${Prisma.join(ids)})
+        AND sf.fee_date >= ${from}::date
+        AND sf.fee_date < ${to}::date
+        AND sf.fee_date < ${asOfDate}::date
+        AND sf.is_arrear_surcharge = false
+        AND sf.is_discount = false
+        AND sf.status <> 'PAID'
+        AND sf.status <> 'DISCOUNT'
+        AND sf.status <> 'WAIVED'
+        AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
+      GROUP BY sf.student_id
+    `);
+    for (const r of rows) result.set(Number(r.student_id), this.roundMoney(Number(r.owed)));
     return result;
   }
 
@@ -2663,8 +2713,11 @@ export class FinancialReportsService {
    * Built this way, DEFAULTING AMOUNT = sum of the row's month cells = the
    * on-screen Arrears figure, and TOTAL = sum of DEFAULTING AMOUNT.
    *
-   * EXPIRING students are left out: they owe nothing that has rolled into an
-   * arrear yet, so they have no defaulted months to list.
+   * The sheet is exactly what the page shows for the same filters: the same
+   * students (EXPIRING ones included, marked in REMARKS), in the same sort
+   * order, with the same month window (strip_months back from as_of). Owed
+   * months outside that window are summed into EARLIER / LATER columns so
+   * the row still adds up.
    */
   private async buildDefaultersStudentReport(
     allItems: Array<Record<string, unknown>>,
@@ -2673,7 +2726,7 @@ export class FinancialReportsService {
     basename: string,
   ): Promise<ExportFile> {
     type Item = Record<string, unknown>;
-    const items = allItems.filter((r) => r.category !== 'EXPIRING');
+    const items = allItems;
     const owedByStudent = await this.loadDefaulterOwedMonths(
       items.map((r) => Number(r.cc)),
       asOfDate,
@@ -2688,19 +2741,9 @@ export class FinancialReportsService {
     for (const item of items) {
       const months = owedByStudent.get(Number(item.cc)) ?? new Map();
       const total = this.roundMoney([...months.values()].reduce((s, m) => s + m.owed, 0));
-      if (total <= 0) continue;
+      // Rows keep listDefaulters' order — the sort the admin picked on screen.
       sheetRows.push({ item, months, total });
     }
-
-    // Level order (classes.id runs PN, NUR, KG, JR-I ... O-III, VI ... X, AS,
-    // A2), then section, then name — how the paper sheet is laid out.
-    const classOrder = (r: Item) => (r.class_id == null ? Number.MAX_SAFE_INTEGER : Number(r.class_id));
-    sheetRows.sort(
-      (a, b) =>
-        classOrder(a.item) - classOrder(b.item) ||
-        String(a.item.section ?? '').localeCompare(String(b.item.section ?? '')) ||
-        String(a.item.student_name ?? '').localeCompare(String(b.item.student_name ?? '')),
-    );
 
     const byCampus = new Map<string, { code: string; name: string; rows: SheetRow[] }>();
     for (const row of sheetRows) {
@@ -2721,30 +2764,50 @@ export class FinancialReportsService {
       ]
         .filter(Boolean)
         .join(' ');
-    const monthSpan = (rows: SheetRow[]) => {
-      let lo = Number.POSITIVE_INFINITY;
-      let hi = Number.NEGATIVE_INFINITY;
+    // The page's month window: strip_months calendar months ending at as_of's
+    // month. Month index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
+    const asOfYm = this.parseYearMonthOfDate(asOfDate);
+    const windowHi = asOfYm.year * 12 + (asOfYm.month - 1);
+    const windowLo = windowHi - (Math.min(Math.max(query.strip_months ?? 12, 1), 24) - 1);
+    type SheetCol = { label: string; from: number; to: number };
+    const sheetColumns = (rows: SheetRow[]): SheetCol[] => {
+      let earlier = false;
+      let later = false;
       for (const r of rows) {
         for (const idx of r.months.keys()) {
-          lo = Math.min(lo, idx);
-          hi = Math.max(hi, idx);
+          if (idx < windowLo) earlier = true;
+          if (idx > windowHi) later = true;
         }
       }
-      if (!Number.isFinite(lo)) return [] as number[];
-      return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-    };
-    // "DEC", "JAN" … as on the paper sheet; the year is added only when the
-    // span is long enough for a month name to repeat.
-    const monthLabels = (span: number[]) =>
-      span.map((idx) => {
+      const span = windowHi - windowLo + 1;
+      const cols: SheetCol[] = [];
+      if (earlier) cols.push({ label: 'EARLIER', from: Number.NEGATIVE_INFINITY, to: windowLo - 1 });
+      for (let idx = windowLo; idx <= windowHi; idx++) {
+        // "DEC", "JAN" … as on the paper sheet; the year is added only when
+        // the window is long enough for a month name to repeat.
         const name = MONTH_ABBR_UPPER[idx % 12];
-        return span.length > 12 ? `${name} ${String(Math.floor(idx / 12)).slice(-2)}` : name;
-      });
+        cols.push({ label: span > 12 ? `${name} ${String(Math.floor(idx / 12)).slice(-2)}` : name, from: idx, to: idx });
+      }
+      if (later) cols.push({ label: 'LATER', from: windowHi + 1, to: Number.POSITIVE_INFINITY });
+      return cols;
+    };
+    const cellFor = (r: SheetRow, col: SheetCol) => {
+      let owed = 0;
+      let partial = false;
+      for (const [idx, m] of r.months) {
+        if (idx < col.from || idx > col.to) continue;
+        owed += m.owed;
+        partial = partial || m.partial;
+      }
+      return owed > 0 ? { owed: this.roundMoney(owed), partial } : null;
+    };
+    const remarkFor = (r: SheetRow) =>
+      r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
     const subtitle = this.defaulterFilterSubtitle(query);
 
     if (query.format === 'csv') {
-      const span = monthSpan(sheetRows);
-      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...monthLabels(span), 'Defaulting Amount'];
+      const cols = sheetColumns(sheetRows);
+      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...cols.map((c) => c.label), 'Defaulting Amount', 'Remarks'];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
       for (const campus of campuses) {
         campus.rows.forEach((r, i) => {
@@ -2755,8 +2818,9 @@ export class FinancialReportsService {
             String(r.item.gr_number ?? ''),
             level(r.item),
             String(r.item.student_name ?? ''),
-            ...span.map((idx) => r.months.get(idx)?.owed ?? ''),
+            ...cols.map((c) => cellFor(r, c)?.owed ?? ''),
             r.total,
+            remarkFor(r),
           ];
           lines.push(cells.map((v) => this.csvCell(v)).join(','));
         });
@@ -2796,10 +2860,10 @@ export class FinancialReportsService {
 
     for (const campus of campuses) {
       const sheet = workbook.addWorksheet(this.sanitizeSheetName(campus.code || campus.name));
-      const span = monthSpan(campus.rows);
-      const labels = monthLabels(span);
+      const cols = sheetColumns(campus.rows);
+      const labels = cols.map((c) => c.label);
       const FIRST_MONTH_COL = 6;
-      const amountCol = FIRST_MONTH_COL + span.length;
+      const amountCol = FIRST_MONTH_COL + cols.length;
       const remarksCol = amountCol + 1;
       const lastCol = this.excelColumnLetter(remarksCol);
 
@@ -2846,9 +2910,9 @@ export class FinancialReportsService {
       sheet.getColumn(3).width = 8;
       sheet.getColumn(4).width = 11;
       sheet.getColumn(5).width = 30;
-      for (let i = 0; i < span.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
+      for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
       sheet.getColumn(amountCol).width = 15;
-      sheet.getColumn(remarksCol).width = 18;
+      sheet.getColumn(remarksCol).width = 22;
 
       let rowIdx = HEADER_ROW + 1;
       let grandTotal = 0;
@@ -2860,8 +2924,8 @@ export class FinancialReportsService {
         row.getCell(3).value = /^\d+$/.test(gr) ? Number(gr) : gr;
         row.getCell(4).value = level(r.item);
         row.getCell(5).value = String(r.item.student_name ?? '').toUpperCase();
-        span.forEach((idx, c) => {
-          const owed = r.months.get(idx);
+        cols.forEach((col, c) => {
+          const owed = cellFor(r, col);
           if (!owed) return;
           const cell = row.getCell(FIRST_MONTH_COL + c);
           cell.value = owed.owed;
@@ -2874,6 +2938,7 @@ export class FinancialReportsService {
         amount.numFmt = '0';
         amount.font = { name: SERIF, bold: true, size: 12 };
         grandTotal += r.total;
+        row.getCell(remarksCol).value = remarkFor(r);
 
         for (let c = 1; c <= remarksCol; c++) {
           const cell = row.getCell(c);
@@ -3009,6 +3074,17 @@ export class FinancialReportsService {
    * "1 & 2 & 3 MONTHS", "6+ MONTHS", "4-9 MONTHS" … DEFAULTERS.
    */
   private defaulterFilterSubtitle(query: ExportDefaultersQueryDto): string {
+    const range = this.defaulterMonthsRangeSubtitle(query);
+    if (!query.arrear_month) return range;
+    const [y, m] = query.arrear_month.split('-').map(Number);
+    const monthName = new Date(Date.UTC(y, m - 1, 1))
+      .toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+      .toUpperCase();
+    // "AUGUST 2026 DEFAULTERS", or "AUGUST 2026 · 4 & 5 MONTHS DEFAULTERS".
+    return range === 'ALL DEFAULTERS' ? `${monthName} DEFAULTERS` : `${monthName} · ${range}`;
+  }
+
+  private defaulterMonthsRangeSubtitle(query: ExportDefaultersQueryDto): string {
     const min = query.min_months_behind ?? 1;
     const max = query.max_months_behind;
     if (max != null && max >= min) {
