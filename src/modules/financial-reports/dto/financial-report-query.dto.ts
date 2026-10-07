@@ -358,6 +358,20 @@ export class ListDefaultersQueryDto extends StudentScopeFilterQueryDto {
   @Max(60)
   min_months_behind?: number = 1;
 
+  /**
+   * Upper bound on months_behind, inclusive. Omit for no cap (default). Paired
+   * with min_months_behind to express the school's N-month filter variants
+   * ("4 & 5 months defaulters" -> min=4, max=5; "6+ months" -> min=6, no max).
+   * Like min_months_behind, this does not apply to EXPIRING rows — those are
+   * months_behind=0 by construction.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(60)
+  max_months_behind?: number;
+
   @IsOptional()
   @Transform(toStringArray)
   @IsArray()
