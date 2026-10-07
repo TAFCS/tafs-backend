@@ -81,7 +81,7 @@ async function main() {
       throw new Error(`Expected to delete ${rows.length}, deleted ${deleted.count} — rolling back.`);
     }
     console.log(`\nDeleted ${deleted.count}. Audit rollup #${parent.id}.`);
-  });
+  }, { maxWait: 30_000, timeout: 120_000 }); // remote DB over a slow link — the 5s default expires
 
   const left = await prisma.teacher_saturday_schedules.count({ where });
   console.log(`Remaining in ${FROM} → ${TO}: ${left}`);
