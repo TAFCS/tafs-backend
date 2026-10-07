@@ -3552,6 +3552,7 @@ export class StudentsService {
       JOIN public.student_fees sf ON vh.student_fee_id = sf.id
       WHERE v.student_id = ${studentId}
       AND sf.academic_year != v.academic_year
+      AND vh.waived = false
     `;
     const totalArrearsEver = Number(arrearsResult[0]?.total || 0);
 
@@ -3575,8 +3576,10 @@ export class StudentsService {
       const hasValidVoucher = f.voucher_heads.some((vh) => vh.vouchers.status !== 'VOID');
 
       if (hasValidVoucher) {
-        const amount = new Prisma.Decimal(f.amount || 0);
         const amountPaid = new Prisma.Decimal(f.amount_paid || 0);
+        // A waived head is written off: only what was actually paid on it
+        // before the waiver counts as due, and nothing is outstanding.
+        const amount = f.status === 'WAIVED' ? amountPaid : new Prisma.Decimal(f.amount || 0);
         totalDue = totalDue.add(amount);
         totalPaid = totalPaid.add(amountPaid);
 

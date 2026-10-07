@@ -72,6 +72,12 @@ export class MeezanService {
         return { ResponseCode: '097', ResponseDesc: 'Voucher is already paid' };
       }
 
+      // A waived voucher is a write-off — nothing is payable. Its stored totals
+      // stay at face value (Rule D), so without this the bank would quote them.
+      if (voucher.status === 'WAIVED') {
+        return { ResponseCode: '093', ResponseDesc: 'Voucher is waived' };
+      }
+
       if (validityDate && today > validityDate) {
         return { ResponseCode: '092', ResponseDesc: 'Voucher date is expired' };
       }
@@ -153,6 +159,14 @@ export class MeezanService {
       );
       const validityDate = voucher.validity_date;
 
+      if (voucher.status === 'VOID') {
+        return { ResponseCode: '093', ResponseDesc: 'Voucher is void' };
+      }
+
+      if (voucher.status === 'WAIVED') {
+        return { ResponseCode: '093', ResponseDesc: 'Voucher is waived' };
+      }
+
       if (voucher.status === 'PAID') {
         return { ResponseCode: '097', ResponseDesc: 'Voucher already paid' };
       }
@@ -213,6 +227,8 @@ export class MeezanService {
 
         for (const head of voucher.voucher_heads) {
           if (head.student_fees.is_discount) continue; // never auto-collect a discount head as cash
+          // A written-off head takes no cash (same rule as recordDeposit).
+          if (head.waived || head.student_fees.status === fee_status_enum.WAIVED) continue;
           if (pool.lte(0)) break;
 
           const headBalance = new Prisma.Decimal(head.student_fees.amount ?? 0).sub(

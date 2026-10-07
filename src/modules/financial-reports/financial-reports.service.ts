@@ -440,7 +440,7 @@ export class FinancialReportsService {
           this.prisma.student_fees.groupBy({
             by: ['student_id'],
             where: { ...where, is_discount: false, status: fee_status_enum.WAIVED, student_id: { in: studentIds } },
-            _sum: { amount: true },
+            _sum: { amount: true, amount_paid: true },
             _count: { _all: true },
           }),
         ])
@@ -453,7 +453,7 @@ export class FinancialReportsService {
       ]),
     );
     const waivedByStudent = new Map(
-      waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
+      waivedGroups.map((w) => [w.student_id, this.waivedPortion(w._sum)]),
     );
 
     return {
@@ -521,7 +521,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['fee_type_id', 'description_prefix'],
         where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
@@ -543,7 +543,7 @@ export class FinancialReportsService {
       ]),
     );
     const waivedByKey = new Map(
-      waivedGroups.map((w) => [groupKey(w), this.toMoney(w._sum.amount)]),
+      waivedGroups.map((w) => [groupKey(w), this.waivedPortion(w._sum)]),
     );
     const seenKeys = new Set(groups.map(groupKey));
     const items = groups.map((group) => {
@@ -625,7 +625,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['target_month', 'academic_year', 'term_start_month'],
         where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
@@ -644,7 +644,7 @@ export class FinancialReportsService {
       ]),
     );
     const waivedByPeriod = new Map(
-      waivedGroups.map((w) => [periodKey(w), this.toMoney(w._sum.amount)]),
+      waivedGroups.map((w) => [periodKey(w), this.waivedPortion(w._sum)]),
     );
     const seenPeriodKeys = new Set(groups.map(periodKey));
     const buildPeriodItem = (
@@ -744,7 +744,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['student_id'],
         where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.feeHeadMoneyTotals(where),
@@ -774,7 +774,7 @@ export class FinancialReportsService {
     }
     for (const w of waivedGroups) {
       const existing = perStudent.get(w.student_id) ?? { amount: 0, amountPaid: 0, headCount: 0, waived: 0 };
-      existing.waived = this.roundMoney(existing.waived + this.toMoney(w._sum.amount));
+      existing.waived = this.roundMoney(existing.waived + this.waivedPortion(w._sum));
       perStudent.set(w.student_id, existing);
     }
 
@@ -891,7 +891,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['fee_date'],
         where: { ...where, is_discount: false, status: fee_status_enum.WAIVED },
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
       }),
       this.feeHeadMoneyTotals(where),
       this.prisma.students.count({
@@ -943,7 +943,7 @@ export class FinancialReportsService {
       b.discountConsumed = d._sum.amount_paid;
     }
     for (const w of waivedGroups) {
-      bucketFor(w.fee_date).waived = this.toMoney(w._sum.amount);
+      bucketFor(w.fee_date).waived = this.waivedPortion(w._sum);
     }
 
     const items = [...buckets.values()]
@@ -1148,7 +1148,7 @@ export class FinancialReportsService {
           this.prisma.student_fees.groupBy({
             by: ['student_id'],
             where: { ...where, is_discount: false, status: fee_status_enum.WAIVED, student_id: { in: studentIds } },
-            _sum: { amount: true },
+            _sum: { amount: true, amount_paid: true },
             _count: { _all: true },
           }),
         ])
@@ -1161,7 +1161,7 @@ export class FinancialReportsService {
       ]),
     );
     const waivedByStudent = new Map(
-      waivedGroups.map((w) => [w.student_id, this.toMoney(w._sum.amount)]),
+      waivedGroups.map((w) => [w.student_id, this.waivedPortion(w._sum)]),
     );
     const columns: ExportColumn[] = [
       { header: 'CC', key: 'cc', width: 10 },
@@ -1848,7 +1848,8 @@ export class FinancialReportsService {
    * throughout: VOID vouchers were superseded and their surcharge rows are
    * stale re-charges of the same arrear month (never cascade-deleted on
    * void, only on hard delete); PAID vouchers are resolved, their arrears
-   * are no longer current.
+   * are no longer current. WAIVED vouchers are written off the same way —
+   * their surcharge rows are all waived and nothing on them is owed.
    */
   private async loadDefaulterEligibility(
     ids: number[],
@@ -1857,7 +1858,7 @@ export class FinancialReportsService {
     if (ids.length === 0) return result;
 
     const vouchers = await this.prisma.vouchers.findMany({
-      where: { student_id: { in: ids }, status: { notIn: ['VOID', 'PAID'] } },
+      where: { student_id: { in: ids }, status: { notIn: ['VOID', 'PAID', 'WAIVED'] } },
       select: {
         student_id: true,
         status: true,
@@ -3779,7 +3780,7 @@ export class FinancialReportsService {
       this.prisma.student_fees.groupBy({
         by: ['status'],
         where: nonDiscountWhere,
-        _sum: { amount: true },
+        _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
       }),
       this.prisma.student_fees.groupBy({
@@ -3804,8 +3805,13 @@ export class FinancialReportsService {
         toBeBilledCount += count;
       } else if (row.status === fee_status_enum.WAIVED) {
         // Waived heads are a permanent write-off — their own bucket, excluded
-        // from both billed and to-be-billed, and netted out of Outstanding below.
-        waived = this.roundMoney(waived + amount);
+        // from to-be-billed and netted out of Outstanding below. A head waived
+        // after a part-payment keeps that cash: the paid part stays billed and
+        // only the remainder is waived, so both reconciliation identities in
+        // buildTotalsCheck still hold.
+        const portion = this.waivedPortion(row._sum);
+        waived = this.roundMoney(waived + portion);
+        billed = this.roundMoney(billed + amount - portion);
         waivedCount += count;
       } else {
         billed = this.roundMoney(billed + amount);
@@ -3917,9 +3923,7 @@ export class FinancialReportsService {
     // heads' paid (see netPaid). Fully used: amount -X, paid -X, outstanding 0.
     const amountPaid = row.is_discount ? this.netPaid(0, row.amount_paid) : this.toMoney(row.amount_paid);
     const isWaived = row.status === fee_status_enum.WAIVED;
-    const waivedAmount = isWaived
-      ? this.roundMoney(this.toMoney(row.waived_amount) || amount)
-      : 0;
+    const waivedAmount = isWaived ? this.waivedPortion({ amount: row.amount, amount_paid: row.amount_paid }) : 0;
     const classId =
       row.students.class_id ??
       row.students.graduated_from_class_id ??
@@ -4227,6 +4231,20 @@ export class FinancialReportsService {
    * discount rows' consumed amount gives the 80,000 back. Both sums must cover
    * the same filtered set of student_fees rows.
    */
+
+  /**
+   * The written-off part of WAIVED heads: whatever was not already paid. A
+   * head waived after a part-payment keeps its cash (amount_paid) and waives
+   * only the rest, so paid + waived = amount for every WAIVED head. Derived
+   * from amount/amount_paid rather than waived_amount so a null or stale
+   * waived_amount can never break the totals check.
+   */
+  private waivedPortion(sum: {
+    amount: Prisma.Decimal | number | null;
+    amount_paid?: Prisma.Decimal | number | null;
+  }): number {
+    return this.roundMoney(Math.max(0, this.toMoney(sum.amount) - this.toMoney(sum.amount_paid ?? 0)));
+  }
   private netPaid(
     headsPaid: Prisma.Decimal | number | null | undefined,
     discountConsumed: Prisma.Decimal | number | null | undefined,

@@ -966,7 +966,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                                                 <Text style={[styles.historyTableCell, { flex: 1, textAlign: 'right' }]}>
                                                     {Number(inst.amount || 0).toLocaleString()}
                                                 </Text>
-                                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' }]}>
+                                                <Text style={[styles.historyTableCell, { flex: 0.8, textAlign: 'right', color: inst.status === 'PAID' ? '#16a34a' : inst.status === 'WAIVED' ? '#0f766e' : '#dc2626' }]}>
                                                     {inst.status}
                                                 </Text>
                                             </View>

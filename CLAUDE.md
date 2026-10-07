@@ -79,6 +79,13 @@ change makes one false, the change is wrong, not the rule.
    `VOID/PAID/EXPIRED`, and drops a waived *head* from a mixed voucher's totals
    the way it drops discount rows. Un-waive is the only way back. See **Rule C**
    for the lifecycle and **Rule D** for how the two waiver shapes present.
+   **Waiving is post-issuance only (TAFSD-269):** `waiveVoucher()` on an issued
+   voucher is the only way in — there is no loose-head waive endpoint. A waive
+   writes off everything still owed on the challan: a part-paid head keeps its
+   cash and waives only the remainder (`waived_amount = amount - amount_paid`),
+   and the "missed" installments the challan prints are attached to the voucher
+   first. Un-waive is latest-voucher-only, like deposit reversal. Reports derive
+   the waived portion as `amount - amount_paid`, never the face value.
 10. **Bulk issuance shares `create()`** — single + bulk both call
     `VouchersService.create()`; `splitPartiallyPaid()` is a hand-maintained
     duplicate. Any issuance-behaviour change lands in both. **PAY IMMEDIATELY**
@@ -220,7 +227,7 @@ one column of the table below, change the other.
 | Storage key suffix | `_paid.pdf` | `_waived.pdf` |
 | PDF overlay | diagonal green `PAID` stamp | diagonal `WAIVED` watermark |
 | Frozen by | `freezePaidPdf()` | `freezeWaivedPdf()` |
-| Returns to ISSUED via | `clearDeposit()` / `reverseDeposit()` | `unwaiveVoucher()` |
+| Returns to ISSUED via | `clearDeposit()` / `reverseDeposit()` — latest deposit only | `unwaiveVoucher()` — latest voucher only; part-paid heads go back to `PARTIALLY_PAID` |
 | Reversal clears the artifact | yes — `paid_pdf_url = null` | yes — `waived_pdf_url = null` |
 
 **The three PDF columns are three distinct objects.** `pdf_url` is the ISSUED
@@ -255,14 +262,18 @@ already durable, so a render failure logs and the next `generatePdf()` mints it.
 
 1. Waive an UNPAID voucher → status `WAIVED`, every non-discount head `WAIVED`,
    `waived_pdf_url` populated, PDF carries the WAIVED watermark, challan
-   downloads without a second click.
+   downloads without a second click. Waive a PARTIALLY_PAID one → paid cash
+   stays, only the remainder is waived; missed installments join the voucher.
 2. Ask for that voucher's PDF again → identical URL, `frozen: true`, no
    re-render, no re-upload.
-3. Un-waive → heads back to `ISSUED`, status `UNPAID`/`OVERDUE`,
-   `waived_pdf_url` null.
+3. Un-waive → heads back to `ISSUED` (`PARTIALLY_PAID` where cash was on
+   them), status `PARTIALLY_PAID`/`UNPAID`/`OVERDUE`, `waived_pdf_url` null.
+   Refused when the student has a newer live voucher.
 4. Re-waive → a **fresh** artifact is minted; the first one is not resurrected.
 5. A PAID voucher still resolves to `paid_pdf_url`, never `waived_pdf_url`.
-6. `npm test -- waived-pdf-freeze paid-pdf-freeze` green.
+6. `npm test -- waived-pdf-freeze paid-pdf-freeze waive-voucher` green.
+7. A WAIVED voucher can't be paid at Meezan, force-deleted, or have a deposit
+   on it reversed (un-waive first).
 
 ---
 
@@ -276,7 +287,7 @@ and they must never be mixed up. The discriminator is `wholeVoucherWaived` in
 
 | | Wholly waived | Partially waived |
 |---|---|---|
-| How it got there | `waiveVoucher()` after issue, **or** `create()` with every non-discount head already `WAIVED` (`issueAsWaived`) | some heads `WAIVED`, the rest billed normally |
+| How it got there | `waiveVoucher()` after issue (legacy: `create()` with every non-discount head already `WAIVED` — `issueAsWaived`) | legacy only — some heads pre-waived, the rest billed normally. No new ones can be made since pre-waive was removed (TAFSD-269) |
 | `vouchers.status` | `WAIVED` | `UNPAID` / `OVERDUE` / … — unchanged |
 | Diagonal WAIVED stamp | **yes** — it carries the whole message | **no** — most of the voucher is payable |
 | Fee-head lines | **printed normally**, full amounts, consolidated into month ranges like any other challan | the waived line is **struck through** and tagged `WAIVED` |
@@ -309,8 +320,9 @@ that derives a balance from it must skip the head explicitly:
 
 1. Waive an issued voucher → challan prints its heads normally under the stamp;
    the deposit row's View button opens a read-only modal with the same numbers.
-2. Waive loose heads, then generate a voucher for exactly those heads → byte-for-
-   byte the same presentation as (1), same total, not zero.
+2. (Legacy data only — loose-head waive no longer exists.) A voucher issued for
+   exactly some already-waived heads → byte-for-byte the same presentation as
+   (1), same total, not zero.
 3. Generate a voucher mixing one waived head with payable ones → no stamp, the
    waived line struck through, the total excludes it, and paying the rest in full
    moves the voucher to `PAID`.

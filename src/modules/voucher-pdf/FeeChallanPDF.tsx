@@ -1112,7 +1112,7 @@ export const FeeChallanPDF = ({ student, details, fees, totalAmount, siblings, s
                                                         { node: inst.month },
                                                         { node: inst.head },
                                                         { node: Number(inst.amount || 0).toLocaleString(), align: 'right' },
-                                                        { node: inst.status, align: 'right', color: inst.status === 'PAID' ? '#16a34a' : '#dc2626' },
+                                                        { node: inst.status, align: 'right', color: inst.status === 'PAID' ? '#16a34a' : inst.status === 'WAIVED' ? '#0f766e' : '#dc2626' },
                                                     ]} />
                                                 ))}
                                                 <HRow cols={[3.95, 1.05]} variant="total" cells={[

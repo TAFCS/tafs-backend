@@ -114,7 +114,7 @@ const STUDENT_OVERRIDES_ACTIONS: TileAction[] = [
   { id: 'scholarship.manage', label: 'Set scholarship', description: 'Set one scholarship percentage across every MTF row for a year', implies: ['view'] },
   { id: 'bundle.manage', label: 'Manage bundles', description: 'Bundle heads together and dissolve bundles', implies: ['view'] },
   { id: 'installment.manage', label: 'Manage installment plans', description: 'Create, edit and delete installment plans', implies: ['view'] },
-  { id: 'waive', label: 'Waive a fee head', description: 'Write off a head or its voucher, and reverse a waiver', implies: ['view'] },
+  { id: 'waive', label: 'Waive a voucher', description: 'Write off an issued voucher, and reverse a waiver', implies: ['view'] },
   { id: 'flags.edit', label: 'Edit fee concession flags', description: 'Complementary and fee-endowment flags on the student', implies: ['view'] },
   { id: 'audit.view', label: 'Open the finance audit log', implies: ['view'] },
 

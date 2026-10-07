@@ -362,8 +362,9 @@ export class InstallmentsService {
           );
         }
 
-        // Detach ISSUED heads (active voucher exists) rather than deleting them
-        const issuedIds = heads.filter(h => h.status === 'ISSUED').map(h => h.id);
+        // Detach ISSUED heads (active voucher exists) rather than deleting them.
+        // WAIVED heads too: they sit on a waived voucher as a write-off record.
+        const issuedIds = heads.filter(h => h.status === 'ISSUED' || h.status === 'WAIVED').map(h => h.id);
         if (issuedIds.length > 0) {
           await tx.student_fees.updateMany({
             where: { id: { in: issuedIds } },

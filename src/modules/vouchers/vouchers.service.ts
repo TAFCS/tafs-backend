@@ -296,6 +296,9 @@ type VoucherAuditEvent = {
     note: string;
 };
 
+/** Voucher statuses waiveVoucher() accepts — anything still owing money. */
+const WAIVABLE_VOUCHER_STATUSES = ['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'];
+
 @Injectable()
 export class VouchersService {
     private readonly logger = new Logger(VouchersService.name);
@@ -1653,6 +1656,88 @@ export class VouchersService {
         return isArrear;
     }
 
+    /**
+     * Every installment row of the student for the academic years this voucher's
+     * heads carry (see the scoping note in prepareVoucherPdfData).
+     */
+    private async loadStudentInstallmentFees(voucher: {
+        student_id: number;
+        academic_year: string | null;
+        voucher_heads: Array<{ student_fees?: { academic_year?: string | null } | null }>;
+    }): Promise<any[]> {
+        const installmentLookupYears = Array.from(new Set(
+            [
+                ...(voucher.voucher_heads as any[]).map((h: any) => h.student_fees?.academic_year),
+                voucher.academic_year,
+            ].filter((ay): ay is string => !!ay),
+        ));
+        return installmentLookupYears.length > 0
+            ? await this.prisma.student_fees.findMany({
+                where: {
+                    student_id: voucher.student_id,
+                    academic_year: { in: installmentLookupYears },
+                    installment_id: { not: null } as any
+                },
+                include: { student_fee_installments: { include: { fee_types: true } } } as any,
+            })
+            : [];
+    }
+
+    /**
+     * Standalone installments that are past + unpaid but absent from every live
+     * voucher (e.g. they became due after the voucher was created). The challan
+     * prints them as extra arrear lines, and waiveVoucher() writes them off with
+     * the rest of the voucher — both must see exactly the same set, so both call
+     * this.
+     */
+    private async selectMissedArrearInstallments(
+        voucher: { id: number; fee_date: Date | null; academic_year: string | null; month: number | null; class_id: number | null; voucher_heads: Array<{ student_fee_id: number }> },
+        studentInstallmentFees: any[],
+        classTerms: Awaited<ReturnType<typeof getClassTermMap>>,
+    ): Promise<any[]> {
+        const voucherTerm: TermContext = { classId: voucher.class_id, classTerms };
+        const termOf = (sf: any): TermContext => termOfHead(sf, { classId: voucher.class_id, classTerms });
+        // Installments already billed on another live voucher. The paid half of a
+        // split leaves its unpaid installments on the balance voucher; surfacing them
+        // here as "missed" arrears printed an ARREARS line that no longer added up to
+        // PAYABLE BY DUE DATE (#232 — voucher 10260012307).
+        const billedElsewhere = new Set(
+            (await this.prisma.voucher_heads.findMany({
+                where: {
+                    student_fee_id: { in: (studentInstallmentFees as any[]).map((f) => f.id) },
+                    voucher_id: { not: voucher.id },
+                    vouchers: { status: { not: 'VOID' } },
+                },
+                select: { student_fee_id: true },
+            })).map((vh) => vh.student_fee_id),
+        );
+
+        // Standalone installments that are past + unpaid but absent from every live voucher
+        // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
+        const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
+            if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
+            if (f.status === 'PAID') return false;
+            // A waived installment is a permanent write-off — never surface it as
+            // an outstanding "missed arrear" the student still owes.
+            if (f.status === 'WAIVED') return false;
+            if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
+            if (billedElsewhere.has(f.id)) return false;
+            if (f.fee_date && voucher.fee_date) {
+                return new Date(f.fee_date) < new Date(voucher.fee_date);
+            }
+            // Fallback: month-based comparison when fee_dates are unavailable
+            const fYear = f.academic_year, vYear = voucher.academic_year;
+            const fMonth = f.target_month, vMonth = voucher.month;
+            if (!fYear || !vYear || fMonth == null || vMonth == null) return false;
+            // Absolute calendar position, not (year string, term-relative slot):
+            // this head and the voucher can sit on different terms.
+            const fIdx = monthAbsoluteIndex(fMonth, fYear, termOf(f));
+            const vIdx = monthAbsoluteIndex(vMonth, vYear, voucherTerm);
+            return fIdx != null && vIdx != null && fIdx < vIdx;
+        });
+        return missedArrearInstallments;
+    }
+
     /** Helper to prepare data for VoucherPdfService */
     private async prepareVoucherPdfData(voucher: any, paidStamp = false, forceHeadsAsCurrent = false, waived = false) {
         // PAY IMMEDIATELY watermark — derived from the row, never passed in by the
@@ -1713,22 +1798,7 @@ export class VouchersService {
         // 2025-2026 while every head is a 2026-2027 row), scoping on the header value
         // returns zero rows, which silently drops BOTH the "(INSTALLMENT n/N)" label from
         // the main columns and the entire installment plan from the 4th column.
-        const installmentLookupYears = Array.from(new Set(
-            [
-                ...(voucher.voucher_heads as any[]).map((h: any) => h.student_fees?.academic_year),
-                voucher.academic_year,
-            ].filter((ay): ay is string => !!ay),
-        ));
-        let studentInstallmentFees = installmentLookupYears.length > 0
-            ? await this.prisma.student_fees.findMany({
-                where: {
-                    student_id: voucher.student_id,
-                    academic_year: { in: installmentLookupYears },
-                    installment_id: { not: null } as any
-                },
-                include: { student_fee_installments: { include: { fee_types: true } } } as any,
-            })
-            : [];
+        let studentInstallmentFees = await this.loadStudentInstallmentFees(voucher);
 
         // Installment sequence order is the position of the month *within its own term* —
         // APR is slot 0 on an Apr-Mar term, AUG is slot 0 on an Aug-Jul one — so unlike
@@ -2157,44 +2227,11 @@ export class VouchersService {
 
         // Surcharge is not a fee head — it is shown via totalSurcharge / surchargeWaived in PDF details.
 
-        // Installments already billed on another live voucher. The paid half of a
-        // split leaves its unpaid installments on the balance voucher; surfacing them
-        // here as "missed" arrears printed an ARREARS line that no longer added up to
-        // PAYABLE BY DUE DATE (#232 — voucher 10260012307).
-        const billedElsewhere = new Set(
-            (await this.prisma.voucher_heads.findMany({
-                where: {
-                    student_fee_id: { in: (studentInstallmentFees as any[]).map((f) => f.id) },
-                    voucher_id: { not: voucher.id },
-                    vouchers: { status: { not: 'VOID' } },
-                },
-                select: { student_fee_id: true },
-            })).map((vh) => vh.student_fee_id),
+        const missedArrearInstallments = await this.selectMissedArrearInstallments(
+            voucher,
+            studentInstallmentFees as any[],
+            classTerms,
         );
-
-        // Standalone installments that are past + unpaid but absent from every live voucher
-        // (e.g. became due after the voucher was created). Surfaced as additional arrear rows.
-        const missedArrearInstallments = (studentInstallmentFees as any[]).filter(f => {
-            if (!(f.installment_id && f.fee_type_id === f.student_fee_installments?.fee_type_id)) return false;
-            if (f.status === 'PAID') return false;
-            // A waived installment is a permanent write-off — never surface it as
-            // an outstanding "missed arrear" the student still owes.
-            if (f.status === 'WAIVED') return false;
-            if (voucher.voucher_heads.some((vh: any) => vh.student_fee_id === f.id)) return false;
-            if (billedElsewhere.has(f.id)) return false;
-            if (f.fee_date && voucher.fee_date) {
-                return new Date(f.fee_date) < new Date(voucher.fee_date);
-            }
-            // Fallback: month-based comparison when fee_dates are unavailable
-            const fYear = f.academic_year, vYear = voucher.academic_year;
-            const fMonth = f.target_month, vMonth = voucher.month;
-            if (!fYear || !vYear || fMonth == null || vMonth == null) return false;
-            // Absolute calendar position, not (year string, term-relative slot):
-            // this head and the voucher can sit on different terms.
-            const fIdx = monthAbsoluteIndex(fMonth, fYear, termOf(f));
-            const vIdx = monthAbsoluteIndex(vMonth, vYear, voucherTerm);
-            return fIdx != null && vIdx != null && fIdx < vIdx;
-        });
 
         const missedArrearFeeItems = missedArrearInstallments.map((f: any) => {
             const group = installmentGroups.get(f.installment_id!) || [];
@@ -2465,7 +2502,8 @@ export class VouchersService {
                             head: getInstallmentLabel(feeType, seqNum, total),
                             month,
                             amount: Number(f.amount || 0),
-                            status: f.status === 'PAID' ? 'PAID' : 'DUE',
+                            // A written-off installment is settled, not owed — never print it as DUE.
+                            status: f.status === 'PAID' ? 'PAID' : f.status === 'WAIVED' ? 'WAIVED' : 'DUE',
                         };
                     }),
                 paymentHistory,
@@ -3583,6 +3621,25 @@ export class VouchersService {
     }
 
     /**
+     * A deposit that paid part of a voucher which was later waived cannot be
+     * reversed while the waiver stands: reversing recomputes those heads'
+     * statuses from the remaining payments and would silently un-waive them.
+     * Un-waive first, then reverse — the same order the write-offs happened in.
+     */
+    private async assertDepositNotOnWaivedVoucher(depositId: number) {
+        const waived = await this.prisma.deposit_allocations.findFirst({
+            where: { deposit_id: depositId, vouchers: { status: 'WAIVED' } },
+            select: { voucher_id: true },
+        });
+        if (waived) {
+            throw new BadRequestException(
+                `This deposit paid part of voucher #${waived.voucher_id}, which has since been waived. ` +
+                'Un-waive that voucher before reversing the deposit.',
+            );
+        }
+    }
+
+    /**
      * Delete a deposit entirely (all the vouchers/fees/surcharges it touched,
      * not just one). Recomputes — never blindly zeroes — every affected
      * student_fees.amount_paid, voucher_arrear_surcharges.amount_paid, and
@@ -3615,6 +3672,7 @@ export class VouchersService {
         }
 
         await this.assertDepositIsLatest(deposit.student_id, depositId);
+        await this.assertDepositNotOnWaivedVoucher(depositId);
 
         await this.prisma.$transaction(async (tx) => {
             const allocations = deposit.deposit_allocations;
@@ -3794,6 +3852,7 @@ export class VouchersService {
         }
 
         await this.assertDepositIsLatest(deposit.student_id, depositId);
+        await this.assertDepositNotOnWaivedVoucher(depositId);
 
         const isPaidVoucher = voucher.status === 'PAID';
 
@@ -6440,7 +6499,7 @@ export class VouchersService {
 
     /**
      * Force hard delete a voucher, bypassing status guard.
-     * Deletes ANY status including PAID/PARTIALLY_PAID.
+     * Deletes ANY status including PAID/PARTIALLY_PAID — except WAIVED (un-waive first).
      * Resets linked student_fees back to NOT_ISSUED.
      * Deletes deposit_allocations (severs link from underlying deposit).
      */
@@ -6458,7 +6517,16 @@ export class VouchersService {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
 
-        // No status guard — allows deleting PAID/PARTIALLY_PAID
+        // A WAIVED voucher is the one status this does not force through: the
+        // reset below would put its written-off heads back to NOT_ISSUED and
+        // silently un-waive them. Un-waive first (same rule as remove()).
+        if (voucher.status === 'WAIVED') {
+            throw new BadRequestException(
+                `Voucher #${id} is waived. Un-waive it before deleting it.`,
+            );
+        }
+
+        // No other status guard — allows deleting PAID/PARTIALLY_PAID
 
         const result = await this.prisma.$transaction(async (tx) => {
             const heads = voucher.voucher_heads || [];
@@ -7005,16 +7073,24 @@ export class VouchersService {
     }
 
     /**
-     * Waive a whole voucher — a permanent write-off. Every non-discount head is
-     * marked WAIVED (waived_amount = its outstanding amount), the voucher_heads
-     * balances are zeroed, and the voucher's status becomes 'WAIVED' (which the
-     * challan PDF stamps with a diagonal "WAIVED" watermark).
+     * Waive a whole voucher — a permanent write-off of everything still owed on
+     * the challan. This is the only way into WAIVED: there is no waiving of loose
+     * fee heads before issue (TAFSD-269).
      *
-     * Only allowed on a voucher with no payments — UNPAID / OVERDUE / EXPIRED.
-     * A PARTIALLY_PAID voucher must be split first (splitPartiallyPaid); the
-     * resulting all-unpaid balance voucher can then be waived.
+     * What gets written off:
+     * - every non-discount head with an unpaid balance (current heads AND the
+     *   older arrear heads issuance folded onto this voucher). A head that was
+     *   part-paid keeps its cash — only the remainder is waived
+     *   (waived_amount = amount - amount_paid). Fully paid heads are untouched.
+     * - the "missed" installments the challan prints as extra arrear lines
+     *   (selectMissedArrearInstallments). They are not voucher heads yet, so
+     *   they are attached to this voucher first and the totals grow by their
+     *   balance — the WAIVED challan's total still adds up, and an un-waive
+     *   leaves them billed here instead of loose.
+     * - every late-payment surcharge row on the voucher.
      *
-     * Reversible via unwaiveVoucher().
+     * Allowed from UNPAID / OVERDUE / EXPIRED / PARTIALLY_PAID. Reversible via
+     * unwaiveVoucher(), on the student's latest voucher only.
      */
     async waiveVoucher(id: number, reason: string | undefined, changedBy: string = 'system', user?: IJwtStaffPayload) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -7034,54 +7110,91 @@ export class VouchersService {
         if (voucher.status === 'PAID') {
             throw new BadRequestException(`Voucher #${id} is fully paid and cannot be waived.`);
         }
-        if (voucher.status === 'PARTIALLY_PAID') {
+        if (!WAIVABLE_VOUCHER_STATUSES.includes(voucher.status as string)) {
             throw new BadRequestException(
-                `Split this voucher before waiving — it has payments recorded.`,
-            );
-        }
-        if (voucher.status !== 'UNPAID' && voucher.status !== 'OVERDUE' && voucher.status !== 'EXPIRED') {
-            throw new BadRequestException(
-                `Only UNPAID, OVERDUE, or EXPIRED vouchers can be waived. Voucher #${id} is ${voucher.status}.`,
+                `Only UNPAID, OVERDUE, EXPIRED or PARTIALLY_PAID vouchers can be waived. Voucher #${id} is ${voucher.status}.`,
             );
         }
 
-        const nonDiscountHeads = voucher.voucher_heads.filter(
-            (h) => h.student_fees && !h.student_fees.is_discount,
+        const outstandingOf = (sf: { amount: Prisma.Decimal | null; amount_before_discount: Prisma.Decimal | null; amount_paid: Prisma.Decimal | null }) =>
+            new Prisma.Decimal(sf.amount ?? sf.amount_before_discount ?? 0).sub(new Prisma.Decimal(sf.amount_paid ?? 0));
+
+        const headsToWaive = voucher.voucher_heads.filter((h) => {
+            const sf = h.student_fees;
+            if (!sf || sf.is_discount) return false;
+            if (sf.status === 'PAID' || sf.status === 'WAIVED') return false;
+            return outstandingOf(sf).gt(0);
+        });
+
+        const classTerms = await getClassTermMap(this.prisma);
+        const missed = (
+            await this.selectMissedArrearInstallments(
+                voucher,
+                await this.loadStudentInstallmentFees(voucher),
+                classTerms,
+            )
+        ).filter((f: any) => outstandingOf(f).gt(0));
+        const missedTotal = missed.reduce(
+            (sum: Prisma.Decimal, f: any) => sum.add(outstandingOf(f)),
+            new Prisma.Decimal(0),
         );
-        // Defensive: PARTIALLY_PAID should already have caught this, but a stray
-        // paid head under a non-partial status must not be silently written off.
-        const paidHead = nonDiscountHeads.find(
-            (h) => Number(h.student_fees!.amount_paid ?? 0) > 0,
-        );
-        if (paidHead) {
-            throw new BadRequestException(
-                `Voucher #${id} has a fee head with a recorded payment. Split the voucher before waiving.`,
-            );
+
+        if (headsToWaive.length === 0 && missed.length === 0) {
+            throw new BadRequestException(`Voucher #${id} has nothing left to waive.`);
         }
 
-        const feeIds = nonDiscountHeads.map((h) => h.student_fee_id);
         const now = new Date();
+        const waivedFields = {
+            status: 'WAIVED',
+            waived_at: now,
+            waived_by: changedBy,
+            waive_reason: reason ?? null,
+        };
 
         await this.prisma.$transaction(async (tx) => {
-            for (const h of nonDiscountHeads) {
+            for (const h of headsToWaive) {
                 await tx.student_fees.update({
                     where: { id: h.student_fee_id },
-                    data: {
-                        status: 'WAIVED',
-                        waived_amount: h.student_fees!.amount ?? h.student_fees!.amount_before_discount ?? new Prisma.Decimal(0),
-                        waived_at: now,
-                        waived_by: changedBy,
-                        waive_reason: reason ?? null,
-                    } as any,
+                    data: { ...waivedFields, waived_amount: outstandingOf(h.student_fees!) } as any,
                 });
             }
-            if (feeIds.length > 0) {
+            if (headsToWaive.length > 0) {
                 await tx.$executeRaw`
                     UPDATE voucher_heads
                     SET waived = true, balance = 0
                     WHERE voucher_id = ${id}
-                      AND student_fee_id IN (${Prisma.join(feeIds)})`;
+                      AND student_fee_id IN (${Prisma.join(headsToWaive.map((h) => h.student_fee_id))})`;
             }
+
+            // Missed installments: put them on the voucher (as issuance would
+            // have, had they been due then), then write them off with the rest.
+            for (const f of missed as any[]) {
+                const owed = outstandingOf(f);
+                await tx.voucher_heads.create({
+                    data: {
+                        voucher_id: id,
+                        student_fee_id: f.id,
+                        discount_amount: new Prisma.Decimal(0),
+                        net_amount: owed,
+                        amount_deposited: new Prisma.Decimal(0),
+                        balance: new Prisma.Decimal(0),
+                        description_prefix: f.description_prefix ?? null,
+                        scholarship_amount: new Prisma.Decimal(0),
+                        waived: true,
+                    },
+                });
+                await tx.student_fees.update({
+                    where: { id: f.id },
+                    data: {
+                        ...waivedFields,
+                        waived_amount: owed,
+                        issue_date: voucher.issue_date,
+                        due_date: voucher.due_date,
+                        validity_date: voucher.validity_date,
+                    } as any,
+                });
+            }
+
             // The whole voucher is written off — its late-payment surcharges go with it.
             await tx.voucher_arrear_surcharges.updateMany({
                 where: { voucher_id: id, waived: false },
@@ -7096,17 +7209,25 @@ export class VouchersService {
                     waive_reason: reason ?? null,
                     surcharge_waived: true,
                     surcharge_waived_by: changedBy,
+                    // Totals stay at face value (Rule D) — and now include the
+                    // missed installments that just joined the voucher.
+                    ...(missed.length > 0
+                        ? {
+                            total_payable_before_due: { increment: missedTotal },
+                            total_payable_after_due: { increment: missedTotal },
+                            total_arrears: { increment: missedTotal },
+                        }
+                        : {}),
                     // pdf_url (the ISSUED challan) is deliberately left in place.
                     // It is dormant while status = 'WAIVED' — storedPdfUrl() and
                     // generatePdf() both route a WAIVED voucher to waived_pdf_url
-                    // instead — so keeping it means un-waiving hands the parent
-                    // back the byte-identical challan they were originally issued,
-                    // with no re-render. Exactly how recordDeposit leaves pdf_url
-                    // alone when a voucher goes ISSUED -> PAID.
+                    // instead. Exactly how recordDeposit leaves pdf_url alone when
+                    // a voucher goes ISSUED -> PAID. (unwaiveVoucher drops it.)
                 } as any,
             });
         });
 
+        const partPaid = headsToWaive.filter((h) => Number(h.student_fees!.amount_paid ?? 0) > 0).length;
         await this.auditLogs.log({
             entity_type: 'VOUCHER',
             entity_id: String(id),
@@ -7116,7 +7237,11 @@ export class VouchersService {
             new_value: 'WAIVED',
             changed_by: changedBy,
             student_id: voucher.student_id,
-            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) waived — ${nonDiscountHeads.length} fee head(s) written off${reason ? `: ${reason}` : ''}.`,
+            note:
+                `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) waived — ${headsToWaive.length} fee head(s) written off` +
+                (partPaid > 0 ? ` (${partPaid} part-paid: remainder only)` : '') +
+                (missed.length > 0 ? `, plus ${missed.length} missed installment(s) [fee ids ${missed.map((f: any) => f.id).join(', ')}] added and written off` : '') +
+                (reason ? `: ${reason}` : '') + '.',
         });
 
         // Mint the WAIVED-stamped challan on the spot, exactly as a fully-paid
@@ -7143,9 +7268,16 @@ export class VouchersService {
     }
 
     /**
-     * Reverse a waiver. Heads go back to ISSUED (they were on a voucher), their
-     * waived_* fields are cleared, voucher_heads balances are recomputed, and the
-     * voucher returns to OVERDUE (if past due) or UNPAID.
+     * Reverse a waiver — the mirror of reversing a payment, with the same
+     * most-recent-first rule: only the student's latest live voucher can be
+     * un-waived. A newer voucher was issued on the assumption this one was
+     * written off (it carries none of these heads), so reviving this one under
+     * it would bill the student twice over / leave an orphaned unpaid voucher.
+     *
+     * Heads go back to where the payments put them: ISSUED, or PARTIALLY_PAID
+     * when part was paid before the waiver. Missed installments attached by the
+     * waiver stay on the voucher as ordinary billed heads. The voucher returns
+     * to PARTIALLY_PAID (money already on it), OVERDUE (past due) or UNPAID.
      */
     async unwaiveVoucher(id: number, changedBy: string = 'system', user?: IJwtStaffPayload) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -7159,22 +7291,48 @@ export class VouchersService {
             throw new BadRequestException(`Voucher #${id} is not waived (status ${voucher.status}).`);
         }
 
-        const nonDiscountFeeIds = voucher.voucher_heads
-            .filter((h) => h.student_fees && !h.student_fees.is_discount)
-            .map((h) => h.student_fee_id);
+        const newer = await this.prisma.vouchers.findFirst({
+            where: {
+                student_id: voucher.student_id,
+                id: { not: id },
+                status: { not: 'VOID' },
+                OR: [
+                    { id: { gt: id } },
+                    ...(voucher.fee_date ? [{ fee_date: { gt: voucher.fee_date } }] : []),
+                ],
+            },
+            orderBy: { id: 'desc' },
+            select: { id: true, voucher_number: true },
+        });
+        if (newer) {
+            throw new BadRequestException(
+                `Only the student's latest voucher can be un-waived. Voucher #${newer.id} ` +
+                `(no. ${newer.voucher_number || 'N/A'}) was issued after this one.`,
+            );
+        }
+
+        const waivedHeads = voucher.voucher_heads.filter(
+            (h) => h.student_fees && !h.student_fees.is_discount && (h.waived || h.student_fees.status === 'WAIVED'),
+        );
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const due = voucher.due_date ? new Date(voucher.due_date) : null;
         if (due) due.setHours(0, 0, 0, 0);
-        const restoredStatus = due && due < today ? 'OVERDUE' : 'UNPAID';
+        const surchargePaid = await this.prisma.voucher_arrear_surcharges.count({
+            where: { voucher_id: id, amount_paid: { gt: 0 } },
+        });
+        const moneyOnVoucher =
+            surchargePaid > 0 || voucher.voucher_heads.some((h) => Number(h.amount_deposited ?? 0) > 0);
+        const restoredStatus = moneyOnVoucher ? 'PARTIALLY_PAID' : due && due < today ? 'OVERDUE' : 'UNPAID';
 
         await this.prisma.$transaction(async (tx) => {
-            if (nonDiscountFeeIds.length > 0) {
-                await tx.student_fees.updateMany({
-                    where: { id: { in: nonDiscountFeeIds } },
+            for (const h of waivedHeads) {
+                const paid = Number(h.student_fees!.amount_paid ?? 0);
+                await tx.student_fees.update({
+                    where: { id: h.student_fee_id },
                     data: {
-                        status: 'ISSUED',
+                        status: paid > 0 ? 'PARTIALLY_PAID' : 'ISSUED',
                         waived_amount: null,
                         waived_at: null,
                         waived_by: null,
@@ -7213,11 +7371,10 @@ export class VouchersService {
                     waived_pdf_url: null,
                     waived_pdf_filename: null,
                     waived_pdf_generated_at: null,
-                    // Drop the ISSUED challan cache too. Restoring the surcharges
-                    // above can legitimately land on a different surcharge_waived
-                    // value than the one baked into the cached render (see the
-                    // manually-waived-surcharge edge case noted there), so the
-                    // next fetch re-renders from live data.
+                    // Drop the ISSUED challan cache too: the restored surcharges
+                    // and any missed installments the waiver attached mean the
+                    // cached render no longer matches, so the next fetch
+                    // re-renders from live data.
                     pdf_url: null,
                 } as any,
             });
@@ -7232,7 +7389,7 @@ export class VouchersService {
             new_value: restoredStatus,
             changed_by: changedBy,
             student_id: voucher.student_id,
-            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) un-waived — ${nonDiscountFeeIds.length} fee head(s) restored to ${restoredStatus}.`,
+            note: `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) un-waived — ${waivedHeads.length} fee head(s) restored, voucher back to ${restoredStatus}.`,
         });
 
         return this.findOne(id);

@@ -189,6 +189,11 @@ the voucher row inside `prepareVoucherPdfData()` rather than threading it throug
 
 ## Worked example: WAIVED heads at issuance
 
+> **Legacy since TAFSD-269.** Heads can no longer be waived before issue — the loose-head
+> `POST /student-fees/waive|unwaive` endpoints are gone and `waiveVoucher()` is the only way into
+> WAIVED. The issuance handling below stays so existing records still issue and render; no new
+> data reaches it. The pattern is still the one to copy.
+
 The fee waiver (`project_fee_head_voucher_waiver`, and **Rule C** in the finance `CLAUDE.md`)
 changed what issuance does with a head whose `student_fees.status` is already `WAIVED`. This is
 the second template to follow, and it touched the three sources above as follows.

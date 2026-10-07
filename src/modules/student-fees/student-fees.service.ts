@@ -245,7 +245,9 @@ export class StudentFeesService {
             const amount = isDiscount ? -rawAmount : rawAmount;
             const paidRaw = isDiscount ? 0 : Number(fee.amount_paid ?? 0);
             const paid = Math.min(Math.max(paidRaw, 0), Math.max(rawAmount, 0));
-            const outstanding = isDiscount ? 0 : Math.max(rawAmount - paid, 0);
+            // A waived head is written off — nothing left to pay on it.
+            const isWaived = fee.status === 'WAIVED';
+            const outstanding = isDiscount || isWaived ? 0 : Math.max(rawAmount - paid, 0);
 
             const key = `${academicYear}|${targetMonth}`;
             const existing = grouped.get(key);
@@ -605,6 +607,10 @@ export class StudentFeesService {
                             select: { id: true, status: true, released_to_parent_at: true },
                         },
                     },
+                    // The covering voucher is the newest one: a head absorbed as an
+                    // arrear also sits on the VOID voucher it was carried from, and
+                    // waive/unwaive from the grid act on this voucher.
+                    orderBy: { id: 'desc' },
                     take: 1,
                 },
             } as any,
@@ -844,7 +850,7 @@ export class StudentFeesService {
 
                     // A WAIVED head is a permanent write-off — locked regardless of
                     // whether it sits on a voucher. Reverse the waiver first
-                    // (POST /v1/student-fees/unwaive or .../vouchers/:id/unwaive).
+                    // (POST /v1/vouchers/:id/unwaive).
                     if (before.status === 'WAIVED') {
                         const changedWaived = [
                             before.fee_type_id !== item.fee_type_id ? 'fee type' : null,
@@ -2505,152 +2511,4 @@ export class StudentFeesService {
         return { deleted: id };
     }
 
-    /**
-     * Waive one or more *loose* fee heads — heads that are not carried by any
-     * voucher. A waived head is a permanent write-off: never expected to be paid,
-     * never accrues arrears/surcharge, and cannot receive a deposit. waived_amount
-     * records the written-off difference (equals amount, since a head with any
-     * payment cannot be waived).
-     *
-     * Heads that already sit on a voucher are rejected — those must be waived via
-     * the whole voucher (POST /v1/vouchers/:id/waive), which flips the voucher to
-     * WAIVED and stamps its PDF.
-     *
-     * Reversible via unwaiveHeads().
-     */
-    async waiveHeads(studentFeeIds: number[], reason: string | undefined, user: IJwtStaffPayload, changedBy: string = 'system') {
-        const ids = [...new Set(studentFeeIds)].filter((n) => Number.isInteger(n) && n > 0);
-        if (ids.length === 0) throw new BadRequestException('No fee head ids provided.');
-        await this.assertFeeHeadsVisible(user, ids);
-
-        const fees = await this.prisma.student_fees.findMany({
-            where: { id: { in: ids } },
-            include: {
-                voucher_heads: { select: { voucher_id: true } },
-                fee_types: { select: { description: true } },
-            },
-        });
-
-        if (fees.length !== ids.length) {
-            throw new BadRequestException('One or more fee heads were not found.');
-        }
-        for (const fee of fees) {
-            if (fee.is_discount) {
-                throw new BadRequestException(`Fee head #${fee.id} is a discount row and cannot be waived.`);
-            }
-            if (fee.status === 'WAIVED') {
-                throw new BadRequestException(`Fee head #${fee.id} is already waived.`);
-            }
-            if (fee.voucher_heads.length > 0) {
-                throw new BadRequestException(
-                    `Fee head #${fee.id} is on a voucher — waive the whole voucher instead ` +
-                    `(POST /v1/vouchers/${fee.voucher_heads[0].voucher_id}/waive).`,
-                );
-            }
-            if (Number(fee.amount_paid ?? 0) > 0) {
-                throw new BadRequestException(
-                    `Fee head #${fee.id} has a recorded payment and cannot be waived.`,
-                );
-            }
-            if (fee.status !== 'NOT_ISSUED' && fee.status !== 'ISSUED') {
-                throw new BadRequestException(
-                    `Fee head #${fee.id} is ${fee.status} and cannot be waived.`,
-                );
-            }
-        }
-
-        const now = new Date();
-        await this.prisma.$transaction(
-            fees.map((fee) =>
-                this.prisma.student_fees.update({
-                    where: { id: fee.id },
-                    data: {
-                        status: 'WAIVED',
-                        waived_amount: fee.amount ?? fee.amount_before_discount ?? new Prisma.Decimal(0),
-                        waived_at: now,
-                        waived_by: changedBy,
-                        waive_reason: reason ?? null,
-                    } as any,
-                }),
-            ),
-        );
-
-        const byStudent = new Map<number, typeof fees>();
-        for (const fee of fees) {
-            const arr = byStudent.get(fee.student_id) ?? [];
-            arr.push(fee);
-            byStudent.set(fee.student_id, arr);
-        }
-        for (const [studentId, group] of byStudent) {
-            await this.auditLogs.log({
-                entity_type: 'STUDENT_FEE_SCHEDULE',
-                entity_id: group.map((f) => f.id).join(','),
-                action: 'WAIVED',
-                section: 'finance',
-                changed_by: changedBy,
-                student_id: studentId,
-                note: `Waived ${group.length} fee head(s) for student #${studentId}${reason ? `: ${reason}` : ''} — ` +
-                    group.map((f) => `${f.fee_types?.description ?? 'fee'} (${this.periodLabel(f.target_month, f.academic_year, f.fee_date)}, ${this.fmtMoney(f.amount)})`).join(', '),
-            });
-        }
-
-        return { waived: ids };
-    }
-
-    /** Reverse a loose-head waiver — heads return to NOT_ISSUED, waived_* cleared. */
-    async unwaiveHeads(studentFeeIds: number[], user: IJwtStaffPayload, changedBy: string = 'system') {
-        const ids = [...new Set(studentFeeIds)].filter((n) => Number.isInteger(n) && n > 0);
-        if (ids.length === 0) throw new BadRequestException('No fee head ids provided.');
-        await this.assertFeeHeadsVisible(user, ids);
-
-        const fees = await this.prisma.student_fees.findMany({
-            where: { id: { in: ids } },
-            include: { voucher_heads: { select: { voucher_id: true } } },
-        });
-        if (fees.length !== ids.length) {
-            throw new BadRequestException('One or more fee heads were not found.');
-        }
-        for (const fee of fees) {
-            if (fee.status !== 'WAIVED') {
-                throw new BadRequestException(`Fee head #${fee.id} is not waived.`);
-            }
-            if (fee.voucher_heads.length > 0) {
-                throw new BadRequestException(
-                    `Fee head #${fee.id} is on a voucher — un-waive the whole voucher instead ` +
-                    `(POST /v1/vouchers/${fee.voucher_heads[0].voucher_id}/unwaive).`,
-                );
-            }
-        }
-
-        await this.prisma.student_fees.updateMany({
-            where: { id: { in: ids } },
-            data: {
-                status: 'NOT_ISSUED',
-                waived_amount: null,
-                waived_at: null,
-                waived_by: null,
-                waive_reason: null,
-            } as any,
-        });
-
-        const byStudent = new Map<number, number[]>();
-        for (const fee of fees) {
-            const arr = byStudent.get(fee.student_id) ?? [];
-            arr.push(fee.id);
-            byStudent.set(fee.student_id, arr);
-        }
-        for (const [studentId, group] of byStudent) {
-            await this.auditLogs.log({
-                entity_type: 'STUDENT_FEE_SCHEDULE',
-                entity_id: group.join(','),
-                action: 'UNWAIVED',
-                section: 'finance',
-                changed_by: changedBy,
-                student_id: studentId,
-                note: `Reversed waiver on ${group.length} fee head(s) for student #${studentId} — restored to Not Issued.`,
-            });
-        }
-
-        return { unwaived: ids };
-    }
 }
