@@ -1696,6 +1696,7 @@ export class FinancialReportsService {
     const stripMonths = Math.min(query.strip_months ?? 12, 24);
     const view = query.view ?? 'students';
     const minMonthsBehind = query.min_months_behind ?? 1;
+    const maxMonthsBehind = query.max_months_behind;
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, options.maxLimit ?? 200);
 
@@ -1765,6 +1766,11 @@ export class FinancialReportsService {
     // early-warning case that category exists to surface.
     if (minMonthsBehind > 1) {
       rows = rows.filter((r) => r.category === 'EXPIRING' || r.months_behind >= minMonthsBehind);
+    }
+    // max_months_behind is the symmetric upper bound. Same EXPIRING carve-out:
+    // their months_behind=0 is a tag for the category, not a truthful count.
+    if (maxMonthsBehind != null) {
+      rows = rows.filter((r) => r.category === 'EXPIRING' || r.months_behind <= maxMonthsBehind);
     }
     if (query.severity?.length) {
       const wanted = new Set(query.severity);
@@ -2537,8 +2543,9 @@ export class FinancialReportsService {
         // Aging always returns exactly five rows; the others page.
         page: 1,
         limit: view === 'aging' ? 50 : EXPORT_ROW_CAP + 1,
-        // The strip costs a full head fetch per row and is not exported.
-        strip_months: 1,
+        // The strip is used by the students-view physical layout; rollup views
+        // don't need it and the per-head fetch is wasted work there.
+        strip_months: view === 'students' ? (query.strip_months ?? 12) : 1,
       } as ListDefaultersQueryDto,
       user,
       { maxLimit: EXPORT_ROW_CAP + 1 },
@@ -2622,65 +2629,292 @@ export class FinancialReportsService {
       );
     }
 
-    return this.buildExportFile(
-      'Defaulters',
+    return this.buildDefaultersStudentReport(
+      items,
+      data.columns as Array<{ year: number; month: number; label: string }>,
+      data.as_of_date,
+      query,
       basename,
-      [
-        { header: 'CC', key: 'cc', width: 10 },
-        { header: 'GR Number', key: 'gr', width: 14 },
-        { header: 'Student', key: 'name', width: 28 },
-        { header: 'Campus', key: 'campus', width: 18 },
-        { header: 'Class', key: 'class', width: 16 },
-        { header: 'Section', key: 'section', width: 12 },
-        { header: 'Status', key: 'status', width: 14 },
-        { header: 'Category', key: 'category', width: 12 },
-        { header: 'Severity', key: 'severity', width: 12 },
-        { header: 'Months Behind', key: 'months', width: 14 },
-        { header: 'Oldest Arrear', key: 'oldest', width: 14 },
-        { header: 'Arrear Heads', key: 'heads', width: 13 },
-        { header: 'Arrears Outstanding', key: 'arrears', width: 20 },
-        { header: 'LPS Charged', key: 'lps_charged', width: 14 },
-        { header: 'LPS Paid', key: 'lps_paid', width: 12 },
-        { header: 'LPS Outstanding', key: 'lps_out', width: 16 },
-        { header: 'LPS Waived', key: 'lps_waived', width: 13 },
-        { header: 'LPS Next Voucher', key: 'lps_next', width: 17 },
-        { header: 'Unreleased Vouchers', key: 'unreleased', width: 19 },
-        { header: 'Last Payment', key: 'last_payment', width: 14 },
-        { header: 'Days Since Payment', key: 'days_since', width: 18 },
-        { header: 'Payments (6m)', key: 'pay6', width: 14 },
-        { header: 'Payments (12m)', key: 'pay12', width: 14 },
-      ],
-      items.map((r) => ({
-        cc: Number(r.cc),
-        gr: String(r.gr_number ?? ''),
-        name: String(r.student_name ?? ''),
-        campus: String(r.campus ?? ''),
-        class: String(r.class_name ?? ''),
-        section: String(r.section ?? ''),
-        status: String(r.student_status ?? ''),
-        category: String(r.category ?? ''),
-        severity: String(r.severity),
-        months: Number(r.months_behind),
-        oldest: String(r.oldest_arrear_fee_date ?? ''),
-        heads: Number(r.arrear_head_count),
-        arrears: Number(r.arrears_outstanding),
-        lps_charged: Number(r.lps_charged),
-        lps_paid: Number(r.lps_paid),
-        lps_out: Number(r.lps_outstanding),
-        lps_waived: Number(r.lps_waived),
-        lps_next: Number(r.lps_projected_next_voucher),
-        unreleased: Number(r.unreleased_voucher_count),
-        // "Never" rather than blank: never-paid is a different signal from
-        // no-data, and it is the one a recovery call cares about most.
-        last_payment: r.last_payment_date
-          ? String(r.last_payment_date).slice(0, 10)
-          : 'Never',
-        days_since: r.days_since_last_payment == null ? '' : Number(r.days_since_last_payment),
-        pay6: Number(r.payments_last_6m),
-        pay12: Number(r.payments_last_12m),
-      })),
-      query.format,
     );
+  }
+
+  /**
+   * The school's defaulter sheet format: per-campus worksheet with the student
+   * list, a month strip showing per-month outstanding, and a totals row. The
+   * TOTAL row and the DEFAULTING AMOUNT column are both computed from the
+   * strip's `outstanding` field — this is the same number the UI tints red on
+   * the strip, so the Excel will reconcile to what the admin sees on screen.
+   */
+  private async buildDefaultersStudentReport(
+    items: Array<Record<string, unknown>>,
+    columns: Array<{ year: number; month: number; label: string }>,
+    asOfDate: string,
+    query: ExportDefaultersQueryDto,
+    basename: string,
+  ): Promise<ExportFile> {
+    type Item = Record<string, unknown>;
+    type StripCellLike = { year: number; month: number; outstanding: number; is_arrear: boolean };
+
+    const subtitle = this.defaulterFilterSubtitle(query);
+    const level = (r: Item): string => {
+      const cls = String(r.class_name ?? '').trim();
+      const sec = String(r.section ?? '').trim();
+      return [cls, sec].filter(Boolean).join(' ');
+    };
+    const stripMap = (r: Item): Map<string, StripCellLike> => {
+      const strip = (r.strip as StripCellLike[] | undefined) ?? [];
+      return new Map(strip.map((c) => [`${c.year}-${c.month}`, c]));
+    };
+
+    // Group by campus — one worksheet per campus. 'Unassigned' catches rows
+    // without a campus (shouldn't happen in practice but keeps the export
+    // honest instead of silently dropping them).
+    const byCampus = new Map<string, Item[]>();
+    for (const item of items) {
+      const campus = String(item.campus ?? '').trim() || 'Unassigned';
+      if (!byCampus.has(campus)) byCampus.set(campus, []);
+      byCampus.get(campus)!.push(item);
+    }
+
+    if (query.format === 'csv') {
+      // CSV can't do multi-sheet; emit a flat version with Campus as a column.
+      const monthHeaders = columns.map((c) => c.label.toUpperCase());
+      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...monthHeaders, 'Defaulting Amount'];
+      const lines = [header.map((h) => this.csvCell(h)).join(',')];
+      for (const [campus, group] of byCampus) {
+        let s = 0;
+        for (const r of group) {
+          s++;
+          const sMap = stripMap(r);
+          const monthCells = columns.map((col) => {
+            const cell = sMap.get(`${col.year}-${col.month}`);
+            return cell && cell.outstanding > 0 ? cell.outstanding : '';
+          });
+          const row = [
+            campus,
+            s,
+            Number(r.cc),
+            String(r.gr_number ?? ''),
+            level(r),
+            String(r.student_name ?? ''),
+            ...monthCells,
+            Number(r.arrears_outstanding),
+          ];
+          lines.push(row.map((v) => this.csvCell(v)).join(','));
+        }
+      }
+      return {
+        buffer: Buffer.from(`﻿${lines.join('\n')}`, 'utf8'),
+        filename: `${basename}.csv`,
+        contentType: 'text/csv; charset=utf-8',
+      };
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'The American Foundation School';
+
+    const schoolTitle = 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES';
+    const exportDate = new Date(asOfDate + 'T00:00:00.000Z');
+    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][exportDate.getUTCDay()];
+    const dateLine = exportDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).toUpperCase();
+
+    // Stable campus order: largest group first (focus of the recovery call).
+    const sortedCampuses = [...byCampus.entries()].sort((a, b) => b[1].length - a[1].length);
+
+    if (sortedCampuses.length === 0) {
+      // Still emit a workbook so the download succeeds and the admin sees
+      // "no results" rather than an opaque server error.
+      const sheet = workbook.addWorksheet('Defaulters');
+      sheet.getCell('A1').value = 'No defaulters match the current filters.';
+      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+      return {
+        buffer,
+        filename: `${basename}.xlsx`,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      };
+    }
+
+    for (const [campus, group] of sortedCampuses) {
+      const sheetName = this.sanitizeSheetName(campus);
+      const sheet = workbook.addWorksheet(sheetName);
+
+      const monthHeaders = columns.map((c) => c.label.toUpperCase());
+      const headerCols = ['S#', 'C.C.', 'G.R.#', 'LEVEL', 'STUDENT NAME', ...monthHeaders, 'DEFAULTING AMOUNT', 'REMARKS'];
+      const totalCols = headerCols.length;
+      const lastColLetter = this.excelColumnLetter(totalCols);
+      const amountColIdx = 5 + monthHeaders.length + 1; // 1-based: S#=1 ... Student=5, months..., Defaulting Amount
+
+      // Header block.
+      sheet.mergeCells(`A1:${lastColLetter}1`);
+      sheet.getCell('A1').value = schoolTitle;
+      sheet.getCell('A1').font = { bold: true, size: 14, name: 'Calibri' };
+      sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.getRow(1).height = 24;
+
+      sheet.getCell('A2').value = `DAY : ${dayName.toUpperCase()}`;
+      sheet.getCell('A2').font = { bold: true, size: 10 };
+      sheet.getCell('A3').value = `DATE : ${dateLine}`;
+      sheet.getCell('A3').font = { bold: true, size: 10 };
+
+      sheet.mergeCells(`A4:${lastColLetter}4`);
+      sheet.getCell('A4').value = `DEFAULTING STUDENT LIST (${campus})`;
+      sheet.getCell('A4').font = { bold: true, size: 13 };
+      sheet.getCell('A4').alignment = { horizontal: 'center' };
+
+      sheet.mergeCells(`A5:${lastColLetter}5`);
+      sheet.getCell('A5').value = subtitle;
+      sheet.getCell('A5').font = { bold: true, size: 11 };
+      sheet.getCell('A5').alignment = { horizontal: 'center' };
+
+      // Column headers at row 7 (row 6 blank for breathing room).
+      const HEADER_ROW_IDX = 7;
+      const headerRow = sheet.getRow(HEADER_ROW_IDX);
+      headerCols.forEach((h, i) => {
+        const cell = headerRow.getCell(i + 1);
+        cell.value = h;
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = HEADER_FILL;
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin' }, left: { style: 'thin' },
+          bottom: { style: 'thin' }, right: { style: 'thin' },
+        };
+      });
+      headerRow.height = 32;
+
+      // Column widths.
+      sheet.getColumn(1).width = 5;    // S#
+      sheet.getColumn(2).width = 8;    // CC
+      sheet.getColumn(3).width = 8;    // GR
+      sheet.getColumn(4).width = 10;   // Level
+      sheet.getColumn(5).width = 28;   // Name
+      for (let i = 0; i < monthHeaders.length; i++) {
+        sheet.getColumn(6 + i).width = 10;
+      }
+      sheet.getColumn(amountColIdx).width = 16;
+      sheet.getColumn(amountColIdx + 1).width = 18; // Remarks
+
+      // Data rows.
+      const monthTotals = columns.map(() => 0);
+      let grandTotal = 0;
+      let rowIdx = HEADER_ROW_IDX + 1;
+      group.forEach((r, i) => {
+        const s = i + 1;
+        const sMap = stripMap(r);
+        const row = sheet.getRow(rowIdx);
+
+        row.getCell(1).value = s;
+        row.getCell(2).value = Number(r.cc);
+        row.getCell(3).value = String(r.gr_number ?? '');
+        row.getCell(4).value = level(r);
+        row.getCell(5).value = String(r.student_name ?? '');
+
+        columns.forEach((col, idx) => {
+          const cell = row.getCell(6 + idx);
+          const strip = sMap.get(`${col.year}-${col.month}`);
+          const outstanding = strip && strip.outstanding > 0 ? Math.round(strip.outstanding) : 0;
+          if (outstanding > 0) {
+            cell.value = outstanding;
+            cell.numFmt = '#,##0';
+            if (strip?.is_arrear) {
+              cell.font = { color: { argb: 'FFCC0000' } };
+            }
+            monthTotals[idx] += outstanding;
+          }
+          cell.alignment = { horizontal: 'right' };
+        });
+
+        const total = Math.round(Number(r.arrears_outstanding));
+        const totalCell = row.getCell(amountColIdx);
+        totalCell.value = total;
+        totalCell.numFmt = '#,##0';
+        totalCell.font = { bold: true };
+        totalCell.alignment = { horizontal: 'right' };
+        grandTotal += total;
+
+        // Thin border on every data cell for a readable grid.
+        for (let c = 1; c <= totalCols; c++) {
+          row.getCell(c).border = {
+            top: { style: 'thin' }, left: { style: 'thin' },
+            bottom: { style: 'thin' }, right: { style: 'thin' },
+          };
+        }
+        rowIdx++;
+      });
+
+      // TOTAL row.
+      const totalRow = sheet.getRow(rowIdx);
+      sheet.mergeCells(rowIdx, 1, rowIdx, 5);
+      totalRow.getCell(1).value = 'TOTAL';
+      totalRow.getCell(1).font = { bold: true, size: 11 };
+      totalRow.getCell(1).alignment = { horizontal: 'right' };
+      columns.forEach((_, idx) => {
+        const cell = totalRow.getCell(6 + idx);
+        if (monthTotals[idx] > 0) {
+          cell.value = monthTotals[idx];
+          cell.numFmt = '#,##0';
+          cell.font = { bold: true };
+          cell.alignment = { horizontal: 'right' };
+        }
+      });
+      const grandCell = totalRow.getCell(amountColIdx);
+      grandCell.value = grandTotal;
+      grandCell.numFmt = '#,##0';
+      grandCell.font = { bold: true, size: 11 };
+      grandCell.alignment = { horizontal: 'right' };
+      for (let c = 1; c <= totalCols; c++) {
+        totalRow.getCell(c).fill = {
+          type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' },
+        };
+        totalRow.getCell(c).border = {
+          top: { style: 'medium' }, left: { style: 'thin' },
+          bottom: { style: 'medium' }, right: { style: 'thin' },
+        };
+      }
+
+      // Freeze header rows and the Student Name column so admins can scroll
+      // through the month strip without losing which student / which column.
+      sheet.views = [{ state: 'frozen', xSplit: 5, ySplit: HEADER_ROW_IDX }];
+    }
+
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    return {
+      buffer,
+      filename: `${basename}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+  }
+
+  /** The H3 subtitle, derived from the filter the admin chose. */
+  private defaulterFilterSubtitle(query: ExportDefaultersQueryDto): string {
+    const min = query.min_months_behind ?? 1;
+    const max = query.max_months_behind;
+    if (max != null && max >= min) {
+      if (min === max) return `${min} MONTH${min === 1 ? '' : 'S'} DEFAULTERS`;
+      // "4 & 5 MONTHS DEFAULTERS" for min=4, max=5; else "4-6 MONTHS DEFAULTERS"
+      if (max - min === 1) return `${min} & ${max} MONTHS DEFAULTERS`;
+      return `${min}-${max} MONTHS DEFAULTERS`;
+    }
+    if (min > 1) return `${min}+ MONTHS DEFAULTERS`;
+    return 'ALL DEFAULTERS';
+  }
+
+  /** Excel sheet names cap at 31 chars and reject []:/?\\* — Prisma campus_name is clean, but belt-and-braces. */
+  private sanitizeSheetName(name: string): string {
+    const cleaned = name.replace(/[\[\]:\/\?\\*]/g, ' ').trim();
+    return cleaned.length > 31 ? cleaned.slice(0, 31) : cleaned || 'Sheet';
+  }
+
+  /** 1 -> A, 26 -> Z, 27 -> AA, etc. for sheet.mergeCells string form. */
+  private excelColumnLetter(colIndex: number): string {
+    let n = colIndex;
+    let s = '';
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
   }
 
 
