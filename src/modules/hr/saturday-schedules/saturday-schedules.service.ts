@@ -38,6 +38,10 @@ const scheduleInclude = {
       full_name: true,
       campus_id: true,
       user_id: true,
+      // The profile segment — the page groups and filters by it first, with
+      // class-assignment segments on top (TAFSD-273).
+      segment_id: true,
+      segments: { select: { id: true, code: true, name: true, display_order: true } },
       employee_class_section_assignments: {
         select: {
           section_id: true,
