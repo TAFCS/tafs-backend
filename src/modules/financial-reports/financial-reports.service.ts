@@ -53,6 +53,19 @@ const EXPORT_ROW_CAP = 25_000;
 const STATS_ROW_CAP = 50_000;
 /** Safety valve on the matrix's month-range width (3 years) — an absurdly wide range is capped, not failed. */
 const MATRIX_MAX_MONTHS = 36;
+const MONTH_ABBR_UPPER = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+/** classes.description -> the short LEVEL the school writes on its defaulter sheet. */
+const DEFAULTER_LEVEL_ABBREVIATIONS: Record<string, string> = {
+  'PRE NURSERY': 'PRE NUR',
+  NURSERY: 'NUR',
+  'K.G.': 'KG',
+};
+/** campus_code -> the label in the sheet's "DEFAULTING STUDENT LIST (...)" heading. */
+const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
+  GEJ: 'G-E-J',
+  KNF: 'KNF',
+  NNZ: 'NNN',
+};
 const HEADER_FILL: ExcelJS.Fill = {
   type: 'pattern',
   pattern: 'solid',
@@ -202,7 +215,7 @@ const DEFAULTER_STUDENT_SELECT = {
   graduated_from_class_id: true,
   is_fee_endowment: true,
   is_complementary: true,
-  campuses: { select: { campus_name: true } },
+  campuses: { select: { campus_name: true, campus_code: true } },
   classes: { select: { description: true } },
   graduated_from_class: { select: { description: true } },
   sections: { select: { description: true } },
@@ -1760,17 +1773,18 @@ export class FinancialReportsService {
       });
     }
 
-    // min_months_behind narrows ARREARS rows only. EXPIRING rows are
-    // months_behind = 0 by construction — filtering them out by the same
-    // threshold under the DEFAULT value of 1 would hide the exact
-    // early-warning case that category exists to surface.
-    if (minMonthsBehind > 1) {
-      rows = rows.filter((r) => r.category === 'EXPIRING' || r.months_behind >= minMonthsBehind);
-    }
-    // max_months_behind is the symmetric upper bound. Same EXPIRING carve-out:
-    // their months_behind=0 is a tag for the category, not a truthful count.
-    if (maxMonthsBehind != null) {
-      rows = rows.filter((r) => r.category === 'EXPIRING' || r.months_behind <= maxMonthsBehind);
+    // EXPIRING rows are months_behind = 0 by construction. Under the default
+    // filter (min 1, no max) they stay — dropping them would hide the exact
+    // early-warning case that category exists to surface. Once the admin asks
+    // for a specific months range ("4 & 5 months"), a student with no
+    // defaulted months is not in it.
+    if (minMonthsBehind > 1 || maxMonthsBehind != null) {
+      rows = rows.filter(
+        (r) =>
+          r.category !== 'EXPIRING' &&
+          r.months_behind >= minMonthsBehind &&
+          (maxMonthsBehind == null || r.months_behind <= maxMonthsBehind),
+      );
     }
     if (query.severity?.length) {
       const wanted = new Set(query.severity);
@@ -2047,6 +2061,8 @@ export class FinancialReportsService {
         gr_number: student.gr_number,
         student_name: student.full_name,
         campus: student.campuses?.campus_name ?? '',
+        campus_code: student.campuses?.campus_code ?? '',
+        class_id: this.effectiveClassId(student),
         class_name: this.resolveStudentClassName(student),
         section: student.sections?.description ?? '',
         student_status: student.status,
@@ -2543,9 +2559,9 @@ export class FinancialReportsService {
         // Aging always returns exactly five rows; the others page.
         page: 1,
         limit: view === 'aging' ? 50 : EXPORT_ROW_CAP + 1,
-        // The strip is used by the students-view physical layout; rollup views
-        // don't need it and the per-head fetch is wasted work there.
-        strip_months: view === 'students' ? (query.strip_months ?? 12) : 1,
+        // The strip is not exported — the students sheet builds its own
+        // per-month breakdown (loadDefaulterOwedMonths), unbounded by a window.
+        strip_months: 1,
       } as ListDefaultersQueryDto,
       user,
       { maxLimit: EXPORT_ROW_CAP + 1 },
@@ -2629,79 +2645,120 @@ export class FinancialReportsService {
       );
     }
 
-    return this.buildDefaultersStudentReport(
-      items,
-      data.columns as Array<{ year: number; month: number; label: string }>,
-      data.as_of_date,
-      query,
-      basename,
-    );
+    return this.buildDefaultersStudentReport(items, data.as_of_date, query, basename);
   }
 
   /**
-   * The school's defaulter sheet format: per-campus worksheet with the student
-   * list, a month strip showing per-month outstanding, and a totals row. The
-   * TOTAL row and the DEFAULTING AMOUNT column are both computed from the
-   * strip's `outstanding` field — this is the same number the UI tints red on
-   * the strip, so the Excel will reconcile to what the admin sees on screen.
+   * The school's own defaulter sheet ("DEFAULTING STUDENT LIST (G-E-J)" /
+   * "4 & 5 MONTHS DEFAULTERS"): one worksheet per campus, students in level
+   * order, one column per owed calendar month, DEFAULTING AMOUNT, REMARKS and
+   * a TOTAL row. Black-on-white and print-ready, like the paper original.
+   *
+   * The month cells come from exactly the heads loadDefaulterMoney sums into
+   * arrears_outstanding (loadDefaulterOwedMonths uses the same predicate),
+   * placed in their term-aware calendar month. Not from the on-screen strip:
+   * that window is a fixed N months back from as_of, so it drops older owed
+   * months (a year billed on one fee_date) and the row would no longer add up.
+   * Built this way, DEFAULTING AMOUNT = sum of the row's month cells = the
+   * on-screen Arrears figure, and TOTAL = sum of DEFAULTING AMOUNT.
+   *
+   * EXPIRING students are left out: they owe nothing that has rolled into an
+   * arrear yet, so they have no defaulted months to list.
    */
   private async buildDefaultersStudentReport(
-    items: Array<Record<string, unknown>>,
-    columns: Array<{ year: number; month: number; label: string }>,
+    allItems: Array<Record<string, unknown>>,
     asOfDate: string,
     query: ExportDefaultersQueryDto,
     basename: string,
   ): Promise<ExportFile> {
     type Item = Record<string, unknown>;
-    type StripCellLike = { year: number; month: number; outstanding: number; is_arrear: boolean };
+    const items = allItems.filter((r) => r.category !== 'EXPIRING');
+    const owedByStudent = await this.loadDefaulterOwedMonths(
+      items.map((r) => Number(r.cc)),
+      asOfDate,
+    );
 
-    const subtitle = this.defaulterFilterSubtitle(query);
-    const level = (r: Item): string => {
-      const cls = String(r.class_name ?? '').trim();
-      const sec = String(r.section ?? '').trim();
-      return [cls, sec].filter(Boolean).join(' ');
+    type SheetRow = {
+      item: Item;
+      months: Map<number, { owed: number; partial: boolean }>;
+      total: number;
     };
-    const stripMap = (r: Item): Map<string, StripCellLike> => {
-      const strip = (r.strip as StripCellLike[] | undefined) ?? [];
-      return new Map(strip.map((c) => [`${c.year}-${c.month}`, c]));
-    };
-
-    // Group by campus — one worksheet per campus. 'Unassigned' catches rows
-    // without a campus (shouldn't happen in practice but keeps the export
-    // honest instead of silently dropping them).
-    const byCampus = new Map<string, Item[]>();
+    const sheetRows: SheetRow[] = [];
     for (const item of items) {
-      const campus = String(item.campus ?? '').trim() || 'Unassigned';
-      if (!byCampus.has(campus)) byCampus.set(campus, []);
-      byCampus.get(campus)!.push(item);
+      const months = owedByStudent.get(Number(item.cc)) ?? new Map();
+      const total = this.roundMoney([...months.values()].reduce((s, m) => s + m.owed, 0));
+      if (total <= 0) continue;
+      sheetRows.push({ item, months, total });
     }
 
-    if (query.format === 'csv') {
-      // CSV can't do multi-sheet; emit a flat version with Campus as a column.
-      const monthHeaders = columns.map((c) => c.label.toUpperCase());
-      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...monthHeaders, 'Defaulting Amount'];
-      const lines = [header.map((h) => this.csvCell(h)).join(',')];
-      for (const [campus, group] of byCampus) {
-        let s = 0;
-        for (const r of group) {
-          s++;
-          const sMap = stripMap(r);
-          const monthCells = columns.map((col) => {
-            const cell = sMap.get(`${col.year}-${col.month}`);
-            return cell && cell.outstanding > 0 ? cell.outstanding : '';
-          });
-          const row = [
-            campus,
-            s,
-            Number(r.cc),
-            String(r.gr_number ?? ''),
-            level(r),
-            String(r.student_name ?? ''),
-            ...monthCells,
-            Number(r.arrears_outstanding),
-          ];
-          lines.push(row.map((v) => this.csvCell(v)).join(','));
+    // Level order (classes.id runs PN, NUR, KG, JR-I ... O-III, VI ... X, AS,
+    // A2), then section, then name — how the paper sheet is laid out.
+    const classOrder = (r: Item) => (r.class_id == null ? Number.MAX_SAFE_INTEGER : Number(r.class_id));
+    sheetRows.sort(
+      (a, b) =>
+        classOrder(a.item) - classOrder(b.item) ||
+        String(a.item.section ?? '').localeCompare(String(b.item.section ?? '')) ||
+        String(a.item.student_name ?? '').localeCompare(String(b.item.student_name ?? '')),
+    );
+
+    const byCampus = new Map<string, { code: string; name: string; rows: SheetRow[] }>();
+    for (const row of sheetRows) {
+      const code = String(row.item.campus_code ?? '').trim();
+      const name = String(row.item.campus ?? '').trim() || 'Unassigned';
+      const key = code || name;
+      if (!byCampus.has(key)) byCampus.set(key, { code, name, rows: [] });
+      byCampus.get(key)!.rows.push(row);
+    }
+    const campuses = [...byCampus.values()].sort((a, b) =>
+      (a.code || a.name).localeCompare(b.code || b.name),
+    );
+
+    const level = (r: Item) =>
+      [
+        DEFAULTER_LEVEL_ABBREVIATIONS[String(r.class_name ?? '').trim()] ?? String(r.class_name ?? '').trim(),
+        String(r.section ?? '').trim(),
+      ]
+        .filter(Boolean)
+        .join(' ');
+    const monthSpan = (rows: SheetRow[]) => {
+      let lo = Number.POSITIVE_INFINITY;
+      let hi = Number.NEGATIVE_INFINITY;
+      for (const r of rows) {
+        for (const idx of r.months.keys()) {
+          lo = Math.min(lo, idx);
+          hi = Math.max(hi, idx);
         }
+      }
+      if (!Number.isFinite(lo)) return [] as number[];
+      return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+    };
+    // "DEC", "JAN" … as on the paper sheet; the year is added only when the
+    // span is long enough for a month name to repeat.
+    const monthLabels = (span: number[]) =>
+      span.map((idx) => {
+        const name = MONTH_ABBR_UPPER[idx % 12];
+        return span.length > 12 ? `${name} ${String(Math.floor(idx / 12)).slice(-2)}` : name;
+      });
+    const subtitle = this.defaulterFilterSubtitle(query);
+
+    if (query.format === 'csv') {
+      const span = monthSpan(sheetRows);
+      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...monthLabels(span), 'Defaulting Amount'];
+      const lines = [header.map((h) => this.csvCell(h)).join(',')];
+      for (const campus of campuses) {
+        campus.rows.forEach((r, i) => {
+          const cells = [
+            this.defaulterCampusLabel(campus.code, campus.name),
+            i + 1,
+            Number(r.item.cc),
+            String(r.item.gr_number ?? ''),
+            level(r.item),
+            String(r.item.student_name ?? ''),
+            ...span.map((idx) => r.months.get(idx)?.owed ?? ''),
+            r.total,
+          ];
+          lines.push(cells.map((v) => this.csvCell(v)).join(','));
+        });
       }
       return {
         buffer: Buffer.from(`﻿${lines.join('\n')}`, 'utf8'),
@@ -2713,186 +2770,252 @@ export class FinancialReportsService {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
 
-    const schoolTitle = 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES';
-    const exportDate = new Date(asOfDate + 'T00:00:00.000Z');
-    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][exportDate.getUTCDay()];
-    const dateLine = exportDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).toUpperCase();
+    const [y, m, d] = asOfDate.split('-').map(Number);
+    const asOf = new Date(Date.UTC(y, m - 1, d));
+    const dayLine = `DAY :${asOf.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }).toUpperCase()}`;
+    const dateLine = `DATE : ${asOf
+      .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+      .toUpperCase()}`;
 
-    // Stable campus order: largest group first (focus of the recovery call).
-    const sortedCampuses = [...byCampus.entries()].sort((a, b) => b[1].length - a[1].length);
-
-    if (sortedCampuses.length === 0) {
-      // Still emit a workbook so the download succeeds and the admin sees
-      // "no results" rather than an opaque server error.
+    if (campuses.length === 0) {
+      // Still a workbook, so the admin sees "nothing matched" rather than an
+      // opaque download failure.
       const sheet = workbook.addWorksheet('Defaulters');
       sheet.getCell('A1').value = 'No defaulters match the current filters.';
-      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       return {
-        buffer,
+        buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
         filename: `${basename}.xlsx`,
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       };
     }
 
-    for (const [campus, group] of sortedCampuses) {
-      const sheetName = this.sanitizeSheetName(campus);
-      const sheet = workbook.addWorksheet(sheetName);
+    const SERIF = 'Times New Roman';
+    const thin: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FF000000' } };
+    const box: Partial<ExcelJS.Borders> = { top: thin, left: thin, bottom: thin, right: thin };
 
-      const monthHeaders = columns.map((c) => c.label.toUpperCase());
-      const headerCols = ['S#', 'C.C.', 'G.R.#', 'LEVEL', 'STUDENT NAME', ...monthHeaders, 'DEFAULTING AMOUNT', 'REMARKS'];
-      const totalCols = headerCols.length;
-      const lastColLetter = this.excelColumnLetter(totalCols);
-      const amountColIdx = 5 + monthHeaders.length + 1; // 1-based: S#=1 ... Student=5, months..., Defaulting Amount
+    for (const campus of campuses) {
+      const sheet = workbook.addWorksheet(this.sanitizeSheetName(campus.code || campus.name));
+      const span = monthSpan(campus.rows);
+      const labels = monthLabels(span);
+      const FIRST_MONTH_COL = 6;
+      const amountCol = FIRST_MONTH_COL + span.length;
+      const remarksCol = amountCol + 1;
+      const lastCol = this.excelColumnLetter(remarksCol);
 
-      // Header block.
-      sheet.mergeCells(`A1:${lastColLetter}1`);
-      sheet.getCell('A1').value = schoolTitle;
-      sheet.getCell('A1').font = { bold: true, size: 14, name: 'Calibri' };
-      sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
-      sheet.getRow(1).height = 24;
+      // Title block — rows 1-7, header at row 8.
+      sheet.mergeCells(`A1:${lastCol}1`);
+      const title = sheet.getCell('A1');
+      title.value = 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES';
+      title.font = { name: SERIF, bold: true, size: 16 };
+      title.alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.getRow(1).height = 28;
 
-      sheet.getCell('A2').value = `DAY : ${dayName.toUpperCase()}`;
-      sheet.getCell('A2').font = { bold: true, size: 10 };
-      sheet.getCell('A3').value = `DATE : ${dateLine}`;
-      sheet.getCell('A3').font = { bold: true, size: 10 };
+      sheet.getCell('A3').value = dayLine;
+      sheet.getCell('A4').value = dateLine;
+      for (const ref of ['A3', 'A4']) sheet.getCell(ref).font = { name: 'Arial', bold: true, size: 9 };
 
-      sheet.mergeCells(`A4:${lastColLetter}4`);
-      sheet.getCell('A4').value = `DEFAULTING STUDENT LIST (${campus})`;
-      sheet.getCell('A4').font = { bold: true, size: 13 };
-      sheet.getCell('A4').alignment = { horizontal: 'center' };
+      sheet.mergeCells(`A6:${lastCol}6`);
+      const h2 = sheet.getCell('A6');
+      h2.value = `DEFAULTING STUDENT LIST (${this.defaulterCampusLabel(campus.code, campus.name)})`;
+      h2.font = { name: SERIF, bold: true, size: 14 };
+      h2.alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.getRow(6).height = 22;
 
-      sheet.mergeCells(`A5:${lastColLetter}5`);
-      sheet.getCell('A5').value = subtitle;
-      sheet.getCell('A5').font = { bold: true, size: 11 };
-      sheet.getCell('A5').alignment = { horizontal: 'center' };
+      sheet.mergeCells(`A7:${lastCol}7`);
+      const h3 = sheet.getCell('A7');
+      h3.value = subtitle;
+      h3.font = { name: SERIF, bold: true, size: 13 };
+      h3.alignment = { horizontal: 'center', vertical: 'middle' };
 
-      // Column headers at row 7 (row 6 blank for breathing room).
-      const HEADER_ROW_IDX = 7;
-      const headerRow = sheet.getRow(HEADER_ROW_IDX);
-      headerCols.forEach((h, i) => {
-        const cell = headerRow.getCell(i + 1);
-        cell.value = h;
-        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = HEADER_FILL;
-        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-        cell.border = {
-          top: { style: 'thin' }, left: { style: 'thin' },
-          bottom: { style: 'thin' }, right: { style: 'thin' },
-        };
-      });
-      headerRow.height = 32;
+      const HEADER_ROW = 8;
+      const headerRow = sheet.getRow(HEADER_ROW);
+      ['S#', 'C.C.', 'G.R. #', 'LEVEL', 'STUDENT NAME', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
+        (h, i) => {
+          const cell = headerRow.getCell(i + 1);
+          cell.value = h;
+          cell.font = { name: SERIF, bold: true, size: i + 1 === amountCol ? 9 : 11 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          cell.border = box;
+        },
+      );
+      headerRow.height = 30;
 
-      // Column widths.
-      sheet.getColumn(1).width = 5;    // S#
-      sheet.getColumn(2).width = 8;    // CC
-      sheet.getColumn(3).width = 8;    // GR
-      sheet.getColumn(4).width = 10;   // Level
-      sheet.getColumn(5).width = 28;   // Name
-      for (let i = 0; i < monthHeaders.length; i++) {
-        sheet.getColumn(6 + i).width = 10;
-      }
-      sheet.getColumn(amountColIdx).width = 16;
-      sheet.getColumn(amountColIdx + 1).width = 18; // Remarks
+      sheet.getColumn(1).width = 5;
+      sheet.getColumn(2).width = 8;
+      sheet.getColumn(3).width = 8;
+      sheet.getColumn(4).width = 11;
+      sheet.getColumn(5).width = 30;
+      for (let i = 0; i < span.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
+      sheet.getColumn(amountCol).width = 15;
+      sheet.getColumn(remarksCol).width = 18;
 
-      // Data rows.
-      const monthTotals = columns.map(() => 0);
+      let rowIdx = HEADER_ROW + 1;
       let grandTotal = 0;
-      let rowIdx = HEADER_ROW_IDX + 1;
-      group.forEach((r, i) => {
-        const s = i + 1;
-        const sMap = stripMap(r);
+      campus.rows.forEach((r, i) => {
         const row = sheet.getRow(rowIdx);
-
-        row.getCell(1).value = s;
-        row.getCell(2).value = Number(r.cc);
-        row.getCell(3).value = String(r.gr_number ?? '');
-        row.getCell(4).value = level(r);
-        row.getCell(5).value = String(r.student_name ?? '');
-
-        columns.forEach((col, idx) => {
-          const cell = row.getCell(6 + idx);
-          const strip = sMap.get(`${col.year}-${col.month}`);
-          const outstanding = strip && strip.outstanding > 0 ? Math.round(strip.outstanding) : 0;
-          if (outstanding > 0) {
-            cell.value = outstanding;
-            cell.numFmt = '#,##0';
-            if (strip?.is_arrear) {
-              cell.font = { color: { argb: 'FFCC0000' } };
-            }
-            monthTotals[idx] += outstanding;
-          }
-          cell.alignment = { horizontal: 'right' };
+        row.getCell(1).value = i + 1;
+        row.getCell(2).value = Number(r.item.cc);
+        const gr = String(r.item.gr_number ?? '').trim();
+        row.getCell(3).value = /^\d+$/.test(gr) ? Number(gr) : gr;
+        row.getCell(4).value = level(r.item);
+        row.getCell(5).value = String(r.item.student_name ?? '').toUpperCase();
+        span.forEach((idx, c) => {
+          const owed = r.months.get(idx);
+          if (!owed) return;
+          const cell = row.getCell(FIRST_MONTH_COL + c);
+          cell.value = owed.owed;
+          // Part-paid month: the remaining balance, shown "BP 10940" as on
+          // the manual sheets. Still a number, so the row sums.
+          cell.numFmt = owed.partial ? '"BP "0' : '0';
         });
+        const amount = row.getCell(amountCol);
+        amount.value = r.total;
+        amount.numFmt = '0';
+        amount.font = { name: SERIF, bold: true, size: 12 };
+        grandTotal += r.total;
 
-        const total = Math.round(Number(r.arrears_outstanding));
-        const totalCell = row.getCell(amountColIdx);
-        totalCell.value = total;
-        totalCell.numFmt = '#,##0';
-        totalCell.font = { bold: true };
-        totalCell.alignment = { horizontal: 'right' };
-        grandTotal += total;
-
-        // Thin border on every data cell for a readable grid.
-        for (let c = 1; c <= totalCols; c++) {
-          row.getCell(c).border = {
-            top: { style: 'thin' }, left: { style: 'thin' },
-            bottom: { style: 'thin' }, right: { style: 'thin' },
-          };
+        for (let c = 1; c <= remarksCol; c++) {
+          const cell = row.getCell(c);
+          cell.border = box;
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: c === 5 };
+          if (c !== amountCol) cell.font = { name: SERIF, size: 11 };
         }
+        row.height = 22;
         rowIdx++;
       });
 
-      // TOTAL row.
+      // TOTAL — a labelled box sitting over the last few month columns, the
+      // grand total under DEFAULTING AMOUNT, as on the paper sheet.
       const totalRow = sheet.getRow(rowIdx);
-      sheet.mergeCells(rowIdx, 1, rowIdx, 5);
-      totalRow.getCell(1).value = 'TOTAL';
-      totalRow.getCell(1).font = { bold: true, size: 11 };
-      totalRow.getCell(1).alignment = { horizontal: 'right' };
-      columns.forEach((_, idx) => {
-        const cell = totalRow.getCell(6 + idx);
-        if (monthTotals[idx] > 0) {
-          cell.value = monthTotals[idx];
-          cell.numFmt = '#,##0';
-          cell.font = { bold: true };
-          cell.alignment = { horizontal: 'right' };
-        }
-      });
-      const grandCell = totalRow.getCell(amountColIdx);
-      grandCell.value = grandTotal;
-      grandCell.numFmt = '#,##0';
-      grandCell.font = { bold: true, size: 11 };
-      grandCell.alignment = { horizontal: 'right' };
-      for (let c = 1; c <= totalCols; c++) {
-        totalRow.getCell(c).fill = {
-          type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' },
-        };
-        totalRow.getCell(c).border = {
-          top: { style: 'medium' }, left: { style: 'thin' },
-          bottom: { style: 'medium' }, right: { style: 'thin' },
-        };
-      }
+      const labelFrom = Math.max(1, amountCol - 3);
+      if (amountCol - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, amountCol - 1);
+      const label = totalRow.getCell(labelFrom);
+      label.value = 'TOTAL';
+      label.font = { name: SERIF, bold: true, size: 12 };
+      label.alignment = { horizontal: 'center', vertical: 'middle' };
+      const grand = totalRow.getCell(amountCol);
+      grand.value = this.roundMoney(grandTotal);
+      grand.numFmt = '0.00';
+      grand.font = { name: SERIF, bold: true, size: 12 };
+      grand.alignment = { horizontal: 'center', vertical: 'middle' };
+      for (let c = labelFrom; c <= amountCol; c++) totalRow.getCell(c).border = box;
+      totalRow.height = 22;
 
-      // Freeze header rows and the Student Name column so admins can scroll
-      // through the month strip without losing which student / which column.
-      sheet.views = [{ state: 'frozen', xSplit: 5, ySplit: HEADER_ROW_IDX }];
+      sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_ROW }];
+      sheet.pageSetup = {
+        paperSize: 9, // A4
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        horizontalCentered: true,
+        printTitlesRow: `${HEADER_ROW}:${HEADER_ROW}`,
+        margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+      };
     }
 
-    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     return {
-      buffer,
+      buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
       filename: `${basename}.xlsx`,
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     };
   }
 
-  /** The H3 subtitle, derived from the filter the admin chose. */
+  /**
+   * Per student, what is owed per calendar month (key year*12 + month-1) —
+   * exactly the heads loadDefaulterMoney sums, so the months add back up to
+   * arrears_outstanding. `partial` marks a month where something was paid.
+   */
+  private async loadDefaulterOwedMonths(
+    ids: number[],
+    asOfDate: string,
+  ): Promise<Map<number, Map<number, { owed: number; partial: boolean }>>> {
+    const result = new Map<number, Map<number, { owed: number; partial: boolean }>>();
+    if (ids.length === 0) return result;
+    const classTerms = await this.loadClassTerms();
+
+    type OwedHeadRaw = {
+      student_id: number;
+      target_month: number;
+      academic_year: string;
+      term_start_month: number | null;
+      fee_date: Date;
+      outstanding: number;
+      amount_paid: number;
+      student_status: student_status | null;
+      class_id: number | null;
+      graduated_from_class_id: number | null;
+    };
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const heads = await this.prisma.$queryRaw<OwedHeadRaw[]>(Prisma.sql`
+        SELECT sf.student_id, sf.target_month, sf.academic_year, sf.term_start_month, sf.fee_date,
+               (COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8
+                 AS outstanding,
+               COALESCE(sf.amount_paid, 0)::float8 AS amount_paid,
+               s.status AS student_status, s.class_id, s.graduated_from_class_id
+        FROM public.student_fees sf
+        JOIN public.students s ON s.cc = sf.student_id
+        WHERE sf.student_id IN (${Prisma.join(chunk)})
+          AND sf.fee_date IS NOT NULL
+          AND sf.fee_date < ${asOfDate}::date
+          AND sf.is_arrear_surcharge = false
+          AND sf.is_discount = false
+          AND sf.status <> 'PAID'
+          AND sf.status <> 'DISCOUNT'
+          AND sf.status <> 'WAIVED'
+          AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
+      `);
+      for (const h of heads) {
+        const resolved =
+          this.resolveHeadCalendarMonth(
+            {
+              target_month: h.target_month,
+              academic_year: h.academic_year,
+              term_start_month: h.term_start_month,
+              students: {
+                status: h.student_status,
+                class_id: h.class_id,
+                graduated_from_class_id: h.graduated_from_class_id,
+              },
+            },
+            classTerms,
+          ) ??
+          // Unparseable academic_year: fall back to the billing month rather
+          // than drop money the DEFAULTING AMOUNT has to account for.
+          { year: h.fee_date.getUTCFullYear(), month: h.fee_date.getUTCMonth() + 1 };
+        const key = resolved.year * 12 + (resolved.month - 1);
+        const studentId = Number(h.student_id);
+        const months = result.get(studentId) ?? new Map<number, { owed: number; partial: boolean }>();
+        const cell = months.get(key) ?? { owed: 0, partial: false };
+        cell.owed = this.roundMoney(cell.owed + Number(h.outstanding));
+        if (Number(h.amount_paid) > 0) cell.partial = true;
+        months.set(key, cell);
+        result.set(studentId, months);
+      }
+    }
+    return result;
+  }
+
+  /** What the school writes in the H2 brackets — "(G-E-J)" on their own sheets. */
+  private defaulterCampusLabel(code: string, name: string): string {
+    return DEFAULTER_CAMPUS_LABELS[code] ?? (code || name);
+  }
+
+  /**
+   * The H3, from the months filter: "1 MONTH", "4 & 5 MONTHS",
+   * "1 & 2 & 3 MONTHS", "6+ MONTHS", "4-9 MONTHS" … DEFAULTERS.
+   */
   private defaulterFilterSubtitle(query: ExportDefaultersQueryDto): string {
     const min = query.min_months_behind ?? 1;
     const max = query.max_months_behind;
     if (max != null && max >= min) {
       if (min === max) return `${min} MONTH${min === 1 ? '' : 'S'} DEFAULTERS`;
-      // "4 & 5 MONTHS DEFAULTERS" for min=4, max=5; else "4-6 MONTHS DEFAULTERS"
-      if (max - min === 1) return `${min} & ${max} MONTHS DEFAULTERS`;
+      if (max - min <= 3) {
+        const parts = Array.from({ length: max - min + 1 }, (_, i) => min + i);
+        return `${parts.join(' & ')} MONTHS DEFAULTERS`;
+      }
       return `${min}-${max} MONTHS DEFAULTERS`;
     }
     if (min > 1) return `${min}+ MONTHS DEFAULTERS`;
