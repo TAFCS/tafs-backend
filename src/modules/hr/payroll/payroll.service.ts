@@ -1366,7 +1366,7 @@ export class PayrollService {
             monthly_pay: { not: null },
             payroll_enabled: true,
             OR: [
-              { employment_status: { in: ['ACTIVE', 'PERMANENT'] } },
+              { employment_status: 'ACTIVE' },
               // Left/terminated mid-cycle: still owed pay up to their date of
               // leaving, so they stay on the roster for the cycle it falls in.
               { employment_status: { in: ['LEFT', 'TERMINATED'] }, date_of_leaving: { gte: periodStart } },
@@ -1542,7 +1542,7 @@ export class PayrollService {
     const rows = await this.prisma.employee_profiles.findMany({
       where: {
         campus_id: campusId,
-        employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+        employment_status: 'ACTIVE',
         ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
         ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
         ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
@@ -1583,7 +1583,7 @@ export class PayrollService {
           campus_id: campusId,
           // Matches generateRun's employee scope — terminated staff have no
           // attendance to show and only inflate the matrix.
-          employment_status: { in: ['ACTIVE', 'PERMANENT'] },
+          employment_status: 'ACTIVE',
           ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
           ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
           ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),

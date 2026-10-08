@@ -1342,6 +1342,12 @@ model employee_profiles {
   father_cnic                        String?                              @db.VarChar(50)
   mother_cnic                        String?                              @db.VarChar(50)
   employment_status                  EmployeeStatus                       @default(ACTIVE)
+  // TAFSD-275: refine the ACTIVE status into permanent / non-permanent /
+  // family. Null for LEFT / TERMINATED rows. Named `employment_subtype`
+  // because the existing `employment_type` varchar column already stores a
+  // free-form job-type label used by salary increments and the employee
+  // excel export. Backfilled on 2026-10-08.
+  employment_subtype                 EmploymentSubtype?
   segment_id                         Int?
   secondary_phone                    String?                              @db.VarChar(60)
   payroll_enabled                    Boolean                              @default(true)
@@ -2807,11 +2813,26 @@ enum ExpectedTimeSource {
   NONE
 }
 
+// TAFSD-275: PERMANENT and FAMILY collapsed into ACTIVE on 2026-10-08.
+// The two values stay in the Postgres enum (dropped in a later migration once
+// nothing in the fleet references them) but no row carries them anymore. See
+// the matching employment_type column for the fine-grained kind.
 enum EmployeeStatus {
   ACTIVE
   TERMINATED
-  PERMANENT
   LEFT
+  PERMANENT
+  FAMILY
+}
+
+// TAFSD-275: subtype that only applies when employment_status = ACTIVE.
+// `PERMANENT` bucket intentionally left empty on backfill — admins mark
+// employees permanent as they get promoted. Separate from
+// employee_profiles.is_permanent_employee (which stays as-is and continues to
+// drive leave policy); the two will be reconciled in a follow-up pass.
+enum EmploymentSubtype {
+  PERMANENT
+  NON_PERMANENT
   FAMILY
 }
 
