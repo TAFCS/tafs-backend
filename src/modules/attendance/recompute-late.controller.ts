@@ -59,6 +59,12 @@ export class RecomputeLateStatusDto {
   @IsInt()
   staff_category_id?: number;
 
+  /** Staff filter — setting it makes the run staff-only. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  segment_id?: number;
+
   /** One employee only — makes the run staff-only. Must belong to campus_id. */
   @IsOptional()
   @Type(() => Number)
@@ -104,6 +110,7 @@ export class RecomputeLateController {
     if (dto.class_id != null) this.scope.assertClass(user, dto.class_id);
     if (dto.department_id != null) this.scope.assertDepartment(user, dto.department_id);
     if (dto.staff_category_id != null) this.scope.assertStaffCategory(user, dto.staff_category_id);
+    if (dto.segment_id != null) this.scope.assertSegment(user, dto.segment_id);
 
     // A class narrows to students; a department/category narrows to staff.
     if (dto.employee_id != null) {
@@ -118,7 +125,7 @@ export class RecomputeLateController {
       }
     }
     const hasStaffFilter =
-      dto.department_id != null || dto.staff_category_id != null || dto.employee_id != null;
+      dto.department_id != null || dto.staff_category_id != null || dto.segment_id != null || dto.employee_id != null;
     if (hasStaffFilter && (dto.class_id != null || dto.target === 'STUDENTS')) {
       throw new BadRequestException('Employee, department and staff category filters apply to staff — remove the class / students-only selection.');
     }
@@ -130,6 +137,7 @@ export class RecomputeLateController {
     const employeeWhere: Prisma.employee_profilesWhereInput = {
       ...(dto.department_id != null ? { department_id: dto.department_id } : {}),
       ...(dto.staff_category_id != null ? { staff_category_id: dto.staff_category_id } : {}),
+      ...(dto.segment_id != null ? { segment_id: dto.segment_id } : {}),
       ...(dto.employee_id != null ? { id: dto.employee_id } : {}),
     };
     const fromDate = new Date(dto.date_from);
