@@ -26,22 +26,9 @@ import {
 export class StaffAttendanceController {
   constructor(private readonly staffAttendanceService: StaffAttendanceService) {}
 
-  @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  @RequireAction('attendance.staff_register#view')
-  async getRegister(
-    @Query() query: GetStaffAttendanceQueryDto,
-    @CurrentUser() user: IJwtStaffPayload,
-  ) {
-    const data = await this.staffAttendanceService.getRegister(query, user);
-    return createApiResponse(data, HttpStatus.OK, 'Staff attendance register retrieved');
-  }
-
   @Put()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   @RequireAnyAction(
-    'attendance.staff_register#mark',
-    'attendance.employee_attendance#mark',
     'attendance.employee_attendance_cycle#mark',
     'hr.payroll#line_manage',
   )
@@ -51,28 +38,6 @@ export class StaffAttendanceController {
   ) {
     const data = await this.staffAttendanceService.bulkMark(dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Staff attendance saved');
-  }
-
-  @Get('summary')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  @RequireAction('attendance.employee_attendance#view')
-  async getSummary(
-    @Query() query: GetStaffAttendanceQueryDto,
-    @CurrentUser() user: IJwtStaffPayload,
-  ) {
-    const data = await this.staffAttendanceService.getSummary(query, user);
-    return createApiResponse(data, HttpStatus.OK, 'Staff attendance summary retrieved');
-  }
-
-  @Get('dashboard')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  @RequireAction('attendance.employee_attendance#view')
-  async getDashboard(
-    @Query() query: GetStaffAttendanceQueryDto,
-    @CurrentUser() user: IJwtStaffPayload,
-  ) {
-    const data = await this.staffAttendanceService.getDashboard(query, user);
-    return createApiResponse(data, HttpStatus.OK, 'Staff attendance dashboard retrieved');
   }
 
   @Get('me')
@@ -87,7 +52,7 @@ export class StaffAttendanceController {
 
   @Get(':employeeId/timeline')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  @RequireAnyAction('attendance.employee_attendance#view', 'hr.employee_directory#view', 'attendance.timetables#view')
+  @RequireAnyAction('attendance.employee_attendance_cycle#view', 'hr.employee_directory#view', 'attendance.timetables#view')
   async getTimeline(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Query() query: GetStaffTimelineQueryDto,
@@ -100,7 +65,7 @@ export class StaffAttendanceController {
   /** Raw punches (device + campus), current override and audit trail for one employee-day. */
   @Get(':employeeId/day-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
-  @RequireAnyAction('attendance.employee_attendance#view', 'hr.payroll#view')
+  @RequireAnyAction('attendance.employee_attendance_cycle#view', 'hr.payroll#view')
   async getDayHistory(
     @Param('employeeId', ParseIntPipe) employeeId: number,
     @Query() query: GetStaffDayHistoryQueryDto,

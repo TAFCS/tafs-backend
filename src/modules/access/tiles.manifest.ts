@@ -862,18 +862,6 @@ const SUPPORT_TICKETS_ACTIONS: TileAction[] = [
 ];
 
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
-const STAFF_REGISTER_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'View staff register', description: 'See staff attendance for any date and campus', default: true },
-  { id: 'mark', label: 'Mark staff attendance', description: 'Mark present/absent/late/excused and save daily attendance', implies: ['view'] },
-];
-
-// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
-const EMPLOYEE_ATTENDANCE_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'View employee attendance', description: 'Daily attendance board, summary stats, and employee timeline', default: true },
-  { id: 'mark', label: 'Mark or resolve attendance', description: 'Bulk mark attendance status, apply clock-out times, and resolve missing punches', implies: ['view'] },
-];
-
-// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View cycle attendance', description: 'See employee lines and punch card matrix over date range', default: true },
   { id: 'export', label: 'Export cycle attendance', description: 'Export employee lines and punch matrix to Excel', implies: ['view'] },
@@ -948,8 +936,6 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'hr.employee_notices', module: 'hr', label: 'Employee Notices', description: 'Broadcast announcements to staff by role', href: '/hr/notices', capabilities: ['communication.send_employee_announcements'], actions: EMPLOYEE_NOTICES_ACTIONS, legacyFullAccessCapabilities: ['communication.send_employee_announcements'] },
 
   // ── Attendance ───────────────────────────────────────────────────────────
-  { id: 'attendance.staff_register', module: 'attendance', label: 'Staff Register', description: 'Daily staff punch-in', href: '/hr/staff-register', group: 'Employees', capabilities: ['attendance.staff.mark'], actions: STAFF_REGISTER_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
-  { id: 'attendance.employee_attendance', module: 'attendance', label: 'Employee Attendance', description: 'Daily staff clock-in/out from biometric devices', href: '/hr/attendance-dashboard', group: 'Employees', capabilities: ['attendance.staff.mark', 'hr.objections.review'], actions: EMPLOYEE_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.staff.mark'] },
   { id: 'attendance.employee_attendance_cycle', module: 'attendance', label: 'Employee Attendance by Cycle', description: 'Employee lines and punch matrix over a date range', href: '/hr/attendance-dashboard/cycle', group: 'Employees', capabilities: ['hr.payroll.view'], actions: EMPLOYEE_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['hr.payroll.manage', 'hr.payroll.view'] },
   { id: 'attendance.objections', module: 'attendance', label: 'Attendance Objections', description: 'Review employee attendance disputes', href: '/hr/objections', group: 'Employees', capabilities: ['hr.objections.review'], actions: OBJECTIONS_ACTIONS, legacyFullAccessCapabilities: ['hr.objections.review'] },
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'], actions: LEAVE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['hr.leave.approve'] },
