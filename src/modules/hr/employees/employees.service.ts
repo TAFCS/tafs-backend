@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
-import { CheckInSource, EmployeeStatus, Prisma, StaffRole } from '@prisma/client';
+import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -122,6 +122,11 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(EmployeeStatus)
   employment_status?: EmployeeStatus;
+
+  // TAFSD-275: sub-status under ACTIVE. Null for LEFT / TERMINATED.
+  @IsOptional()
+  @IsEnum(EmploymentSubtype)
+  employment_subtype?: EmploymentSubtype;
 
   @IsOptional() @IsInt()
   department_id?: number;
@@ -1021,7 +1026,8 @@ export class EmployeesService {
             join_date: rest.join_date ? new Date(rest.join_date) : null,
             employment_type: rest.employment_type || null,
             employment_status: status,
-            is_permanent_employee: status === EmployeeStatus.PERMANENT,
+            employment_subtype: rest.employment_subtype ?? null,
+            is_permanent_employee: status === EmployeeStatus.PERMANENT || rest.employment_subtype === EmploymentSubtype.PERMANENT,
             department_id: rest.department_id || null,
             reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
@@ -1353,6 +1359,7 @@ export class EmployeesService {
             cnic: rest.cnic !== undefined ? rest.cnic : undefined,
             join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
             employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
+            employment_subtype: rest.employment_subtype !== undefined ? rest.employment_subtype : undefined,
             department_id: rest.department_id !== undefined ? rest.department_id : undefined,
             reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
             employee_code: codeFields
