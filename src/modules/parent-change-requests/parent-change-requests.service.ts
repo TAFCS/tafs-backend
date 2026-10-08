@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
@@ -188,6 +189,34 @@ export class ParentChangeRequestsService {
 
     const family = await this.prisma.families.findUnique({ where: { id: dto.family_id } });
     if (!family) throw new NotFoundException('Family not found');
+
+    const reqData = dto.requested_data as Record<string, any>;
+    if (reqData) {
+      if (reqData.request_type === 'STUDENT_UPDATE' && reqData.changes?.cnic) {
+        const studentCc = Number(reqData.student_cc);
+        const cnic = String(reqData.changes.cnic).trim().toUpperCase();
+        const existingStudent = await this.prisma.students.findUnique({
+          where: { cnic },
+          select: { cc: true, full_name: true },
+        });
+        if (existingStudent && existingStudent.cc !== studentCc) {
+          throw new ConflictException(
+            `CNIC/B-Form "${cnic}" is already registered to another student (CC: ${existingStudent.cc}${existingStudent.full_name ? ` - ${existingStudent.full_name}` : ''}).`,
+          );
+        }
+      } else if (reqData.cnic) {
+        const cnic = String(reqData.cnic).trim().toUpperCase();
+        const existingGuardian = await this.prisma.guardians.findUnique({
+          where: { cnic },
+          select: { id: true, full_name: true },
+        });
+        if (existingGuardian && existingGuardian.id !== dto.guardian_id) {
+          throw new ConflictException(
+            `CNIC "${cnic}" is already registered to another guardian (Guardian ID: ${existingGuardian.id}${existingGuardian.full_name ? ` - ${existingGuardian.full_name}` : ''}).`,
+          );
+        }
+      }
+    }
 
     const request = await this.prisma.parent_change_requests.create({
       data: {
@@ -447,6 +476,18 @@ export class ParentChangeRequestsService {
       if (changes.dob) {
         changes.dob = new Date(changes.dob);
       }
+      if (changes.cnic) {
+        const cnic = String(changes.cnic).trim().toUpperCase();
+        const existingStudent = await tx.students.findUnique({
+          where: { cnic },
+          select: { cc: true, full_name: true },
+        });
+        if (existingStudent && existingStudent.cc !== studentCc) {
+          throw new ConflictException(
+            `CNIC/B-Form "${changes.cnic}" is already registered to another student (CC: ${existingStudent.cc}${existingStudent.full_name ? ` - ${existingStudent.full_name}` : ''}).`,
+          );
+        }
+      }
       await tx.students.update({
         where: { cc: studentCc },
         data: changes,
@@ -459,6 +500,19 @@ export class ParentChangeRequestsService {
 
     const dataToUpdate = this.uppercaseTextValues({ ...approvedData } as Record<string, any>);
     this.assertGuardianFieldLengths(dataToUpdate);
+
+    if (dataToUpdate.cnic) {
+      const cnic = String(dataToUpdate.cnic).trim().toUpperCase();
+      const existingGuardian = await tx.guardians.findUnique({
+        where: { cnic },
+        select: { id: true, full_name: true },
+      });
+      if (existingGuardian && existingGuardian.id !== request.guardian_id) {
+        throw new ConflictException(
+          `CNIC "${dataToUpdate.cnic}" is already registered to another guardian (Guardian ID: ${existingGuardian.id}${existingGuardian.full_name ? ` - ${existingGuardian.full_name}` : ''}).`,
+        );
+      }
+    }
 
     if ('home_phone' in dataToUpdate) {
       const homePhone = dataToUpdate.home_phone;
@@ -651,15 +705,57 @@ export class ParentChangeRequestsService {
         ? ` Account deletion request. Reason: ${(requestedData as any).reason || 'not provided'}.`
         : '');
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      if (isApproving && isPartial && remainingData) {
-        // Atomic guard: only proceed if the request is still PENDING. This closes
-        // the race where two concurrent requests both pass the pre-transaction
-        // status check and each end up applying the change + writing audit logs.
+    let result: { result: any; historyId: number };
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        if (isApproving && isPartial && remainingData) {
+          // Atomic guard: only proceed if the request is still PENDING. This closes
+          // the race where two concurrent requests both pass the pre-transaction
+          // status check and each end up applying the change + writing audit logs.
+          const guard = await tx.parent_change_requests.updateMany({
+            where: { id, status: 'PENDING' },
+            data: {
+              requested_data: remainingData as any,
+            },
+          });
+
+          if (guard.count === 0) {
+            throw new BadRequestException('Request has already been processed');
+          }
+
+          // Apply selected fields, move them into a new History (APPROVED) row,
+          // and leave the original request PENDING with only unselected fields.
+          await this.applyApprovedData(tx, request, approvedData);
+
+          const historyRequest = await tx.parent_change_requests.create({
+            data: {
+              guardian_id: request.guardian_id,
+              family_id: request.family_id,
+              requested_data: approvedData as any,
+              status: ChangeRequestStatus.APPROVED,
+              comment: dto.comment ?? null,
+              processed_by: adminId,
+              processed_at: new Date(),
+            },
+          });
+
+          const pendingRequest = await tx.parent_change_requests.findUniqueOrThrow({
+            where: { id },
+          });
+
+          return { result: pendingRequest, historyId: historyRequest.id };
+        }
+
         const guard = await tx.parent_change_requests.updateMany({
           where: { id, status: 'PENDING' },
           data: {
-            requested_data: remainingData as any,
+            status: dto.status,
+            comment: dto.comment,
+            processed_by: adminId,
+            processed_at: new Date(),
+            ...(isApproving
+              ? { requested_data: approvedData as any }
+              : {}),
           },
         });
 
@@ -667,56 +763,27 @@ export class ParentChangeRequestsService {
           throw new BadRequestException('Request has already been processed');
         }
 
-        // Apply selected fields, move them into a new History (APPROVED) row,
-        // and leave the original request PENDING with only unselected fields.
-        await this.applyApprovedData(tx, request, approvedData);
+        if (isApproving) {
+          await this.applyApprovedData(tx, request, approvedData);
+        }
 
-        const historyRequest = await tx.parent_change_requests.create({
-          data: {
-            guardian_id: request.guardian_id,
-            family_id: request.family_id,
-            requested_data: approvedData as any,
-            status: ChangeRequestStatus.APPROVED,
-            comment: dto.comment ?? null,
-            processed_by: adminId,
-            processed_at: new Date(),
-          },
-        });
-
-        const pendingRequest = await tx.parent_change_requests.findUniqueOrThrow({
+        const updatedRequest = await tx.parent_change_requests.findUniqueOrThrow({
           where: { id },
         });
 
-        return { result: pendingRequest, historyId: historyRequest.id };
-      }
-
-      const guard = await tx.parent_change_requests.updateMany({
-        where: { id, status: 'PENDING' },
-        data: {
-          status: dto.status,
-          comment: dto.comment,
-          processed_by: adminId,
-          processed_at: new Date(),
-          ...(isApproving
-            ? { requested_data: approvedData as any }
-            : {}),
-        },
+        return { result: updatedRequest, historyId: id };
       });
-
-      if (guard.count === 0) {
-        throw new BadRequestException('Request has already been processed');
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const target = Array.isArray(err.meta?.target)
+          ? (err.meta.target as string[]).join(', ')
+          : 'unique field';
+        throw new ConflictException(
+          `Cannot apply changes: unique constraint failed on ${target}. Another record already has this value.`,
+        );
       }
-
-      if (isApproving) {
-        await this.applyApprovedData(tx, request, approvedData);
-      }
-
-      const updatedRequest = await tx.parent_change_requests.findUniqueOrThrow({
-        where: { id },
-      });
-
-      return { result: updatedRequest, historyId: id };
-    });
+      throw err;
+    }
 
     const logEntityId = String(result.historyId);
     if (diffs.length === 0) {
