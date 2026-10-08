@@ -1342,8 +1342,8 @@ model employee_profiles {
   father_cnic                        String?                              @db.VarChar(50)
   mother_cnic                        String?                              @db.VarChar(50)
   employment_status                  EmployeeStatus                       @default(ACTIVE)
-  // TAFSD-275: refine the ACTIVE status into permanent / non-permanent /
-  // family. Null for LEFT / TERMINATED rows. Named `employment_subtype`
+  // TAFSD-275: refine the ACTIVE status into permanent / non-permanent.
+  // Null for LEFT / TERMINATED rows. Named `employment_subtype`
   // because the existing `employment_type` varchar column already stores a
   // free-form job-type label used by salary increments and the employee
   // excel export. Backfilled on 2026-10-08.
@@ -2821,19 +2821,16 @@ enum EmployeeStatus {
   ACTIVE
   TERMINATED
   LEFT
-  PERMANENT
-  FAMILY
 }
 
-// TAFSD-275: subtype that only applies when employment_status = ACTIVE.
-// `PERMANENT` bucket intentionally left empty on backfill — admins mark
-// employees permanent as they get promoted. Separate from
-// employee_profiles.is_permanent_employee (which stays as-is and continues to
-// drive leave policy); the two will be reconciled in a follow-up pass.
+// TAFSD-275: subtype that only applies when employment_status = ACTIVE; null
+// otherwise. The source of truth for permanence: is_permanent_employee (read
+// by leave policy) is kept equal to `subtype = PERMANENT` on every write, and
+// PermanentEmployeeScheduler promotes ACTIVE staff to PERMANENT after 14
+// months. FAMILY was retired on 2026-10-09 (family staff are PERMANENT).
 enum EmploymentSubtype {
   PERMANENT
   NON_PERMANENT
-  FAMILY
 }
 
 enum otp_purpose {

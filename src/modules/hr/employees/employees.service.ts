@@ -17,6 +17,7 @@ import {
   resolveEmployeeCampusPrefix,
 } from './employee-code.util';
 import { buildMasterEmployeesExcelBuffer } from './master-employee-excel.util';
+import { permanenceFields } from './employment-permanence.util';
 import { encryptSecret, decryptSecret } from '../../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../../common/utils/account-credentials.util';
 import { CaslAbilityFactory } from '../../auth/casl/casl-ability.factory';
@@ -298,6 +299,11 @@ export class UpdateEmployeeStatusDto {
   @IsOptional()
   @IsDateString()
   join_date?: string;
+
+  /** Subtype when bringing someone back to ACTIVE. Defaults to NON_PERMANENT. */
+  @IsOptional()
+  @IsEnum(EmploymentSubtype)
+  employment_subtype?: EmploymentSubtype;
 }
 
 export class UpdateEmployeeLeavingDateDto {
@@ -1028,8 +1034,7 @@ export class EmployeesService {
             join_date: rest.join_date ? new Date(rest.join_date) : null,
             employment_type: rest.employment_type || null,
             employment_status: status,
-            employment_subtype: rest.employment_subtype ?? null,
-            is_permanent_employee: status === EmployeeStatus.PERMANENT || rest.employment_subtype === EmploymentSubtype.PERMANENT,
+            ...permanenceFields(status, rest.employment_subtype),
             department_id: rest.department_id || null,
             reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
@@ -1361,7 +1366,10 @@ export class EmployeesService {
             cnic: rest.cnic !== undefined ? rest.cnic : undefined,
             join_date: rest.join_date !== undefined ? (rest.join_date ? new Date(rest.join_date) : null) : undefined,
             employment_type: rest.employment_type !== undefined ? rest.employment_type : undefined,
-            employment_subtype: rest.employment_subtype !== undefined ? rest.employment_subtype : undefined,
+            // Subtype edits keep is_permanent_employee in step (TAFSD-275).
+            ...(rest.employment_subtype !== undefined
+              ? permanenceFields(existing.employment_status, rest.employment_subtype)
+              : {}),
             department_id: rest.department_id !== undefined ? rest.department_id : undefined,
             reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
             employee_code: codeFields
@@ -1576,6 +1584,7 @@ export class EmployeesService {
         data: {
           employment_status: EmployeeStatus.TERMINATED,
           is_permanent_employee: false,
+          employment_subtype: null,
         },
         include: includeRelations,
       });
@@ -1788,11 +1797,7 @@ export class EmployeesService {
     const wasOffboarded =
       existing.employment_status === EmployeeStatus.TERMINATED ||
       existing.employment_status === EmployeeStatus.LEFT;
-    const reactivatePortal =
-      wasOffboarded &&
-      (nextStatus === EmployeeStatus.ACTIVE ||
-        nextStatus === EmployeeStatus.PERMANENT ||
-        nextStatus === EmployeeStatus.FAMILY);
+    const reactivatePortal = wasOffboarded && nextStatus === EmployeeStatus.ACTIVE;
 
     // Rejoining: the date asked for on the status change becomes the new date
     // of joining. It can't fall on or before the day they left.
@@ -1824,7 +1829,16 @@ export class EmployeesService {
         where: { id },
         data: {
           employment_status: nextStatus,
-          is_permanent_employee: nextStatus === EmployeeStatus.PERMANENT,
+          // Leaving clears the subtype; coming back sets it (default
+          // NON_PERMANENT — the 14-month rule promotes them again). Was
+          // `is_permanent_employee: nextStatus === PERMANENT`, which reset
+          // every rejoiner's permanence (TAFSD-275).
+          ...permanenceFields(
+            nextStatus,
+            nextStatus === EmployeeStatus.ACTIVE
+              ? dto.employment_subtype ?? EmploymentSubtype.NON_PERMANENT
+              : null,
+          ),
           // Cleared again if the employee is brought back.
           date_of_leaving: nextLeavingDate,
           ...(rejoinDate ? { join_date: rejoinDate } : {}),
