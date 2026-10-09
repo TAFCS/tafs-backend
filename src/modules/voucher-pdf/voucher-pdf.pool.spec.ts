@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
@@ -20,7 +21,30 @@ describe('voucherPdfWorkerCount', () => {
 });
 
 describe('resolveVoucherPdfWorkerFilename', () => {
-    it('returns null when the compiled worker is missing', () => {
-        expect(resolveVoucherPdfWorkerFilename(path.join(__dirname, '__no_such_dir__'))).toBeNull();
+    const cwd = process.cwd();
+
+    afterEach(() => {
+        process.chdir(cwd);
+    });
+
+    it('returns null when neither sibling nor dist/ worker exists', () => {
+        // Isolate from a local `npm run build` that left dist/ populated.
+        const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'voucher-pdf-pool-'));
+        process.chdir(empty);
+        expect(resolveVoucherPdfWorkerFilename(path.join(empty, '__no_such_dir__'))).toBeNull();
+    });
+
+    it('falls back to dist/ when the sibling worker is missing but dist is built', () => {
+        const distWorkers = [
+            path.join(cwd, 'dist/src/modules/voucher-pdf/voucher-pdf.worker.js'),
+            path.join(cwd, 'dist/modules/voucher-pdf/voucher-pdf.worker.js'),
+        ];
+        const existing = distWorkers.find((p) => fs.existsSync(p));
+        const resolved = resolveVoucherPdfWorkerFilename(path.join(__dirname, '__no_such_dir__'));
+        if (existing) {
+            expect(resolved).toBe(existing);
+        } else {
+            expect(resolved).toBeNull();
+        }
     });
 });
