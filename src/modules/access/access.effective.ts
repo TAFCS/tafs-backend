@@ -12,6 +12,12 @@ export type EffectiveTile = {
   actions?: EffectiveTileAction[];
   /** Holding any of these capability keys confers every action of this tile. */
   legacyFullAccessCapabilities?: string[];
+  /**
+   * Web dashboard tiles are not-allowed by default (TAFSD-284): only an
+   * explicit per-user allow shows them. Role baselines and packs no longer
+   * surface them. Staff App tabs leave this off and keep inheriting.
+   */
+  requiresExplicitAllow?: boolean;
 };
 
 export type ActionRef = { tileId: string; actionId: string };
@@ -122,8 +128,12 @@ export function computeEffectiveAccess(args: {
 
   const capabilityKeys = [...union];
   const keySet = new Set(capabilityKeys);
+  const explicitlyAllowed = new Set(allowTileIds);
   const effectiveTiles = activeTiles.filter(
-    (t) => !denied.has(t.id) && t.capabilities.every((c) => keySet.has(c)),
+    (t) =>
+      !denied.has(t.id) &&
+      (!t.requiresExplicitAllow || explicitlyAllowed.has(t.id)) &&
+      t.capabilities.every((c) => keySet.has(c)),
   );
   const tileIds = effectiveTiles.map((t) => t.id);
 

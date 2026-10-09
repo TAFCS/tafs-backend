@@ -263,4 +263,37 @@ describe('tile sub-permissions', () => {
     expect(result.tileIds).toContain('finance.vouchers');
     expect(result.actionIds).toEqual([]);
   });
+
+  describe('web tiles are not-allowed by default (TAFSD-284)', () => {
+    const webTiles = tiles.map((t) => ({ ...t, requiresExplicitAllow: true }));
+
+    it('hides a web tile the role or a pack would have granted', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: webTiles,
+        role: StaffRole.PRINCIPAL,
+        roleKeys: ['finance.vouchers.view'],
+        packTileIds: ['student.directory'],
+      });
+
+      expect(result.tileIds).toEqual([]);
+    });
+
+    it('shows a web tile only on an explicit per-user allow', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: webTiles,
+        role: StaffRole.EMPLOYEE,
+        allowTileIds: ['finance.vouchers'],
+      });
+
+      expect(result.tileIds).toEqual(['finance.vouchers']);
+    });
+
+    it('SUPER_ADMIN still holds every web tile', () => {
+      const result = computeEffectiveAccess({ ...base, activeTiles: webTiles, role: StaffRole.SUPER_ADMIN });
+
+      expect(result.tileIds).toEqual(webTiles.map((t) => t.id));
+    });
+  });
 });

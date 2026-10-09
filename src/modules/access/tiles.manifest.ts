@@ -1112,6 +1112,7 @@ export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
     implies: a.implies ?? [],
   })),
   legacyFullAccessCapabilities: t.legacyFullAccessCapabilities ?? [],
+  requiresExplicitAllow: (t.surface ?? 'web') === 'web',
 }));
 
 export function catalogFromManifest() {

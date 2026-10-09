@@ -349,7 +349,8 @@ export class AccessService {
 
     const roleKeySet = new Set(rolePerms.map((rp) => rp.permissions.key));
     const roleTileIds = MANIFEST_EFFECTIVE_TILES
-      .filter((t) => t.capabilities.every((c) => roleKeySet.has(c)))
+      // Web tiles never inherit from the role (TAFSD-284), only Staff App tabs do.
+      .filter((t) => !t.requiresExplicitAllow && t.capabilities.every((c) => roleKeySet.has(c)))
       .map((t) => t.id);
 
     return {
