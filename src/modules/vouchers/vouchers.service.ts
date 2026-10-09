@@ -3856,17 +3856,28 @@ export class VouchersService {
 
         const isPaidVoucher = voucher.status === 'PAID';
 
-        // Is this voucher a product of splitPartiallyPaid? Future splits carry the
-        // split_parent_id marker; legacy splits (pre-marker) are detected via the
-        // PARTIAL/BALANCE PAYMENT OF description_prefix left on their heads.
+        // Is this voucher a product of splitPartiallyPaid? Splits produced after migration
+        // 20260614000000 carry the split_parent_id marker. Legacy splits (pre-marker) are
+        // detected via the PARTIAL/BALANCE PAYMENT OF description_prefix on their heads.
+        // Modern vouchers issued by create() or bulk may carry rolled-over balance heads
+        // (with description_prefix set) from earlier splits, but they were not produced by
+        // a split (split_parent_id is null) and must take the recompute branch.
+        const SPLIT_PARENT_ID_MIGRATION_DATE = new Date('2026-06-14T00:00:00.000Z');
+        const voucherCreatedAt = (voucher as any).generated_at
+            ? new Date((voucher as any).generated_at)
+            : (voucher.issue_date ? new Date(voucher.issue_date) : null);
+        const isPreMigration = voucherCreatedAt != null && voucherCreatedAt < SPLIT_PARENT_ID_MIGRATION_DATE;
+
         const isSplitVoucher =
             (voucher as any).split_parent_id != null ||
-            voucher.voucher_heads.some((h) => {
-                const p = (h.student_fees?.description_prefix ?? '') as string;
-                return p.startsWith('PARTIAL PAYMENT OF') || p.startsWith('BALANCE PAYMENT OF');
-            });
+            (isPreMigration &&
+                voucher.voucher_heads.some((h) => {
+                    const p = (h.student_fees?.description_prefix ?? '') as string;
+                    return p.startsWith('PARTIAL PAYMENT OF') || p.startsWith('BALANCE PAYMENT OF');
+                }));
 
         let fullUndoHandled = false;
+        let voucherDestroyed = false;
         // Side-effect audit events (voucher deleted, heads reset, predecessors
         // reactivated, split reversed) collected in-tx and flushed after commit.
         const auditEvents: VoucherAuditEvent[] = [];
@@ -3934,6 +3945,7 @@ export class VouchersService {
                 // runs) and for marker splits whose full-undo bailed for a non-independent-deposit
                 // reason (multi-level / re-split / unexpected shape).
                 await this._destroyVoucherInTx(voucherId, voucher as any, tx, true, auditEvents);
+                voucherDestroyed = true;
             } else {
                 // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from the
                 // remaining allocations and re-derive the voucher status (the exact inverse of
@@ -4110,8 +4122,9 @@ export class VouchersService {
         }
 
         // The PAID + split delete path and the full split-undo both remove this voucher —
-        // nothing to fetch back in either case.
-        if (fullUndoHandled || (isPaidVoucher && isSplitVoucher)) return null;
+        // nothing to fetch back in either case. A split voucher that another deposit still
+        // funds took the recompute branch and still exists, so it is fetched back.
+        if (fullUndoHandled || voucherDestroyed) return null;
 
         return this.findOne(voucherId);
     }
@@ -6595,6 +6608,64 @@ export class VouchersService {
      *   cleanup (a VOID voucher's own predecessors belong to the voucher that
      *   superseded IT, which is still standing — reactivating them would double-bill).
      */
+    /**
+     * Re-derives a voucher's voucher_heads.amount_deposited / balance from the
+     * deposit_allocations that stand against it — the same derivation clearDeposit's
+     * recompute branch uses. Reports whether any payment (head, late fee or arrear
+     * surcharge) survives, so the caller can pick PARTIALLY_PAID over UNPAID/OVERDUE.
+     */
+    private async _recomputeVoucherHeadsFromAllocationsInTx(
+        tx: any,
+        voucherId: number,
+    ): Promise<{ anyDeposit: boolean }> {
+        const headTotals = await tx.deposit_allocations.groupBy({
+            by: ['student_fee_id'],
+            where: { voucher_id: voucherId, student_fee_id: { not: null } },
+            _sum: { amount: true },
+        });
+        const headMap = new Map<number, Prisma.Decimal>(
+            headTotals.map((r: any) => [r.student_fee_id, new Prisma.Decimal(r._sum.amount ?? 0)]),
+        );
+        const heads = await tx.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            select: { id: true, student_fee_id: true, net_amount: true },
+        });
+        let anyDeposit = false;
+        for (const head of heads) {
+            const deposited = headMap.get(head.student_fee_id) ?? new Prisma.Decimal(0);
+            const balance = Prisma.Decimal.max(
+                new Prisma.Decimal(head.net_amount as any ?? 0).sub(deposited),
+                new Prisma.Decimal(0),
+            );
+            if (deposited.gt(0)) anyDeposit = true;
+            await tx.voucher_heads.update({
+                where: { id: head.id },
+                data: { amount_deposited: deposited, balance },
+            });
+        }
+
+        const lateFee = await tx.deposit_allocations.aggregate({
+            where: { voucher_id: voucherId, type: 'LATE_FEE' },
+            _sum: { amount: true },
+        });
+        const lateFeeDeposited = new Prisma.Decimal(lateFee._sum?.amount ?? 0);
+        if (lateFeeDeposited.gt(0)) anyDeposit = true;
+        await tx.vouchers.update({
+            where: { id: voucherId },
+            data: { late_fee_deposited: lateFeeDeposited },
+        });
+
+        if (!anyDeposit) {
+            const surcharges = await tx.voucher_arrear_surcharges.findMany({
+                where: { voucher_id: voucherId, waived: false },
+                select: { amount_paid: true },
+            });
+            anyDeposit = surcharges.some((s: any) => new Prisma.Decimal(s.amount_paid ?? 0).gt(0));
+        }
+
+        return { anyDeposit };
+    }
+
     private async _destroyVoucherInTx(id: number, voucher: any, tx: any, reactivate: boolean, auditEvents?: VoucherAuditEvent[]): Promise<any> {
         const heads: any[] = voucher.voucher_heads || [];
         const allFeeIds: number[] = heads
@@ -6904,11 +6975,51 @@ export class VouchersService {
             });
         }
 
-        // STEP 7: Reactivate superseded VOID vouchers (OVERDUE if due_date passed, else UNPAID).
+        // STEP 6b: Recompute the heads STEP 6 skipped because a reactivated predecessor
+        //          owns them. This voucher may have carried a payment on them (clearDeposit's
+        //          destroy branch has already deleted that allocation), so their amount_paid /
+        //          status must be re-derived from the allocations that survive — never left
+        //          PAID with nothing behind it (finance rule 7: reversal recomputes). Same
+        //          derivation as clearDeposit's recompute branch.
+        const sharedWithPredecessorFeeIds = allFeeIds.filter(
+            (fid) => reactivatedHeadFeeIds.has(fid)
+                && !splitPaidFeeIds.includes(fid)
+                && !waivedHeadFeeIds.has(fid),
+        );
+        if (sharedWithPredecessorFeeIds.length > 0) {
+            const remainingByFee = await tx.deposit_allocations.groupBy({
+                by: ['student_fee_id'],
+                where: { student_fee_id: { in: sharedWithPredecessorFeeIds } },
+                _sum: { amount: true },
+            });
+            const remainingMap = new Map<number, Prisma.Decimal>(
+                remainingByFee.map((r: any) => [r.student_fee_id, new Prisma.Decimal(r._sum.amount ?? 0)]),
+            );
+            const fees = await tx.student_fees.findMany({
+                where: { id: { in: sharedWithPredecessorFeeIds }, is_discount: false },
+                select: { id: true, amount: true, amount_paid: true, status: true },
+            });
+            for (const fee of fees) {
+                if (fee.status === 'WAIVED') continue;
+                const paid = remainingMap.get(fee.id) ?? new Prisma.Decimal(0);
+                const canon = new Prisma.Decimal(fee.amount ?? 0);
+                const status = paid.gte(canon) ? 'PAID' : paid.gt(0) ? 'PARTIALLY_PAID' : 'ISSUED';
+                if (new Prisma.Decimal(fee.amount_paid ?? 0).eq(paid) && fee.status === status) continue;
+                await tx.student_fees.update({
+                    where: { id: fee.id },
+                    data: { amount_paid: paid, status: status as any },
+                });
+            }
+        }
+
+        // STEP 7: Reactivate superseded VOID vouchers. Its heads and status are re-derived
+        //         from the allocations that still stand on it: PARTIALLY_PAID if any payment
+        //         survives, otherwise OVERDUE if due_date passed, else UNPAID.
         for (const sv of supersededVouchers) {
             const svDue = new Date(sv.due_date);
             svDue.setHours(0, 0, 0, 0);
-            const newStatus = svDue < today ? 'OVERDUE' : 'UNPAID';
+            const svPaid = await this._recomputeVoucherHeadsFromAllocationsInTx(tx, sv.id);
+            const newStatus = svPaid.anyDeposit ? 'PARTIALLY_PAID' : svDue < today ? 'OVERDUE' : 'UNPAID';
             const svRow = await tx.vouchers.update({
                 where: { id: sv.id },
                 data: { status: newStatus, superseded_by_voucher_id: null } as any,

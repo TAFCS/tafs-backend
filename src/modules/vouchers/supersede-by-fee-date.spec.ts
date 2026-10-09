@@ -5,6 +5,7 @@ jest.mock('../voucher-pdf/voucher-pdf.service', () => ({
 }));
 
 import { VouchersService } from './vouchers.service';
+import { Prisma } from '@prisma/client';
 
 /**
  * Supersession rule under test (blunt, by fee date):
@@ -335,7 +336,12 @@ describe('VouchersService — supersession by fee date', () => {
           deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
           updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
-        deposit_allocations: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        deposit_allocations: {
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          groupBy: jest.fn().mockResolvedValue([]),
+          aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
+        },
+        voucher_arrear_surcharges: { findMany: jest.fn().mockResolvedValue([]) },
         student_fees: {
           updateMany: jest.fn().mockResolvedValue({ count: 0 }),
           deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -372,6 +378,128 @@ describe('VouchersService — supersession by fee date', () => {
         }),
       );
       expect(auditEvents.some((e) => e.entity_id === '42' && e.new_value === 'OVERDUE')).toBe(true);
+    });
+  });
+
+
+  // TAFSD-282: a head shared by the deleted voucher and a reactivated predecessor is
+  // skipped by STEP 6's NOT_ISSUED reset, so it must be recomputed from the
+  // allocations that survive — never left PAID with nothing backing it.
+  describe('_destroyVoucherInTx — heads shared with a reactivated predecessor', () => {
+    const build = (opts: { survivingOnFee: number; survivingOnPredecessor: number }) => {
+      const studentFeesUpdate = jest.fn().mockResolvedValue({});
+      const studentFeesUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const vouchersUpdate = jest.fn().mockResolvedValue({ id: 42, voucher_number: 'V42' });
+      const voucherHeadsUpdate = jest.fn().mockResolvedValue({});
+
+      const tx: any = {
+        vouchers: {
+          // STEP 1 link lookup: V42 (the rolled-over balance voucher) was superseded by V500.
+          findMany: jest.fn().mockResolvedValue([{ id: 42, due_date: new Date('2020-01-01') }]),
+          update: vouchersUpdate,
+          delete: jest.fn().mockResolvedValue({ id: 500, voucher_number: 'V500' }),
+        },
+        voucher_heads: {
+          findMany: jest.fn().mockImplementation((args: any) => {
+            // STEP 1 fallback overlap query — nothing extra.
+            if (args?.where?.voucher_id?.not != null) return Promise.resolve([]);
+            // reactivatedHeadFeeIds lookup: V42 owns the 1,000 balance head.
+            if (args?.where?.voucher_id?.in) return Promise.resolve([{ student_fee_id: 102 }]);
+            // V42's own heads, for the predecessor recompute.
+            if (args?.where?.voucher_id === 42) {
+              return Promise.resolve([{ id: 20, student_fee_id: 102, net_amount: 1000 }]);
+            }
+            return Promise.resolve([]);
+          }),
+          deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          update: voucherHeadsUpdate,
+        },
+        deposit_allocations: {
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          groupBy: jest.fn().mockImplementation((args: any) => {
+            if (args?.where?.voucher_id === 42) {
+              return Promise.resolve(opts.survivingOnPredecessor > 0
+                ? [{ student_fee_id: 102, _sum: { amount: opts.survivingOnPredecessor } }]
+                : []);
+            }
+            return Promise.resolve(opts.survivingOnFee > 0
+              ? [{ student_fee_id: 102, _sum: { amount: opts.survivingOnFee } }]
+              : []);
+          }),
+          aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
+        },
+        voucher_arrear_surcharges: { findMany: jest.fn().mockResolvedValue([]) },
+        student_fees: {
+          // Left PAID by the deposit that clearDeposit has just removed.
+          findMany: jest.fn().mockResolvedValue([
+            { id: 102, amount: 1000, amount_paid: 1000, status: 'PAID' },
+          ]),
+          update: studentFeesUpdate,
+          updateMany: studentFeesUpdateMany,
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findFirst: jest.fn(),
+          findUnique: jest.fn(),
+        },
+      };
+
+      // V500: 90,000 tuition (Oct) + the 1,000 BALANCE head rolled onto Oct.
+      const deleted = {
+        id: 500,
+        student_id: 7000,
+        voucher_number: 'V500',
+        fee_date: new Date('2026-10-01'),
+        voucher_heads: [
+          { student_fee_id: 101, student_fees: { fee_date: new Date('2026-10-01'), description_prefix: null } },
+          { student_fee_id: 102, student_fees: { fee_date: new Date('2026-10-01'), description_prefix: 'BALANCE PAYMENT OF TUITION' } },
+        ],
+      };
+
+      return { tx, deleted, studentFeesUpdate, studentFeesUpdateMany, vouchersUpdate, voucherHeadsUpdate };
+    };
+
+    it('recomputes the shared head to ISSUED / amount_paid 0 and reactivates the predecessor OVERDUE', async () => {
+      const { tx, deleted, studentFeesUpdate, studentFeesUpdateMany, vouchersUpdate } =
+        build({ survivingOnFee: 0, survivingOnPredecessor: 0 });
+
+      await (svc() as any)._destroyVoucherInTx(500, deleted, tx, true, []);
+
+      // STEP 6 resets only the 90,000 head; the shared head is left to STEP 6b.
+      expect(studentFeesUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: [101] } } }),
+      );
+      expect(studentFeesUpdate).toHaveBeenCalledWith({
+        where: { id: 102 },
+        data: { amount_paid: new Prisma.Decimal(0), status: 'ISSUED' },
+      });
+      expect(vouchersUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 42 },
+          data: { status: 'OVERDUE', superseded_by_voucher_id: null },
+        }),
+      );
+    });
+
+    it('keeps a surviving payment and reactivates the predecessor PARTIALLY_PAID', async () => {
+      const { tx, deleted, studentFeesUpdate, vouchersUpdate, voucherHeadsUpdate } =
+        build({ survivingOnFee: 400, survivingOnPredecessor: 400 });
+
+      await (svc() as any)._destroyVoucherInTx(500, deleted, tx, true, []);
+
+      expect(studentFeesUpdate).toHaveBeenCalledWith({
+        where: { id: 102 },
+        data: { amount_paid: new Prisma.Decimal(400), status: 'PARTIALLY_PAID' },
+      });
+      expect(voucherHeadsUpdate).toHaveBeenCalledWith({
+        where: { id: 20 },
+        data: { amount_deposited: new Prisma.Decimal(400), balance: new Prisma.Decimal(600) },
+      });
+      expect(vouchersUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 42 },
+          data: { status: 'PARTIALLY_PAID', superseded_by_voucher_id: null },
+        }),
+      );
     });
   });
 
@@ -412,6 +540,7 @@ describe('VouchersService — supersession by fee date', () => {
         {} as any,
         auditLogs,
         {} as any,
+        {} as any, // ScopeService
       );
       (service as any)._destroyVoucherInTx = destroy;
       return { service, destroy };
@@ -433,6 +562,269 @@ describe('VouchersService — supersession by fee date', () => {
       const { service, destroy } = buildRemove('VOID');
       await service.remove(500, 'tester');
       expect(reactivateArg(destroy)).toBe(false);
+    });
+  });
+
+  describe('clearDeposit() — clearing deposit on voucher carrying rolled-over BALANCE head', () => {
+    it('recomputes V3 (UNPAID/OVERDUE, heads ISSUED with amount_paid 0) and does NOT hard-delete or reactivate predecessors', async () => {
+      const v3Heads = [
+        {
+          id: 1,
+          student_fee_id: 101,
+          net_amount: 90000,
+          amount_deposited: 90000,
+          balance: 0,
+          student_fees: {
+            id: 101,
+            amount: 90000,
+            amount_paid: 90000,
+            status: 'PAID',
+            is_discount: false,
+            description_prefix: null,
+          },
+        },
+        {
+          id: 2,
+          student_fee_id: 102,
+          net_amount: 1000,
+          amount_deposited: 1000,
+          balance: 0,
+          student_fees: {
+            id: 102,
+            amount: 1000,
+            amount_paid: 1000,
+            status: 'PAID',
+            is_discount: false,
+            description_prefix: 'BALANCE PAYMENT OF TUITION',
+          },
+        },
+      ];
+
+      const v3 = {
+        id: 300,
+        student_id: 7000,
+        status: 'PAID',
+        split_parent_id: null, // Generated by create(), not a split child
+        generated_at: new Date('2026-10-01'),
+        issue_date: new Date('2026-10-01'),
+        due_date: new Date('2026-10-10'),
+        voucher_heads: v3Heads,
+      };
+
+      const deposit = {
+        id: 999,
+        student_id: 7000,
+        total_amount: 91000,
+        reference_number: 'DEP999',
+      };
+
+      const txStudentFeesUpdate = jest.fn().mockResolvedValue({});
+      const txVouchersUpdate = jest.fn().mockResolvedValue({ id: 300, status: 'UNPAID' });
+      const txVouchersDelete = jest.fn();
+
+      const tx: any = {
+        deposit_allocations: {
+          findMany: jest.fn().mockResolvedValue([
+            { deposit_id: 999, voucher_id: 300, student_fee_id: 101, amount: 90000 },
+            { deposit_id: 999, voucher_id: 300, student_fee_id: 102, amount: 1000 },
+          ]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+          count: jest.fn().mockResolvedValue(0), // remainingOnDeposit = 0, remainingOnVoucher = 0
+          groupBy: jest.fn().mockResolvedValue([]),
+          aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
+        },
+        deposits: {
+          delete: jest.fn().mockResolvedValue({ id: 999 }),
+        },
+        student_fees: {
+          findMany: jest.fn().mockResolvedValue([
+            { id: 101, amount: 90000, amount_paid: 90000, status: 'PAID' },
+            { id: 102, amount: 1000, amount_paid: 1000, status: 'PAID' },
+          ]),
+          update: txStudentFeesUpdate,
+        },
+        voucher_heads: {
+          findMany: jest.fn().mockImplementation((args) => {
+            if (args?.include?.student_fees) {
+              return Promise.resolve(v3Heads);
+            }
+            return Promise.resolve([
+              { id: 1, student_fee_id: 101, net_amount: 90000 },
+              { id: 2, student_fee_id: 102, net_amount: 1000 },
+            ]);
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+        voucher_arrear_surcharges: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        vouchers: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 300,
+            due_date: new Date('2026-10-10'),
+            status: 'PAID',
+            voucher_heads: [
+              { id: 1, balance: 90000, amount_deposited: 0 },
+              { id: 2, balance: 1000, amount_deposited: 0 },
+            ],
+          }),
+          update: txVouchersUpdate,
+          delete: txVouchersDelete,
+        },
+      };
+
+      const prisma: any = {
+        vouchers: {
+          findUnique: jest.fn().mockResolvedValue(v3),
+        },
+        deposits: {
+          findUnique: jest.fn().mockResolvedValue(deposit),
+          findFirst: jest.fn().mockResolvedValue({ id: 999 }),
+        },
+        deposit_allocations: { findFirst: jest.fn().mockResolvedValue(null) },
+        $transaction: jest.fn(async (cb: any) => cb(tx)),
+      };
+
+      const auditLogs: any = { log: jest.fn().mockResolvedValue(1) };
+      const service = new VouchersService(
+        prisma,
+        {} as any,
+        {} as any,
+        {} as any,
+        auditLogs,
+        {} as any,
+        {} as any,
+      );
+
+      const destroySpy = jest.spyOn(service as any, '_destroyVoucherInTx');
+      jest.spyOn(service as any, 'findOne').mockResolvedValue({ id: 300, status: 'UNPAID' } as any);
+
+      const result = await service.clearDeposit(300, 999, 'tester');
+
+      // V3 must NOT be destroyed
+      expect(destroySpy).not.toHaveBeenCalled();
+      expect(txVouchersDelete).not.toHaveBeenCalled();
+
+      // V3 must take the recompute path and be updated
+      expect(txVouchersUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 300 },
+          data: expect.objectContaining({
+            status: expect.stringMatching(/^(UNPAID|OVERDUE)$/),
+          }),
+        }),
+      );
+
+      // Both fee heads must be reset to ISSUED with amount_paid = 0
+      expect(txStudentFeesUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 101 },
+          data: expect.objectContaining({ status: 'ISSUED' }),
+        }),
+      );
+      expect(txStudentFeesUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 102 },
+          data: expect.objectContaining({ status: 'ISSUED' }),
+        }),
+      );
+
+      // findOne returns the recomputed voucher
+      expect(result).toEqual({ id: 300, status: 'UNPAID' });
+    });
+
+    it('still takes the delete path for a legacy (pre-split_parent_id) split detected by its prefix', async () => {
+      const legacy = {
+        id: 310,
+        student_id: 7000,
+        status: 'PAID',
+        split_parent_id: null,
+        generated_at: new Date('2026-05-01'),
+        issue_date: new Date('2026-05-01'),
+        voucher_heads: [
+          { id: 3, student_fee_id: 103, student_fees: { id: 103, description_prefix: 'PARTIAL PAYMENT OF TUITION' } },
+        ],
+      };
+      const tx: any = {
+        deposit_allocations: {
+          findMany: jest.fn().mockResolvedValue([{ deposit_id: 777, voucher_id: 310, student_fee_id: 103, amount: 500 }]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        deposits: { delete: jest.fn().mockResolvedValue({ id: 777 }) },
+        voucher_heads: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const prisma: any = {
+        vouchers: { findUnique: jest.fn().mockResolvedValue(legacy) },
+        deposits: {
+          findUnique: jest.fn().mockResolvedValue({ id: 777, student_id: 7000, total_amount: 500 }),
+          findFirst: jest.fn().mockResolvedValue({ id: 777 }),
+        },
+        deposit_allocations: { findFirst: jest.fn().mockResolvedValue(null) },
+        $transaction: jest.fn(async (cb: any) => cb(tx)),
+      };
+      const service = new VouchersService(
+        prisma, {} as any, {} as any, {} as any,
+        { log: jest.fn().mockResolvedValue(1) } as any, {} as any, {} as any,
+      );
+      const destroy = jest.spyOn(service as any, '_destroyVoucherInTx').mockResolvedValue({ id: 310 });
+
+      const result = await service.clearDeposit(310, 777, 'tester');
+
+      expect(destroy).toHaveBeenCalledWith(310, legacy, tx, true, expect.any(Array));
+      expect(result).toBeNull();
+    });
+
+    it('triggers full split-undo (_reverseSplitFamilyInTx) when voucher is a real split child with split_parent_id', async () => {
+      const splitChild = {
+        id: 400,
+        student_id: 7000,
+        status: 'PAID',
+        split_parent_id: 200,
+        generated_at: new Date('2026-10-01'),
+        voucher_heads: [],
+      };
+
+      const deposit = {
+        id: 888,
+        student_id: 7000,
+        total_amount: 5000,
+      };
+
+      const prisma: any = {
+        vouchers: {
+          findUnique: jest.fn().mockResolvedValue(splitChild),
+        },
+        deposits: {
+          findUnique: jest.fn().mockResolvedValue(deposit),
+          findFirst: jest.fn().mockResolvedValue({ id: 888 }),
+        },
+        deposit_allocations: { findFirst: jest.fn().mockResolvedValue(null) },
+        $transaction: jest.fn(async (cb: any) => cb({} as any)),
+      };
+
+      const auditLogs: any = { log: jest.fn().mockResolvedValue(1) };
+      const service = new VouchersService(
+        prisma,
+        {} as any,
+        {} as any,
+        {} as any,
+        auditLogs,
+        {} as any,
+        {} as any,
+      );
+
+      const reverseSplitSpy = jest.spyOn(service as any, '_reverseSplitFamilyInTx').mockResolvedValue(true);
+
+      const result = await service.clearDeposit(400, 888, 'tester');
+
+      expect(reverseSplitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 400, split_parent_id: 200 }),
+        888,
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(result).toBeNull();
     });
   });
 });

@@ -65,7 +65,7 @@ function buildService(prisma: PrismaService): VouchersService {
     const pdfStub: any = { generateVoucherPdf: async () => Buffer.from('%PDF-1.4') };
     const auditStub: any = { log: async () => undefined };
     const inert: any = new Proxy({}, { get: () => async () => undefined });
-    return new VouchersService(prisma, storageStub, pdfStub, inert, auditStub, inert);
+    return new VouchersService(prisma, storageStub, pdfStub, inert, auditStub, inert, inert);
 }
 
 async function main(): Promise<void> {
@@ -150,16 +150,16 @@ async function main(): Promise<void> {
         // ══════════════════════════════════════════════════════════════════════
         const A = await makeVoucher();
 
+        // D2: 1000 of September (partial)
+        await service.recordDeposit(A.voucherId, { amount: 1000, distributions: { [A.sepHead]: 1000 } } as any, 'verify');
+        const d2 = await lastDepositId();
+
         // D1: August (2000) + surcharge (1000)
         await service.recordDeposit(A.voucherId, {
             amount: 3000, distributions: { [A.augHead]: 2000 },
             surcharge_allocations: [{ surcharge_id: A.surchargeId, amount: 1000 }],
         } as any, 'verify');
         const d1 = await lastDepositId();
-
-        // D2: 1000 of September (partial)
-        await service.recordDeposit(A.voucherId, { amount: 1000, distributions: { [A.sepHead]: 1000 } } as any, 'verify');
-        const d2 = await lastDepositId();
 
         let v = await prisma.vouchers.findUnique({ where: { id: A.voucherId } });
         assert(v?.status === 'PARTIALLY_PAID', 'voucher is PARTIALLY_PAID after two deposits');
