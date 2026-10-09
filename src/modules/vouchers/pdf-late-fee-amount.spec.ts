@@ -23,8 +23,13 @@ describe('pdfLateFeeAmount', () => {
     expect(pdfLateFeeAmount(v(true, 40405, 41405))).toBe(1000);
   });
 
-  it('prints no late fee for the paid half of a split (10260012307)', () => {
+  it('prints no late fee for the paid half of a split when none was deposited (10260012307)', () => {
     expect(pdfLateFeeAmount(v(true, 13289, 13289))).toBe(0);
+  });
+
+  it('prints the deposited late fee for a paid split that collected it (#285)', () => {
+    // Agreement: PAYABLE BY 99,000 / LATE PAYMENT SURCHARGE 1,000 / AFTER DUE 100,000.
+    expect(pdfLateFeeAmount(v(true, 99000, 100000))).toBe(1000);
   });
 
   it('falls back to 1,000 when no after-due total was stored', () => {

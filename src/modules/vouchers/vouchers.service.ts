@@ -241,9 +241,11 @@ export function splitBalanceSurcharges(
 /**
  * The late fee the challan prints between PAYABLE BY and PAYABLE AFTER DUE DATE.
  * Every writer stores total_payable_after_due = before_due + late fee, so the
- * stored gap is the truth: the paid half of a split stores no late fee, and
- * hardcoding 1,000 printed an after-due total the voucher never had (#232).
- * Vouchers with no stored after-due total fall back to the old flat 1,000.
+ * stored gap is the truth. The paid half of a split stores a gap only when the
+ * family actually paid the due-date late fee (`late_fee_deposited`); otherwise
+ * before === after and hardcoding 1,000 printed an after-due total the voucher
+ * never had (#232). Vouchers with no stored after-due total fall back to the
+ * old flat 1,000.
  */
 export function pdfLateFeeAmount(voucher: {
     late_fee_charge: boolean | null;
@@ -254,6 +256,21 @@ export function pdfLateFeeAmount(voucher: {
     const after = Number(voucher.total_payable_after_due ?? 0);
     if (after <= 0) return 1000;
     return Math.max(after - Number(voucher.total_payable_before_due ?? 0), 0);
+}
+
+/**
+ * Payable totals for the PAID half of a split (TAFSD-285).
+ * before = fee heads + paid arrear surcharges; after = before + due-date late
+ * fee actually collected. When lateFeeDeposited is 0, after === before so the
+ * receipt prints no LATE PAYMENT SURCHARGE (#232).
+ */
+export function splitPaidPayableTotals(
+    paidHeadsTotal: Prisma.Decimal,
+    paidArrearSurchargeTotal: Prisma.Decimal,
+    lateFeeDeposited: Prisma.Decimal,
+): { beforeDue: Prisma.Decimal; afterDue: Prisma.Decimal } {
+    const beforeDue = paidHeadsTotal.add(paidArrearSurchargeTotal);
+    return { beforeDue, afterDue: beforeDue.add(lateFeeDeposited) };
 }
 
 /** Cheap row for serving a stored PDF — no heads, deposits, or siblings. */
@@ -5717,15 +5734,20 @@ export class VouchersService {
             //    Step 6 created both vouchers with totals derived from fee heads only
             //    (paidTotal/unpaidTotal); the arrear surcharges classified above must be
             //    added so the printed challan shows fees + surcharges (matching the create
-            //    path's totalBeforeDueWithSurcharge). Added to BOTH before- and after-due
-            //    so their difference stays exactly the late fee (downstream derives the
-            //    late fee as total_payable_after_due − total_payable_before_due).
+            //    path's totalBeforeDueWithSurcharge). On the PAID side both columns get
+            //    the same bump here; the due-date late fee gap is applied just below
+            //    from late_fee_deposited (splitPaidPayableTotals / TAFSD-285).
             if (sideSurchargeBeforeDue.paid.gt(0)) {
+                const { beforeDue } = splitPaidPayableTotals(
+                    paidTotal,
+                    sideSurchargeBeforeDue.paid,
+                    new Prisma.Decimal(0),
+                );
                 await tx.vouchers.update({
                     where: { id: paid.id },
                     data: {
-                        total_payable_before_due: paidTotal.add(sideSurchargeBeforeDue.paid),
-                        total_payable_after_due: paidTotal.add(sideSurchargeBeforeDue.paid),
+                        total_payable_before_due: beforeDue,
+                        total_payable_after_due: beforeDue,
                     } as any,
                 });
             }
@@ -5783,16 +5805,32 @@ export class VouchersService {
             // Late-fee allocations (student_fee_id=null, surcharge_id=null, type=LATE_FEE)
             // represent a flat charge already paid against this voucher — not tied to any
             // single head — so they (and the cached late_fee_deposited total) travel with
-            // the settled/paid side as a unit.
+            // the settled/paid side as a unit. Mirror create()/recordDeposit: before_due
+            // stays fees (+ paid arrear surcharges from Step 8c); after_due = before + the
+            // late fee actually collected. Without that gap the PAID receipt prints only
+            // the fee total and hides the LATE PAYMENT SURCHARGE line (TAFSD-285 —
+            // agreed layout 99,000 / surcharge 1,000 / 100,000). When nothing was
+            // deposited, before === after and pdfLateFeeAmount correctly prints 0 (#232).
             const lateFeeDeposited = new Prisma.Decimal((original as any).late_fee_deposited ?? 0);
             if (lateFeeDeposited.gt(0)) {
                 await tx.deposit_allocations.updateMany({
                     where: { voucher_id: voucherId, type: 'LATE_FEE' },
                     data: { voucher_id: paid.id },
                 });
+                const { beforeDue, afterDue } = splitPaidPayableTotals(
+                    paidTotal,
+                    sideSurchargeBeforeDue.paid,
+                    lateFeeDeposited,
+                );
                 await tx.vouchers.update({
                     where: { id: paid.id },
-                    data: { late_fee_deposited: lateFeeDeposited } as any,
+                    data: {
+                        late_fee_deposited: lateFeeDeposited,
+                        // before_due was already set in Step 6 / 8c; only the after-due
+                        // gap needs writing here (and late_fee_deposited itself).
+                        total_payable_before_due: beforeDue,
+                        total_payable_after_due: afterDue,
+                    } as any,
                 });
             }
 
