@@ -95,8 +95,11 @@ For 1Bill, the consumer number is a fixed 14-digit number:
 \texttt{10000000008088}; for CC \texttt{44} it is \texttt{10000000000044}.
 
 \medskip
-\noindent\textbf{Note:} \texttt{1000000000} is a \textbf{placeholder}. TAFS will replace it with the 10-digit
-prefix assigned through 1Bill as soon as it is issued; no code change is needed on either side.
+\noindent\fbox{\parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule}{%
+\textbf{Request to UBL: 10-digit 1Bill prefix.} TAFS requests UBL to issue (or arrange through 1Bill) the
+\textbf{10-digit 1Bill prefix} for The American Foundation School and share it with TAFS. Until it is received,
+TAFS vouchers and this document use the placeholder \texttt{1000000000}. Once UBL shares the prefix, TAFS will
+switch to it by configuration; no code change is needed on either side.}}
 
 \subsection{Voucher number}
 Vouchers collected through UBL carry a plain serial voucher number (e.g.\ \texttt{12461}), printed small
@@ -456,7 +459,7 @@ TAFS asks UBL to confirm the following before integration testing:
         accepting payment?
   \item \textbf{Cheques.} Are cheques posted to TAFS when deposited, or only once cleared? If posted at deposit, TAFS will need a
         way to be told about a returned cheque (see item 7).
-  \item \textbf{1Bill prefix.} Please confirm the process and timeline for issuing the 10-digit 1Bill prefix for TAFS.
+  \item \textbf{1Bill prefix (requested).} Please issue TAFS's 10-digit 1Bill prefix (Section~\ref{sec:onebill}) and confirm when it will be live.
   \item \textbf{Reversals.} This version has no reversal API. A payment posted in error is corrected by the school on request.
         Please tell TAFS if UBL requires an online reversal message, and its format.
   \item \textbf{Reconciliation.} Can UBL share a daily settlement statement listing \texttt{transaction\_id}, amount, channel and
