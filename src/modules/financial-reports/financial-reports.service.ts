@@ -47,6 +47,7 @@ import type {
   CreateFeeHeadsSnapshotDto,
   ListFeeHeadsSnapshotsQueryDto,
 } from './dto/financial-report-snapshot.dto';
+import { DEFAULTER_SHEET_LIST_TITLE, campusLine, defaulterSheetHeading } from './defaulter-sheet-heading';
 
 const EXPORT_ROW_CAP = 25_000;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
@@ -60,7 +61,7 @@ const DEFAULTER_LEVEL_ABBREVIATIONS: Record<string, string> = {
   NURSERY: 'NUR',
   'K.G.': 'KG',
 };
-/** campus_code -> the label in the sheet's "DEFAULTING STUDENT LIST (...)" heading. */
+/** campus_code -> the short campus label in the CSV's Campus column (and the sheet's fallback campus line). */
 const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
   GEJ: 'G-E-J',
   KNF: 'KNF',
@@ -2700,8 +2701,10 @@ export class FinancialReportsService {
   }
 
   /**
-   * The school's own defaulter sheet ("DEFAULTING STUDENT LIST (G-E-J)" /
-   * "4 & 5 MONTHS DEFAULTERS"): one worksheet per campus, students in level
+   * The school's own defaulter sheet ("AT A GLANCE CONSOLIDATED DEFAULTERS'
+   * LIST" under the school name for its class group — see
+   * defaulter-sheet-heading.ts — then campus, session and "4 & 5 MONTHS
+   * DEFAULTERS"): one worksheet per campus, students in level
    * order, one column per owed calendar month, DEFAULTING AMOUNT, REMARKS and
    * a TOTAL row. Black-on-white and print-ready, like the paper original.
    *
@@ -2804,6 +2807,9 @@ export class FinancialReportsService {
     const remarkFor = (r: SheetRow) =>
       r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
     const subtitle = this.defaulterFilterSubtitle(query);
+    // A class or segment filter narrows the sheet to part of the school; without
+    // one it is the whole school and gets the plain name.
+    const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
 
     if (query.format === 'csv') {
       const cols = sheetColumns(sheetRows);
@@ -2865,34 +2871,44 @@ export class FinancialReportsService {
       const FIRST_MONTH_COL = 6;
       const amountCol = FIRST_MONTH_COL + cols.length;
       const remarksCol = amountCol + 1;
-      const lastCol = this.excelColumnLetter(remarksCol);
 
-      // Title block — rows 1-7, header at row 8.
-      sheet.mergeCells(`A1:${lastCol}1`);
-      const title = sheet.getCell('A1');
-      title.value = 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES';
-      title.font = { name: SERIF, bold: true, size: 16 };
-      title.alignment = { horizontal: 'center', vertical: 'middle' };
-      sheet.getRow(1).height = 28;
+      // Title block (TAFSD-289): school name by class group, the classes line
+      // when the sheet mixes both schools, list title, campus, session, then
+      // DAY / DATE and the filter subtitle. The header row follows.
+      const heading = defaulterSheetHeading(
+        campus.rows.map((r) => ({
+          class_id: r.item.class_id == null ? null : Number(r.item.class_id),
+          class_name: String(r.item.class_name ?? ''),
+        })),
+        classFiltered,
+        asOfDate,
+      );
+      let line = 1;
+      const banner = (text: string, size: number, height: number) => {
+        sheet.mergeCells(line, 1, line, remarksCol);
+        const cell = sheet.getCell(line, 1);
+        cell.value = text;
+        cell.font = { name: SERIF, bold: true, size };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        sheet.getRow(line).height = height;
+        line++;
+      };
+      banner(heading.school, 16, 28);
+      if (heading.classesLine) banner(heading.classesLine, 11, 18);
+      banner(DEFAULTER_SHEET_LIST_TITLE, 14, 22);
+      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 13, 20);
+      banner(heading.session, 12, 18);
 
-      sheet.getCell('A3').value = dayLine;
-      sheet.getCell('A4').value = dateLine;
-      for (const ref of ['A3', 'A4']) sheet.getCell(ref).font = { name: 'Arial', bold: true, size: 9 };
+      line++;
+      for (const text of [dayLine, dateLine]) {
+        const cell = sheet.getCell(line++, 1);
+        cell.value = text;
+        cell.font = { name: 'Arial', bold: true, size: 9 };
+      }
+      line++;
+      banner(subtitle, 13, 20);
 
-      sheet.mergeCells(`A6:${lastCol}6`);
-      const h2 = sheet.getCell('A6');
-      h2.value = `DEFAULTING STUDENT LIST (${this.defaulterCampusLabel(campus.code, campus.name)})`;
-      h2.font = { name: SERIF, bold: true, size: 14 };
-      h2.alignment = { horizontal: 'center', vertical: 'middle' };
-      sheet.getRow(6).height = 22;
-
-      sheet.mergeCells(`A7:${lastCol}7`);
-      const h3 = sheet.getCell('A7');
-      h3.value = subtitle;
-      h3.font = { name: SERIF, bold: true, size: 13 };
-      h3.alignment = { horizontal: 'center', vertical: 'middle' };
-
-      const HEADER_ROW = 8;
+      const HEADER_ROW = line;
       const headerRow = sheet.getRow(HEADER_ROW);
       ['S#', 'C.C.', 'G.R. #', 'LEVEL', 'STUDENT NAME', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
         (h, i) => {
