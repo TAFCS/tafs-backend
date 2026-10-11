@@ -1536,15 +1536,25 @@ export class PayrollService {
   private async getMatchingEmployeeIds(
     campusId: number,
     filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id' | 'search'>,
+    user: IJwtStaffPayload,
   ): Promise<number[]> {
     const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
     const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
+    // Enforce the caller's segment scope unconditionally — a scoped user must
+    // never see out-of-scope employees even when no segment filter is passed.
+    const scopeSegments = this.scope.scopeOf(user).segments;
+    const effectiveSegmentIds =
+      scopeSegments.length > 0
+        ? segmentIds?.length
+          ? segmentIds.filter((id) => scopeSegments.includes(id))
+          : scopeSegments
+        : segmentIds;
     const rows = await this.prisma.employee_profiles.findMany({
       where: {
         campus_id: campusId,
         employment_status: 'ACTIVE',
         ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
-        ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
+        ...(effectiveSegmentIds?.length ? { segment_id: { in: effectiveSegmentIds } } : {}),
         ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
         ...(keywords.length
           ? {
@@ -1665,7 +1675,7 @@ export class PayrollService {
     // First pass: fetch only IDs (cheap) so we can paginate before the expensive line computation.
     const campusEmployeeIds = await Promise.all(
       campusIds.map(async (campusId) => {
-        const ids = await this.getMatchingEmployeeIds(campusId, query);
+        const ids = await this.getMatchingEmployeeIds(campusId, query, user);
         return { campusId, ids };
       }),
     );
