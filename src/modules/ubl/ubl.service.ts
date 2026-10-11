@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VouchersService } from '../vouchers/vouchers.service';
-import { UBL_1BILL_CHANNEL_FEE, ccFromUblConsumerNumber, ubl1BillConsumerNumber } from '../../utils/ubl.util';
+import { ccFromUblConsumerNumber, ubl1BillChannelFee, ubl1BillConsumerNumber, ublCc } from '../../utils/ubl.util';
 import { UblBillInquiryQueryDto, UblBillPaymentDto } from './dto/ubl-bill.dto';
 
 /**
@@ -141,13 +141,13 @@ export class UblService {
             if ('error' in r) return r.error;
             const { cc, student, voucher } = r;
             const p = this.payable(voucher, today);
-            const channelFee = dto.channel === 'ONEBILL' ? UBL_1BILL_CHANNEL_FEE : 0;
+            const channelFee = dto.channel === 'ONEBILL' ? ubl1BillChannelFee() : 0;
             if (p.withinDue.lte(0)) return reply('ALREADY_PAID', { voucher_number: voucher.voucher_number });
 
             return reply('OK', {
                 consumer_number: dto.consumer_number,
                 onebill_consumer_number: ubl1BillConsumerNumber(cc),
-                cc: String(cc),
+                cc: ublCc(cc),
                 student_name: student.full_name,
                 gr_number: student.gr_number ?? null,
                 campus: student.campuses?.campus_name ?? null,
@@ -196,7 +196,7 @@ export class UblService {
 
             const p = this.payable(voucher, txnDate);
             if (p.payableNow.lte(0)) return reply('ALREADY_PAID', { voucher_number: voucher.voucher_number });
-            const channelFee = new Prisma.Decimal(dto.channel === 'ONEBILL' ? UBL_1BILL_CHANNEL_FEE : 0);
+            const channelFee = new Prisma.Decimal(dto.channel === 'ONEBILL' ? ubl1BillChannelFee() : 0);
             const expected = p.payableNow.add(channelFee);
             const received = new Prisma.Decimal(dto.amount);
             if (!received.eq(expected)) {

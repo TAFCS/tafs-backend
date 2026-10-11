@@ -2,7 +2,9 @@ import { UblService } from './ubl.service';
 import {
     ccFromUblConsumerNumber,
     isUblBank,
+    ubl1BillChannelFee,
     ubl1BillConsumerNumber,
+    ublCc,
     voucherNumberFor,
 } from '../../utils/ubl.util';
 
@@ -22,22 +24,40 @@ describe('ubl.util', () => {
         expect(voucherNumberFor(12461, new Date('2026-10-01'), 'Meezan Bank')).toBe('10260012461');
     });
 
-    it('builds the 1Bill number as prefix + 4-digit CC and reads it back', () => {
+    it('builds the 15-digit 1Bill number as prefix + 5-digit CC and reads it back', () => {
         process.env.UBL_1BILL_PREFIX = '1234567890';
-        expect(ubl1BillConsumerNumber(8088)).toBe('12345678908088');
-        expect(ubl1BillConsumerNumber(44)).toBe('12345678900044');
-        expect(ccFromUblConsumerNumber('12345678908088')).toBe(8088);
-        expect(ccFromUblConsumerNumber('12345678900044')).toBe(44);
+        expect(ubl1BillConsumerNumber(8088)).toBe('123456789008088');
+        expect(ubl1BillConsumerNumber(10001)).toBe('123456789010001');
+        expect(ccFromUblConsumerNumber('123456789008088')).toBe(8088);
+        expect(ccFromUblConsumerNumber('123456789010001')).toBe(10001);
+        expect(ccFromUblConsumerNumber('08088')).toBe(8088);
         expect(ccFromUblConsumerNumber('8088')).toBe(8088);
-        expect(ccFromUblConsumerNumber('99999999998088')).toBeNull(); // wrong prefix
+        expect(ccFromUblConsumerNumber('12345678908088')).toBeNull(); // old 14-digit form
+        expect(ccFromUblConsumerNumber('999999999908088')).toBeNull(); // wrong prefix
         expect(ccFromUblConsumerNumber('12a4')).toBeNull();
+    });
+
+    it('pads CCs to 5 digits', () => {
+        expect(ublCc(8088)).toBe('08088');
+        expect(ublCc(10000)).toBe('10000');
+    });
+
+    it('reads the 1Bill charge from UBL_1BILL_CHANNEL_FEE, defaulting to 30', () => {
+        const old = process.env.UBL_1BILL_CHANNEL_FEE;
+        delete process.env.UBL_1BILL_CHANNEL_FEE;
+        expect(ubl1BillChannelFee()).toBe(30);
+        process.env.UBL_1BILL_CHANNEL_FEE = '25';
+        expect(ubl1BillChannelFee()).toBe(25);
+        process.env.UBL_1BILL_CHANNEL_FEE = 'abc';
+        expect(ubl1BillChannelFee()).toBe(30);
+        process.env.UBL_1BILL_CHANNEL_FEE = old;
     });
 
     it('falls back to the placeholder prefix until a real 10-digit one is set', () => {
         process.env.UBL_1BILL_PREFIX = '';
-        expect(ubl1BillConsumerNumber(8088)).toBe('10000000008088');
+        expect(ubl1BillConsumerNumber(8088)).toBe('100000000008088');
         process.env.UBL_1BILL_PREFIX = '123';
-        expect(ubl1BillConsumerNumber(8088)).toBe('10000000008088');
+        expect(ubl1BillConsumerNumber(8088)).toBe('100000000008088');
     });
 });
 
@@ -87,6 +107,7 @@ describe('UblService', () => {
         const onebill: any = await svc.billInquiry({ consumer_number: '8088', channel: 'ONEBILL' });
         const otc: any = await svc.billInquiry({ consumer_number: '8088', channel: 'OTC' });
         expect(onebill.response_code).toBe('00');
+        expect(onebill.cc).toBe('08088');
         expect(onebill.amount_payable).toBe(90030);
         expect(onebill.amount_after_due_date).toBe(91030);
         expect(otc.amount_payable).toBe(90000);

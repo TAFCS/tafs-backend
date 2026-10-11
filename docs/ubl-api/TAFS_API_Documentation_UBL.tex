@@ -52,7 +52,7 @@ collecting school fees through UBL channels. It covers:
   \item the collection channels and how a payer identifies a student on each;
   \item the \textbf{Bill Inquiry} (\texttt{GET}) and \textbf{Bill Payment} (\texttt{POST}) APIs, with request
         and response samples for success and failure;
-  \item the amount rules: within due date, after due date, and the 1Bill aggregator fee;
+  \item the amount rules: within due date, after due date, and the 1Bill charges, which the payer bears;
   \item mandatory tracking of the \textbf{payment channel} and \textbf{payment method} on every payment;
   \item TAFS's stated consent to resolving every search by CC to the student's most recent voucher;
   \item the points on which TAFS asks UBL to confirm feasibility (Section~\ref{sec:confirm}).
@@ -82,17 +82,21 @@ collection into the UBL account.
 \section{Identifying a Student}
 
 \subsection{CC number}
-Every TAFS student has a \textbf{CC number}: a numeric student code of up to 4 digits
-(e.g.\ \texttt{8088}). The CC is printed on every voucher. It is the identifier for OTC, the UBL app
-and internet banking. Leading zeros may be sent or omitted (\texttt{0044} and \texttt{44} identify the same student).
+Every TAFS student has a \textbf{CC number}, a numeric student code. To stay unambiguous as CCs reach
+10,000, TAFS treats every CC as \textbf{5 digits, zero-padded}, and prints it that way on UBL vouchers
+(e.g.\ \texttt{08088} for CC 8088). The CC is the identifier for OTC, the UBL app and internet banking.
+Leading zeros may be sent or omitted (\texttt{08088} and \texttt{8088} identify the same student).
 
 \subsection{1Bill consumer number}\label{sec:onebill}
-For 1Bill, the consumer number is a fixed 14-digit number:
+For 1Bill, the consumer number is a fixed \textbf{15-digit} number:
 \begin{center}
-\texttt{[10-digit TAFS 1Bill prefix][CC as 4 digits, zero-padded]}
+\texttt{[10-digit TAFS 1Bill prefix][CC as 5 digits, zero-padded]}
 \end{center}
-\noindent Example: with prefix \texttt{1000000000} and CC \texttt{8088}, the 1Bill consumer number is
-\texttt{10000000008088}; for CC \texttt{44} it is \texttt{10000000000044}.
+\noindent Examples, with prefix \texttt{1000000000}:
+\begin{itemize}[nosep]
+  \item CC \texttt{8088} $\rightarrow$ \texttt{100000000008088}
+  \item CC \texttt{10001} $\rightarrow$ \texttt{100000000010001}
+\end{itemize}
 
 \medskip
 \noindent\fbox{\parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule}{%
@@ -140,7 +144,7 @@ owes, including any arrears.}}
 On or before the due date & The voucher amount (\texttt{amount\_within\_due\_date}). \\
 After the due date (until validity date) & Voucher amount + late payment surcharge, normally \textbf{PKR 1,000} (\texttt{amount\_after\_due\_date}). \\
 After the validity date & Not payable. The school must issue a new voucher (response code \texttt{04}). \\
-Channel = \texttt{ONEBILL} & The amounts above \textbf{+ PKR 30} (1Bill aggregator fee). \\
+Channel = \texttt{ONEBILL} & The amounts above \textbf{+ the 1Bill charges}, borne by the payer. This document assumes \textbf{PKR 30} until UBL confirms the actual charges (Section~\ref{sec:confirm}). \\
 OTC, app, internet banking & The amounts above, with no addition. \\
 \bottomrule
 \end{tabularx}
@@ -149,8 +153,10 @@ OTC, app, internet banking & The amounts above, with no addition. \\
 \begin{itemize}[nosep]
   \item The inquiry returns \texttt{amount\_payable}, the exact amount to collect \emph{today} on the channel stated in the request.
   \item The payment must carry exactly that amount. Partial payments and overpayments are rejected (code \texttt{06}).
-  \item On a 1Bill payment TAFS records only the fee amount against the student. The PKR 30 is recorded as the 1Bill
-        aggregator's fee and is never credited to the student's account.
+  \item TAFS wants the \textbf{parent to bear the 1Bill charges}: they are added on top of the fee amount shown to the payer.
+        On a 1Bill payment TAFS records only the fee amount against the student; the 1Bill charge is noted against the
+        payment and never credited to the student's account.
+  \item TAFS can change the 1Bill charge by configuration as soon as UBL confirms it; no code change is needed.
   \item Dates are evaluated in Pakistan Standard Time (UTC+05:00).
 \end{itemize}
 
@@ -198,8 +204,8 @@ GET /api/v1/ubl/bill-inquiry?consumer_number={CC or 1Bill no}&channel={channel}
 \toprule
 \textbf{Parameter} & \textbf{Type} & \textbf{Required} & \textbf{Description} \\
 \midrule
-\texttt{consumer\_number} & digits & Yes & CC number (OTC, app, internet banking) or 14-digit 1Bill consumer number. \\
-\texttt{channel} & enum & \textbf{Yes} & \texttt{ONEBILL}, \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. Decides whether PKR 30 is added. \\
+\texttt{consumer\_number} & digits & Yes & CC number, up to 5 digits (OTC, app, internet banking), or 15-digit 1Bill consumer number. \\
+\texttt{channel} & enum & \textbf{Yes} & \texttt{ONEBILL}, \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. Decides whether the 1Bill charge is added. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -213,8 +219,8 @@ GET /api/v1/ubl/bill-inquiry?consumer_number={CC or 1Bill no}&channel={channel}
 \texttt{response\_code} & string & \texttt{"00"} \\
 \texttt{response\_desc} & string & \texttt{"Success"} \\
 \texttt{consumer\_number} & string & As sent \\
-\texttt{onebill\_consumer\_number} & string & The student's 14-digit 1Bill number \\
-\texttt{cc} & string & Student CC number \\
+\texttt{onebill\_consumer\_number} & string & The student's 15-digit 1Bill number \\
+\texttt{cc} & string & Student CC number, 5 digits zero-padded \\
 \texttt{student\_name} & string & Student's full name \\
 \texttt{gr\_number} & string & School registration number \\
 \texttt{campus} & string & Campus name \\
@@ -230,14 +236,14 @@ GET /api/v1/ubl/bill-inquiry?consumer_number={CC or 1Bill no}&channel={channel}
 \texttt{amount\_after\_due\_date} & number & Payable after the due date (incl.\ late fee and channel fee) \\
 \texttt{late\_fee} & number & Late payment surcharge applicable after the due date \\
 \texttt{channel} & string & As sent \\
-\texttt{channel\_fee} & number & \texttt{30} for \texttt{ONEBILL}, else \texttt{0} \\
+\texttt{channel\_fee} & number & 1Bill charge for \texttt{ONEBILL} (assumed \texttt{30}), else \texttt{0} \\
 \texttt{amount\_payable} & number & \textbf{Exact amount to collect today} \\
 \bottomrule
 \end{longtable}
 
 \subsection{Sample \,--\, 1Bill inquiry before the due date}
 \begin{lstlisting}
-GET /api/v1/ubl/bill-inquiry?consumer_number=10000000008088&channel=ONEBILL
+GET /api/v1/ubl/bill-inquiry?consumer_number=100000000008088&channel=ONEBILL
 X-UBL-User: <issued by TAFS>
 X-UBL-Password: <issued by TAFS>
 \end{lstlisting}
@@ -245,9 +251,9 @@ X-UBL-Password: <issued by TAFS>
 {
   "response_code": "00",
   "response_desc": "Success",
-  "consumer_number": "10000000008088",
-  "onebill_consumer_number": "10000000008088",
-  "cc": "8088",
+  "consumer_number": "100000000008088",
+  "onebill_consumer_number": "100000000008088",
+  "cc": "08088",
   "student_name": "HAFSA DAHRI",
   "gr_number": "7001",
   "campus": "Gulistan-e-Jauhar Campus",
@@ -270,13 +276,13 @@ X-UBL-Password: <issued by TAFS>
 
 \subsection{Sample \,--\, OTC inquiry after the due date}
 \begin{lstlisting}
-GET /api/v1/ubl/bill-inquiry?consumer_number=8088&channel=OTC
+GET /api/v1/ubl/bill-inquiry?consumer_number=08088&channel=OTC
 \end{lstlisting}
 \begin{lstlisting}
 {
   "response_code": "00",
   "response_desc": "Success",
-  "cc": "8088",
+  "cc": "08088",
   "voucher_number": "12461",
   "voucher_status": "OVERDUE",
   "amount_within_due_date": 90000,
@@ -313,7 +319,7 @@ Content-Type: application/json
 \texttt{consumer\_number} & digits & Yes & Same value used in the inquiry \\
 \texttt{channel} & enum & \textbf{Yes} & \texttt{ONEBILL}, \texttt{OTC}, \texttt{APP}, \texttt{INTERNET\_BANKING} \\
 \texttt{payment\_method} & enum & \textbf{Yes} & How the payer paid. See Section~\ref{sec:method} \\
-\texttt{amount} & number & Yes & Amount collected from the payer, PKR. Must equal \texttt{amount\_payable} (incl.\ PKR 30 on 1Bill) \\
+\texttt{amount} & number & Yes & Amount collected from the payer, PKR. Must equal \texttt{amount\_payable} (incl.\ the 1Bill charge on 1Bill) \\
 \texttt{transaction\_id} & string & Yes & UBL's unique transaction reference (max 100). Used to prevent duplicate posting \\
 \texttt{transaction\_datetime} & ISO 8601 & Yes & When the payment was taken, with offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00} \\
 \texttt{voucher\_number} & string & Advised & \texttt{voucher\_number} from the inquiry; guards against a newer voucher issued in between \\
@@ -357,7 +363,7 @@ payer actually used, so that each receipt can be reconciled. A payment without t
 \texttt{tafs\_receipt\_id} & string & TAFS receipt number for this payment \\
 \texttt{voucher\_number} & string & Voucher the payment was applied to \\
 \texttt{amount\_booked} & number & Amount credited to the student (excludes the 1Bill fee) \\
-\texttt{channel\_fee} & number & 1Bill fee retained by the aggregator (\texttt{30} or \texttt{0}) \\
+\texttt{channel\_fee} & number & 1Bill charge borne by the payer and retained by 1Bill (\texttt{0} on other channels) \\
 \bottomrule
 \end{longtable}
 
@@ -365,7 +371,7 @@ payer actually used, so that each receipt can be reconciled. A payment without t
 \begin{lstlisting}
 POST /api/v1/ubl/bill-payment
 {
-  "consumer_number": "10000000008088",
+  "consumer_number": "100000000008088",
   "channel": "ONEBILL",
   "payment_method": "ACCOUNT_TRANSFER",
   "amount": 90030,
@@ -391,7 +397,7 @@ POST /api/v1/ubl/bill-payment
 \subsection{Sample \,--\, OTC cheque payment after the due date}
 \begin{lstlisting}
 {
-  "consumer_number": "8088",
+  "consumer_number": "08088",
   "channel": "OTC",
   "payment_method": "CHEQUE",
   "instrument_number": "00412387",
@@ -447,11 +453,14 @@ POST /api/v1/ubl/bill-payment
 TAFS asks UBL to confirm the following before integration testing:
 \begin{enumerate}
   \item \textbf{1Bill channel on inquiry.} Can UBL tell TAFS, on the \texttt{GET} inquiry itself, that the request came
-        through 1Bill (the \texttt{channel=ONEBILL} parameter), so that the PKR 30 aggregator fee is included in the amount
+        through 1Bill (the \texttt{channel=ONEBILL} parameter), so that the 1Bill charge is included in the amount
         shown to the payer? If 1Bill inquiries reach TAFS in a different way, for example through a separate
         1Bill-facing endpoint or with different credentials, please describe it and TAFS will adapt.
-  \item \textbf{1Bill fee settlement.} Is the PKR 30 collected from the payer on top of the bill and retained by the aggregator,
-        so that UBL settles only the fee amount into the TAFS account? TAFS's books assume this.
+  \item \textbf{1Bill charges (please specify).} What are the 1Bill charges on a TAFS bill payment? Please state whether it
+        is a flat amount or a percentage, any slabs or caps, and whether it differs by paying bank or wallet. TAFS wants the
+        \textbf{parent to bear these charges}, added on top of the fee. Please confirm that 1Bill collects them from the payer
+        and retains them, and that only the fee amount is settled into the TAFS account. The PKR 30 used in this document
+        is an assumption pending your answer.
   \item \textbf{Payment method on the payment request.} Can UBL send \texttt{payment\_method} on every payment, for every
         channel, using the values in Section~\ref{sec:method}? For 1Bill, can UBL also pass the paying bank or wallet
         (\texttt{payer\_bank\_code} / \texttt{payer\_bank\_name})?
@@ -475,7 +484,7 @@ Each voucher issued for collection into the UBL account carries, at the bottom:
   \item \textbf{UBL branches:} pay at any UBL branch by quoting the student's CC number.
   \item \textbf{UBL digital app:} go to Bill Payment, select ``TAFS'' as the beneficiary and enter the student's CC number.
   \item \textbf{Other banks / digital channels (1Bill):} pay via ``1Bill Invoices'' using the 1Bill consumer number printed
-        on the voucher; 1Bill adds a PKR 30 service charge.
+        on the voucher; 1Bill service charges are added to the bill and paid by the payer.
 \end{itemize}
 
 \vspace{1.5em}
