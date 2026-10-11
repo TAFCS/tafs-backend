@@ -17,7 +17,7 @@ import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, isEligibleForDisciplineGroup, type TermContext } from '../../common/utils/academic-labels';
 import { getClassTermMap } from '../../common/utils/class-terms.util';
 import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
-import { toMeezanVoucherNumber } from '../../utils/meezan.util';
+import { voucherNumberFor } from '../../utils/ubl.util';
 import { buildVoucherFilename } from '../../utils/voucher-filename.util';
 import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
@@ -829,6 +829,11 @@ export class VouchersService {
                     bankAccountId = firstBank.id;
                 }
             }
+            // UBL vouchers are numbered by plain serial, Meezan ones by MMYY+id (voucherNumberFor).
+            const issuingBank = await tx.bank_accounts.findUnique({
+                where: { id: bankAccountId! },
+                select: { bank_name: true },
+            });
 
             const generatorName = await this.resolveGeneratedByName(changedBy);
 
@@ -1112,7 +1117,7 @@ export class VouchersService {
                     total_payable_before_due: issueAsWaived ? totalWaivedDecimal : totalBeforeDueWithSurcharge,
                     total_payable_after_due: issueAsWaived ? totalWaivedDecimal : totalAfterDueDecimal,
                     total_arrears: totalArrearsDecimal,
-                    voucher_number: toMeezanVoucherNumber(newVoucher.id, feeDate || issueDate),
+                    voucher_number: voucherNumberFor(newVoucher.id, feeDate || issueDate, issuingBank?.bank_name),
                     reprint_fee_amount: dto.reprint_fee_charge ? new Prisma.Decimal(reprintFeeVal) : null,
                     ...waivedPatch,
                 } as any,
@@ -2887,6 +2892,17 @@ export class VouchersService {
             },
             include: VOUCHER_INCLUDE,
         });
+
+        // Moving a voucher between a UBL and a non-UBL account changes how it is
+        // numbered (voucherNumberFor) — renumber so the challan and the bank agree.
+        if (dto.bank_account_id && dto.bank_account_id !== (before as any).bank_account_id) {
+            const numberDate = (updated as any).fee_date ?? (updated as any).issue_date;
+            const expected = voucherNumberFor(id, new Date(numberDate), (updated as any).bank_accounts?.bank_name);
+            if (expected !== (updated as any).voucher_number) {
+                await this.prisma.vouchers.update({ where: { id }, data: { voucher_number: expected } as any });
+                (updated as any).voucher_number = expected;
+            }
+        }
 
         // One user action → one parent row; per-field diffs nest as children.
         const fieldChecks: Array<{ field: string; before: string | null; after: string | null; label: string }> = [
@@ -5492,12 +5508,19 @@ export class VouchersService {
             // ── Derive feeRef from the head whose fee_date matches the voucher's own
             //    fee_date (the "current period" head), not just the lowest-id head — an
             //    arrear head can easily have the lowest id, which would bake the wrong
-            //    MMYY into the new voucher numbers via toMeezanVoucherNumber. Mirrors how
+            //    MMYY into the new voucher numbers via voucherNumberFor. Mirrors how
             //    _destroyVoucherInTx derives "current period" via MAX(fee_date).
             const feeRef = this.splitFeeRef(original, allHeads);
             const targetMonth = feeRef?.target_month ?? original.month;
             const targetYear = feeRef?.academic_year ?? original.academic_year;
             const targetFeeDate = feeRef?.fee_date ?? original.fee_date;
+
+            // Each split half is numbered for the bank it collects into (voucherNumberFor):
+            // the PAID receipt keeps the original's bank, the balance voucher takes the chosen one.
+            const splitBankName = async (bankAccountId: number | null | undefined) =>
+                bankAccountId == null
+                    ? null
+                    : (await tx.bank_accounts.findUnique({ where: { id: bankAccountId }, select: { bank_name: true } }))?.bank_name;
 
             const commonFields = {
                 student_id: original.student_id,
@@ -5551,7 +5574,7 @@ export class VouchersService {
             });
             await tx.vouchers.update({
                 where: { id: paid.id },
-                data: { voucher_number: toMeezanVoucherNumber(paid.id, targetFeeDate ? new Date(targetFeeDate) : new Date(original.issue_date)) } as any,
+                data: { voucher_number: voucherNumberFor(paid.id, targetFeeDate ? new Date(targetFeeDate) : new Date(original.issue_date), await splitBankName(original.bank_account_id)) } as any,
             });
 
             // The BALANCE voucher carries the shared issuance settings resolved
@@ -5591,7 +5614,7 @@ export class VouchersService {
             });
             await tx.vouchers.update({
                 where: { id: unpaid.id },
-                data: { voucher_number: toMeezanVoucherNumber(unpaid.id, targetFeeDate ? new Date(targetFeeDate) : issueDate) } as any,
+                data: { voucher_number: voucherNumberFor(unpaid.id, targetFeeDate ? new Date(targetFeeDate) : issueDate, await splitBankName(balanceBankAccountId)) } as any,
             });
 
             // ── Step 7: Create voucher_heads.

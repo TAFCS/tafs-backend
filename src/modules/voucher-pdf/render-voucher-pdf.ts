@@ -2,6 +2,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import * as React from 'react';
 import { FeeChallanPDF } from './FeeChallanPDF';
 import type { VoucherPdfData } from './voucher-pdf.types';
+import { ubl1BillConsumerNumber } from '../../utils/ubl.util';
 
 // Renders "DD-MM-YYYY hh:mm AM/PM" in Pakistan Standard Time, independent of
 // the host machine's system timezone (which may be UTC in production).
@@ -52,6 +53,8 @@ export async function renderVoucherPdf(data: VoucherPdfData): Promise<Buffer> {
             applyReprintFee: data.reprintFeeAmount > 0,
             reprintFeeAmount: data.reprintFeeAmount,
             voucherNumber: data.voucherNumber,
+            // Printed only on UBL vouchers (FeeChallanPDF gates on the bank name).
+            oneBillConsumerNumber: ubl1BillConsumerNumber(data.student.cc),
             generatedBy: {
                 fullName: data.generatedByName || 'TAFSync System',
                 // Prefer the persisted generation timestamp; fall back to

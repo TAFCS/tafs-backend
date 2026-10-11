@@ -1,6 +1,7 @@
 import React from 'react';
 import { Page, Text, View, Document, StyleSheet, Image, Font, Svg, Rect } from '@react-pdf/renderer';
 import QRCode from 'qrcode';
+import { isUblBank as isUblBankName } from '../../utils/ubl.util';
 import path from 'path';
 import fs from 'fs';
 
@@ -591,6 +592,8 @@ interface FeeChallanPDFProps {
         applyReprintFee?: boolean;
         reprintFeeAmount?: number;
         voucherNumber: number | string;
+        /** 1Bill consumer number ([10-digit prefix][CC]) — printed on UBL vouchers only. */
+        oneBillConsumerNumber?: string;
         generatedBy: {
             fullName: string;
             timestampStr: string;
@@ -691,7 +694,8 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             <View style={styles.studentCol}>
                 <View style={{ flex: 1.85, paddingRight: 2 }}>
                     <Text style={styles.label}>Voucher #</Text>
-                    <Text style={styles.value}>{details.voucherNumber}</Text>
+                    {/* UBL looks bills up by CC, so its plain-serial voucher number is printed small (TAFSD-294). */}
+                    <Text style={isUblBankName(details.bank?.name) ? [styles.value, { fontSize: 5.5, color: '#4b5563' }] : styles.value}>{details.voucherNumber}</Text>
                 </View>
                 <View style={{ flex: 0.72, paddingRight: 2 }}>
                     <Text style={styles.label}>Level</Text>
@@ -937,6 +941,39 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                             <View style={styles.paymentOptionsCol2}>
                                 <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 24-DIGIT INVOICE NUMBER.</Text>
                                 <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL ID: 1006259110046</Text>
+                            </View>
+                        </View>
+                    </View>
+                )}
+
+                {isUblBankName(details.bank?.name) && (
+                    <View style={styles.paymentOptionsTable}>
+                        <View style={styles.paymentOptionsHeader}>
+                            <Text>PAYMENT OPTIONS (CASH ACCEPTED)</Text>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>UBL BRANCHES</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY AT ANY UBL BRANCH BY QUOTING THE STUDENT'S CC NUMBER: {student.cc}.</Text>
+                            </View>
+                        </View>
+                        <View style={styles.paymentOptionsRow}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>UBL DIGITAL APP</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>GO TO BILL PAYMENT, SELECT "TAFS" AS THE BENEFICIARY AND ENTER THE STUDENT'S CC NUMBER: {student.cc}.</Text>
+                            </View>
+                        </View>
+                        <View style={[styles.paymentOptionsRow, { borderBottomWidth: 0 }]}>
+                            <View style={styles.paymentOptionsCol1}>
+                                <Text style={{ fontWeight: 'bold' }}>OTHER BANKS/DIGITAL CHANNELS (1BILL)</Text>
+                            </View>
+                            <View style={styles.paymentOptionsCol2}>
+                                <Text>PAY VIA THE "1BILL INVOICES" OPTION USING THE 1BILL CONSUMER NUMBER BELOW. 1BILL ADDS A PKR 30 SERVICE CHARGE.</Text>
+                                <Text style={{ fontWeight: 'bold', marginTop: 1 }}>1BILL CONSUMER NO: {details.oneBillConsumerNumber}</Text>
                             </View>
                         </View>
                     </View>
