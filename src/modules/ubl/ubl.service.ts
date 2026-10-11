@@ -74,11 +74,17 @@ export class UblService {
      * them yet). TAFS has agreed that search by CC always resolves to this one.
      */
     private async latestVoucherId(cc: number): Promise<number | null> {
-        const v = await this.prisma.vouchers.findFirst({
-            where: { student_id: cc, status: { not: 'VOID' }, released_to_parent_at: { not: null } },
+        const live = { student_id: cc, status: { not: 'VOID' }, released_to_parent_at: { not: null } };
+        // With more than one active voucher, the most recent still-payable one is
+        // presented first; the older one comes up once that is settled.
+        const payable = await this.prisma.vouchers.findFirst({
+            where: { ...live, status: { in: ['UNPAID', 'OVERDUE', 'PARTIALLY_PAID'] } },
             orderBy: { id: 'desc' },
             select: { id: true },
         });
+        if (payable) return payable.id;
+        // Nothing payable: the newest live voucher, so UBL is told why (paid / expired / written off).
+        const v = await this.prisma.vouchers.findFirst({ where: live, orderBy: { id: 'desc' }, select: { id: true } });
         return v?.id ?? null;
     }
 

@@ -122,6 +122,15 @@ describe('UblService', () => {
         jest.setSystemTime(new Date('2026-10-05T06:00:00Z'));
     });
 
+    it('presents the most recent payable voucher when two are active', async () => {
+        const { svc, prisma } = build();
+        prisma.vouchers.findFirst = jest.fn().mockResolvedValueOnce({ id: 500 });
+        await svc.billInquiry({ consumer_number: '8088', channel: 'OTC' });
+        const where = prisma.vouchers.findFirst.mock.calls[0][0].where;
+        expect(where.status).toEqual({ in: ['UNPAID', 'OVERDUE', 'PARTIALLY_PAID'] });
+        expect(prisma.vouchers.findFirst.mock.calls[0][0].orderBy).toEqual({ id: 'desc' });
+    });
+
     it('rejects a paid voucher', async () => {
         const { svc } = build(voucher({ status: 'PAID' }));
         const res: any = await svc.billInquiry({ consumer_number: '8088', channel: 'OTC' });

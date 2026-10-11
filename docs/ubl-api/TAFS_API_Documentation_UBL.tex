@@ -10,6 +10,9 @@
 \usepackage{listings}
 \usepackage{hyperref}
 \usepackage{fancyhdr}
+\definecolor{askbg}{HTML}{FFF4E5}
+\definecolor{askrule}{HTML}{C2410C}
+\definecolor{decbg}{HTML}{EEF4FF}
 
 \definecolor{codebg}{HTML}{F5F7FA}
 \definecolor{tafsblue}{HTML}{1F3A68}
@@ -33,17 +36,71 @@
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\small TAFS API Documentation \,--\, UBL}
-\rhead{\small Draft v0.1}
+\rhead{\small Draft v0.2}
 \cfoot{\small \thepage}
 
 \title{\textbf{TAFS API Documentation} \\[4pt]
 \large Bill Inquiry \& Bill Payment Integration \\ for United Bank Limited (UBL)}
-\author{The American Foundation School (TAFS) \\ TAFS Development Team}
-\date{Draft v0.1 \,--\, 11 October 2026}
+\author{The American Foundation School (TAFS) \\ TAFS IT and Software Department \\[4pt] Aawaiz Ali}
+\date{Draft v0.2 \,--\, 12 October 2026}
 
 \begin{document}
 \maketitle
 \thispagestyle{fancy}
+
+% ---------------------------------------------------------------------------
+\section*{Open Questions and TAFS Decisions at a Glance}
+
+\noindent\fcolorbox{askrule}{askbg}{\parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule}{%
+\textbf{\Large Open questions for UBL} \\[2pt]
+\small Please answer these before integration testing. TAFS will adapt to UBL's answers.
+\begin{enumerate}[leftmargin=2.2em, itemsep=3pt, topsep=4pt]
+  \item \textbf{Are 15-digit 1Bill consumer numbers acceptable?} (10-digit prefix + 5-digit CC.) If 1Bill requires a
+        different length, please state it.
+  \item \textbf{Shall TAFS give 1Bill a separate endpoint?} TAFS can provide dedicated 1Bill endpoints
+        (e.g.\ \texttt{/api/v1/ubl/onebill/bill-inquiry} and \texttt{/bill-payment}) that always add the 1Bill charges, instead
+        of relying on \texttt{channel=ONEBILL} in the request. Which does UBL prefer? If the same endpoint is used, can UBL
+        always send \texttt{channel=ONEBILL} on 1Bill inquiries?
+  \item \textbf{What are the 1Bill charges?} Flat amount or percentage, any slabs or caps, and whether they differ by paying
+        bank or wallet. This document assumes PKR 30 until UBL confirms.
+  \item \textbf{1Bill settlement.} Please confirm that 1Bill collects its charges from the payer and keeps them, and that only
+        the fee amount is settled into the TAFS account.
+  \item \textbf{Please issue TAFS's 10-digit 1Bill prefix} (Section~\ref{sec:onebill}) and confirm when it will be live.
+  \item \textbf{Payment method tracking.} Can UBL send \texttt{payment\_method} on every payment, for every channel
+        (Section~\ref{sec:method})? For 1Bill, can UBL also send the paying bank or wallet?
+  \item \textbf{OTC search by CC.} Can the branch teller screen search by CC and show the inquiry result before accepting
+        payment?
+  \item \textbf{Cheques.} Are cheques posted to TAFS when deposited or only once cleared? If at deposit, how will TAFS be told
+        about a returned cheque?
+  \item \textbf{Reversals.} This version has no reversal API; errors are corrected by the school on request. Does UBL require an
+        online reversal message? If so, please share its format.
+  \item \textbf{Daily reconciliation.} Can UBL share a daily settlement statement (transaction id, amount, channel, payment
+        method)?
+  \item \textbf{Message format.} Does UBL require its own standard message format (field names, fixed-length amounts,
+        response codes)? If so, please share the specification.
+  \item \textbf{Testing and security.} Please share UBL's outbound IP addresses (for allowlisting), a technical contact, and the
+        preferred UAT window. TAFS will provide test students and a UAT base URL.
+\end{enumerate}}}
+
+
+\bigskip
+\noindent\colorbox{decbg}{\parbox{\dimexpr\textwidth-2\fboxsep}{%
+\textbf{\large TAFS has decided}
+\begin{enumerate}[leftmargin=2.2em, itemsep=2pt, topsep=4pt]
+  \item \textbf{CC numbers are 5 digits, zero-padded.} No CC is shorter than 4 digits today, and CC 10,000 is close, so TAFS
+        writes every CC as 5 digits with a leading zero (e.g.\ \texttt{08088}). This is how it is printed on UBL vouchers.
+        Leading zeros are optional when entered (\texttt{08088} = \texttt{8088}).
+  \item \textbf{1Bill consumer number = 15 digits:} the 10-digit 1Bill prefix + the 5-digit CC
+        (e.g.\ \texttt{1000000000} + \texttt{08088} = \texttt{100000000008088}).
+  \item \textbf{Search by CC returns the student's most recent voucher.} If a student has \textbf{two active vouchers},
+        the \textbf{most recent one is shown and collected first}. The older one is presented only after the most recent
+        one has been paid. TAFS consents to this method (Section~\ref{sec:latest}).
+  \item \textbf{The parent bears the 1Bill charges.} They are added on top of the fee shown to the payer; TAFS books
+        only the fee amount.
+  \item \textbf{Exact amount only, with mandatory channel and payment method} on every payment.
+\end{enumerate}}}
+
+\newpage
 
 \section*{Purpose of This Document}
 This document describes the interface TAFS provides to United Bank Limited (UBL) for
@@ -55,7 +112,7 @@ collecting school fees through UBL channels. It covers:
   \item the amount rules: within due date, after due date, and the 1Bill charges, which the payer bears;
   \item mandatory tracking of the \textbf{payment channel} and \textbf{payment method} on every payment;
   \item TAFS's stated consent to resolving every search by CC to the student's most recent voucher;
-  \item the points on which TAFS asks UBL to confirm feasibility (Section~\ref{sec:confirm}).
+  \item the open questions TAFS asks UBL to answer, listed first, on the opening page.
 \end{itemize}
 Every payload in this document matches what the TAFS implementation sends and accepts.
 
@@ -120,8 +177,14 @@ voucher, excluding:
   \item vouchers the school has cancelled because a newer voucher replaced them; and
   \item vouchers the school has generated but not yet released to the parent.
 \end{itemize}
-If that voucher is already paid, has expired, or has been written off, the API says so and no
-older voucher is offered in its place.
+\textbf{Two active vouchers.} If a student has more than one active (unpaid) voucher, the \textbf{most recent one is
+shown and collected first}. The older one is presented only once the most recent one has been paid. In normal use
+this is rare: when the school issues a new voucher, it carries the older unpaid amounts as arrears and cancels the
+older voucher.
+
+\medskip
+\noindent If the student has no active voucher, the API reports the state of the most recent one (already paid, expired
+or written off) and collects nothing.
 
 \medskip
 \noindent\fbox{\parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule}{%
@@ -144,7 +207,7 @@ owes, including any arrears.}}
 On or before the due date & The voucher amount (\texttt{amount\_within\_due\_date}). \\
 After the due date (until validity date) & Voucher amount + late payment surcharge, normally \textbf{PKR 1,000} (\texttt{amount\_after\_due\_date}). \\
 After the validity date & Not payable. The school must issue a new voucher (response code \texttt{04}). \\
-Channel = \texttt{ONEBILL} & The amounts above \textbf{+ the 1Bill charges}, borne by the payer. This document assumes \textbf{PKR 30} until UBL confirms the actual charges (Section~\ref{sec:confirm}). \\
+Channel = \texttt{ONEBILL} & The amounts above \textbf{+ the 1Bill charges}, borne by the payer. This document assumes \textbf{PKR 30} until UBL confirms the actual charges (see the open questions at the start). \\
 OTC, app, internet banking & The amounts above, with no addition. \\
 \bottomrule
 \end{tabularx}
@@ -447,35 +510,6 @@ POST /api/v1/ubl/bill-payment
 \bottomrule
 \end{tabularx}
 \end{center}
-
-% ---------------------------------------------------------------------------
-\section{Points for UBL to Confirm}\label{sec:confirm}
-TAFS asks UBL to confirm the following before integration testing:
-\begin{enumerate}
-  \item \textbf{1Bill channel on inquiry.} Can UBL tell TAFS, on the \texttt{GET} inquiry itself, that the request came
-        through 1Bill (the \texttt{channel=ONEBILL} parameter), so that the 1Bill charge is included in the amount
-        shown to the payer? If 1Bill inquiries reach TAFS in a different way, for example through a separate
-        1Bill-facing endpoint or with different credentials, please describe it and TAFS will adapt.
-  \item \textbf{1Bill charges (please specify).} What are the 1Bill charges on a TAFS bill payment? Please state whether it
-        is a flat amount or a percentage, any slabs or caps, and whether it differs by paying bank or wallet. TAFS wants the
-        \textbf{parent to bear these charges}, added on top of the fee. Please confirm that 1Bill collects them from the payer
-        and retains them, and that only the fee amount is settled into the TAFS account. The PKR 30 used in this document
-        is an assumption pending your answer.
-  \item \textbf{Payment method on the payment request.} Can UBL send \texttt{payment\_method} on every payment, for every
-        channel, using the values in Section~\ref{sec:method}? For 1Bill, can UBL also pass the paying bank or wallet
-        (\texttt{payer\_bank\_code} / \texttt{payer\_bank\_name})?
-  \item \textbf{OTC search by CC.} Can the OTC teller screen search by CC number and display the inquiry result before
-        accepting payment?
-  \item \textbf{Cheques.} Are cheques posted to TAFS when deposited, or only once cleared? If posted at deposit, TAFS will need a
-        way to be told about a returned cheque (see item 7).
-  \item \textbf{1Bill prefix (requested).} Please issue TAFS's 10-digit 1Bill prefix (Section~\ref{sec:onebill}) and confirm when it will be live.
-  \item \textbf{Reversals.} This version has no reversal API. A payment posted in error is corrected by the school on request.
-        Please tell TAFS if UBL requires an online reversal message, and its format.
-  \item \textbf{Reconciliation.} Can UBL share a daily settlement statement listing \texttt{transaction\_id}, amount, channel and
-        payment method, so TAFS can reconcile against its receipts?
-  \item \textbf{Message format.} If UBL requires its own standard message format (field names, fixed-length amounts, response
-        codes), please share the specification and TAFS will map to it.
-\end{enumerate}
 
 % ---------------------------------------------------------------------------
 \section{What Is Printed on the Voucher}
