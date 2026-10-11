@@ -75,25 +75,41 @@ export type TileManifestEntry = {
 /**
  * Sub-permissions for the Student Directory.
  *
- * Unlike the Employee Directory these are not tab-shaped: the student record
- * has no multi-tab write. They follow the routes instead -- reading a student
- * is one thing, seeing their money is another, and moving or promoting them is
- * a third.
+ * Tab-shaped, one view/edit pair per tab in StudentDetailPanel — mirrors the
+ * Employee Directory. Granting the tile alone gives only `view` (open the
+ * list); each tab's content is gated on its own `.view` action so an admin
+ * can hand out read-only access to, say, Guardians without exposing Biometric
+ * or Finances. `.edit` implies `.view`, so granting edit is sufficient to
+ * open the tab.
  */
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the student list, search it, and open a record', default: true },
 
+  { id: 'identity.view', label: 'View identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['view'] },
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['identity.view'] },
+
+  { id: 'admissions.view', label: 'View admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['view'] },
+  { id: 'admissions.edit', label: 'Edit admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['admissions.view'] },
+
+  { id: 'academic.view', label: 'View academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['view'] },
+  { id: 'academic.edit', label: 'Edit academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['academic.view'] },
+
+  { id: 'guardians.view', label: 'View guardians', description: 'Parent and guardian records', implies: ['view'] },
+  { id: 'guardians.edit', label: 'Edit guardians', description: 'Add, edit and remove parent and guardian records', implies: ['guardians.view'] },
+
+  { id: 'biometric.view', label: 'View biometric', description: 'Device mappings and PIN linkage', implies: ['view'] },
+  { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['biometric.view'] },
+
+  { id: 'class_grade.view', label: 'View class & grade', description: 'Current campus, class, section and house assignment', implies: ['view'] },
+  { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['class_grade.view'] },
+
+  { id: 'certificates.view', label: 'View certificates & documents', description: 'Certificates studio, leaving certificate, admission order, transfer order', implies: ['view'] },
+
   { id: 'payment_history.view', label: 'View payment history', description: 'What the family has paid', implies: ['view'] },
   { id: 'progression.view', label: 'View academic history', description: 'Progression, academic history and house history', implies: ['view'] },
+  { id: 'logs.view', label: 'View activity logs', description: 'Student activity and change history', implies: ['view'] },
 
-  { id: 'identity.edit', label: 'Edit identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['view'] },
-  { id: 'admissions.edit', label: 'Edit admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['view'] },
-  { id: 'academic.edit', label: 'Edit academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['view'] },
-  { id: 'guardians.edit', label: 'Edit guardians', description: 'Add, edit and remove parent and guardian records', implies: ['view'] },
-  { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['view'] },
-
-  { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['view'] },
   { id: 'status.change', label: 'Change status', description: 'Expel, mark left, return, unexpel, undo left', implies: ['view'] },
   { id: 'promote', label: 'Promote', description: 'Single and bulk promotion, and GR suggestions for it', implies: ['view'] },
   { id: 'export', label: 'Export to Excel', implies: ['view'] },
