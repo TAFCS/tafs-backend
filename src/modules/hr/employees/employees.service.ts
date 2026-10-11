@@ -468,6 +468,7 @@ const listSelect = {
   campuses: { select: { id: true, campus_name: true } },
   departments: { select: { id: true, name: true } },
   staff_categories: { select: { id: true, name: true, code: true } },
+  segments: { select: { id: true, name: true } },
   device_user_mappings: { select: { device_sn: true, is_active: true } },
 };
 
