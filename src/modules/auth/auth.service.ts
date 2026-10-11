@@ -18,6 +18,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { EMPTY_SCOPE } from '../../common/scope/scope.types';
+import { encryptSecret } from '../../common/utils/reversible-secret.util';
 import { compactActionKeys } from '../access/tiles.manifest';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -826,7 +827,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.newPassword, 10);
     await this.prisma.users.update({
       where: { id: userId },
-      data: { password_hash: passwordHash },
+      data: { password_hash: passwordHash, password_reveal: encryptSecret(dto.newPassword) },
     });
 
     await this.auditLogs.log({
