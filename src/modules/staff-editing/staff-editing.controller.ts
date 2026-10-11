@@ -25,6 +25,7 @@ import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editi
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 
 @Controller('staff-editing')
 @UseGuards(JwtStaffGuard)
@@ -54,6 +55,7 @@ export class StaffEditingController {
   }
 
   @Patch('students/:id')
+  @RequireAction('student.directory#identity.edit')
   async updateStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
@@ -68,6 +70,7 @@ export class StaffEditingController {
   }
  
   @Delete('students/:id/hard-delete')
+  @RequireAction('student.directory#status.change')
   async hardDeleteStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: HardDeleteStudentDto,
@@ -82,6 +85,7 @@ export class StaffEditingController {
   }
 
   @Patch('students/:id/family-address')
+  @RequireAction('student.directory#identity.edit')
   async updateFamilyAddress(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
@@ -111,6 +115,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:studentId/guardians')
+  @RequireAction('student.directory#guardians.edit')
   async addGuardianToStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: CreateGuardianDto,
@@ -129,6 +134,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:studentId/guardians/link-existing')
+  @RequireAction('student.directory#guardians.edit')
   async linkExistingGuardian(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: LinkExistingGuardianDto,
@@ -147,6 +153,7 @@ export class StaffEditingController {
   }
 
   @Patch('students/:studentId/guardians/:guardianId')
+  @RequireAction('student.directory#guardians.edit')
   async updateGuardianRelationship(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
@@ -168,6 +175,7 @@ export class StaffEditingController {
 
   @Delete('students/:studentId/guardians/:guardianId')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#guardians.edit')
   async removeGuardianFromStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
@@ -198,6 +206,7 @@ export class StaffEditingController {
   }
 
   @Patch('guardians/:id')
+  @RequireAction('student.directory#guardians.edit')
   async updateGuardian(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateGuardianDto,
@@ -223,6 +232,7 @@ export class StaffEditingController {
 
   @Delete('guardians/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#guardians.edit')
   async deleteGuardian(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -238,6 +248,7 @@ export class StaffEditingController {
   // ─── Sub-table CRUD ──────────────────────────────────────────────────────
 
   @Post('students/:id/admissions')
+  @RequireAction('student.directory#admissions.edit')
   async upsertAdmission(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
@@ -248,6 +259,7 @@ export class StaffEditingController {
 
   @Delete('admissions/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#admissions.edit')
   async deleteAdmission(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -257,6 +269,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:id/activities')
+  @RequireAction('student.directory#academic.edit')
   async upsertActivity(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
@@ -267,6 +280,7 @@ export class StaffEditingController {
 
   @Delete('activities/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deleteActivity(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -276,6 +290,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:id/languages')
+  @RequireAction('student.directory#academic.edit')
   async upsertLanguage(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
@@ -286,6 +301,7 @@ export class StaffEditingController {
 
   @Delete('languages/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deleteLanguage(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -295,6 +311,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:id/schools')
+  @RequireAction('student.directory#academic.edit')
   async upsertPreviousSchool(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
@@ -305,6 +322,7 @@ export class StaffEditingController {
 
   @Delete('schools/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deletePreviousSchool(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -314,6 +332,7 @@ export class StaffEditingController {
   }
 
   @Post('students/:id/alevel-details')
+  @RequireAction('student.directory#academic.edit')
   async upsertALevelDetails(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,

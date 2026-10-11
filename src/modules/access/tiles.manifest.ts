@@ -87,6 +87,12 @@ const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'payment_history.view', label: 'View payment history', description: 'What the family has paid', implies: ['view'] },
   { id: 'progression.view', label: 'View academic history', description: 'Progression, academic history and house history', implies: ['view'] },
 
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['view'] },
+  { id: 'admissions.edit', label: 'Edit admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['view'] },
+  { id: 'academic.edit', label: 'Edit academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['view'] },
+  { id: 'guardians.edit', label: 'Edit guardians', description: 'Add, edit and remove parent and guardian records', implies: ['view'] },
+  { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['view'] },
+
   { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['view'] },
   { id: 'status.change', label: 'Change status', description: 'Expel, mark left, return, unexpel, undo left', implies: ['view'] },
   { id: 'promote', label: 'Promote', description: 'Single and bulk promotion, and GR suggestions for it', implies: ['view'] },
