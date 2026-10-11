@@ -36,17 +36,21 @@
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\small TAFS API Documentation \,--\, UBL}
-\rhead{\small Draft v0.2}
+\rhead{\small The American Foundation School}
 \cfoot{\small \thepage}
 
 \title{\textbf{TAFS API Documentation} \\[4pt]
 \large Bill Inquiry \& Bill Payment Integration \\ for United Bank Limited (UBL)}
 \author{The American Foundation School (TAFS) \\ TAFS IT and Software Department \\[4pt] Aawaiz Ali}
-\date{Draft v0.2 \,--\, 12 October 2026}
+\date{12 October 2026}
 
 \begin{document}
-\maketitle
-\thispagestyle{fancy}
+\begin{titlepage}
+\vspace*{\fill}
+{\let\newpage\relax\maketitle}
+\thispagestyle{empty}
+\vspace*{\fill}
+\end{titlepage}
 
 % ---------------------------------------------------------------------------
 \section*{Open Questions and TAFS Decisions at a Glance}
@@ -112,7 +116,7 @@ collecting school fees through UBL channels. It covers:
   \item the amount rules: within due date, after due date, and the 1Bill charges, which the payer bears;
   \item mandatory tracking of the \textbf{payment channel} and \textbf{payment method} on every payment;
   \item TAFS's stated consent to resolving every search by CC to the student's most recent voucher;
-  \item the open questions TAFS asks UBL to answer, listed first, on the opening page.
+  \item the open questions TAFS asks UBL to answer, listed first, right after the cover page.
 \end{itemize}
 Every payload in this document matches what the TAFS implementation sends and accepts.
 
