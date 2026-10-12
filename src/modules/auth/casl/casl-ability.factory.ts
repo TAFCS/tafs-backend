@@ -7,6 +7,7 @@ import {
 import { StaffRole } from '@prisma/client';
 import { Action } from './actions';
 import { AppSubjects } from './subjects';
+import { actionsCover } from '../../access/tiles.manifest';
 import {
   IJwtStaffPayload,
   IJwtParentPayload,
@@ -25,6 +26,22 @@ export class CaslAbilityFactory {
     if (user.role === StaffRole.SUPER_ADMIN) {
       can(Action.Manage, 'all');
       return build();
+    }
+
+    // Tile sub-permissions that guard StaffAttendance routes. The routes pair
+    // @CheckPolicies with @RequireAnyAction, and the tile's capability list
+    // only maps to Read Payroll, so without this a holder of the Resolve
+    // action passes the tile guard and still gets "Forbidden resource" here.
+    // The route's own @RequireAnyAction still decides who may call it.
+    const heldActions = new Set(user.actions ?? []);
+    if (
+      actionsCover(heldActions, 'attendance.employee_attendance_cycle#mark') ||
+      actionsCover(heldActions, 'hr.payroll#line_manage')
+    ) {
+      can(Action.Manage, 'StaffAttendance');
+      can(Action.Read, 'StaffAttendance');
+    } else if (actionsCover(heldActions, 'attendance.employee_attendance_cycle#view')) {
+      can(Action.Read, 'StaffAttendance');
     }
 
     // 2. Map new permissions to CASL (for other roles)
