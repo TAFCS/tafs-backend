@@ -492,6 +492,8 @@ const VOUCHERS_ACTIONS: TileAction[] = [
 
   { id: 'edit', label: 'Edit a voucher', description: 'Issue date, due date, validity, status, late fee, bank account, section', implies: ['view'] },
   { id: 'delete', label: 'Delete a voucher', description: 'Single or bulk', implies: ['view'] },
+  { id: 'download', label: 'Download voucher PDF', description: 'Single PDF, PAID receipt, and bulk ZIP / merged PDF. Generates the PDF if none exists yet', implies: ['view'] },
+  { id: 'regenerate', label: 'Regenerate voucher PDF', description: 'Re-render an existing PDF, and choose whether to hold it or notify the parent', implies: ['download'] },
 ];
 
 // Standalone — no other tile shares any pending-release route. The real fix

@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Body,
     Controller,
     Get,
@@ -46,6 +47,24 @@ import { RequireAction, RequireAnyAction } from '../../decorators/require-action
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Action } from '../auth/casl/actions';
+import { actionsCover } from '../access/tiles.manifest';
+import { StaffRole } from '@prisma/client';
+
+/** Who may download (or first-generate) a voucher PDF. */
+const PDF_DOWNLOAD_ACTIONS = [
+    'finance.vouchers#download',
+    'finance.receive_deposit#print',
+    'finance.single_voucher#create',
+    'finance.vouchers#edit',
+] as const;
+/** Who may re-render an existing PDF and set its hold / notify options. */
+const PDF_REGENERATE_ACTIONS = ['finance.vouchers#regenerate', 'finance.receive_deposit#print'] as const;
+
+function holdsAny(user: IJwtStaffPayload, keys: readonly string[]): boolean {
+    if (user.role === StaffRole.SUPER_ADMIN) return true;
+    const held = new Set(user.actions ?? []);
+    return keys.some((k) => actionsCover(held, k));
+}
 
 @Controller('vouchers')
 export class VouchersController {
@@ -275,13 +294,18 @@ export class VouchersController {
     }
 
     /** Generate (or regenerate) the voucher PDF server-side, store it, and return the URL. */
+    //
+    // Tile actions decide who may call this, not CASL: the old Update Voucher
+    // check was only satisfied by legacy role keys, so a granted Print still
+    // 403'd. CASL now only asks that the caller can see vouchers or deposits.
     @Post(':id/generate-pdf')
     @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
-    @RequireAnyAction('finance.receive_deposit#print', 'finance.vouchers#edit', 'finance.single_voucher#create')
+    @RequireAnyAction(...PDF_DOWNLOAD_ACTIONS)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies(
         (ability) =>
-            ability.can(Action.Update, 'Voucher') ||
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'Challan') ||
             ability.can(Action.Manage, 'all'),
     )
     async generatePdf(
@@ -290,6 +314,11 @@ export class VouchersController {
         @Req() req: any,
         @CurrentUser() user: IJwtStaffPayload,
     ) {
+        // Download and Regenerate are separate grants. Hold/notify only take
+        // effect on a regenerate (opts.force), so a downloader cannot set them.
+        if (dto.regenerate === true && !holdsAny(user, PDF_REGENERATE_ACTIONS)) {
+            throw new ForbiddenException('Missing permission: Regenerate voucher PDF.');
+        }
         await this.vouchersService.assertVoucherVisible(user, id);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         const result = await this.vouchersService.generatePdf(
@@ -618,8 +647,9 @@ export class VouchersController {
     }
 
     @Post('batch-export')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    @RequireAnyAction('finance.vouchers#download', 'finance.bulk_voucher#view')
     async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
@@ -631,8 +661,9 @@ export class VouchersController {
     }
 
     @Post('batch-merge')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
+    @RequireAnyAction('finance.vouchers#download', 'finance.bulk_voucher#view')
     async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
         const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
