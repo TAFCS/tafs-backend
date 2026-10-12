@@ -56,6 +56,7 @@ import {
   defaulterSheetHeading,
   type DefaulterFilterNames,
 } from './defaulter-sheet-heading';
+import { periodLine, writeSchoolSheets, type SchoolSheet, type SchoolSheetColumn } from './school-report-sheet';
 
 const EXPORT_ROW_CAP = 25_000;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
@@ -75,6 +76,14 @@ const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
   KNF: 'KNF',
   NNZ: 'NNN',
 };
+/** Fee Heads / Deposits export columns that get a TOTAL on the school-format sheet (TAFSD-268). */
+const SCHOOL_SHEET_TOTAL_KEYS = new Set([
+  'amount', 'amount_paid', 'waived', 'waived_amount', 'outstanding', 'billed', 'discount',
+  'total_amount', 'fee_heads', 'late_fee', 'surcharge', 'lps_total',
+  'head_count', 'student_count', 'discount_count',
+]);
+/** Of those, the counts (no thousands format). */
+const SCHOOL_SHEET_COUNT_KEYS = new Set(['head_count', 'student_count', 'discount_count']);
 /** What a student owes in one calendar month, and which fee heads it is made of. */
 type DefaulterOwedMonth = {
   owed: number;
@@ -1116,12 +1125,14 @@ export class FinancialReportsService {
       outstanding: item.outstanding,
     }));
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads',
+      'FEE HEADS REPORT',
       `fee-heads-report-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1221,12 +1232,14 @@ export class FinancialReportsService {
       };
     });
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Student',
+      'FEE HEADS REPORT — BY STUDENT',
       `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1255,12 +1268,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Type',
+      'FEE HEADS REPORT — BY FEE TYPE',
       `fee-heads-by-type-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1291,12 +1306,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Period',
+      'FEE HEADS REPORT — BY PERIOD',
       `fee-heads-by-period-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1327,12 +1344,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Class',
+      'FEE HEADS REPORT — BY CLASS',
       `fee-heads-by-class-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1360,12 +1379,14 @@ export class FinancialReportsService {
       ...item,
       fee_date: item.fee_date ?? 'No fee date',
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Fee Date',
+      'FEE HEADS REPORT — BY FEE DATE',
       `fee-heads-by-fee-date-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1421,12 +1442,14 @@ export class FinancialReportsService {
       lps_total: item.lps_total,
     }));
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Deposits',
+      'DEPOSITS REPORT',
       `deposits-report-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.depositsFilterWords(query),
     );
   }
 
@@ -3219,7 +3242,9 @@ export class FinancialReportsService {
   }
 
   /** Names for the ids the export was filtered by, for the sheet's filter lines. */
-  private async loadDefaulterFilterNames(query: ExportDefaultersQueryDto): Promise<DefaulterFilterNames> {
+  private async loadDefaulterFilterNames(
+    query: Pick<StudentScopeFilterQueryDto, 'campus_id' | 'class_id' | 'section_id' | 'segment_id' | 'graduated_from_class_id'>,
+  ): Promise<DefaulterFilterNames> {
     const classIds = [...(query.class_id ?? []), ...(query.graduated_from_class_id ?? [])];
     const [campuses, classes, sections, segments] = await Promise.all([
       query.campus_id?.length
@@ -4409,6 +4434,106 @@ export class FinancialReportsService {
     return new Map(
       classes.map((c) => [c.id, c.term_start_month ?? 8]),
     );
+  }
+
+  /**
+   * TAFSD-268: Fee Heads / Deposits exports in the school's paper format (see
+   * school-report-sheet.ts), one tab per campus when the rows carry a campus.
+   * CSV stays the plain data table. Same rows and numbers as before — only the
+   * layout changes, so the reconciliation invariants hold as they do on screen.
+   */
+  private async buildSchoolExportFile(
+    sheetName: string,
+    reportTitle: string,
+    basename: string,
+    columns: ExportColumn[],
+    rows: Record<string, string | number>[],
+    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' },
+    extraFilterLines: string[],
+  ): Promise<ExportFile> {
+    if (query.format === 'csv') return this.buildExportFile(sheetName, basename, columns, rows, 'csv');
+
+    const names = await this.loadDefaulterFilterNames(query);
+    const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
+    const heading = defaulterSheetHeading(
+      (query.class_id ?? []).map((id) => ({ class_id: id, class_name: names.classes.get(id) ?? String(id) })),
+      classFiltered,
+      query.to_date,
+    );
+    const filterLines = defaulterFilterLines(
+      query,
+      names,
+      null,
+      heading.classesLine != null,
+      [],
+      extraFilterLines,
+    );
+
+    // Split by campus when the rows say which campus they are; the campus is
+    // then the sheet's own line, so its column is dropped.
+    const byCampus = columns.some((c) => c.key === 'campus');
+    const sheetColumns: SchoolSheetColumn[] = columns
+      .filter((c) => !byCampus || c.key !== 'campus')
+      .map((c) => ({
+        ...c,
+        total: SCHOOL_SHEET_TOTAL_KEYS.has(c.key),
+        money: SCHOOL_SHEET_TOTAL_KEYS.has(c.key) && !SCHOOL_SHEET_COUNT_KEYS.has(c.key),
+      }));
+    let sheets: SchoolSheet[];
+    if (byCampus) {
+      const groups = new Map<string, Record<string, string | number>[]>();
+      for (const row of rows) {
+        const campus = String(row.campus ?? '').trim() || 'Unassigned';
+        if (!groups.has(campus)) groups.set(campus, []);
+        groups.get(campus)!.push(row);
+      }
+      sheets = [...groups.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([campus, campusRows]) => ({ tab: campus, campus: campusLine(campus), rows: campusRows }));
+    } else {
+      const campus = query.campus_id?.length
+        ? [...names.campuses.values()].map((n) => campusLine(n)).join(', ')
+        : 'ALL CAMPUSES';
+      sheets = [{ tab: sheetName, campus, rows }];
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'The American Foundation School';
+    if (rows.length === 0) {
+      workbook.addWorksheet(sheetName).getCell('A1').value = 'Nothing matches the current filters.';
+    } else {
+      writeSchoolSheets(workbook, sheets, {
+        reportTitle,
+        heading,
+        periodLine: periodLine(query.from_date, query.to_date),
+        filterLines,
+        exportDate: this.todayPkt(),
+        columns: sheetColumns,
+      });
+    }
+    return {
+      buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
+      filename: `${basename}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+  }
+
+  /** Fee Heads filters beyond the shared student ones, in words. */
+  private feeHeadsFilterWords(query: ListFeeHeadsQueryDto): string[] {
+    return query.status?.length ? [`FEE STATUS: ${query.status.map((s) => s.replace(/_/g, ' ')).join(', ')}`] : [];
+  }
+
+  /** Deposits filters beyond the shared student ones, in words. */
+  private depositsFilterWords(query: ListDepositsQueryDto): string[] {
+    const lines: string[] = [];
+    if (query.payment_method?.length) lines.push(`PAYMENT METHOD: ${query.payment_method.join(', ').toUpperCase()}`);
+    if (query.bank_name?.length) lines.push(`BANK: ${query.bank_name.join(', ').toUpperCase()}`);
+    return lines;
+  }
+
+  /** Today as YYYY-MM-DD in Pakistan time, whatever the server's timezone. */
+  private todayPkt(): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
   }
 
   private async buildExportFile(
