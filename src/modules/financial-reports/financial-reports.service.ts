@@ -47,7 +47,13 @@ import type {
   CreateFeeHeadsSnapshotDto,
   ListFeeHeadsSnapshotsQueryDto,
 } from './dto/financial-report-snapshot.dto';
-import { DEFAULTER_SHEET_LIST_TITLE, campusLine, defaulterSheetHeading } from './defaulter-sheet-heading';
+import {
+  DEFAULTER_SHEET_LIST_TITLE,
+  campusLine,
+  defaulterFilterLines,
+  defaulterSheetHeading,
+  type DefaulterFilterNames,
+} from './defaulter-sheet-heading';
 
 const EXPORT_ROW_CAP = 25_000;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
@@ -2818,7 +2824,12 @@ export class FinancialReportsService {
     };
     const remarkFor = (r: SheetRow) =>
       r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
-    const subtitle = this.defaulterFilterSubtitle(query);
+    // The months line only when months behind or the arrear month was filtered;
+    // the other filters follow it in words (TAFSD-291).
+    const monthsLine =
+      query.arrear_month || (query.min_months_behind ?? 1) > 1 || query.max_months_behind != null
+        ? this.defaulterFilterSubtitle(query)
+        : null;
     // A class or segment filter narrows the sheet to part of the school; without
     // one it is the whole school and gets the plain name.
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
@@ -2855,6 +2866,7 @@ export class FinancialReportsService {
       };
     }
 
+    const filterNames = await this.loadDefaulterFilterNames(query);
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
 
@@ -2925,7 +2937,8 @@ export class FinancialReportsService {
         cell.font = { name: 'Arial', bold: true, size: 9 };
       }
       line++;
-      banner(subtitle, 13, 20);
+      const filterLines = defaulterFilterLines(query, filterNames, monthsLine, heading.classesLine != null);
+      filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 13 : 11, i === 0 && monthsLine ? 20 : 16));
 
       const HEADER_ROW = line;
       const headerRow = sheet.getRow(HEADER_ROW);
@@ -3101,6 +3114,31 @@ export class FinancialReportsService {
       }
     }
     return result;
+  }
+
+  /** Names for the ids the export was filtered by, for the sheet's filter lines. */
+  private async loadDefaulterFilterNames(query: ExportDefaultersQueryDto): Promise<DefaulterFilterNames> {
+    const classIds = [...(query.class_id ?? []), ...(query.graduated_from_class_id ?? [])];
+    const [campuses, classes, sections, segments] = await Promise.all([
+      query.campus_id?.length
+        ? this.prisma.campuses.findMany({ where: { id: { in: query.campus_id } }, select: { id: true, campus_name: true } })
+        : [],
+      classIds.length
+        ? this.prisma.classes.findMany({ where: { id: { in: classIds } }, select: { id: true, description: true } })
+        : [],
+      query.section_id?.length
+        ? this.prisma.sections.findMany({ where: { id: { in: query.section_id } }, select: { id: true, description: true } })
+        : [],
+      query.segment_id?.length
+        ? this.prisma.segments.findMany({ where: { id: { in: query.segment_id } }, select: { id: true, name: true } })
+        : [],
+    ]);
+    return {
+      campuses: new Map(campuses.map((c) => [c.id, c.campus_name] as [number, string])),
+      classes: new Map(classes.map((c) => [c.id, c.description] as [number, string])),
+      sections: new Map(sections.map((c) => [c.id, c.description] as [number, string])),
+      segments: new Map(segments.map((c) => [c.id, c.name] as [number, string])),
+    };
   }
 
   /**
