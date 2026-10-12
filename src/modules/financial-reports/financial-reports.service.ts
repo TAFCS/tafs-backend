@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
+import * as React from 'react';
+import { renderToBuffer } from '@react-pdf/renderer';
 import {
   FinancialReportSnapshotStatus,
   FinancialReportType,
@@ -56,9 +58,21 @@ import {
   defaulterSheetHeading,
   type DefaulterFilterNames,
 } from './defaulter-sheet-heading';
-import { periodLine, writeSchoolSheets, type SchoolSheet, type SchoolSheetColumn } from './school-report-sheet';
+import {
+  dayDateLines,
+  periodLine,
+  writeSchoolSheets,
+  type SchoolSheet,
+  type SchoolSheetColumn,
+  type SchoolSheetOptions,
+} from './school-report-sheet';
+import { SchoolReportPDF } from './SchoolReportPDF';
 
 const EXPORT_ROW_CAP = 25_000;
+/** PDF exports of the school-format reports (TAFSD-306) stop here; Excel goes to EXPORT_ROW_CAP. */
+const PDF_EXPORT_ROW_CAP = 2_000;
+/** A full ISO instant ("2026-09-01T05:28:59.016Z") — printed as PKT on the school sheets. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
 const STATS_ROW_CAP = 50_000;
 /** Safety valve on the matrix's month-range width (3 years) — an absurdly wide range is capped, not failed. */
@@ -4448,10 +4462,17 @@ export class FinancialReportsService {
     basename: string,
     columns: ExportColumn[],
     rows: Record<string, string | number>[],
-    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' },
+    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf' },
     extraFilterLines: string[],
   ): Promise<ExportFile> {
     if (query.format === 'csv') return this.buildExportFile(sheetName, basename, columns, rows, 'csv');
+    // A PDF of tens of thousands of rows is hundreds of pages nobody prints —
+    // and a long render. Excel has no such limit.
+    if (query.format === 'pdf' && rows.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} rows (this has ${rows.length.toLocaleString()}). Narrow the filters or export Excel.`,
+      );
+    }
 
     const names = await this.loadDefaulterFilterNames(query);
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
@@ -4468,6 +4489,20 @@ export class FinancialReportsService {
       [],
       extraFilterLines,
     );
+
+    // The school sheets are read by people: a stored instant (deposit_date)
+    // prints as Pakistan time, "01-09-2026 10:28 AM", not raw ISO-in-UTC. The
+    // CSV above keeps the machine-readable value.
+    rows = rows.map((row) => {
+      let out = row;
+      for (const [key, value] of Object.entries(row)) {
+        if (typeof value === 'string' && ISO_INSTANT.test(value)) {
+          if (out === row) out = { ...row };
+          out[key] = this.formatPktDateTime(new Date(value));
+        }
+      }
+      return out;
+    });
 
     // Split by campus when the rows say which campus they are; the campus is
     // then the sheet's own line, so its column is dropped.
@@ -4497,19 +4532,33 @@ export class FinancialReportsService {
       sheets = [{ tab: sheetName, campus, rows }];
     }
 
+    const opts: SchoolSheetOptions = {
+      reportTitle,
+      heading,
+      periodLine: periodLine(query.from_date, query.to_date),
+      filterLines,
+      exportDate: this.todayPkt(),
+      columns: sheetColumns,
+    };
+
+    if (query.format === 'pdf') {
+      const pdf = await renderToBuffer(
+        React.createElement(SchoolReportPDF, {
+          // An empty report still prints its title block, with no table rows.
+          sheets: sheets.length ? sheets : [{ tab: sheetName, campus: 'ALL CAMPUSES', rows: [] }],
+          opts,
+          ...dayDateLines(opts.exportDate),
+        }) as any,
+      );
+      return { buffer: Buffer.from(pdf), filename: `${basename}.pdf`, contentType: 'application/pdf' };
+    }
+
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
     if (rows.length === 0) {
       workbook.addWorksheet(sheetName).getCell('A1').value = 'Nothing matches the current filters.';
     } else {
-      writeSchoolSheets(workbook, sheets, {
-        reportTitle,
-        heading,
-        periodLine: periodLine(query.from_date, query.to_date),
-        filterLines,
-        exportDate: this.todayPkt(),
-        columns: sheetColumns,
-      });
+      writeSchoolSheets(workbook, sheets, opts);
     }
     return {
       buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
@@ -4529,6 +4578,21 @@ export class FinancialReportsService {
     if (query.payment_method?.length) lines.push(`PAYMENT METHOD: ${query.payment_method.join(', ').toUpperCase()}`);
     if (query.bank_name?.length) lines.push(`BANK: ${query.bank_name.join(', ').toUpperCase()}`);
     return lines;
+  }
+
+  /** "01-09-2026 10:28 AM" in Pakistan time. */
+  private formatPktDateTime(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Karachi',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
   }
 
   /** Today as YYYY-MM-DD in Pakistan time, whatever the server's timezone. */
