@@ -67,6 +67,15 @@ const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
   KNF: 'KNF',
   NNZ: 'NNN',
 };
+/** students.status -> the STATUS column on the defaulters sheet. */
+const DEFAULTER_STATUS_LABELS: Record<string, string> = {
+  ENROLLED: 'Enrolled',
+  LEFT: 'Left',
+  EXPELLED: 'Expelled',
+  GRADUATED: 'Graduated',
+  SOFT_ADMISSION: 'Soft Admission',
+  QUICK_ADMISSION: 'Quick Admission',
+};
 const HEADER_FILL: ExcelJS.Fill = {
   type: 'pattern',
   pattern: 'solid',
@@ -2734,6 +2743,9 @@ export class FinancialReportsService {
       items.map((r) => Number(r.cc)),
       asOfDate,
     );
+    const siblingGrs = await this.loadSiblingGrNumbers(items.map((r) => Number(r.cc)));
+    const linkToGr = (r: Item) => (siblingGrs.get(Number(r.cc)) ?? []).join(', ');
+    const statusFor = (r: Item) => DEFAULTER_STATUS_LABELS[String(r.student_status ?? '')] ?? '';
 
     type SheetRow = {
       item: Item;
@@ -2813,7 +2825,10 @@ export class FinancialReportsService {
 
     if (query.format === 'csv') {
       const cols = sheetColumns(sheetRows);
-      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...cols.map((c) => c.label), 'Defaulting Amount', 'Remarks'];
+      const header = [
+        'Campus', 'S#', 'C.C.', 'G.R.#', 'Link to GR', 'Level', 'Student Name', 'Status',
+        ...cols.map((c) => c.label), 'Defaulting Amount', 'Remarks',
+      ];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
       for (const campus of campuses) {
         campus.rows.forEach((r, i) => {
@@ -2822,8 +2837,10 @@ export class FinancialReportsService {
             i + 1,
             Number(r.item.cc),
             String(r.item.gr_number ?? ''),
+            linkToGr(r.item),
             level(r.item),
             String(r.item.student_name ?? ''),
+            statusFor(r.item),
             ...cols.map((c) => cellFor(r, c)?.owed ?? ''),
             r.total,
             remarkFor(r),
@@ -2868,7 +2885,9 @@ export class FinancialReportsService {
       const sheet = workbook.addWorksheet(this.sanitizeSheetName(campus.code || campus.name));
       const cols = sheetColumns(campus.rows);
       const labels = cols.map((c) => c.label);
-      const FIRST_MONTH_COL = 6;
+      // S#, C.C., G.R. #, LINK TO GR, LEVEL, STUDENT NAME, STATUS, then the months.
+      const NAME_COL = 6;
+      const FIRST_MONTH_COL = 8;
       const amountCol = FIRST_MONTH_COL + cols.length;
       const remarksCol = amountCol + 1;
 
@@ -2910,7 +2929,7 @@ export class FinancialReportsService {
 
       const HEADER_ROW = line;
       const headerRow = sheet.getRow(HEADER_ROW);
-      ['S#', 'C.C.', 'G.R. #', 'LEVEL', 'STUDENT NAME', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
+      ['S#', 'C.C.', 'G.R. #', 'LINK TO GR', 'LEVEL', 'STUDENT NAME', 'STATUS', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
         (h, i) => {
           const cell = headerRow.getCell(i + 1);
           cell.value = h;
@@ -2924,8 +2943,10 @@ export class FinancialReportsService {
       sheet.getColumn(1).width = 5;
       sheet.getColumn(2).width = 8;
       sheet.getColumn(3).width = 8;
-      sheet.getColumn(4).width = 11;
-      sheet.getColumn(5).width = 30;
+      sheet.getColumn(4).width = 14;
+      sheet.getColumn(5).width = 11;
+      sheet.getColumn(NAME_COL).width = 30;
+      sheet.getColumn(7).width = 11;
       for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
       sheet.getColumn(amountCol).width = 15;
       sheet.getColumn(remarksCol).width = 22;
@@ -2938,8 +2959,10 @@ export class FinancialReportsService {
         row.getCell(2).value = Number(r.item.cc);
         const gr = String(r.item.gr_number ?? '').trim();
         row.getCell(3).value = /^\d+$/.test(gr) ? Number(gr) : gr;
-        row.getCell(4).value = level(r.item);
-        row.getCell(5).value = String(r.item.student_name ?? '').toUpperCase();
+        row.getCell(4).value = linkToGr(r.item);
+        row.getCell(5).value = level(r.item);
+        row.getCell(NAME_COL).value = String(r.item.student_name ?? '').toUpperCase();
+        row.getCell(7).value = statusFor(r.item);
         cols.forEach((col, c) => {
           const owed = cellFor(r, col);
           if (!owed) return;
@@ -2959,7 +2982,7 @@ export class FinancialReportsService {
         for (let c = 1; c <= remarksCol; c++) {
           const cell = row.getCell(c);
           cell.border = box;
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: c === 5 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: c === NAME_COL || c === 4 };
           if (c !== amountCol) cell.font = { name: SERIF, size: 11 };
         }
         row.height = 22;
@@ -3076,6 +3099,46 @@ export class FinancialReportsService {
         months.set(key, cell);
         result.set(studentId, months);
       }
+    }
+    return result;
+  }
+
+  /**
+   * Per student, the GR numbers of the other students in the same family
+   * (students.family_id), for the sheet's LINK TO GR column. One query per
+   * 5,000 students, not one per student. Deleted students and blank GRs are
+   * skipped; the student's own GR is never listed.
+   */
+  private async loadSiblingGrNumbers(ids: number[]): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>();
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const rows = await this.prisma.$queryRaw<Array<{ cc: number; gr_number: string }>>(Prisma.sql`
+        SELECT s.cc, TRIM(sib.gr_number) AS gr_number
+        FROM public.students s
+        JOIN public.students sib
+          ON sib.family_id = s.family_id
+         AND sib.cc <> s.cc
+         AND sib.deleted_at IS NULL
+        WHERE s.cc IN (${Prisma.join(chunk)})
+          AND s.family_id IS NOT NULL
+          AND NULLIF(TRIM(sib.gr_number), '') IS NOT NULL
+          AND TRIM(sib.gr_number) <> COALESCE(TRIM(s.gr_number), '')
+      `);
+      for (const r of rows) {
+        const cc = Number(r.cc);
+        const list = result.get(cc) ?? [];
+        if (!list.includes(r.gr_number)) list.push(r.gr_number);
+        result.set(cc, list);
+      }
+    }
+    for (const list of result.values()) {
+      list.sort((a, b) => {
+        const na = Number(a);
+        const nb = Number(b);
+        return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : a.localeCompare(b);
+      });
     }
     return result;
   }
