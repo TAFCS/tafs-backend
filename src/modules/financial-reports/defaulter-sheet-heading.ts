@@ -82,3 +82,89 @@ export function campusLine(campusName: string): string {
   if (!name) return '';
   return /\bCAMPUS$/.test(name) ? name : `${name} CAMPUS`;
 }
+
+/** Names for the ids a defaulters export was filtered by, looked up once per export. */
+export interface DefaulterFilterNames {
+  campuses: Map<number, string>;
+  classes: Map<number, string>;
+  sections: Map<number, string>;
+  segments: Map<number, string>;
+}
+
+export interface DefaulterFilterQuery {
+  campus_id?: number[];
+  class_id?: number[];
+  section_id?: number[];
+  segment_id?: number[];
+  student_status?: string[];
+  severity?: string[];
+  is_fee_endowment?: boolean;
+  is_complementary?: boolean;
+  graduated_from_class_id?: number[];
+  graduated_year_range?: string;
+  cc?: number;
+}
+
+const STATUS_WORDS: Record<string, string> = {
+  ENROLLED: 'ENROLLED',
+  LEFT: 'LEFT',
+  EXPELLED: 'EXPELLED',
+  GRADUATED: 'GRADUATED',
+  SOFT_ADMISSION: 'SOFT ADMISSION',
+  QUICK_ADMISSION: 'QUICK ADMISSION',
+};
+
+/**
+ * TAFSD-291: one plain-words line per filter applied on the page, for the top
+ * of the sheet — names, never ids; filters that weren't applied are left out.
+ *
+ * @param monthsLine   the months-behind / arrear-month line ("4 & 5 MONTHS
+ *                     DEFAULTERS"), or null when neither was filtered
+ * @param omitClasses  the title block already names the classes (mixed sheet)
+ * @returns `['ALL STUDENTS']` when nothing at all was filtered; may be empty
+ *          when the only filter is the classes the title block names
+ */
+export function defaulterFilterLines(
+  query: DefaulterFilterQuery,
+  names: DefaulterFilterNames,
+  monthsLine: string | null,
+  omitClasses = false,
+): string[] {
+  const named = (ids: number[] | undefined, map: Map<number, string>) =>
+    (ids ?? []).map((id) => (map.get(id) ?? `#${id}`).trim().toUpperCase()).join(', ');
+  const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+  const lines: string[] = [];
+
+  if (monthsLine) lines.push(monthsLine);
+  if (query.campus_id?.length)
+    lines.push(`${plural(query.campus_id.length, 'CAMPUS', 'CAMPUSES')}: ${named(query.campus_id, names.campuses)}`);
+  if (query.class_id?.length && !omitClasses)
+    lines.push(`${plural(query.class_id.length, 'CLASS', 'CLASSES')}: ${named(query.class_id, names.classes)}`);
+  if (query.segment_id?.length)
+    lines.push(`${plural(query.segment_id.length, 'SEGMENT', 'SEGMENTS')}: ${named(query.segment_id, names.segments)}`);
+  if (query.section_id?.length)
+    lines.push(`${plural(query.section_id.length, 'SECTION', 'SECTIONS')}: ${named(query.section_id, names.sections)}`);
+  // Enrolled-only is the page's default, so it is not called out. Cleared (no
+  // status at all) widens the list to every status — say so, or a sheet full
+  // of left students would read like the ordinary list.
+  const statuses = query.student_status ?? [];
+  if (statuses.length === 0) lines.push('ALL STUDENT STATUSES');
+  else if (!(statuses.length === 1 && statuses[0] === 'ENROLLED')) {
+    const words = statuses.map((s) => STATUS_WORDS[s] ?? s.replace(/_/g, ' '));
+    lines.push(`${words.join(' & ')} STUDENTS ONLY`);
+  }
+  if (query.severity?.length) lines.push(`SEVERITY: ${query.severity.join(', ')}`);
+  if (query.is_fee_endowment != null)
+    lines.push(query.is_fee_endowment ? 'FEE ENDOWMENT STUDENTS ONLY' : 'EXCLUDING FEE ENDOWMENT STUDENTS');
+  if (query.is_complementary != null)
+    lines.push(query.is_complementary ? 'COMPLEMENTARY STUDENTS ONLY' : 'EXCLUDING COMPLEMENTARY STUDENTS');
+  if (query.graduated_from_class_id?.length)
+    lines.push(`GRADUATED FROM: ${named(query.graduated_from_class_id, names.classes)}`);
+  if (query.graduated_year_range) lines.push(`GRADUATED ${query.graduated_year_range.replace('-', '–')}`);
+  if (query.cc != null) lines.push(`C.C. ${query.cc}`);
+
+  // A class filter the title block already names is still a filter: no line,
+  // but not "ALL STUDENTS" either.
+  if (lines.length === 0 && !(omitClasses && query.class_id?.length)) return ['ALL STUDENTS'];
+  return lines;
+}
