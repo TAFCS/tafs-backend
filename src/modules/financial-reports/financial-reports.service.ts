@@ -73,6 +73,12 @@ const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
   KNF: 'KNF',
   NNZ: 'NNN',
 };
+/** What a student owes in one calendar month, and which fee heads it is made of. */
+type DefaulterOwedMonth = {
+  owed: number;
+  partial: boolean;
+  heads: Array<{ name: string; owed: number; partial: boolean }>;
+};
 /** students.status -> the STATUS column on the defaulters sheet. */
 const DEFAULTER_STATUS_LABELS: Record<string, string> = {
   ENROLLED: 'Enrolled',
@@ -2755,7 +2761,7 @@ export class FinancialReportsService {
 
     type SheetRow = {
       item: Item;
-      months: Map<number, { owed: number; partial: boolean }>;
+      months: Map<number, DefaulterOwedMonth>;
       total: number;
     };
     const sheetRows: SheetRow[] = [];
@@ -2815,13 +2821,28 @@ export class FinancialReportsService {
     const cellFor = (r: SheetRow, col: SheetCol) => {
       let owed = 0;
       let partial = false;
+      // Per head name, summed across the months this column covers (EARLIER /
+      // LATER span several), in the order the heads were first seen.
+      const heads = new Map<string, { owed: number; partial: boolean }>();
       for (const [idx, m] of r.months) {
         if (idx < col.from || idx > col.to) continue;
         owed += m.owed;
         partial = partial || m.partial;
+        for (const h of m.heads) {
+          const acc = heads.get(h.name) ?? { owed: 0, partial: false };
+          acc.owed = this.roundMoney(acc.owed + h.owed);
+          acc.partial = acc.partial || h.partial;
+          heads.set(h.name, acc);
+        }
       }
-      return owed > 0 ? { owed: this.roundMoney(owed), partial } : null;
+      return owed > 0 ? { owed: this.roundMoney(owed), partial, heads } : null;
     };
+    // TAFSD-293: "TUITION FEE 9,000" per line; a part-paid head keeps its "BP".
+    const breakdown = Boolean(query.breakdown_by_head);
+    const headLines = (heads: Map<string, { owed: number; partial: boolean }>) =>
+      [...heads].map(
+        ([name, h]) => `${name.toUpperCase()} ${h.partial ? 'BP ' : ''}${h.owed.toLocaleString('en-US')}`,
+      );
     const remarkFor = (r: SheetRow) =>
       r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
     // The months line only when months behind or the arrear month was filtered;
@@ -2852,7 +2873,11 @@ export class FinancialReportsService {
             level(r.item),
             String(r.item.student_name ?? ''),
             statusFor(r.item),
-            ...cols.map((c) => cellFor(r, c)?.owed ?? ''),
+            ...cols.map((c) => {
+              const cell = cellFor(r, c);
+              if (!cell) return '';
+              return breakdown ? headLines(cell.heads).join('; ') : cell.owed;
+            }),
             r.total,
             remarkFor(r),
           ];
@@ -2960,7 +2985,7 @@ export class FinancialReportsService {
       sheet.getColumn(5).width = 11;
       sheet.getColumn(NAME_COL).width = 30;
       sheet.getColumn(7).width = 11;
-      for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
+      for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = breakdown ? 22 : 10;
       sheet.getColumn(amountCol).width = 15;
       sheet.getColumn(remarksCol).width = 22;
 
@@ -2976,10 +3001,18 @@ export class FinancialReportsService {
         row.getCell(5).value = level(r.item);
         row.getCell(NAME_COL).value = String(r.item.student_name ?? '').toUpperCase();
         row.getCell(7).value = statusFor(r.item);
+        let lineCount = 1;
         cols.forEach((col, c) => {
           const owed = cellFor(r, col);
           if (!owed) return;
           const cell = row.getCell(FIRST_MONTH_COL + c);
+          if (breakdown) {
+            // Text, one head per line — DEFAULTING AMOUNT and TOTAL stay numeric.
+            const lines = headLines(owed.heads);
+            cell.value = lines.join('\n');
+            lineCount = Math.max(lineCount, lines.length);
+            return;
+          }
           cell.value = owed.owed;
           // Part-paid month: the remaining balance, shown "BP 10940" as on
           // the manual sheets. Still a number, so the row sums.
@@ -2995,10 +3028,16 @@ export class FinancialReportsService {
         for (let c = 1; c <= remarksCol; c++) {
           const cell = row.getCell(c);
           cell.border = box;
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: c === NAME_COL || c === 4 };
-          if (c !== amountCol) cell.font = { name: SERIF, size: 11 };
+          const monthCell = c >= FIRST_MONTH_COL && c < amountCol;
+          cell.alignment = {
+            horizontal: 'center',
+            vertical: 'middle',
+            wrapText: c === NAME_COL || c === 4 || (breakdown && monthCell),
+          };
+          if (c !== amountCol) cell.font = { name: SERIF, size: breakdown && monthCell ? 8 : 11 };
         }
-        row.height = 22;
+        // Excel won't grow a row to fit wrapped text it didn't write itself.
+        row.height = breakdown ? Math.max(22, lineCount * 11 + 6) : 22;
         rowIdx++;
       });
 
@@ -3042,13 +3081,14 @@ export class FinancialReportsService {
   /**
    * Per student, what is owed per calendar month (key year*12 + month-1) —
    * exactly the heads loadDefaulterMoney sums, so the months add back up to
-   * arrears_outstanding. `partial` marks a month where something was paid.
+   * arrears_outstanding. `partial` marks a month where something was paid;
+   * `heads` splits the month by fee head (TAFSD-293).
    */
   private async loadDefaulterOwedMonths(
     ids: number[],
     asOfDate: string,
-  ): Promise<Map<number, Map<number, { owed: number; partial: boolean }>>> {
-    const result = new Map<number, Map<number, { owed: number; partial: boolean }>>();
+  ): Promise<Map<number, Map<number, DefaulterOwedMonth>>> {
+    const result = new Map<number, Map<number, DefaulterOwedMonth>>();
     if (ids.length === 0) return result;
     const classTerms = await this.loadClassTerms();
 
@@ -3063,6 +3103,7 @@ export class FinancialReportsService {
       student_status: student_status | null;
       class_id: number | null;
       graduated_from_class_id: number | null;
+      head_name: string | null;
     };
     const CHUNK = 5_000;
     for (let i = 0; i < ids.length; i += CHUNK) {
@@ -3072,9 +3113,11 @@ export class FinancialReportsService {
                (COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8
                  AS outstanding,
                COALESCE(sf.amount_paid, 0)::float8 AS amount_paid,
-               s.status AS student_status, s.class_id, s.graduated_from_class_id
+               s.status AS student_status, s.class_id, s.graduated_from_class_id,
+               ft.description AS head_name
         FROM public.student_fees sf
         JOIN public.students s ON s.cc = sf.student_id
+        LEFT JOIN public.fee_types ft ON ft.id = sf.fee_type_id
         WHERE sf.student_id IN (${Prisma.join(chunk)})
           AND sf.fee_date IS NOT NULL
           AND sf.fee_date < ${asOfDate}::date
@@ -3105,10 +3148,19 @@ export class FinancialReportsService {
           { year: h.fee_date.getUTCFullYear(), month: h.fee_date.getUTCMonth() + 1 };
         const key = resolved.year * 12 + (resolved.month - 1);
         const studentId = Number(h.student_id);
-        const months = result.get(studentId) ?? new Map<number, { owed: number; partial: boolean }>();
-        const cell = months.get(key) ?? { owed: 0, partial: false };
-        cell.owed = this.roundMoney(cell.owed + Number(h.outstanding));
-        if (Number(h.amount_paid) > 0) cell.partial = true;
+        const months = result.get(studentId) ?? new Map<number, DefaulterOwedMonth>();
+        const cell = months.get(key) ?? { owed: 0, partial: false, heads: [] };
+        const outstanding = Number(h.outstanding);
+        const paid = Number(h.amount_paid) > 0;
+        cell.owed = this.roundMoney(cell.owed + outstanding);
+        if (paid) cell.partial = true;
+        // Same rows as the month total, so the heads always add back up to it.
+        const name = (h.head_name ?? '').trim() || 'OTHER';
+        const head = cell.heads.find((x) => x.name === name);
+        if (head) {
+          head.owed = this.roundMoney(head.owed + outstanding);
+          head.partial = head.partial || paid;
+        } else cell.heads.push({ name, owed: this.roundMoney(outstanding), partial: paid });
         months.set(key, cell);
         result.set(studentId, months);
       }
