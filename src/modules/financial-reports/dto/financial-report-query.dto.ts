@@ -1,4 +1,5 @@
 import {
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -414,6 +415,21 @@ export class ListDefaultersQueryDto extends StudentScopeFilterQueryDto {
   arrear_month?: string;
 }
 
+/** The defaulters sheet's columns, in sheet order — what the export's column picker chooses from (TAFSD-301). */
+export const DEFAULTER_COLUMN_KEYS = [
+  'sno',
+  'cc',
+  'gr',
+  'link_to_gr',
+  'level',
+  'name',
+  'status',
+  'months',
+  'amount',
+  'remarks',
+] as const;
+export type DefaulterColumnKey = (typeof DEFAULTER_COLUMN_KEYS)[number];
+
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
@@ -424,4 +440,16 @@ export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @Transform(toOptionalBoolean)
   @IsBoolean()
   breakdown_by_head?: boolean;
+
+  /**
+   * TAFSD-301: the columns to include, from DEFAULTER_COLUMN_KEYS. Always
+   * written in the standard order whatever order they arrive in. Omitted =
+   * every column (the full sheet).
+   */
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(DEFAULTER_COLUMN_KEYS, { each: true })
+  columns?: DefaulterColumnKey[];
 }

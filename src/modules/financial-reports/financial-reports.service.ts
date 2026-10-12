@@ -37,12 +37,14 @@ import type {
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
   FinancialReportQueryDto,
+  DefaulterColumnKey,
   ListDefaultersQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
   ListFeeMatrixQueryDto,
   StudentScopeFilterQueryDto,
 } from './dto/financial-report-query.dto';
+import { DEFAULTER_COLUMN_KEYS } from './dto/financial-report-query.dto';
 import type {
   CreateFeeHeadsSnapshotDto,
   ListFeeHeadsSnapshotsQueryDto,
@@ -2855,37 +2857,49 @@ export class FinancialReportsService {
     // one it is the whole school and gets the plain name.
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
 
+    // TAFSD-301: the columns the user picked, in the standard order. None
+    // picked (the param omitted) is the full sheet, as before.
+    const picked = new Set<DefaulterColumnKey>(query.columns?.length ? query.columns : DEFAULTER_COLUMN_KEYS);
+    const show = (key: DefaulterColumnKey) => picked.has(key);
+
     if (query.format === 'csv') {
-      const cols = sheetColumns(sheetRows);
+      const cols = show('months') ? sheetColumns(sheetRows) : [];
+      const fixed: Array<[DefaulterColumnKey, string, (r: SheetRow, i: number) => string | number]> = [
+        ['sno', 'S#', (_r, i) => i + 1],
+        ['cc', 'C.C.', (r) => Number(r.item.cc)],
+        ['gr', 'G.R.#', (r) => String(r.item.gr_number ?? '')],
+        ['link_to_gr', 'Link to GR', (r) => linkToGr(r.item)],
+        ['level', 'Level', (r) => level(r.item)],
+        ['name', 'Student Name', (r) => String(r.item.student_name ?? '')],
+        ['status', 'Status', (r) => statusFor(r.item)],
+      ];
+      const before = fixed.filter(([k]) => show(k));
       const header = [
-        'Campus', 'S#', 'C.C.', 'G.R.#', 'Link to GR', 'Level', 'Student Name', 'Status',
-        ...cols.map((c) => c.label), 'Defaulting Amount', 'Remarks',
+        'Campus',
+        ...before.map(([, h]) => h),
+        ...cols.map((c) => c.label),
+        ...(show('amount') ? ['Defaulting Amount'] : []),
+        ...(show('remarks') ? ['Remarks'] : []),
       ];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
       for (const campus of campuses) {
         campus.rows.forEach((r, i) => {
           const cells = [
             this.defaulterCampusLabel(campus.code, campus.name),
-            i + 1,
-            Number(r.item.cc),
-            String(r.item.gr_number ?? ''),
-            linkToGr(r.item),
-            level(r.item),
-            String(r.item.student_name ?? ''),
-            statusFor(r.item),
+            ...before.map(([, , v]) => v(r, i)),
             ...cols.map((c) => {
               const cell = cellFor(r, c);
               if (!cell) return '';
               return breakdown ? headLines(cell.heads).join('; ') : cell.owed;
             }),
-            r.total,
-            remarkFor(r),
+            ...(show('amount') ? [r.total] : []),
+            ...(show('remarks') ? [remarkFor(r)] : []),
           ];
           lines.push(cells.map((v) => this.csvCell(v)).join(','));
         });
       }
       return {
-        buffer: Buffer.from(`﻿${lines.join('\n')}`, 'utf8'),
+        buffer: Buffer.from(`\ufeff${lines.join('\n')}`, 'utf8'),
         filename: `${basename}.csv`,
         contentType: 'text/csv; charset=utf-8',
       };
@@ -2920,13 +2934,81 @@ export class FinancialReportsService {
 
     for (const campus of campuses) {
       const sheet = workbook.addWorksheet(this.sanitizeSheetName(campus.code || campus.name));
-      const cols = sheetColumns(campus.rows);
-      const labels = cols.map((c) => c.label);
-      // S#, C.C., G.R. #, LINK TO GR, LEVEL, STUDENT NAME, STATUS, then the months.
-      const NAME_COL = 6;
-      const FIRST_MONTH_COL = 8;
-      const amountCol = FIRST_MONTH_COL + cols.length;
-      const remarksCol = amountCol + 1;
+      // Column specs in the standard order, narrowed to the picked ones
+      // (TAFSD-301). The months expand to one column per month.
+      type Spec = {
+        header: string;
+        width: number;
+        /** Text that may run long: wrap it. */
+        wrap?: boolean;
+        /** Summed into the TOTAL row. */
+        total?: (r: SheetRow) => number;
+        fill: (cell: ExcelJS.Cell, r: SheetRow, i: number) => number | void;
+        amount?: boolean;
+        month?: boolean;
+      };
+      const specs: Spec[] = [];
+      if (show('sno')) specs.push({ header: 'S#', width: 5, fill: (c, _r, i) => void (c.value = i + 1) });
+      if (show('cc')) specs.push({ header: 'C.C.', width: 8, fill: (c, r) => void (c.value = Number(r.item.cc)) });
+      if (show('gr'))
+        specs.push({
+          header: 'G.R. #',
+          width: 8,
+          fill: (c, r) => {
+            const gr = String(r.item.gr_number ?? '').trim();
+            c.value = /^\d+$/.test(gr) ? Number(gr) : gr;
+          },
+        });
+      if (show('link_to_gr'))
+        specs.push({ header: 'LINK TO GR', width: 14, wrap: true, fill: (c, r) => void (c.value = linkToGr(r.item)) });
+      if (show('level')) specs.push({ header: 'LEVEL', width: 11, fill: (c, r) => void (c.value = level(r.item)) });
+      if (show('name'))
+        specs.push({
+          header: 'STUDENT NAME',
+          width: 30,
+          wrap: true,
+          fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
+        });
+      if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
+      if (show('months')) {
+        for (const col of sheetColumns(campus.rows)) {
+          specs.push({
+            header: col.label,
+            width: breakdown ? 22 : 10,
+            wrap: breakdown,
+            month: true,
+            // A breakdown cell is text and can't be summed.
+            total: breakdown ? undefined : (r) => cellFor(r, col)?.owed ?? 0,
+            fill: (cell, r) => {
+              const owed = cellFor(r, col);
+              if (!owed) return;
+              if (breakdown) {
+                // Text, one head per line — DEFAULTING AMOUNT and TOTAL stay numeric.
+                const lines = headLines(owed.heads);
+                cell.value = lines.join('\n');
+                return lines.length;
+              }
+              cell.value = owed.owed;
+              // Part-paid month: the remaining balance, shown "BP 10940" as on
+              // the manual sheets. Still a number, so the row sums.
+              cell.numFmt = owed.partial ? '"BP "0' : '0';
+            },
+          });
+        }
+      }
+      if (show('amount'))
+        specs.push({
+          header: 'DEFAULTING AMOUNT',
+          width: 15,
+          amount: true,
+          total: (r) => r.total,
+          fill: (c, r) => {
+            c.value = r.total;
+            c.numFmt = '0';
+          },
+        });
+      if (show('remarks')) specs.push({ header: 'REMARKS', width: 22, fill: (c, r) => void (c.value = remarkFor(r)) });
+      const lastCol = Math.max(specs.length, 1);
 
       // Title block (TAFSD-289): school name by class group, the classes line
       // when the sheet mixes both schools, list title, campus, session, then
@@ -2941,7 +3023,7 @@ export class FinancialReportsService {
       );
       let line = 1;
       const banner = (text: string, size: number, height: number) => {
-        sheet.mergeCells(line, 1, line, remarksCol);
+        if (lastCol > 1) sheet.mergeCells(line, 1, line, lastCol);
         const cell = sheet.getCell(line, 1);
         cell.value = text;
         cell.font = { name: SERIF, bold: true, size };
@@ -2967,96 +3049,64 @@ export class FinancialReportsService {
 
       const HEADER_ROW = line;
       const headerRow = sheet.getRow(HEADER_ROW);
-      ['S#', 'C.C.', 'G.R. #', 'LINK TO GR', 'LEVEL', 'STUDENT NAME', 'STATUS', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
-        (h, i) => {
-          const cell = headerRow.getCell(i + 1);
-          cell.value = h;
-          cell.font = { name: SERIF, bold: true, size: i + 1 === amountCol ? 9 : 11 };
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-          cell.border = box;
-        },
-      );
+      specs.forEach((spec, i) => {
+        const cell = headerRow.getCell(i + 1);
+        cell.value = spec.header;
+        cell.font = { name: SERIF, bold: true, size: spec.amount ? 9 : 11 };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = box;
+        sheet.getColumn(i + 1).width = spec.width;
+      });
       headerRow.height = 30;
 
-      sheet.getColumn(1).width = 5;
-      sheet.getColumn(2).width = 8;
-      sheet.getColumn(3).width = 8;
-      sheet.getColumn(4).width = 14;
-      sheet.getColumn(5).width = 11;
-      sheet.getColumn(NAME_COL).width = 30;
-      sheet.getColumn(7).width = 11;
-      for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = breakdown ? 22 : 10;
-      sheet.getColumn(amountCol).width = 15;
-      sheet.getColumn(remarksCol).width = 22;
-
       let rowIdx = HEADER_ROW + 1;
-      let grandTotal = 0;
       campus.rows.forEach((r, i) => {
         const row = sheet.getRow(rowIdx);
-        row.getCell(1).value = i + 1;
-        row.getCell(2).value = Number(r.item.cc);
-        const gr = String(r.item.gr_number ?? '').trim();
-        row.getCell(3).value = /^\d+$/.test(gr) ? Number(gr) : gr;
-        row.getCell(4).value = linkToGr(r.item);
-        row.getCell(5).value = level(r.item);
-        row.getCell(NAME_COL).value = String(r.item.student_name ?? '').toUpperCase();
-        row.getCell(7).value = statusFor(r.item);
         let lineCount = 1;
-        cols.forEach((col, c) => {
-          const owed = cellFor(r, col);
-          if (!owed) return;
-          const cell = row.getCell(FIRST_MONTH_COL + c);
-          if (breakdown) {
-            // Text, one head per line — DEFAULTING AMOUNT and TOTAL stay numeric.
-            const lines = headLines(owed.heads);
-            cell.value = lines.join('\n');
-            lineCount = Math.max(lineCount, lines.length);
-            return;
-          }
-          cell.value = owed.owed;
-          // Part-paid month: the remaining balance, shown "BP 10940" as on
-          // the manual sheets. Still a number, so the row sums.
-          cell.numFmt = owed.partial ? '"BP "0' : '0';
-        });
-        const amount = row.getCell(amountCol);
-        amount.value = r.total;
-        amount.numFmt = '0';
-        amount.font = { name: SERIF, bold: true, size: 12 };
-        grandTotal += r.total;
-        row.getCell(remarksCol).value = remarkFor(r);
-
-        for (let c = 1; c <= remarksCol; c++) {
-          const cell = row.getCell(c);
+        specs.forEach((spec, c) => {
+          const cell = row.getCell(c + 1);
+          const lines = spec.fill(cell, r, i);
+          if (typeof lines === 'number') lineCount = Math.max(lineCount, lines);
           cell.border = box;
-          const monthCell = c >= FIRST_MONTH_COL && c < amountCol;
-          cell.alignment = {
-            horizontal: 'center',
-            vertical: 'middle',
-            wrapText: c === NAME_COL || c === 4 || (breakdown && monthCell),
-          };
-          if (c !== amountCol) cell.font = { name: SERIF, size: breakdown && monthCell ? 8 : 11 };
-        }
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: Boolean(spec.wrap) };
+          cell.font = spec.amount
+            ? { name: SERIF, bold: true, size: 12 }
+            : { name: SERIF, size: breakdown && spec.month ? 8 : 11 };
+        });
         // Excel won't grow a row to fit wrapped text it didn't write itself.
         row.height = breakdown ? Math.max(22, lineCount * 11 + 6) : 22;
         rowIdx++;
       });
 
-      // TOTAL — a labelled box sitting over the last few month columns, the
-      // grand total under DEFAULTING AMOUNT, as on the paper sheet.
-      const totalRow = sheet.getRow(rowIdx);
-      const labelFrom = Math.max(1, amountCol - 3);
-      if (amountCol - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, amountCol - 1);
-      const label = totalRow.getCell(labelFrom);
-      label.value = 'TOTAL';
-      label.font = { name: SERIF, bold: true, size: 12 };
-      label.alignment = { horizontal: 'center', vertical: 'middle' };
-      const grand = totalRow.getCell(amountCol);
-      grand.value = this.roundMoney(grandTotal);
-      grand.numFmt = '0.00';
-      grand.font = { name: SERIF, bold: true, size: 12 };
-      grand.alignment = { horizontal: 'center', vertical: 'middle' };
-      for (let c = labelFrom; c <= amountCol; c++) totalRow.getCell(c).border = box;
-      totalRow.height = 22;
+      // TOTAL — the grand total under DEFAULTING AMOUNT, as on the paper sheet,
+      // with a labelled box over the few columns before it. Without DEFAULTING
+      // AMOUNT, each month column that is still a number gets its own total;
+      // with nothing numeric left there is no TOTAL row.
+      const totalCols = specs
+        .map((spec, i) => ({ spec, col: i + 1 }))
+        .filter(({ spec }) => spec.total && (spec.amount || !show('amount')));
+      if (totalCols.length) {
+        const totalRow = sheet.getRow(rowIdx);
+        const firstTotal = totalCols[0].col;
+        if (firstTotal > 1) {
+          const labelFrom = Math.max(1, firstTotal - 3);
+          if (firstTotal - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, firstTotal - 1);
+          const label = totalRow.getCell(labelFrom);
+          label.value = 'TOTAL';
+          label.font = { name: SERIF, bold: true, size: 12 };
+          label.alignment = { horizontal: 'center', vertical: 'middle' };
+          for (let c = labelFrom; c < firstTotal; c++) totalRow.getCell(c).border = box;
+        }
+        for (const { spec, col } of totalCols) {
+          const cell = totalRow.getCell(col);
+          cell.value = this.roundMoney(campus.rows.reduce((sum, r) => sum + spec.total!(r), 0));
+          cell.numFmt = spec.amount ? '0.00' : '0';
+          cell.font = { name: SERIF, bold: true, size: 12 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          cell.border = box;
+        }
+        totalRow.height = 22;
+      }
 
       sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_ROW }];
       sheet.pageSetup = {
