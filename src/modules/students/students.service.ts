@@ -400,6 +400,10 @@ export class StudentsService {
         `;
         const abnormalCcs = abnormalStudents.map(s => s.student_id);
         where.cc = { in: abnormalCcs };
+      } else if (auditType === 'no_app_signup') {
+        where.families = {
+          OR: [{ email: null }, { password_hash: null }],
+        };
       }
     }
 
