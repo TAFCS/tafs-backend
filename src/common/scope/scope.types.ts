@@ -158,3 +158,19 @@ export function whereForStudents(scope: UserScope) {
     classes: scope.segments.length > 0 ? { segment_id: { in: scope.segments } } : undefined,
   });
 }
+
+/**
+ * Prisma `where` fragment scoping a query over `vouchers`, by the placement
+ * snapshotted on the voucher at issue (never rewritten, so it reflects who was
+ * actually billed). SEGMENT is applied through the voucher's class, exactly as
+ * for students -- hand-rolled campus/class/section checks used to skip it, so a
+ * segment-only scoped user saw every voucher.
+ */
+export function whereForVouchers(scope: UserScope) {
+  return compact({
+    campus_id: maybeIn(scope.campuses),
+    class_id: maybeIn(scope.classes),
+    section_id: maybeIn(scope.sections),
+    classes: scope.segments.length > 0 ? { segment_id: { in: scope.segments } } : undefined,
+  });
+}

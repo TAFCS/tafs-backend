@@ -12,6 +12,7 @@ import {
   scopeFromEntries,
   whereForEmployees,
   whereForStudents,
+  whereForVouchers,
   type UserScope,
 } from './scope.types';
 
@@ -259,5 +260,10 @@ export class ScopeService {
   whereForStudents(user: Parameters<ScopeService['assertDimension']>[0]) {
     if (this.isExempt(user)) return {};
     return whereForStudents(this.scopeOf(user));
+  }
+
+  whereForVouchers(user: Parameters<ScopeService['assertDimension']>[0]) {
+    if (this.isExempt(user)) return {};
+    return whereForVouchers(this.scopeOf(user));
   }
 }

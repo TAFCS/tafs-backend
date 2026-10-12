@@ -7,6 +7,7 @@ import {
   scopeFromEntries,
   whereForEmployees,
   whereForStudents,
+  whereForVouchers,
   type UserScope,
 } from './scope.types';
 
@@ -87,6 +88,33 @@ describe('scope semantics', () => {
         class_id: { in: [7] },
         section_id: { in: [9] },
       });
+    });
+  });
+
+  describe('whereForVouchers', () => {
+    it('is an empty fragment when unrestricted', () => {
+      expect(whereForVouchers(scope())).toEqual({});
+    });
+
+    // A segment-only user (e.g. O/A Levels) used to see every voucher: the
+    // hand-rolled check read campus/class/section and nothing else.
+    it('applies a segment-only scope through the voucher class', () => {
+      expect(whereForVouchers(scope({ segments: [3] }))).toEqual({
+        classes: { segment_id: { in: [3] } },
+      });
+    });
+
+    it('applies every student dimension on the voucher snapshot', () => {
+      expect(whereForVouchers(scope({ campuses: [1], classes: [7], sections: [9], segments: [3] }))).toEqual({
+        campus_id: { in: [1] },
+        class_id: { in: [7] },
+        section_id: { in: [9] },
+        classes: { segment_id: { in: [3] } },
+      });
+    });
+
+    it('ignores employee-only dimensions', () => {
+      expect(whereForVouchers(scope({ departments: [5], staffCategories: [6] }))).toEqual({});
     });
   });
 });

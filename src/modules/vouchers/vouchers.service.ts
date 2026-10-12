@@ -333,38 +333,51 @@ export class VouchersService {
     ) { }
 
     /**
-     * Non-throwing scope check for a voucher's own snapshot campus/class/section
-     * (never rewritten after issuance, so this reflects who was actually billed,
-     * matching 'as_issued' semantics). `user` is optional and omitted entirely
-     * skips the check — only the routes threading a caller through opt in. Used
-     * to turn a 403 into a 404 on :id lookups, per the scope/tile-permission
-     * handoff: a 403 would confirm the voucher exists at another campus.
+     * Ids among `voucherIds` the caller may see, judged by each voucher's own
+     * snapshot placement (never rewritten after issuance, matching 'as_issued')
+     * across every student dimension — campus, segment, class, section — via
+     * ScopeService.whereForVouchers, so no hand-rolled check can drop one.
+     *
+     * `user` is optional and omitted entirely skips the check. That is only for
+     * internal callers with no live request (the bulk-voucher job); every staff
+     * route MUST thread its caller through.
      */
-    private canSeeVoucher(
-        user: IJwtStaffPayload | undefined,
-        voucher: { campus_id: number; class_id: number; section_id: number | null },
-    ): boolean {
-        if (!user) return true;
-        try {
-            this.scope.assertCampus(user, voucher.campus_id);
-            this.scope.assertClass(user, voucher.class_id);
-            this.scope.assertSection(user, voucher.section_id);
-            return true;
-        } catch {
-            return false;
+    private async visibleVoucherIds(user: IJwtStaffPayload | undefined, voucherIds: number[]): Promise<Set<number>> {
+        if (!user || this.scope.isUnrestricted(user)) return new Set(voucherIds);
+        const rows = await this.prisma.vouchers.findMany({
+            where: { id: { in: voucherIds }, ...this.scope.whereForVouchers(user) },
+            select: { id: true },
+        });
+        return new Set(rows.map((r) => r.id));
+    }
+
+    /**
+     * Non-throwing single-voucher counterpart of visibleVoucherIds. Used to turn
+     * a 403 into a 404 on :id lookups, per the scope/tile-permission handoff: a
+     * 403 would confirm the voucher exists at another campus.
+     */
+    private async canSeeVoucher(user: IJwtStaffPayload | undefined, voucher: { id: number }): Promise<boolean> {
+        return (await this.visibleVoucherIds(user, [voucher.id])).has(voucher.id);
+    }
+
+    /** Throws 404 unless the caller may see voucher `id`. */
+    async assertVoucherVisible(user: IJwtStaffPayload, id: number): Promise<void> {
+        if (!(await this.canSeeVoucher(user, { id }))) {
+            throw new NotFoundException(`Voucher ${id} not found`);
         }
     }
 
     /**
-     * Asserts the TARGET student of a new voucher is in the caller's scope,
-     * or a scoped user could issue a voucher for a student outside their own
-     * reach. Deliberately a standalone check the Single Voucher Issuance
+     * Throws 404 unless student `studentId` is in the caller's scope. Guards
+     * every route keyed by a student (by-student list, arrears, previews) and
+     * the TARGET student of a new voucher, or a scoped user could read or issue
+     * for a student outside their reach. Deliberately a standalone check the
      * controller calls BEFORE create(), rather than a change inside create()
      * itself — create() is also called from the bulk-voucher pipeline's
      * fire-and-forget async job (see BulkVoucherJobsService.processJob),
      * where there is no live request/caller to thread through safely.
      */
-    async assertCanIssueFor(user: IJwtStaffPayload, studentId: number): Promise<void> {
+    async assertStudentVisible(user: IJwtStaffPayload, studentId: number): Promise<void> {
         if (this.scope.isExempt(user)) return;
         const student = await this.prisma.students.findUnique({
             where: { cc: studentId },
@@ -378,6 +391,11 @@ export class VouchersService {
         })) {
             throw new NotFoundException(`Student ${studentId} not found`);
         }
+    }
+
+    /** Kept for the Single Voucher Issuance call site — see assertStudentVisible. */
+    async assertCanIssueFor(user: IJwtStaffPayload, studentId: number): Promise<void> {
+        return this.assertStudentVisible(user, studentId);
     }
 
     // True for student_fees rows produced by splitPartiallyPaid() — these are a
@@ -1473,6 +1491,17 @@ export class VouchersService {
                 ...(validIds !== undefined ? { id: { in: validIds } } : {}),
             };
 
+            // Universal scope as a floor on every dimension, segment included —
+            // the intersect above only narrows campus/class/section, and only the
+            // filters the caller happened to send. Follows the same placement the
+            // list is filtered on: the student today, or the voucher as issued.
+            if (user && !this.scope.isExempt(user)) {
+                const floor: Prisma.vouchersWhereInput = matchCurrentPlacement
+                    ? { students: this.scope.whereForStudents(user) }
+                    : this.scope.whereForVouchers(user);
+                where.AND = [floor];
+            }
+
             // Fetch all IDs matching the filter for custom sorting in JS
             const allMatching = await this.prisma.vouchers.findMany({
                 where,
@@ -1593,14 +1622,9 @@ export class VouchersService {
         // caller's own campus/class/section restriction is a floor the
         // requested filters can narrow further but never opt out of by
         // simply omitting campus_id/class_id.
-        const scopeOfCaller = this.scope.scopeOf(user);
-        const scopeClauses: Prisma.vouchersWhereInput[] = this.scope.isExempt(user) ? [] : [
-            ...(scopeOfCaller.campuses.length > 0 ? [{ campus_id: { in: scopeOfCaller.campuses } }] : []),
-            ...(scopeOfCaller.classes.length > 0 ? [{ class_id: { in: scopeOfCaller.classes } }] : []),
-            ...(scopeOfCaller.sections.length > 0 ? [{ section_id: { in: scopeOfCaller.sections } }] : []),
-        ];
-        const where: Prisma.vouchersWhereInput = scopeClauses.length > 0
-            ? { AND: [filterClause, ...scopeClauses] }
+        const scopeClause: Prisma.vouchersWhereInput = this.scope.whereForVouchers(user);
+        const where: Prisma.vouchersWhereInput = Object.keys(scopeClause).length > 0
+            ? { AND: [filterClause, scopeClause] }
             : filterClause;
 
         const [total, vouchers, classTerms] = await Promise.all([
@@ -2670,7 +2694,7 @@ export class VouchersService {
             getClassTermMap(this.prisma),
         ]);
 
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher with ID ${id} not found`);
         }
 
@@ -2992,7 +3016,7 @@ export class VouchersService {
             include: { voucher_heads: true },
         });
 
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
 
@@ -3856,7 +3880,7 @@ export class VouchersService {
             include: { voucher_heads: { include: { student_fees: true } } },
         });
 
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
         }
 
@@ -4955,6 +4979,16 @@ export class VouchersService {
         if (stored) return stored;
 
         return this.renderAndStorePdfBuffer(voucherId, generatedByName);
+    }
+
+    /**
+     * `voucherIds` narrowed to the ones the caller may see, order kept.
+     * Out-of-scope ids are dropped silently, same as releaseVouchers — never a
+     * hard error that would leak whether an out-of-scope id exists.
+     */
+    async filterVisibleVoucherIds(user: IJwtStaffPayload, voucherIds: number[]): Promise<number[]> {
+        const visible = await this.visibleVoucherIds(user, voucherIds);
+        return voucherIds.filter((id) => visible.has(id));
     }
 
     async batchExport(voucherIds: number[], generatedByName: string | undefined, res: Response): Promise<void> {
@@ -6564,7 +6598,7 @@ export class VouchersService {
             }
         });
 
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
 
@@ -7164,7 +7198,8 @@ export class VouchersService {
         // Out-of-scope candidates are silently skipped, same as already-
         // released ones — never released, never a hard error that would leak
         // whether an out-of-scope id exists.
-        const held = candidates.filter((v) => v.released_to_parent_at == null && this.canSeeVoucher(user, v));
+        const visible = await this.visibleVoucherIds(user, candidates.map((v) => v.id));
+        const held = candidates.filter((v) => v.released_to_parent_at == null && visible.has(v.id));
         const skipped = uniqueIds.length - held.length;
         const voucherIds = held.map((v) => v.id);
 
@@ -7246,7 +7281,7 @@ export class VouchersService {
             where: { id },
             include: { voucher_heads: { include: { student_fees: true } } },
         });
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
 
@@ -7433,7 +7468,7 @@ export class VouchersService {
             where: { id },
             include: { voucher_heads: { include: { student_fees: true } } },
         });
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
         if (voucher.status !== 'WAIVED') {
@@ -7550,7 +7585,7 @@ export class VouchersService {
             include: { voucher_heads: { include: { student_fees: true } } },
         });
 
-        if (!voucher || !this.canSeeVoucher(user, voucher)) {
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
             throw new NotFoundException(`Voucher #${id} not found`);
         }
 
@@ -7629,10 +7664,11 @@ export class VouchersService {
         return result;
     }
 
-    async batchPreview(dto: BatchPreviewDto) {
+    async batchPreview(dto: BatchPreviewDto, user: IJwtStaffPayload) {
         const feeDates = getMonthlyFeeDates(dto.fee_date_from, dto.fee_date_to);
 
         const { studentRecords, matchingFees, existingVouchers } = await this.bulkLogic.fetchBaseData({
+            student_scope: this.scope.whereForStudents(user),
             campus_ids: dto.campus_ids,
             class_ids: dto.class_ids,
             section_ids: dto.section_ids,

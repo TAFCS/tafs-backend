@@ -95,11 +95,13 @@ export class VouchersController {
     async getArrears(
         @Query('student_id') studentIdStr: string,
         @Query('fee_date') feeDateStr: string,
+        @CurrentUser() user: IJwtStaffPayload,
         @Query('waive_surcharge') waiveSurchargeStr?: string,
     ) {
         const studentId = parseInt(studentIdStr, 10);
         const feeDate = new Date(feeDateStr);
         const waiveSurcharge = waiveSurchargeStr === 'true';
+        await this.vouchersService.assertStudentVisible(user, studentId);
 
         const result = await this.vouchersService.computeArrears(studentId, feeDate, waiveSurcharge);
         return {
@@ -124,8 +126,10 @@ export class VouchersController {
     async previewPayImmediate(
         @Query('student_id') studentIdStr: string,
         @Query('fee_date') feeDateStr: string,
+        @CurrentUser() user: IJwtStaffPayload,
         @Query('issue_date') issueDateStr?: string,
     ) {
+        await this.vouchersService.assertStudentVisible(user, parseInt(studentIdStr, 10));
         return {
             success: true,
             data: await this.vouchersService.previewPayImmediate(parseInt(studentIdStr, 10), feeDateStr, issueDateStr),
@@ -176,7 +180,8 @@ export class VouchersController {
             ability.can(Action.Read, 'Voucher') ||
             ability.can(Action.Manage, 'all'),
     )
-    async findByStudent(@Param('cc', ParseIntPipe) cc: number) {
+    async findByStudent(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
+        await this.vouchersService.assertStudentVisible(user, cc);
         const vouchers = await this.vouchersService.findByStudentCC(cc);
         return {
             success: true,
@@ -283,7 +288,9 @@ export class VouchersController {
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: GenerateVoucherPdfDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
+        await this.vouchersService.assertVoucherVisible(user, id);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         const result = await this.vouchersService.generatePdf(
             id,
@@ -322,7 +329,9 @@ export class VouchersController {
     async generateMainColumnReceipt(
         @Param('id', ParseIntPipe) id: number,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
+        await this.vouchersService.assertVoucherVisible(user, id);
         const changedBy = req.user?.username || req.user?.id || 'system';
         const result = await this.vouchersService.generateMainColumnReceipt(id, changedBy);
         return {
@@ -479,8 +488,10 @@ export class VouchersController {
     )
     async previewSplit(
         @Param('id', ParseIntPipe) id: number,
+        @CurrentUser() user: IJwtStaffPayload,
         @Query('issue_date') issueDate?: string,
     ) {
+        await this.vouchersService.assertVoucherVisible(user, id);
         return {
             success: true,
             data: await this.vouchersService.previewSplitPayImmediate(id, issueDate),
@@ -500,7 +511,9 @@ export class VouchersController {
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: SplitPartiallyPaidDto,
         @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
     ) {
+        await this.vouchersService.assertVoucherVisible(user, id);
         const changedBy = req.user?.username || req.user?.id || 'system';
         const result = await this.vouchersService.splitPartiallyPaid(id, dto, changedBy);
         return {
@@ -595,8 +608,8 @@ export class VouchersController {
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchPreview(@Body() dto: BatchPreviewDto) {
-        const data = await this.vouchersService.batchPreview(dto);
+    async batchPreview(@Body() dto: BatchPreviewDto, @CurrentUser() user: IJwtStaffPayload) {
+        const data = await this.vouchersService.batchPreview(dto, user);
         return {
             success: true,
             message: 'Batch preview generated successfully',
@@ -607,21 +620,23 @@ export class VouchersController {
     @Post('batch-export')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any) {
+    async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
+        const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         res.set({
             'Content-Type': 'application/zip',
             'Content-Disposition': 'attachment; filename=vouchers_batch.zip',
         });
-        await this.vouchersService.batchExport(dto.ids, generatedByName, res);
+        await this.vouchersService.batchExport(ids, generatedByName, res);
     }
 
     @Post('batch-merge')
     @UseGuards(JwtStaffGuard, PoliciesGuard)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
-    async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any) {
+    async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
+        const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
-        const buffer = await this.vouchersService.batchMerge(dto.ids, generatedByName);
+        const buffer = await this.vouchersService.batchMerge(ids, generatedByName);
         res.set({
             'Content-Type': 'application/pdf',
             'Content-Disposition': 'attachment; filename=vouchers_merged.pdf',
