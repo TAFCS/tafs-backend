@@ -333,8 +333,8 @@ export class VouchersService {
     ) { }
 
     /**
-     * Ids among `voucherIds` the caller may see, judged by each voucher's own
-     * snapshot placement (never rewritten after issuance, matching 'as_issued')
+     * Ids among `voucherIds` the caller may see — by the voucher's snapshot
+     * placement or the student's current one, the two views findAll offers —
      * across every student dimension — campus, segment, class, section — via
      * ScopeService.whereForVouchers, so no hand-rolled check can drop one.
      *
@@ -345,7 +345,14 @@ export class VouchersService {
     private async visibleVoucherIds(user: IJwtStaffPayload | undefined, voucherIds: number[]): Promise<Set<number>> {
         if (!user || this.scope.isUnrestricted(user)) return new Set(voucherIds);
         const rows = await this.prisma.vouchers.findMany({
-            where: { id: { in: voucherIds }, ...this.scope.whereForVouchers(user) },
+            // Either placement, matching what findAll can list: the student
+            // today ('current', the list's default) or the voucher as issued
+            // ('as_issued'). Snapshot-only made a promoted student's older
+            // vouchers show in the list but 404 on download.
+            where: {
+                id: { in: voucherIds },
+                OR: [this.scope.whereForVouchers(user), { students: this.scope.whereForStudents(user) }],
+            },
             select: { id: true },
         });
         return new Set(rows.map((r) => r.id));
