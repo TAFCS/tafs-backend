@@ -418,4 +418,10 @@ export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
+
+  /** TAFSD-293: list each owed fee head and its amount inside the month cells. */
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  breakdown_by_head?: boolean;
 }
