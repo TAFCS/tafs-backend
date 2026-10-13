@@ -16,7 +16,7 @@ import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
 import { computeTenureWindows, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
-import { calculateStatutoryContribution, calculateMonthlyIncomeTax } from '../payroll-rules/payroll-tax-calculator.util';
+import { calculateMonthlyIncomeTax, calculateStatutoryContributions } from '../payroll-rules/payroll-tax-calculator.util';
 import { SecurityDepositsService } from '../security-deposits/security-deposits.service';
 import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
@@ -48,6 +48,9 @@ interface EmployeeLineInput {
   // computeEmployeeLine via progression).
   join_date?: Date | null;
   date_of_leaving?: Date | null;
+  // TAFSD-278: skip that scheme entirely for this employee.
+  eobi_exempt?: boolean;
+  sessi_exempt?: boolean;
 }
 
 type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'SICK_LEAVE' | 'CASUAL_LEAVE' | 'ANNUAL_LEAVE' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
@@ -108,6 +111,8 @@ interface ComputedLine {
   income_tax_deduction: Prisma.Decimal;
   eobi_employer_cost: Prisma.Decimal;
   sessi_employer_cost: Prisma.Decimal;
+  eobi_exempt: boolean;
+  sessi_exempt: boolean;
   total_deductions: Prisma.Decimal;
   net_pay: Prisma.Decimal;
   after_leaving_deduction: Prisma.Decimal;
@@ -188,6 +193,8 @@ export class PayrollService {
     check_in_source: true,
     join_date: true,
     date_of_leaving: true,
+    eobi_exempt: true,
+    sessi_exempt: true,
   } as const;
 
   constructor(
@@ -650,19 +657,17 @@ export class PayrollService {
       this.payrollRules.findEffective('SESSI', periodEnd),
       this.payrollRules.findEffective('INCOME_TAX', periodEnd),
     ]);
-    const eobiValue = (eobiRule?.value_json ?? {}) as { employer_percent?: number; employee_percent?: number; wage_base_amount?: number };
-    const sessiValue = (sessiRule?.value_json ?? {}) as { employer_percent?: number; wage_base_amount?: number };
     const incomeTaxValue = (incomeTaxRule?.value_json ?? {}) as { slabs?: { min: number; max: number | null; fixed_amount: number; rate_percent: number }[] };
 
-    const eobiDeduction = eobiRule
-      ? calculateStatutoryContribution(eobiValue.wage_base_amount ?? 0, eobiValue.employee_percent ?? 0)
-      : new Prisma.Decimal(0);
-    const eobiEmployerCost = eobiRule
-      ? calculateStatutoryContribution(eobiValue.wage_base_amount ?? 0, eobiValue.employer_percent ?? 0)
-      : new Prisma.Decimal(0);
-    const sessiEmployerCost = sessiRule
-      ? calculateStatutoryContribution(sessiValue.wage_base_amount ?? 0, sessiValue.employer_percent ?? 0)
-      : new Prisma.Decimal(0);
+    const eobiExempt = employee.eobi_exempt === true;
+    const sessiExempt = employee.sessi_exempt === true;
+    const { eobiDeduction, eobiEmployerCost, sessiEmployerCost } = calculateStatutoryContributions(
+      {
+        eobi: eobiRule ? ((eobiRule.value_json ?? {}) as { employer_percent?: number; employee_percent?: number; wage_base_amount?: number }) : null,
+        sessi: sessiRule ? ((sessiRule.value_json ?? {}) as { employer_percent?: number; wage_base_amount?: number }) : null,
+      },
+      { eobi: eobiExempt, sessi: sessiExempt },
+    );
     const incomeTaxDeduction = incomeTaxValue.slabs
       ? calculateMonthlyIncomeTax(monthlyPay.times(12).toNumber(), incomeTaxValue.slabs)
       : new Prisma.Decimal(0);
@@ -708,6 +713,8 @@ export class PayrollService {
       income_tax_deduction: incomeTaxDeduction,
       eobi_employer_cost: eobiEmployerCost,
       sessi_employer_cost: sessiEmployerCost,
+      eobi_exempt: eobiExempt,
+      sessi_exempt: sessiExempt,
       total_deductions: totalDeductions.toDecimalPlaces(2),
       net_pay: netPay.toDecimalPlaces(2),
       after_leaving_deduction: afterLeavingDeduction.toDecimalPlaces(2),
@@ -1629,6 +1636,8 @@ export class PayrollService {
           check_in_source: true,
           join_date: true,
           date_of_leaving: true,
+          eobi_exempt: true,
+          sessi_exempt: true,
         },
       }),
     ]);

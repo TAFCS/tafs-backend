@@ -36,7 +36,7 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
   reporting_time: 'schedule_pay', leaving_time: 'schedule_pay',
   check_in_source: 'schedule_pay', late_relaxation_minutes: 'schedule_pay',
   days_per_week: 'schedule_pay', monthly_pay: 'schedule_pay',
-  payroll_enabled: 'schedule_pay',
+  payroll_enabled: 'schedule_pay', eobi_exempt: 'schedule_pay', sessi_exempt: 'schedule_pay',
   account_number: 'schedule_pay', bank_name: 'schedule_pay',
 
   // ── Class & Sections tab ──
