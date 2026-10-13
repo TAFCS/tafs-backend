@@ -31,6 +31,12 @@ export const EMPTY_SCOPE: UserScope = Object.freeze({
   staffCategories: [],
 });
 
+/**
+ * No record has this id. A dimension narrowed to [NO_MATCH_ID] is restricted
+ * to nothing — the only way to say so, since an empty array means unrestricted.
+ */
+export const NO_MATCH_ID = -1;
+
 /** Maps a scope field onto its persisted ScopeDimension enum value. */
 export const SCOPE_FIELD_BY_DIMENSION: Record<ScopeDimension, keyof UserScope> = {
   CAMPUS: 'campuses',

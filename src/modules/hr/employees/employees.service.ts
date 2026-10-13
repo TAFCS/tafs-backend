@@ -2213,7 +2213,9 @@ export class EmployeesService {
     employeeId: number,
     dto: PreviousEmployerDto,
     changedBy?: string,
+    caller?: IJwtStaffPayload,
   ) {
+    await this.assertCanTouch(employeeId, caller);
     await this.findOne(employeeId);
     const name = dto.employer_name?.trim();
     if (!name) {
@@ -2260,13 +2262,14 @@ export class EmployeesService {
     return row;
   }
 
-  async deletePreviousEmployer(id: number, changedBy?: string) {
+  async deletePreviousEmployer(id: number, changedBy?: string, caller?: IJwtStaffPayload) {
     const existing = await this.prisma.employee_previous_employers.findUnique({
       where: { id },
     });
     if (!existing) {
       throw new NotFoundException(`Previous employer with ID ${id} not found`);
     }
+    await this.assertCanTouch(existing.employee_id, caller);
 
     await this.prisma.employee_previous_employers.delete({ where: { id } });
 

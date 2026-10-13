@@ -103,7 +103,7 @@ export class AuthService {
       scope,
     ] = await Promise.all([
       this.permissionsService.getEffectiveAccess(user.id, user.role),
-      this.scopeService.resolve(user.id),
+      this.scopeService.resolveEffective(user.id),
     ]);
 
     const allowedClassIds = user.allowed_class_ids ?? [];

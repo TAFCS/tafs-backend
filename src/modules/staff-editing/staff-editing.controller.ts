@@ -23,20 +23,25 @@ import { HardDeleteStudentDto } from './dto/hard-delete-student.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 
+// TileActionGuard is what enforces @RequireAction. Without it every decorator
+// below was inert and any staff login could edit — or hard-delete — any
+// student. Routes with no action of their own fall back to the class default.
 @Controller('staff-editing')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, TileActionGuard)
+@RequireAction('student.directory#view')
 export class StaffEditingController {
   constructor(private readonly staffEditingService: StaffEditingService) {}
 
   // ─── Students ─────────────────────────────────────────────────────────────
 
   @Get('students')
-  async getStudents(@Query() query: GetSheetStudentsDto) {
-    const result = await this.staffEditingService.getStudents(query);
+  async getStudents(@Query() query: GetSheetStudentsDto, @CurrentUser() user: IJwtStaffPayload) {
+    const result = await this.staffEditingService.getStudents(query, user);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -45,7 +50,8 @@ export class StaffEditingController {
   }
 
   @Get('students/:id')
-  async getStudent(@Param('id', ParseIntPipe) id: number) {
+  async getStudent(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const student = await this.staffEditingService.getStudent(id);
     return createApiResponse(
       student,
@@ -61,6 +67,7 @@ export class StaffEditingController {
     @Body() dto: UpdateStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const student = await this.staffEditingService.updateStudent(id, dto, user.username);
     return createApiResponse(
       student,
@@ -76,6 +83,7 @@ export class StaffEditingController {
     @Body() dto: HardDeleteStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const result = await this.staffEditingService.hardDeleteStudent(id, user.username, dto.reason);
     return createApiResponse(
       result,
@@ -91,6 +99,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const result = await this.staffEditingService.updateFamilyAddress(id, dto, user.username);
     return createApiResponse(
       result,
@@ -104,7 +113,9 @@ export class StaffEditingController {
   @Get('students/:studentId/guardians')
   async getStudentGuardians(
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardians =
       await this.staffEditingService.getStudentGuardians(studentId);
     return createApiResponse(
@@ -121,6 +132,7 @@ export class StaffEditingController {
     @Body() dto: CreateGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardian = await this.staffEditingService.addGuardianToStudent(
       studentId,
       dto,
@@ -140,6 +152,7 @@ export class StaffEditingController {
     @Body() dto: LinkExistingGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardian = await this.staffEditingService.linkExistingGuardian(
       studentId,
       dto,
@@ -160,6 +173,7 @@ export class StaffEditingController {
     @Body() dto: UpdateGuardianRelationshipDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const result = await this.staffEditingService.updateGuardianRelationship(
       studentId,
       guardianId,
@@ -181,6 +195,7 @@ export class StaffEditingController {
     @Param('guardianId', ParseIntPipe) guardianId: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     await this.staffEditingService.removeGuardianFromStudent(
       studentId,
       guardianId,
@@ -196,7 +211,8 @@ export class StaffEditingController {
   // ─── Guardians (standalone) ───────────────────────────────────────────────
 
   @Get('guardians/:id')
-  async getGuardian(@Param('id', ParseIntPipe) id: number) {
+  async getGuardian(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const guardian = await this.staffEditingService.getGuardian(id);
     return createApiResponse(
       guardian,
@@ -212,6 +228,7 @@ export class StaffEditingController {
     @Body() dto: UpdateGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const guardian = await this.staffEditingService.updateGuardian(id, dto, user.username);
     return createApiResponse(
       guardian,
@@ -221,7 +238,7 @@ export class StaffEditingController {
   }
 
   @Get('guardians/by-nic/:nic')
-  async getGuardianByNic(@Param('nic') nic: string) {
+  async getGuardianByNic(@Param('nic') nic: string, @CurrentUser() user: IJwtStaffPayload) {
     const guardian = await this.staffEditingService.getGuardianByNic(nic);
     return createApiResponse(
       guardian,
@@ -237,6 +254,7 @@ export class StaffEditingController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const result = await this.staffEditingService.deleteGuardian(id, user.username);
     return createApiResponse(
       result,
@@ -254,6 +272,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertAdmission(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
@@ -264,6 +283,7 @@ export class StaffEditingController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'admission', id);
     await this.staffEditingService.deleteAdmission(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
@@ -275,6 +295,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertActivity(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
@@ -285,6 +306,7 @@ export class StaffEditingController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'activity', id);
     await this.staffEditingService.deleteActivity(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
@@ -296,6 +318,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertLanguage(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
@@ -306,6 +329,7 @@ export class StaffEditingController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'language', id);
     await this.staffEditingService.deleteLanguage(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
@@ -317,6 +341,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertPreviousSchool(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
@@ -327,6 +352,7 @@ export class StaffEditingController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'school', id);
     await this.staffEditingService.deletePreviousSchool(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
@@ -338,6 +364,7 @@ export class StaffEditingController {
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 }

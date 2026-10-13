@@ -105,9 +105,17 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // admin_inbox carries every family's live messages — only join it if the
         // staff member actually has chat-view permission (mirrors the REST
         // PoliciesGuard check on GET /chat/inbox), not just "any authenticated staff".
+        //
+        // A staff member with a data scope must not see families outside it:
+        // they join admin_inbox_scoped instead, and emitToAdmins delivers each
+        // family event only to the scoped sockets that can see that family.
+        // Scope is read live here, never trusted from the 90-day token.
         if (this.canViewChats(payload)) {
-          client.join('admin_inbox');
-          console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
+          const live = await this.chatService.withLiveScope(payload);
+          client.data.tafsPayload = live;
+          const room = this.chatService.isUnrestrictedStaff(live) ? 'admin_inbox' : 'admin_inbox_scoped';
+          client.join(room);
+          console.log(`[ChatGateway] Staff joined ${room}: ${client.id}`);
         }
         client.join(`staff_inbox_${payload.sub}`);
         if (payload.role === 'FINANCE_CLERK') client.join('finance_queue');
@@ -142,9 +150,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
 
         if (!wasOnline) {
-          this.server
-            .to('admin_inbox')
-            .emit('userStatusChanged', { familyId, status: 'ONLINE' });
+          void this.emitToAdmins(familyId, 'userStatusChanged', { familyId, status: 'ONLINE' });
         }
         console.log(`[ChatGateway] Parent ${familyId} connected: ${client.id}`);
       }
@@ -173,7 +179,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       if (!isNaN(familyId)) {
         const stillOnline = (this.server.sockets.adapter.rooms.get(`family_app_${familyId}`)?.size ?? 0) > 0;
         if (!stillOnline) {
-          this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'OFFLINE' });
+          void this.emitToAdmins(familyId, 'userStatusChanged', { familyId, status: 'OFFLINE' });
         }
       }
     }
@@ -339,7 +345,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     content: string,
   ) {
     const formattedConv = this.chatService.formatConversation(updatedConv);
-    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
+    await this.emitToAdmins(familyId, 'receiveMessage', { message: newMessage, conversation: formattedConv });
     this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
 
     if (senderType === 'ADMIN') {
@@ -389,11 +395,28 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return !!room && room.size > 0;
   }
 
+  /**
+   * Emits a family's event to every admin allowed to see that family: all of
+   * admin_inbox (unrestricted staff), and each admin_inbox_scoped socket whose
+   * scope covers it. fetchSockets() spans the cluster via the redis adapter.
+   */
+  private async emitToAdmins(familyId: number, event: string, body: unknown) {
+    this.server.to('admin_inbox').emit(event, body);
+    const scoped = await this.server.in('admin_inbox_scoped').fetchSockets();
+    const seen = new Map<string, boolean>();
+    for (const socket of scoped) {
+      const user = socket.data.tafsPayload;
+      if (!user?.sub) continue;
+      if (!seen.has(user.sub)) seen.set(user.sub, await this.chatService.staffCanSeeFamily(user, familyId));
+      if (seen.get(user.sub)) socket.emit(event, body);
+    }
+  }
+
   broadcastMessagesRead(familyId: number, by: 'ADMIN' | 'GUARDIAN') {
     if (by === 'ADMIN') {
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
-      this.server.to('admin_inbox').emit('messagesRead', { familyId, by: 'GUARDIAN' });
+      void this.emitToAdmins(familyId, 'messagesRead', { familyId, by: 'GUARDIAN' });
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
   }
@@ -416,6 +439,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       if (authorizedFamilyId !== familyId) {
         return { error: 'forbidden' };
       }
+    }
+    // Staff only to families inside their scope (same rule as POST /chat/messages/admin).
+    if (payload?.userType === 'STAFF' && !(await this.chatService.staffCanSeeFamily(await this.chatService.withLiveScope(payload), familyId))) {
+      return { error: 'forbidden' };
     }
 
     // Resolve sender name: use provided name, or derive from JWT payload
@@ -461,6 +488,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             : 'GUARDIAN';
 
     const familyId = Number(data.familyId);
+    if (payload?.userType === 'STAFF' && !(await this.chatService.staffCanSeeFamily(await this.chatService.withLiveScope(payload), familyId))) {
+      return { error: 'forbidden' };
+    }
     if (payload?.userType === 'PARENT') {
       const authorizedFamilyId = Number(payload.familyId ?? payload.sub);
       if (authorizedFamilyId !== familyId) {
@@ -494,7 +524,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (role === 'ADMIN') {
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
-      this.server.to('admin_inbox').emit('messagesRead', { familyId: familyId, by: 'GUARDIAN' });
+      void this.emitToAdmins(familyId, 'messagesRead', { familyId: familyId, by: 'GUARDIAN' });
       // Also notify other devices of the same family
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
@@ -569,7 +599,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // Deliver only to the specific family room
     this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message, conversation });
-    this.server.to('admin_inbox').emit('receiveMessage', { message, conversation });
+    await this.emitToAdmins(familyId, 'receiveMessage', { message, conversation });
 
     // Background FCM push
     this.fcmService
@@ -715,7 +745,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       });
 
       // 2. Broadcast deletion
-      this.server.to('admin_inbox').emit('messageDeleted', { messageId: data.messageId, familyId: familyId });
+      void this.emitToAdmins(familyId, 'messageDeleted', { messageId: data.messageId, familyId: familyId });
       this.server.to(`family_app_${familyId}`).emit('messageDeleted', { messageId: data.messageId });
       
       return { success: true };

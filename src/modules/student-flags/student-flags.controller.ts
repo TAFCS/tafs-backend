@@ -15,7 +15,8 @@ export class StudentFlagsController {
 
   @Get(':cc')
   @ApiOperation({ summary: 'Get all flags for a student' })
-  async getFlags(@Param('cc', ParseIntPipe) cc: number) {
+  async getFlags(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.svc.assertStudentVisible(user, cc);
     return createApiResponse(await this.svc.getFlags(cc), HttpStatus.OK, 'Flags retrieved');
   }
 
@@ -27,6 +28,7 @@ export class StudentFlagsController {
     @Body('reminder_date') reminderDate: string | undefined,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.svc.assertStudentVisible(user, cc);
     const date = reminderDate ? new Date(reminderDate) : undefined;
     return createApiResponse(await this.svc.addFlag(cc, flag, date, user.username), HttpStatus.OK, 'Flag added');
   }
@@ -38,6 +40,7 @@ export class StudentFlagsController {
     @Param('flag') flag: string,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.svc.assertStudentVisible(user, cc);
     return createApiResponse(await this.svc.markWorkDone(cc, flag, user.username), HttpStatus.OK, 'Status updated');
   }
 
@@ -48,14 +51,15 @@ export class StudentFlagsController {
     @Param('flag') flag: string,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.svc.assertStudentVisible(user, cc);
     return createApiResponse(await this.svc.removeFlag(cc, flag, user.username), HttpStatus.OK, 'Flag removed');
   }
 
   @Get('all/notifications')
   @ApiOperation({ summary: 'Get all pending notifications (reminder_date <= now)' })
-  async pendingNotifications() {
+  async pendingNotifications(@CurrentUser() user: IJwtStaffPayload) {
     return createApiResponse(
-      await this.svc.getPendingNotifications(),
+      await this.svc.getPendingNotifications(user),
       HttpStatus.OK,
       'Pending notifications retrieved'
     );

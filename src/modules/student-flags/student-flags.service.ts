@@ -1,13 +1,25 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class StudentFlagsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /** 404 unless the student is in the caller's scope — flags carry no placement of their own. */
+  async assertStudentVisible(user: IJwtStaffPayload, studentId: number): Promise<void> {
+    if (this.scope.isExempt(user)) return;
+    const visible = await this.prisma.students.count({
+      where: { cc: studentId, ...this.scope.whereForStudents(user) },
+    });
+    if (!visible) throw new NotFoundException(`Student #${studentId} not found`);
+  }
 
   async onModuleInit() {
     await this.setupTrigger();
@@ -143,9 +155,10 @@ export class StudentFlagsService implements OnModuleInit {
 
   // ── NOTIFICATIONS ────────────────────────────────────────────────────────
 
-  async getPendingNotifications() {
+  async getPendingNotifications(user: IJwtStaffPayload) {
     const students = await this.prisma.students.findMany({
       where: {
+        ...this.scope.whereForStudents(user),
         student_flags: {
           some: {
             work_done: false,

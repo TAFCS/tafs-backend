@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ScopeService } from '../scope/scope.service';
 import {
   IJwtParentPayload,
   IJwtStaffPayload,
@@ -16,6 +17,7 @@ export class JwtStaffOrParentGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly scopeService: ScopeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -31,7 +33,25 @@ export class JwtStaffOrParentGuard implements CanActivate {
         | IJwtParentPayload;
 
       if (payload.userType === 'STAFF') {
-        request.user = payload;
+        // Same as JwtStaffStrategy.validate: an inactive account is refused,
+        // and scope is read live rather than trusted from the 90-day token.
+        const [user, scope] = await Promise.all([
+          this.prisma.users.findUnique({
+            where: { id: payload.sub },
+            select: { is_active: true },
+          }),
+          this.scopeService.resolveEffective(payload.sub),
+        ]);
+        if (!user || !user.is_active) {
+          throw new UnauthorizedException('Account is inactive');
+        }
+        request.user = {
+          ...payload,
+          allowedClassIds: payload.allowedClassIds ?? [],
+          permissions: payload.permissions ?? [],
+          actions: payload.actions ?? [],
+          scope,
+        };
         return true;
       }
 

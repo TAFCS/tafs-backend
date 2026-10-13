@@ -6,6 +6,7 @@ import { readUntilMigrated } from '../../utils/pending-migration.util';
 import {
   effectiveScopeOf,
   isFullyUnrestricted,
+  NO_MATCH_ID,
   SCOPE_DIMENSION_LABEL,
   SCOPE_FIELD_BY_DIMENSION,
   scopeAllows,
@@ -57,6 +58,37 @@ export class ScopeService {
       },
     );
     return scopeFromEntries(entries);
+  }
+
+  /**
+   * The scope a session is actually held to: `resolve()` with SEGMENT folded
+   * into CLASS. Use for issuing tokens and checking requests; use `resolve()`
+   * wherever the raw entries are shown or edited (the access admin panel), or
+   * the derived classes would be saved back as explicit class scope.
+   *
+   * Segment scope means "students in classes of these segments", but most
+   * checks are written against class alone (assertClass, classIdsFor, a
+   * class_id filter) and silently skipped segment — a segment-scoped user
+   * reached every class. Narrowing `classes` to the segments' classes makes
+   * every class-based check enforce segment without each one remembering to.
+   */
+  async resolveEffective(userId: string): Promise<UserScope> {
+    return this.withSegmentClasses(await this.resolve(userId));
+  }
+
+  async withSegmentClasses(scope: UserScope): Promise<UserScope> {
+    if (scope.segments.length === 0) return scope;
+    const rows = await this.prisma.classes.findMany({
+      where: { segment_id: { in: scope.segments } },
+      select: { id: true },
+    });
+    const inSegments = new Set(rows.map((r) => r.id));
+    // Dimensions AND together, so an explicit class scope is intersected.
+    const classes = scope.classes.length > 0
+      ? scope.classes.filter((id) => inSegments.has(id))
+      : [...inSegments];
+    // Never [] here — that would read as unrestricted.
+    return { ...scope, classes: classes.length > 0 ? classes : [NO_MATCH_ID] };
   }
 
   async setScope(userId: string, scope: Partial<UserScope>): Promise<UserScope> {

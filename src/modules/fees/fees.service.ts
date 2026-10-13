@@ -2,6 +2,8 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { SubmitStudentFeesDto } from './dto/submit-student-fees.dto';
 
 @Injectable()
@@ -9,6 +11,7 @@ export class FeesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly vouchersService: VouchersService,
+    private readonly scope: ScopeService,
   ) {}
 
   /**
@@ -16,10 +19,10 @@ export class FeesService {
    * Uses PostgreSQL ON CONFLICT DO UPDATE so the operation is idempotent:
    * re-submitting the same student+fee_type+month updates the amount in place.
    */
-  async submitStudentFees(dto: SubmitStudentFeesDto) {
-    // Resolve cc_number → internal student id
+  async submitStudentFees(dto: SubmitStudentFeesDto, user: IJwtStaffPayload) {
+    // Resolve cc_number → internal student id. Out of scope reads as missing.
     const student = await this.prisma.students.findFirst({
-      where: { cc: dto.cc, deleted_at: null },
+      where: { cc: dto.cc, deleted_at: null, ...this.scope.whereForStudents(user) },
       select: { cc: true },
     });
     if (!student) {

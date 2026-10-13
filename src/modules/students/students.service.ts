@@ -1871,7 +1871,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user) this.scope.assertCampus(user, student.campus_id);
+    if (user) await this.assertStudentsVisible(user, [id]);
 
     if (!isDepartureStatus(student.status)) {
       throw new BadRequestException(
@@ -2089,7 +2089,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user) this.scope.assertCampus(user, student.campus_id);
+    if (user) await this.assertStudentsVisible(user, [id]);
 
     if ((student.status as any) === newStatus) {
       throw new BadRequestException(`Student is already in ${newStatus} status`);
@@ -2390,7 +2390,30 @@ export class StudentsService {
     needing.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
   }
 
-  async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string) {
+  /**
+   * 404 unless every cc is a student in the caller's scope (all dimensions).
+   * For routes keyed by a student id that otherwise never see the caller.
+   */
+  async assertStudentsVisible(user: IJwtStaffPayload, ccs: number[]): Promise<void> {
+    const unique = [...new Set(ccs)];
+    if (unique.length === 0 || this.scope.isExempt(user)) return;
+    const visible = await this.prisma.students.count({
+      where: { cc: { in: unique }, ...this.scope.whereForStudents(user) },
+    });
+    if (visible !== unique.length) throw new NotFoundException('Student not found');
+  }
+
+  /** Asserts each placement field that is set lies inside the caller's scope. */
+  assertPlacementInScope(
+    user: IJwtStaffPayload,
+    placement: { campus_id?: number | null; class_id?: number | null; section_id?: number | null },
+  ): void {
+    if (placement.campus_id != null) this.scope.assertCampus(user, placement.campus_id);
+    if (placement.class_id != null) this.scope.assertClass(user, placement.class_id);
+    if (placement.section_id != null) this.scope.assertSection(user, placement.section_id);
+  }
+
+  async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string, user?: IJwtStaffPayload) {
     const result = await this.promoteBulk({
       from: dto.from,
       to: dto.to,
@@ -2403,7 +2426,7 @@ export class StudentsService {
       student_ids: [dto.student_id],
       reason: dto.reason,
       dry_run: dto.dry_run,
-    }, changedBy);
+    }, changedBy, user);
 
     return {
       ...result,
@@ -2411,7 +2434,7 @@ export class StudentsService {
     };
   }
 
-  async promoteBulk(dto: PromoteBulkStudentsDto, changedBy: string) {
+  async promoteBulk(dto: PromoteBulkStudentsDto, changedBy: string, user?: IJwtStaffPayload) {
     // Validate: exactly one of `to`, `graduate`, `expel`, or `left` must be set
     const isGraduating = !!dto.graduate;
     const isExpelling = !!dto.expel;
@@ -2439,6 +2462,13 @@ export class StudentsService {
       throw new BadRequestException('From and to class must be different for promotion');
     }
 
+    // A scoped user may only promote into a placement inside their own scope.
+    if (user) {
+      if (dto.to_campus_id != null) this.scope.assertCampus(user, dto.to_campus_id);
+      if (toClass) this.scope.assertClass(user, toClass.id);
+      if (dto.to_section_id != null) this.scope.assertSection(user, dto.to_section_id);
+    }
+
     const dryRun = !!dto.dry_run;
     const distinctStudentIds = dto.student_ids?.length
       ? Array.from(new Set(dto.student_ids))
@@ -2449,7 +2479,12 @@ export class StudentsService {
     // When explicit student_ids are provided, we look up exactly those students by cc —
     // no extra filters, because the user explicitly asked for those IDs. Mismatches
     // (wrong class, wrong campus) are handled gracefully in processPromotionForStudent.
-    const where: Prisma.studentsWhereInput = { deleted_at: null };
+    // Out-of-scope students drop out here, so an explicit id outside the
+    // caller's scope gets the same "not found" outcome as a missing one.
+    const where: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      ...(user ? { AND: [this.scope.whereForStudents(user)] } : {}),
+    };
 
     if (!isExplicitIds) {
       if (dto.campus_id !== undefined) {

@@ -17,6 +17,8 @@ import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
+import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Controller('fees')
 export class FeesController {
@@ -27,8 +29,8 @@ export class FeesController {
   @UseGuards(JwtStaffGuard, PoliciesGuard)
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
-  async submitStudentFees(@Body() dto: SubmitStudentFeesDto) {
-    const result = await this.feesService.submitStudentFees(dto);
+  async submitStudentFees(@Body() dto: SubmitStudentFeesDto, @CurrentUser() user: IJwtStaffPayload) {
+    const result = await this.feesService.submitStudentFees(dto, user);
     return {
       success: true,
       message: `${result.upserted} fee record(s) saved successfully`,

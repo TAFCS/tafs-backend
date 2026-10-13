@@ -21,6 +21,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { CurrentUser } from '../../decorators/current-user.decorator';
 import { TeachingGroupsService } from './teaching-groups.service';
 import {
   BulkEnrollDto,
@@ -127,8 +128,9 @@ export class TeachingGroupsController {
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async listStudentSubjectEnrollments(
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.service.listStudentSubjectEnrollments(studentId);
+    const data = await this.service.listStudentSubjectEnrollments(studentId, user);
     return createApiResponse(data, HttpStatus.OK, 'Student subject enrollments retrieved');
   }
 }

@@ -221,7 +221,7 @@ export class EmployeesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.upsertPreviousEmployer(id, dto, changedBy);
+    const data = await this.employeesService.upsertPreviousEmployer(id, dto, changedBy, user);
     return createApiResponse(data, HttpStatus.OK, 'Previous employer saved successfully');
   }
 
@@ -233,7 +233,7 @@ export class EmployeesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.deletePreviousEmployer(id, changedBy);
+    const data = await this.employeesService.deletePreviousEmployer(id, changedBy, user);
     return createApiResponse(data, HttpStatus.OK, 'Previous employer deleted successfully');
   }
 
