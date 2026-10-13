@@ -250,7 +250,10 @@ describe('VouchersService — supersession by fee date', () => {
           ]),
           update: jest.fn().mockResolvedValue({}),
         },
-        bank_accounts: { findFirst: jest.fn().mockResolvedValue({ id: 1, is_default: true }) },
+        bank_accounts: {
+          findFirst: jest.fn().mockResolvedValue({ id: 1, is_default: true }),
+          findUnique: jest.fn().mockResolvedValue({ bank_name: 'Meezan Bank' }),
+        },
         voucher_arrear_surcharges: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       };
 
