@@ -129,6 +129,10 @@ export function defaulterFilterLines(
   names: DefaulterFilterNames,
   monthsLine: string | null,
   omitClasses = false,
+  /** The page's default status filter, which is not called out. Defaulters: enrolled; the other reports: all. */
+  defaultStatuses: readonly string[] = ['ENROLLED'],
+  /** Report-specific filters already in words ("FEE STATUS: PAID"), placed after the shared ones. */
+  extraLines: readonly string[] = [],
 ): string[] {
   const named = (ids: number[] | undefined, map: Map<number, string>) =>
     (ids ?? []).map((id) => (map.get(id) ?? `#${id}`).trim().toUpperCase()).join(', ');
@@ -144,12 +148,15 @@ export function defaulterFilterLines(
     lines.push(`${plural(query.segment_id.length, 'SEGMENT', 'SEGMENTS')}: ${named(query.segment_id, names.segments)}`);
   if (query.section_id?.length)
     lines.push(`${plural(query.section_id.length, 'SECTION', 'SECTIONS')}: ${named(query.section_id, names.sections)}`);
-  // Enrolled-only is the page's default, so it is not called out. Cleared (no
-  // status at all) widens the list to every status — say so, or a sheet full
-  // of left students would read like the ordinary list.
+  // The page's default status filter is not called out (enrolled-only on the
+  // defaulters page). Where that default is narrower than "all", a cleared
+  // filter widens the list to every status — say so, or a sheet full of left
+  // students would read like the ordinary list.
   const statuses = query.student_status ?? [];
-  if (statuses.length === 0) lines.push('ALL STUDENT STATUSES');
-  else if (!(statuses.length === 1 && statuses[0] === 'ENROLLED')) {
+  const isDefault =
+    statuses.length === defaultStatuses.length && statuses.every((s) => defaultStatuses.includes(s));
+  if (statuses.length === 0 && !isDefault) lines.push('ALL STUDENT STATUSES');
+  else if (statuses.length && !isDefault) {
     const words = statuses.map((s) => STATUS_WORDS[s] ?? s.replace(/_/g, ' '));
     lines.push(`${words.join(' & ')} STUDENTS ONLY`);
   }
@@ -162,6 +169,7 @@ export function defaulterFilterLines(
     lines.push(`GRADUATED FROM: ${named(query.graduated_from_class_id, names.classes)}`);
   if (query.graduated_year_range) lines.push(`GRADUATED ${query.graduated_year_range.replace('-', '–')}`);
   if (query.cc != null) lines.push(`C.C. ${query.cc}`);
+  lines.push(...extraLines);
 
   // A class filter the title block already names is still a filter: no line,
   // but not "ALL STUDENTS" either.
