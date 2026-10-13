@@ -73,7 +73,31 @@ export class ScopeService {
    * every class-based check enforce segment without each one remembering to.
    */
   async resolveEffective(userId: string): Promise<UserScope> {
-    return this.withSegmentClasses(await this.resolve(userId));
+    return this.withCategoryDepartments(await this.withSegmentClasses(await this.resolve(userId)));
+  }
+
+  /**
+   * Staff-category scope also means "in those categories' departments".
+   * Department and category AND together on the employee row, so with
+   * Departments on All a category-only scope matched on `staff_category_id`
+   * alone -- and an employee whose `department_id` disagrees with their
+   * category's department (rows from before categories were tied to
+   * departments, TAFSD-276) leaked into the view. Narrowing `departments` to
+   * the categories' parents closes that for every employee check at once.
+   */
+  async withCategoryDepartments(scope: UserScope): Promise<UserScope> {
+    if (scope.staffCategories.length === 0) return scope;
+    const rows = await this.prisma.staff_categories.findMany({
+      where: { id: { in: scope.staffCategories } },
+      select: { department_id: true },
+    });
+    const parents = new Set(rows.map((r) => r.department_id));
+    // Dimensions AND together, so an explicit department scope is intersected.
+    const departments = scope.departments.length > 0
+      ? scope.departments.filter((id) => parents.has(id))
+      : [...parents];
+    // Never [] here — that would read as unrestricted.
+    return { ...scope, departments: departments.length > 0 ? departments : [NO_MATCH_ID] };
   }
 
   async withSegmentClasses(scope: UserScope): Promise<UserScope> {

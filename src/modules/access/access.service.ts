@@ -149,6 +149,29 @@ export class AccessService {
   }
 
   /**
+   * Staff categories belong to a department. A category whose department is
+   * not among a restricted Departments list can never match anyone (the two
+   * dimensions AND together), so it is refused rather than saved as a scope
+   * that silently selects nothing. Departments on "All" (empty) take any
+   * category.
+   */
+  private async assertStaffCategoriesFitDepartments(scope: Partial<UserScope>) {
+    const categories = scope.staffCategories ?? [];
+    const departments = scope.departments ?? [];
+    if (categories.length === 0 || departments.length === 0) return;
+    const rows = await this.prisma.staff_categories.findMany({
+      where: { id: { in: [...new Set(categories)] } },
+      select: { id: true, name: true, department_id: true },
+    });
+    const outside = rows.filter((r) => !departments.includes(r.department_id));
+    if (outside.length === 0) return;
+    throw new BadRequestException(
+      `${outside.map((r) => r.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} not in the selected ` +
+        'Departments. Add the department, or remove the category.',
+    );
+  }
+
+  /**
    * Everything a scope picker can offer. Small, stable reference data -- the
    * panel fetches it once and filters client-side.
    */
@@ -401,6 +424,7 @@ export class AccessService {
     if (dto.scope !== undefined) {
       this.assertGrantableScope(actingUser, dto.scope);
       await this.assertSegmentsFitDepartments(dto.scope);
+      await this.assertStaffCategoriesFitDepartments(dto.scope);
     }
 
     const packIds = [...new Set(dto.packIds ?? [])];
