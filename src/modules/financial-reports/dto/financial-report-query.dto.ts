@@ -132,15 +132,17 @@ export class ListDepositsQueryDto extends FinancialReportQueryDto {
 }
 
 export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
 }
 
 export class ExportDepositsQueryDto extends ListDepositsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
 }
 
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;

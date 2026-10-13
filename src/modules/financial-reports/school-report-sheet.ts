@@ -51,12 +51,7 @@ export function writeSchoolSheets(
   sheets: SchoolSheet[],
   opts: SchoolSheetOptions,
 ): void {
-  const [y, m, d] = opts.exportDate.split('-').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  const dayLine = `DAY :${date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }).toUpperCase()}`;
-  const dateLine = `DATE : ${date
-    .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
-    .toUpperCase()}`;
+  const { dayLine, dateLine } = dayDateLines(opts.exportDate);
 
   const usedTabs = new Set<string>();
   for (const sheetData of sheets) {
@@ -167,6 +162,18 @@ export function writeSchoolSheets(
       margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
     };
   }
+}
+
+/** "DAY :MONDAY" / "DATE : OCTOBER 12, 2026", as on the school's sheets. */
+export function dayDateLines(isoDate: string): { dayLine: string; dateLine: string } {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return {
+    dayLine: `DAY :${date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }).toUpperCase()}`,
+    dateLine: `DATE : ${date
+      .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+      .toUpperCase()}`,
+  };
 }
 
 /** "FROM 1 AUGUST 2026 TO 31 OCTOBER 2026" (or "ON …" for a single day). */
