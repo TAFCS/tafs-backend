@@ -10,9 +10,11 @@ export class BackupsSchedulerService {
 
     /**
      * Automated Database Backup
-     * Runs at 12:00 AM, 12:00 PM, and 4:00 PM Pakistan Time (PKT)
+     * Runs twice a day, Pakistan Time (PKT): 4:00 PM, after school hours, and
+     * 12:00 AM. A backup reads every table in-process for about 75 s, so it
+     * stays out of the busy school day (TAFSD-326).
      */
-    @Cron('0 0,12,16 * * *', {
+    @Cron('0 0,16 * * *', {
         timeZone: 'Asia/Karachi',
     })
     async handleAutomatedBackup() {
