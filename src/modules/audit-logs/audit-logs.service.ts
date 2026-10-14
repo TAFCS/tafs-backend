@@ -65,6 +65,13 @@ const HOUSE_BALANCER_STUDENT_NOTES = [
 
 const SUPER_ADMIN_ONLY_ENTITY_TYPES = ['PARENT_CHANGE_REQUEST'];
 
+/**
+ * The activity feed counts at most this many matches (TAFSD-326). An exact
+ * count read ~140k rows on every page load (0.4 s idle, up to 12 s under
+ * load); past the cap the total is reported as a lower bound.
+ */
+const AUDIT_COUNT_CAP = 10_000;
+
 /** entity_id on these rows is employee_profiles.id */
 const EMPLOYEE_ENTITY_TYPES = new Set(['STAFF_ATTENDANCE', 'EMPLOYEE']);
 
@@ -518,8 +525,9 @@ export class AuditLogsService {
         take: limit,
         skip: offset,
       }),
-      this.prisma.audit_logs.count({ where: finalWhere }),
+      this.prisma.audit_logs.count({ where: finalWhere, take: AUDIT_COUNT_CAP + 1 }),
     ]);
+    const totalCapped = total > AUDIT_COUNT_CAP;
 
     const parentIds = data.map((d) => d.id);
     const children =
@@ -538,7 +546,8 @@ export class AuditLogsService {
       childrenByParent.set(child.parent_id, list);
     }
 
-    return this.enrichAndReturn(data, childrenByParent, total);
+    const result = await this.enrichAndReturn(data, childrenByParent, totalCapped ? AUDIT_COUNT_CAP : total);
+    return { ...result, total_capped: totalCapped };
   }
 
   private collectActors(
