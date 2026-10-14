@@ -41,6 +41,9 @@ import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
 const SEED_ACTOR_ID = '00000000-0000-0000-0000-000000000001';
 import { TileGrantDto } from '../../access/dto/access.dto';
 
+/** Largest value a Postgres INT4 column can hold. */
+const INT4_MAX = 2_147_483_647;
+
 export class ClassSectionAssignmentDto {
   @IsInt()
   class_id: number;
@@ -1674,7 +1677,8 @@ export class EmployeesService {
       }
     }
 
-    if (isNumeric) {
+    // An id past INT4 can't exist, and Prisma throws (500) binding it (TAFSD-326).
+    if (isNumeric && Number(trimmed) <= INT4_MAX) {
       const exact = await this.prisma.employee_profiles.findFirst({
         where: { id: Number(trimmed), ...scopeWhere },
         select: { id: true, full_name: true, employee_code: true },
