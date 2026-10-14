@@ -894,7 +894,8 @@ model users {
   employee_shift_overrides_created                                         employee_shift_overrides[]   @relation("ShiftOverrideCreatedBy")
   fcm_device_tokens                                                        fcm_device_tokens[]
   leave_requests_reviewed                                                  leave_requests[]             @relation("LeaveRequestReviewedBy")
-  notice_board_posts                                                       notice_board_posts[]
+  notice_board_posts                                                       notice_board_posts[]         @relation("NoticePostPostedBy")
+  notice_board_posts_reviewed                                              notice_board_posts[]         @relation("NoticePostReviewedBy")
   processed_change_requests                                                parent_change_requests[]
   payroll_run_exclusions_excluded                                          payroll_run_exclusions[]     @relation("PayrollExclusionExcludedBy")
   payroll_run_lines_disbursed                                              payroll_run_lines[]          @relation("PayrollLineDisbursedBy")
@@ -2159,10 +2160,16 @@ model notice_board_posts {
   notification_only Boolean             @default(false)
   student_statuses  student_status[]    @default([])
   academic_years    String[]            @default([])
-  users             users               @relation(fields: [posted_by], references: [id])
+  status            NoticePostStatus    @default(APPROVED)
+  reviewed_by       String?             @db.VarChar(255)
+  reviewed_at       DateTime?           @db.Timestamp(6)
+  review_reason     String?             @db.VarChar(500)
+  users             users               @relation("NoticePostPostedBy", fields: [posted_by], references: [id])
+  reviewer          users?              @relation("NoticePostReviewedBy", fields: [reviewed_by], references: [id])
   post_reads        notice_post_reads[]
 
   @@index([posted_at(sort: Desc)])
+  @@index([status])
   @@index([campus_ids], type: Gin)
   @@index([class_ids], type: Gin)
   @@index([section_ids], type: Gin)
@@ -2725,6 +2732,12 @@ enum StaffAttendanceStatus {
   SICK_LEAVE
   CASUAL_LEAVE
   ANNUAL_LEAVE
+}
+
+enum NoticePostStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum LeaveRequestStatus {

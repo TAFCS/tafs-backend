@@ -1,5 +1,13 @@
-import { ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
-import { student_status } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
+import { NoticePostStatus, StaffRole, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
@@ -10,6 +18,27 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
+
+const POST_LIST_INCLUDE = {
+  users: { select: { full_name: true } },
+  reviewer: { select: { full_name: true } },
+  _count: { select: { post_reads: true } },
+} as const;
+
+type PostListRow = {
+  student_ccs: number[];
+  campus_ids: number[];
+  class_ids: number[];
+  section_ids: number[];
+  student_statuses: student_status[];
+  academic_years: string[];
+};
+
+const REVIEW_STATUSES: NoticePostStatus[] = [
+  NoticePostStatus.PENDING,
+  NoticePostStatus.APPROVED,
+  NoticePostStatus.REJECTED,
+];
 
 @Injectable()
 export class NoticeBoardService {
@@ -131,6 +160,7 @@ export class NoticeBoardService {
     const posts = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        status: NoticePostStatus.APPROVED,
         notification_only: false,
         OR: [
           ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
@@ -167,17 +197,18 @@ export class NoticeBoardService {
 
   // ── Admin-facing ─────────────────────────────────────────────────────────
 
+  // The feed shows live posts plus the caller's own pending / rejected ones
+  // (badged in the UI). Other people's pending posts live on the review page
+  // only — superadmins included.
   async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload) {
     const fetched = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
         ...(cursor ? { id: { lt: cursor } } : {}),
       },
       orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
-      include: {
-        users: { select: { full_name: true } },
-        _count: { select: { post_reads: true } },
-      },
+      include: POST_LIST_INCLUDE,
       take: 30,
     });
 
@@ -194,52 +225,7 @@ export class NoticeBoardService {
       }
     }
 
-    const allStudentCcs = [...new Set(posts.flatMap((p) => p.student_ccs || []))];
-    const students = allStudentCcs.length
-      ? await this.prisma.students.findMany({
-          where: { cc: { in: allStudentCcs } },
-          select: {
-            cc: true,
-            full_name: true,
-            gr_number: true,
-            families: { select: { household_name: true } },
-          },
-        })
-      : [];
-    const studentMap = new Map(
-      students.map((s) => [
-        s.cc,
-        {
-          cc: s.cc,
-          full_name: s.full_name,
-          gr_number: s.gr_number,
-          household_name: s.families?.household_name || null,
-        },
-      ]),
-    );
-
-    const postsWithStudents = posts.map((post) => ({
-      ...post,
-      targeted_students: (post.student_ccs || [])
-        .map((cc) => studentMap.get(cc))
-        .filter(Boolean),
-    }));
-
-    let schoolWideReached: number | null = null;
-    const postsWithReach = await Promise.all(
-      postsWithStudents.map(async (post) => {
-        if (this._isSchoolWide(post)) {
-          if (schoolWideReached == null) {
-            schoolWideReached = await this._countAudienceFamilies(post);
-          }
-          return { ...post, total_reached: schoolWideReached };
-        }
-        return {
-          ...post,
-          total_reached: await this._countAudienceFamilies(post),
-        };
-      }),
-    );
+    const postsWithReach = await this._withTargetsAndReach(posts);
 
     const allHolidays = await this.prisma.academic_calendar_days.findMany({
       where: {
@@ -307,6 +293,7 @@ export class NoticeBoardService {
         media_types: [],
         is_pinned: isPinned,
         notification_only: false,
+        status: NoticePostStatus.APPROVED,
         posted_at: h.date,
         expires_at: null,
         deleted_at: null,
@@ -325,11 +312,66 @@ export class NoticeBoardService {
     return merged;
   }
 
+  /** Adds targeted_students and total_reached to each post, for the admin views. */
+  private async _withTargetsAndReach<T extends PostListRow>(posts: T[]) {
+    const allStudentCcs = [...new Set(posts.flatMap((p) => p.student_ccs || []))];
+    const students = allStudentCcs.length
+      ? await this.prisma.students.findMany({
+          where: { cc: { in: allStudentCcs } },
+          select: {
+            cc: true,
+            full_name: true,
+            gr_number: true,
+            families: { select: { household_name: true } },
+          },
+        })
+      : [];
+    const studentMap = new Map(
+      students.map((s) => [
+        s.cc,
+        {
+          cc: s.cc,
+          full_name: s.full_name,
+          gr_number: s.gr_number,
+          household_name: s.families?.household_name || null,
+        },
+      ]),
+    );
+
+    const postsWithStudents = posts.map((post) => ({
+      ...post,
+      targeted_students: (post.student_ccs || [])
+        .map((cc) => studentMap.get(cc))
+        .filter(Boolean),
+    }));
+
+    let schoolWideReached: number | null = null;
+    const postsWithReach = await Promise.all(
+      postsWithStudents.map(async (post) => {
+        if (this._isSchoolWide(post)) {
+          if (schoolWideReached == null) {
+            schoolWideReached = await this._countAudienceFamilies(post);
+          }
+          return { ...post, total_reached: schoolWideReached };
+        }
+        return {
+          ...post,
+          total_reached: await this._countAudienceFamilies(post),
+        };
+      }),
+    );
+
+    return postsWithReach;
+  }
+
   // `user` is omitted by in-process callers that post a system notice on
   // someone's behalf (e.g. ParentChangeRequestsService) — only the admin HTTP
-  // route threads a caller through, so only it is scope-checked here.
+  // route threads a caller through, so only it is scope-checked here, and
+  // only it can land in review: a post by anyone but a SUPER_ADMIN is held as
+  // PENDING, with no push, until a superadmin approves it (approvePost).
   async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string, user?: IJwtStaffPayload) {
     if (user) await this.assertTargetingInScope(user, dto);
+    const needsReview = !!user && !this.isSuperAdmin(user);
     // Student targeting is exclusive in the feed — strip campus/class/section so
     // the stored post can't look school-/campus-scoped while only listing kids.
     const studentCcs = dto.student_ccs ?? [];
@@ -355,15 +397,13 @@ export class NoticeBoardService {
         is_pinned: dto.is_pinned ?? false,
         notification_only: dto.notification_only ?? false,
         expires_at: dto.expires_at ? new Date(dto.expires_at) : null,
+        status: needsReview ? NoticePostStatus.PENDING : NoticePostStatus.APPROVED,
       },
-      include: {
-        users: { select: { full_name: true } },
-        _count: { select: { post_reads: true } },
-      },
+      include: POST_LIST_INCLUDE,
     });
 
     const noteParts = [
-      `Posted "${dto.title?.trim() || 'untitled'}"`,
+      `${needsReview ? 'Submitted for approval' : 'Posted'} "${dto.title?.trim() || 'untitled'}"`,
       this._audienceSummary(post),
       `Body: ${this._snippet(dto.body)}`,
     ];
@@ -381,9 +421,11 @@ export class NoticeBoardService {
     });
 
     // Fire-and-forget push notifications to all scoped families
-    this._sendPostNotifications(post).catch((err) =>
-      console.error('Notice board FCM dispatch failed:', err.message),
-    );
+    if (!needsReview) {
+      this._sendPostNotifications(post).catch((err) =>
+        console.error('Notice board FCM dispatch failed:', err.message),
+      );
+    }
 
     return {
       ...post,
@@ -592,9 +634,24 @@ export class NoticeBoardService {
     if (!post) throw new NotFoundException('Post not found');
     await this.assertCanManagePost(user, post);
 
+    // New wording from a non-superadmin is a new submission: it goes back to
+    // PENDING (an approved post leaves families' feeds until re-approved, a
+    // rejected one is resubmitted). Pin / expiry changes alone don't.
+    const contentChanged =
+      (dto.title !== undefined && dto.title !== post.title) ||
+      (dto.body !== undefined && dto.body !== post.body);
+    const backToReview =
+      contentChanged && !this.isSuperAdmin(user) && post.status !== NoticePostStatus.PENDING;
+
     const updated = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
       data: {
+        ...(backToReview && {
+          status: NoticePostStatus.PENDING,
+          reviewed_by: null,
+          reviewed_at: null,
+          review_reason: null,
+        }),
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.body !== undefined && { body: dto.body }),
         ...(dto.is_pinned !== undefined && { is_pinned: dto.is_pinned }),
@@ -621,6 +678,7 @@ export class NoticeBoardService {
         changes.push(`expires_at "${oldExp ?? '—'}" → "${newExp ?? '—'}"`);
       }
     }
+    if (backToReview) changes.push(`status ${post.status} → PENDING (resubmitted for approval)`);
 
     if (changes.length > 0) {
       await this.auditLogs.log({
@@ -776,6 +834,141 @@ export class NoticeBoardService {
       total_read: post._count.post_reads,
       targeted_reads: targetedReads.length ? targetedReads : undefined,
     };
+  }
+
+  // ── Review (SUPER_ADMIN only) ────────────────────────────────────────────
+
+  private isSuperAdmin(user: IJwtStaffPayload): boolean {
+    return user.role === StaffRole.SUPER_ADMIN;
+  }
+
+  private assertReviewer(user: IJwtStaffPayload): void {
+    if (!this.isSuperAdmin(user)) {
+      throw new ForbiddenException('Only a superadmin can review notice board posts.');
+    }
+  }
+
+  async getReviewQueue(
+    status: string | undefined,
+    cursor: number | undefined,
+    user: IJwtStaffPayload,
+    q?: string,
+  ) {
+    this.assertReviewer(user);
+    const wanted = (status ?? NoticePostStatus.PENDING).toUpperCase() as NoticePostStatus;
+    if (!REVIEW_STATUSES.includes(wanted)) {
+      throw new BadRequestException(`status must be one of ${REVIEW_STATUSES.join(', ')}`);
+    }
+    // Pending is a queue (oldest first). The decided lists are history: only
+    // posts that went through review, newest decision first.
+    const posts = await this.prisma.notice_board_posts.findMany({
+      where: {
+        deleted_at: null,
+        status: wanted,
+        ...(wanted === NoticePostStatus.PENDING ? {} : { reviewed_at: { not: null } }),
+        ...(q?.trim()
+          ? {
+              OR: [
+                { title: { contains: q.trim(), mode: 'insensitive' as const } },
+                { body: { contains: q.trim(), mode: 'insensitive' as const } },
+                { users: { full_name: { contains: q.trim(), mode: 'insensitive' as const } } },
+              ],
+            }
+          : {}),
+      },
+      orderBy:
+        wanted === NoticePostStatus.PENDING
+          ? [{ id: 'asc' }]
+          : [{ reviewed_at: 'desc' }, { id: 'desc' }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: POST_LIST_INCLUDE,
+      take: 30,
+    });
+    return this._withTargetsAndReach(posts);
+  }
+
+  async getPendingCount(user: IJwtStaffPayload) {
+    this.assertReviewer(user);
+    const pending = await this.prisma.notice_board_posts.count({
+      where: { deleted_at: null, status: NoticePostStatus.PENDING },
+    });
+    return { pending };
+  }
+
+  async approvePost(id: number, user: IJwtStaffPayload, changedBy: string | undefined) {
+    this.assertReviewer(user);
+    const post = await this._decide(id, user, NoticePostStatus.APPROVED, null);
+
+    // Goes live now: dated at approval so it lands at the top of the feed,
+    // and families are notified only at this point.
+    this._sendPostNotifications(post).catch((err) =>
+      console.error('Notice board FCM dispatch failed:', err.message),
+    );
+    this._notifyAuthor(post, 'Notice approved', `"${post.title?.trim() || this._snippet(post.body, 60)}" is now live.`);
+
+    await this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(id),
+      action: 'APPROVED',
+      section: 'communication',
+      new_value: post.title ?? this._snippet(post.body, 80),
+      note: `Approved notice #${id} by ${post.users?.full_name ?? post.posted_by} | ${this._audienceSummary(post)}`,
+      changed_by: changedBy ?? user.sub,
+    });
+    return { ...post, total_reached: await this._countAudienceFamilies(post) };
+  }
+
+  async rejectPost(id: number, reason: string, user: IJwtStaffPayload, changedBy: string | undefined) {
+    this.assertReviewer(user);
+    const trimmed = reason?.trim();
+    if (!trimmed) throw new BadRequestException('A reason is required to reject a post.');
+    const post = await this._decide(id, user, NoticePostStatus.REJECTED, trimmed);
+
+    this._notifyAuthor(post, 'Notice not approved', `"${post.title?.trim() || this._snippet(post.body, 60)}": ${trimmed}`);
+
+    await this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(id),
+      action: 'REJECTED',
+      section: 'communication',
+      new_value: trimmed,
+      note: `Rejected notice #${id} by ${post.users?.full_name ?? post.posted_by}. Reason: ${trimmed}`,
+      changed_by: changedBy ?? user.sub,
+    });
+    return post;
+  }
+
+  /** PENDING → decision, atomically, so two reviewers can't both act on one post. */
+  private async _decide(id: number, user: IJwtStaffPayload, status: NoticePostStatus, reason: string | null) {
+    const now = new Date();
+    const { count } = await this.prisma.notice_board_posts.updateMany({
+      where: { id, deleted_at: null, status: NoticePostStatus.PENDING },
+      data: {
+        status,
+        reviewed_by: user.sub,
+        reviewed_at: now,
+        review_reason: reason,
+        ...(status === NoticePostStatus.APPROVED && { posted_at: now }),
+      },
+    });
+    if (count === 0) {
+      const exists = await this.prisma.notice_board_posts.findFirst({
+        where: { id, deleted_at: null },
+        select: { status: true },
+      });
+      if (!exists) throw new NotFoundException('Post not found');
+      throw new ConflictException(`This post is already ${exists.status.toLowerCase()}.`);
+    }
+    return this.prisma.notice_board_posts.findUniqueOrThrow({
+      where: { id },
+      include: POST_LIST_INCLUDE,
+    });
+  }
+
+  private _notifyAuthor(post: { id: number; posted_by: string }, title: string, body: string) {
+    this.fcm
+      .sendToUsers([post.posted_by], title, body, { type: 'notice_board_review', post_id: String(post.id) })
+      .catch((err) => console.error('Notice review push failed:', err.message));
   }
 
   // ── Media upload ─────────────────────────────────────────────────────────

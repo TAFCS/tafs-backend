@@ -17,6 +17,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NoticeBoardService } from './notice-board.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { RejectPostDto } from './dto/reject-post.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
@@ -82,6 +83,47 @@ export class NoticeBoardController {
   @ApiOperation({ summary: 'Admin: create a post' })
   create(@CurrentUser() user: any, @Body() dto: CreatePostDto) {
     return this.service.createPost(user.sub, dto, auditActorLabel(user), user);
+  }
+
+  // ── Review queue ─────────────────────────────────────────────────────────
+  // SUPER_ADMIN only (checked in the service): every other poster's notice
+  // waits here as PENDING until approved. Declared before the :id routes.
+
+  @Get('admin/notice-board/review')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Superadmin: list posts by review status (default PENDING), searchable by title, body or author' })
+  reviewQueue(
+    @Query('status') status: string | undefined,
+    @Query('cursor') cursor: string | undefined,
+    @Query('q') q: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getReviewQueue(status, cursor ? parseInt(cursor) : undefined, user, q);
+  }
+
+  @Get('admin/notice-board/review/count')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Superadmin: number of posts awaiting approval' })
+  reviewCount(@CurrentUser() user: any) {
+    return this.service.getPendingCount(user);
+  }
+
+  @Patch('admin/notice-board/:id/approve')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Superadmin: approve a pending post (publishes and notifies families)' })
+  approve(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.service.approvePost(id, user, auditActorLabel(user));
+  }
+
+  @Patch('admin/notice-board/:id/reject')
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Superadmin: reject a pending post with a reason' })
+  reject(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RejectPostDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.rejectPost(id, dto.reason, user, auditActorLabel(user));
   }
 
   @Patch('admin/notice-board/:id')

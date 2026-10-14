@@ -363,11 +363,14 @@ const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
 // longer leave a restricted targeting dimension empty (empty = whole school),
 // address specific students outside their scope, or edit/delete/inspect a post
 // (or holiday notice) aimed outside it — 404, never 403.
+// TAFSD-313: a post by anyone but a SUPER_ADMIN is held as PENDING until a
+// superadmin approves it on /notice-board/review; so is a non-superadmin's
+// edit to a post's wording. Review itself is role-gated, not an action.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const NOTICE_BOARD_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View posts and read stats', default: true },
 
-  { id: 'create', label: 'Post a notice (incl. media upload)', implies: ['view'] },
+  { id: 'create', label: 'Post a notice (incl. media upload)', description: 'Posts by anyone but a superadmin wait for superadmin approval before families see them.', implies: ['view'] },
   { id: 'edit', label: 'Edit or pin a notice', implies: ['view'] },
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
