@@ -11,9 +11,9 @@ import { StorageService } from '../../../common/storage/storage.service';
 import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
-import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels } from './payroll-excel.util';
+import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
-import { computeTenureWindows, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
+import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateMonthlyIncomeTax, calculateStatutoryContributions } from '../payroll-rules/payroll-tax-calculator.util';
@@ -172,6 +172,19 @@ const runInclude = {
  * were explicit product decisions, not inferred — see the conversation that
  * produced this module for the alternatives that were rejected.
  */
+/**
+ * Who is on a cycle's roster, by status: everyone ACTIVE, plus anyone who
+ * left or was terminated on or after the cycle start — they are still owed
+ * pay up to their date of leaving. Shared by the payroll run and the
+ * attendance-by-cycle matrix so the two always list the same people.
+ */
+function cycleRosterStatusWhere(periodStart: Date): Prisma.employee_profilesWhereInput[] {
+  return [
+    { employment_status: 'ACTIVE' },
+    { employment_status: { in: ['LEFT', 'TERMINATED'] }, date_of_leaving: { gte: periodStart } },
+  ];
+}
+
 @Injectable()
 export class PayrollService {
   private readonly logger = new Logger(PayrollService.name);
@@ -1372,12 +1385,7 @@ export class PayrollService {
             campus_id: dto.campus_id,
             monthly_pay: { not: null },
             payroll_enabled: true,
-            OR: [
-              { employment_status: 'ACTIVE' },
-              // Left/terminated mid-cycle: still owed pay up to their date of
-              // leaving, so they stay on the roster for the cycle it falls in.
-              { employment_status: { in: ['LEFT', 'TERMINATED'] }, date_of_leaving: { gte: periodStart } },
-            ],
+            OR: cycleRosterStatusWhere(periodStart),
           },
           select: this.employeeLineSelect,
         });
@@ -1544,6 +1552,7 @@ export class PayrollService {
     campusId: number,
     filters: Pick<AttendanceMatrixQueryDto, 'department_id' | 'segment_id' | 'staff_category_id' | 'search'>,
     user: IJwtStaffPayload,
+    periodStart: Date,
   ): Promise<number[]> {
     const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
     const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
@@ -1559,7 +1568,7 @@ export class PayrollService {
     const rows = await this.prisma.employee_profiles.findMany({
       where: {
         campus_id: campusId,
-        employment_status: 'ACTIVE',
+        OR: cycleRosterStatusWhere(periodStart),
         ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
         ...(effectiveSegmentIds?.length ? { segment_id: { in: effectiveSegmentIds } } : {}),
         ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
@@ -1598,9 +1607,9 @@ export class PayrollService {
           ? { id: { in: employeeIdOverride } }
           : {
           campus_id: campusId,
-          // Matches generateRun's employee scope — terminated staff have no
-          // attendance to show and only inflate the matrix.
-          employment_status: 'ACTIVE',
+          // Same roster as generateRun: mid-cycle leavers are still paid for
+          // part of the cycle, so they stay visible here too.
+          OR: cycleRosterStatusWhere(periodStart),
           ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
           ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
           ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
@@ -1636,14 +1645,31 @@ export class PayrollService {
           check_in_source: true,
           join_date: true,
           date_of_leaving: true,
+          employment_status: true,
           eobi_exempt: true,
           sessi_exempt: true,
         },
       }),
     ]);
 
-    const computedLines = await this.computeEmployeeLinesForRange(employees, campusId, periodStart, periodEnd);
+    const [computedLines, progressionRows] = await Promise.all([
+      this.computeEmployeeLinesForRange(employees, campusId, periodStart, periodEnd),
+      // Same overlap query computeEmployeeLinesForRange uses for proration, so
+      // the tenure shown matches the days payroll actually counts.
+      this.prisma.employee_progression_periods.findMany({
+        where: {
+          employee_id: { in: employees.map((e) => e.id) },
+          valid_from: { lte: periodEnd },
+          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+        },
+        select: { employee_id: true, employment_status: true, valid_from: true, valid_to: true },
+      }),
+    ]);
     const employeeById = new Map(employees.map((e) => [e.id, e]));
+    const progressionByEmployee = new Map<number, typeof progressionRows>();
+    for (const row of progressionRows) {
+      progressionByEmployee.set(row.employee_id, [...(progressionByEmployee.get(row.employee_id) ?? []), row]);
+    }
 
     return computedLines.map((line) => {
       const employee = employeeById.get(line.employee_id)!;
@@ -1671,6 +1697,14 @@ export class PayrollService {
         total_break_minutes: line.total_break_minutes,
         total_late_minutes: line.total_late_minutes,
         daily_breakdown: line.daily_breakdown,
+        employment_status: employee.employment_status,
+        tenure: describeCycleTenure({
+          periodStart,
+          periodEnd,
+          joinDate: employee.join_date,
+          dateOfLeaving: employee.date_of_leaving,
+          progression: progressionByEmployee.get(employee.id),
+        }),
       };
     });
   }
@@ -1688,7 +1722,7 @@ export class PayrollService {
     // First pass: fetch only IDs (cheap) so we can paginate before the expensive line computation.
     const campusEmployeeIds = await Promise.all(
       campusIds.map(async (campusId) => {
-        const ids = await this.getMatchingEmployeeIds(campusId, query, user);
+        const ids = await this.getMatchingEmployeeIds(campusId, query, user, periodStart);
         return { campusId, ids };
       }),
     );
@@ -1743,6 +1777,7 @@ export class PayrollService {
       columns.push({ header: 'Campus', width: 20, getValue: (l) => l.campus_name ?? '' });
     }
     columns.push(
+      { header: 'Joined / Left in cycle', width: 34, getValue: (l) => tenureLabel(l.tenure) },
       { header: 'Present', width: 10, getValue: (l) => l.present_days },
       { header: 'Absent / Unpaid', width: 16, getValue: (l) => l.absent_days + (l.unpaid_leave_days ?? 0) },
       { header: 'Unresolved', width: 12, getValue: (l) => l.unresolved_days },
