@@ -91,13 +91,14 @@ export class NoticeBoardController {
 
   @Get('admin/notice-board/review')
   @UseGuards(JwtStaffGuard)
-  @ApiOperation({ summary: 'Superadmin: list posts by review status (default PENDING)' })
+  @ApiOperation({ summary: 'Superadmin: list posts by review status (default PENDING), searchable by title, body or author' })
   reviewQueue(
     @Query('status') status: string | undefined,
     @Query('cursor') cursor: string | undefined,
+    @Query('q') q: string | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.service.getReviewQueue(status, cursor ? parseInt(cursor) : undefined, user);
+    return this.service.getReviewQueue(status, cursor ? parseInt(cursor) : undefined, user, q);
   }
 
   @Get('admin/notice-board/review/count')

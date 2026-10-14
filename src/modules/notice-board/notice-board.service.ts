@@ -848,7 +848,12 @@ export class NoticeBoardService {
     }
   }
 
-  async getReviewQueue(status: string | undefined, cursor: number | undefined, user: IJwtStaffPayload) {
+  async getReviewQueue(
+    status: string | undefined,
+    cursor: number | undefined,
+    user: IJwtStaffPayload,
+    q?: string,
+  ) {
     this.assertReviewer(user);
     const wanted = (status ?? NoticePostStatus.PENDING).toUpperCase() as NoticePostStatus;
     if (!REVIEW_STATUSES.includes(wanted)) {
@@ -861,9 +866,21 @@ export class NoticeBoardService {
         deleted_at: null,
         status: wanted,
         ...(wanted === NoticePostStatus.PENDING ? {} : { reviewed_at: { not: null } }),
-        ...(cursor ? { id: wanted === NoticePostStatus.PENDING ? { gt: cursor } : { lt: cursor } } : {}),
+        ...(q?.trim()
+          ? {
+              OR: [
+                { title: { contains: q.trim(), mode: 'insensitive' as const } },
+                { body: { contains: q.trim(), mode: 'insensitive' as const } },
+                { users: { full_name: { contains: q.trim(), mode: 'insensitive' as const } } },
+              ],
+            }
+          : {}),
       },
-      orderBy: wanted === NoticePostStatus.PENDING ? { id: 'asc' } : { reviewed_at: 'desc' },
+      orderBy:
+        wanted === NoticePostStatus.PENDING
+          ? [{ id: 'asc' }]
+          : [{ reviewed_at: 'desc' }, { id: 'desc' }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: POST_LIST_INCLUDE,
       take: 30,
     });
