@@ -1475,6 +1475,7 @@ export class EmployeesService {
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
       { key: 'payroll_enabled', label: 'On Payroll' },
+      { key: 'employment_subtype', label: 'Employment Subtype' },
       { key: 'days_per_week', label: 'Working Days / Week' },
       { key: 'check_in_source', label: 'Check-in Source' },
       { key: 'reporting_time', label: 'Expected Check-in' },
