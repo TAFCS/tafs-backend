@@ -1666,11 +1666,15 @@ export class PayrollService {
     });
   }
 
-  async getAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload) {
+  // `all` skips pagination: the Excel export must contain every matching
+  // employee, not just the page the screen happens to be showing.
+  async getAttendanceMatrix(
+    query: AttendanceMatrixQueryDto,
+    user: IJwtStaffPayload,
+    opts: { all?: boolean } = {},
+  ) {
     const { periodStart, periodEnd } = this.parseMatrixPeriod(query.period_start, query.period_end);
     const campusIds = await this.resolveMatrixCampusIds(user, query.campus_id);
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 50;
 
     // First pass: fetch only IDs (cheap) so we can paginate before the expensive line computation.
     const campusEmployeeIds = await Promise.all(
@@ -1684,6 +1688,8 @@ export class PayrollService {
       ids.map((id) => ({ campusId, employeeId: id })),
     );
     const total = allEntries.length;
+    const page = opts.all ? 1 : (query.page ?? 1);
+    const limit = opts.all ? Math.max(total, 1) : (query.limit ?? 50);
     const pageEntries = allEntries.slice((page - 1) * limit, page * limit);
 
     // Group this page's employees by campus for the second pass.
@@ -1716,7 +1722,7 @@ export class PayrollService {
   // color-coded to match. Includes a Campus column only when the request
   // spans more than one campus.
   async exportAttendanceMatrix(query: AttendanceMatrixQueryDto, user: IJwtStaffPayload): Promise<Buffer> {
-    const matrix = await this.getAttendanceMatrix(query, user);
+    const matrix = await this.getAttendanceMatrix(query, user, { all: true });
     const includeCampusColumn = matrix.campus_id == null;
     type Line = (typeof matrix.lines)[number];
 
