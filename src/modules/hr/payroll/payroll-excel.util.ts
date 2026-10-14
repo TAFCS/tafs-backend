@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { DayBreakdownEntry } from './payroll.service';
+import { CycleTenure, OffRollReason, offRollReason } from './tenure-window.util';
 
 type DayClassification = DayBreakdownEntry['classification'];
 
@@ -11,6 +12,8 @@ export interface ExportableAttendanceLine {
   is_mapped: boolean;
   has_punches: boolean;
   daily_breakdown: DayBreakdownEntry[];
+  /** Attendance-matrix lines only; payroll-run lines carry no tenure. */
+  tenure?: CycleTenure;
 }
 
 export interface EmployeeLineColumn<T> {
@@ -51,6 +54,30 @@ const LEGEND: [DayClassification, string][] = [
   ['UNRESOLVED', 'Unresolved'],
   ['DAY_OFF', 'Day Off'],
 ];
+
+const OFF_ROLL_TEXT: Record<OffRollReason, string> = {
+  BEFORE_JOIN: 'Not joined',
+  AFTER_LEAVE: 'Left',
+  BETWEEN_TENURES: 'Off roll',
+};
+// Diagonal grey hatch: reads as "not applicable" rather than any attendance state.
+const OFF_ROLL_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'lightUp', fgColor: { argb: 'FFD4D4D8' }, bgColor: { argb: 'FFF4F4F5' } };
+
+function fmtDate(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** "Joined 12 Oct 2026 · Left 20 Oct 2026 (9 of 31 days)" — empty for a full-cycle employee. */
+export function tenureLabel(tenure: CycleTenure | undefined): string {
+  if (!tenure) return '';
+  const parts: string[] = [];
+  if (tenure.rejoined) parts.push(`Rejoined ${fmtDate(tenure.windows[tenure.windows.length - 1].start)}`);
+  else if (tenure.joined_on) parts.push(`Joined ${fmtDate(tenure.joined_on)}`);
+  if (tenure.left_on) parts.push(`Left ${fmtDate(tenure.left_on)}`);
+  if (parts.length === 0) return '';
+  return `${parts.join(' · ')} (${tenure.in_tenure_days} of ${tenure.period_days} days)`;
+}
 
 export function tagLabels(line: { has_salary: boolean; is_mapped: boolean; has_punches: boolean }): string {
   const tags: string[] = [];
@@ -157,7 +184,9 @@ export function addMatrixSheet(
       ...(includeCampusColumn ? [line.campus_name ?? ''] : []),
       ...dates.map((d) => {
         const day = dayMap.get(d);
-        return day ? dayCellText(day) : '';
+        if (day) return dayCellText(day);
+        const reason = line.tenure ? offRollReason(d, line.tenure) : null;
+        return reason ? OFF_ROLL_TEXT[reason] : '';
       }),
     ]);
     row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
@@ -165,9 +194,15 @@ export function addMatrixSheet(
 
     dates.forEach((d, i) => {
       const day = dayMap.get(d);
+      const cell = row.getCell(dateColOffset + i + 1);
+      if (!day && line.tenure && offRollReason(d, line.tenure)) {
+        cell.fill = OFF_ROLL_FILL;
+        cell.font = { color: { argb: 'FFA1A1AA' }, italic: true };
+        return;
+      }
       const fill = day ? CELL_FILL[day.classification] : null;
       if (fill) {
-        row.getCell(dateColOffset + i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
       }
     });
   }
@@ -183,4 +218,9 @@ export function addMatrixSheet(
     const fill = CELL_FILL[cls];
     if (fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
   });
+  if (lines.some((l) => l.tenure)) {
+    const cell = sheet.getCell(legendStartRow + 1 + LEGEND.length, 1);
+    cell.value = 'Not on roll (before joining / after leaving) — not counted, as in payroll';
+    cell.fill = OFF_ROLL_FILL;
+  }
 }
