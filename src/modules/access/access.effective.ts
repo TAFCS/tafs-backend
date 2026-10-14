@@ -128,6 +128,18 @@ export function computeEffectiveAccess(args: {
 
   const capabilityKeys = [...union];
   const keySet = new Set(capabilityKeys);
+
+  // The legacy bridge exists for capabilities a role baseline or a direct
+  // user permission carried before sub-permissions shipped. A tile or pack
+  // grant also adds the tile's capabilities to `union`, and for most tiles
+  // the tile's own capability is also its bridge key (Attendance by Cycle:
+  // hr.payroll.view), so judging the bridge on `keySet` turned every plain
+  // tile grant into every action of that tile, Resolve/Edit included.
+  const legacyKeys = new Set<string>(roleKeys);
+  for (const up of userPerms) {
+    if (up.granted) legacyKeys.add(up.key);
+    else legacyKeys.delete(up.key);
+  }
   const explicitlyAllowed = new Set(allowTileIds);
   const effectiveTiles = activeTiles.filter(
     (t) =>
@@ -157,8 +169,8 @@ export function computeEffectiveAccess(args: {
   for (const tile of effectiveTiles) {
     if (!tile.actions || tile.actions.length === 0) continue;
 
-    const holdsLegacyFullAccess = (tile.legacyFullAccessCapabilities ?? []).some((c) =>
-      keySet.has(c),
+    const holdsLegacyFullAccess = (tile.legacyFullAccessCapabilities ?? []).some(
+      (c) => legacyKeys.has(c) && keySet.has(c),
     );
 
     const seed = holdsLegacyFullAccess

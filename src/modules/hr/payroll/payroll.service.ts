@@ -1556,34 +1556,29 @@ export class PayrollService {
   ): Promise<number[]> {
     const { department_id: departmentIds, segment_id: segmentIds, staff_category_id: staffCategoryIds, search } = filters;
     const keywords = search?.split(/\s+/).filter(Boolean) ?? [];
-    // Enforce the caller's segment scope unconditionally — a scoped user must
-    // never see out-of-scope employees even when no segment filter is passed.
-    const scopeSegments = this.scope.scopeOf(user).segments;
-    const effectiveSegmentIds =
-      scopeSegments.length > 0
-        ? segmentIds?.length
-          ? segmentIds.filter((id) => scopeSegments.includes(id))
-          : scopeSegments
-        : segmentIds;
     const rows = await this.prisma.employee_profiles.findMany({
       where: {
+        // The caller's scope (campus, segment, department, staff category) is
+        // ANDed with the page filters rather than intersected id-by-id: a
+        // filter that names only out-of-scope segments used to intersect to
+        // [] and drop the segment condition entirely, showing every segment.
+        AND: [
+          this.scope.whereForEmployees(user),
+          // Keyword search: every word must hit at least one field, in any order.
+          ...keywords.map((word) => ({
+            OR: [
+              { full_name: { contains: word, mode: 'insensitive' as const } },
+              { employee_code: { contains: word, mode: 'insensitive' as const } },
+              { cnic: { contains: word, mode: 'insensitive' as const } },
+              { job_title: { contains: word, mode: 'insensitive' as const } },
+            ],
+          })),
+        ],
         campus_id: campusId,
         OR: cycleRosterStatusWhere(periodStart),
         ...(departmentIds?.length ? { department_id: { in: departmentIds } } : {}),
-        ...(effectiveSegmentIds?.length ? { segment_id: { in: effectiveSegmentIds } } : {}),
+        ...(segmentIds?.length ? { segment_id: { in: segmentIds } } : {}),
         ...(staffCategoryIds?.length ? { staff_category_id: { in: staffCategoryIds } } : {}),
-        ...(keywords.length
-          ? {
-              AND: keywords.map((word) => ({
-                OR: [
-                  { full_name: { contains: word, mode: 'insensitive' as const } },
-                  { employee_code: { contains: word, mode: 'insensitive' as const } },
-                  { cnic: { contains: word, mode: 'insensitive' as const } },
-                  { job_title: { contains: word, mode: 'insensitive' as const } },
-                ],
-              })),
-            }
-          : {}),
       },
       select: { id: true },
       orderBy: { full_name: 'asc' },

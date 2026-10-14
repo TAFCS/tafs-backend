@@ -183,6 +183,71 @@ describe('tile sub-permissions', () => {
     );
   });
 
+  describe('legacy bridge on a tile whose own capability is its bridge key', () => {
+    const CYCLE_ACTIONS = [
+      { id: 'view', default: true, implies: [] },
+      { id: 'export', default: false, implies: ['view'] },
+      { id: 'mark', default: false, implies: ['view'] },
+    ];
+    const cycleTiles: EffectiveTile[] = [
+      ...tiles,
+      {
+        id: 'attendance.employee_attendance_cycle',
+        capabilities: ['hr.payroll.view'],
+        actions: CYCLE_ACTIONS,
+        legacyFullAccessCapabilities: ['hr.payroll.manage', 'hr.payroll.view'],
+      },
+    ];
+    const cycle = (ids: string[]) => ids.map((id) => `attendance.employee_attendance_cycle#${id}`).sort();
+
+    it('a per-user tile grant confers only default actions, not Resolve/Edit', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: cycleTiles,
+        role: StaffRole.EMPLOYEE,
+        allowTileIds: ['attendance.employee_attendance_cycle'],
+      });
+      expect(result.tileIds).toContain('attendance.employee_attendance_cycle');
+      expect(result.actionIds.filter((a) => a.startsWith('attendance.employee_attendance_cycle#')).sort())
+        .toEqual(cycle(['view']));
+    });
+
+    it('a pack tile grant confers only default and pack actions', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: cycleTiles,
+        role: StaffRole.EMPLOYEE,
+        packTileIds: ['attendance.employee_attendance_cycle'],
+        packActions: [{ tileId: 'attendance.employee_attendance_cycle', actionId: 'export' }],
+      });
+      expect(result.actionIds.filter((a) => a.startsWith('attendance.employee_attendance_cycle#')).sort())
+        .toEqual(cycle(['export', 'view']));
+    });
+
+    it('the bridge key from a role baseline still confers every action', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: cycleTiles,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['hr.payroll.view'],
+      });
+      expect(result.actionIds.filter((a) => a.startsWith('attendance.employee_attendance_cycle#')).sort())
+        .toEqual(cycle(['export', 'mark', 'view']));
+    });
+
+    it('a direct user permission revoking the bridge key ends the bridge', () => {
+      const result = computeEffectiveAccess({
+        ...base,
+        activeTiles: cycleTiles,
+        role: StaffRole.CAMPUS_ADMIN,
+        roleKeys: ['hr.payroll.view'],
+        allowTileIds: ['attendance.employee_attendance_cycle'],
+        userPerms: [{ key: 'hr.payroll.view', granted: false }],
+      });
+      expect(result.actionIds).not.toContain('attendance.employee_attendance_cycle#mark');
+    });
+  });
+
   it('a user deny beats a pack grant', () => {
     const result = computeEffectiveAccess({
       ...base,
