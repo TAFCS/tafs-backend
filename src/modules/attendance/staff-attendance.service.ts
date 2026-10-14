@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
+import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, StaffRole, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -800,7 +800,7 @@ export class StaffAttendanceService {
       ],
     };
     const [atCampus, inScope] = await Promise.all([
-      this.prisma.employee_profiles.findMany({ where: onCampus, select: { id: true } }),
+      this.prisma.employee_profiles.findMany({ where: onCampus, select: { id: true, user_id: true } }),
       this.prisma.employee_profiles.findMany({
         where: { ...onCampus, ...this.scope.whereForEmployees(user) },
         select: { id: true },
@@ -817,6 +817,10 @@ export class StaffAttendanceService {
       throw new BadRequestException(
         `Employee IDs not found on this campus: ${notAtCampus.join(', ')}`,
       );
+    }
+    // Nobody overrides their own attendance day; it goes to whoever manages them.
+    if (user.role !== StaffRole.SUPER_ADMIN && atCampus.some((e) => e.user_id === user.sub)) {
+      throw new ForbiddenException('You cannot change your own attendance. Ask someone who manages your attendance.');
     }
     const inScopeIds = new Set(inScope.map((e) => e.id));
     const outOfScope = employeeIds.filter((id) => !inScopeIds.has(id));

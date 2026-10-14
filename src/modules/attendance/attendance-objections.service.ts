@@ -159,6 +159,11 @@ export class AttendanceObjectionsService {
     }
     // Covers segment/department/category, which the legacy campus-only check never did.
     this.scope.assertEmployee(user, existing.employee);
+    // Accepting rewrites the attendance day, so the same rule as a manual
+    // override applies: nobody decides their own objection.
+    if (user.role !== StaffRole.SUPER_ADMIN && existing.employee.user_id === user.sub) {
+      throw new ForbiddenException('You cannot review your own attendance objection.');
+    }
 
     const updated = await this.prisma.attendance_objections.update({
       where: { id },
