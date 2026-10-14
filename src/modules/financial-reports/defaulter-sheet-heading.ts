@@ -160,7 +160,8 @@ export function defaulterFilterLines(
     const words = statuses.map((s) => STATUS_WORDS[s] ?? s.replace(/_/g, ' '));
     lines.push(`${words.join(' & ')} STUDENTS ONLY`);
   }
-  if (query.severity?.length) lines.push(`SEVERITY: ${query.severity.join(', ')}`);
+  if (query.severity?.length)
+    lines.push(`SEVERITY: ${query.severity.map((s) => (s === 'EXPIRING' ? 'EXPIRED BILL' : s)).join(', ')}`);
   if (query.is_fee_endowment != null)
     lines.push(query.is_fee_endowment ? 'FEE ENDOWMENT STUDENTS ONLY' : 'EXCLUDING FEE ENDOWMENT STUDENTS');
   if (query.is_complementary != null)

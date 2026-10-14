@@ -2723,7 +2723,7 @@ export class FinancialReportsService {
           { header: 'Students In Scope', key: 'in_scope', width: 18 },
           { header: 'Defaulters', key: 'defaulters', width: 12 },
           { header: 'Defaulter Rate %', key: 'rate', width: 16 },
-          { header: 'Expiring', key: 'expiring', width: 12 },
+          { header: 'Expired Bills', key: 'expiring', width: 14 },
           { header: 'Watch (1m)', key: 'watch', width: 12 },
           { header: 'Defaulter (2m)', key: 'defaulter', width: 14 },
           { header: 'Severe (3m)', key: 'severe', width: 12 },
@@ -2883,7 +2883,7 @@ export class FinancialReportsService {
         ([name, h]) => `${name.toUpperCase()} ${h.partial ? 'BP ' : ''}${h.owed.toLocaleString('en-US')}`,
       );
     const remarkFor = (r: SheetRow) =>
-      r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
+      r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '';
     // The months line only when months behind or the arrear month was filtered;
     // the other filters follow it in words (TAFSD-291).
     const monthsLine =
