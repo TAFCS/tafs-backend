@@ -118,6 +118,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           console.log(`[ChatGateway] Staff joined ${room}: ${client.id}`);
         }
         client.join(`staff_inbox_${payload.sub}`);
+        // Live ticket-pool events follow queue membership (TAFSD-235), read
+        // here rather than from the token. The role rooms below only serve
+        // tickets routed before queues existed (routed_queue_id null).
+        const memberships = await this.prisma.ticket_queue_members.findMany({
+          where: { user_id: payload.sub },
+          select: { queue_id: true },
+        });
+        for (const m of memberships) client.join(ChatGateway.queueRoom(m.queue_id));
         if (payload.role === 'FINANCE_CLERK') client.join('finance_queue');
         if (payload.role === 'SUPER_ADMIN') client.join('super_admin_approvals');
         if (payload.role === 'GENERAL_RESPONDENT') client.join('general_respondent_inbox');
@@ -912,6 +920,36 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  static queueRoom(queueId: number) {
+    return `ticket_queue_${queueId}`;
+  }
+
+  /**
+   * Rooms that hold a ticket's pool: its queue's members, or for a ticket
+   * routed before queues existed, the old role room.
+   */
+  private ticketPoolRooms(ticket: { routed_queue_id?: number | null; routed_role?: string | null }): string[] {
+    if (ticket.routed_queue_id != null) return [ChatGateway.queueRoom(ticket.routed_queue_id)];
+    if (ticket.routed_role === 'FINANCE_CLERK') return ['finance_queue'];
+    if (ticket.routed_role === 'GENERAL_RESPONDENT') return ['general_respondent_inbox'];
+    return [];
+  }
+
+  private emitToPool(ticket: any, event: string, payload: unknown) {
+    const rooms = this.ticketPoolRooms(ticket);
+    if (rooms.length) this.server.to(rooms).emit(event, payload);
+  }
+
+  /**
+   * After a queue's members change, move already-connected sockets in or out
+   * of its room so a newly added member sees the pool without reconnecting.
+   */
+  async syncQueueRoom(queueId: number, memberIds: string[]) {
+    const room = ChatGateway.queueRoom(queueId);
+    this.server.in(room).socketsLeave(room);
+    if (memberIds.length) this.server.in(memberIds.map((id) => `staff_inbox_${id}`)).socketsJoin(room);
+  }
+
   async broadcastTicketCreated(ticket: any) {
     this.server.to('super_admin_approvals').emit('ticketCreated', { ticket });
     if (ticket.current_assignee_id) {
@@ -919,16 +957,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketCreated', { ticket });
     }
-    if (ticket.routed_role === 'FINANCE_CLERK') {
-      this.server.to('finance_queue').emit('ticketCreated', { ticket });
-    }
-    if (ticket.routed_role === 'GENERAL_RESPONDENT') {
-      this.server.to('general_respondent_inbox').emit('ticketCreated', { ticket });
-    }
+    this.emitToPool(ticket, 'ticketCreated', { ticket });
   }
 
   async broadcastTicketClaimed(ticket: any) {
-    this.server.to('finance_queue').emit('ticketClaimed', { ticket });
+    // Everyone in the pool drops it from "unclaimed".
+    this.emitToPool(ticket, 'ticketClaimed', { ticket });
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
@@ -939,7 +973,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   async broadcastTicketTransferred(ticket: any, fromUserId: string, toUserId: string) {
     this.server.to(`staff_inbox_${fromUserId}`).emit('ticketTransferred', { ticket, toUserId });
     this.server.to(`staff_inbox_${toUserId}`).emit('ticketTransferred', { ticket, fromUserId });
-    this.server.to('finance_queue').emit('ticketTransferred', { ticket });
+    this.emitToPool(ticket, 'ticketTransferred', { ticket });
   }
 
   async broadcastTicketForwarded(ticket: any, fromUserId: string, toUserId: string) {
@@ -1078,9 +1112,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageReceived', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageReceived', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageReceived', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageReceived', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', payload);
   }
@@ -1117,9 +1149,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageDeleted', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageDeleted', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageDeleted', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageDeleted', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageDeleted', payload);
   }
@@ -1138,9 +1168,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageUpdated', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageUpdated', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageUpdated', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageUpdated', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageUpdated', payload);
   }
