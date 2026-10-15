@@ -1139,6 +1139,26 @@ export class NoticeBoardService {
     return counts;
   }
 
+  private audienceCountCache = new Map<string, { value: number; expires: number }>();
+
+  private _audienceKey(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): string {
+    const ccs = ((post.student_ccs as number[]) ?? []).slice().sort().join(',');
+    if (ccs) return `ccs:${ccs}`;
+    const cmp = ((post.campus_ids as number[]) ?? []).slice().sort().join(',');
+    const cls = ((post.class_ids as number[]) ?? []).slice().sort().join(',');
+    const sec = ((post.section_ids as number[]) ?? []).slice().sort().join(',');
+    const st = ((post.student_statuses as string[]) ?? []).slice().sort().join(',');
+    const ay = ((post.academic_years as string[]) ?? []).slice().sort().join(',');
+    return `${cmp}|${cls}|${sec}|${st}|${ay}`;
+  }
+
   private async _countAudienceFamilies(post: {
     campus_ids: unknown;
     class_ids: unknown;
@@ -1147,6 +1167,13 @@ export class NoticeBoardService {
     student_statuses: unknown;
     academic_years: unknown;
   }): Promise<number> {
+    const cacheKey = this._audienceKey(post);
+    const hit = this.audienceCountCache.get(cacheKey);
+    const now = Date.now();
+    if (hit && hit.expires > now) {
+      return hit.value;
+    }
+
     const studentCcs = (post.student_ccs as number[]) ?? [];
     if (studentCcs.length) {
       const students = await this.prisma.students.findMany({
@@ -1157,11 +1184,13 @@ export class NoticeBoardService {
         },
         select: { family_id: true },
       });
-      return new Set(
+      const count = new Set(
         students
           .map((s) => s.family_id)
           .filter((id): id is number => id != null),
       ).size;
+      this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+      return count;
     }
 
     const campusIds = (post.campus_ids as number[]) ?? [];
@@ -1170,7 +1199,7 @@ export class NoticeBoardService {
     const studentStatuses = (post.student_statuses as student_status[]) ?? [];
     const academicYears = (post.academic_years as string[]) ?? [];
 
-    return this.prisma.families.count({
+    const count = await this.prisma.families.count({
       where: {
         deleted_at: null,
         students: {
@@ -1187,5 +1216,7 @@ export class NoticeBoardService {
         },
       },
     });
+    this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+    return count;
   }
 }

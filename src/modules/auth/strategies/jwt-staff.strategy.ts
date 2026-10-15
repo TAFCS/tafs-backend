@@ -27,24 +27,41 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
     });
   }
 
+  private userStatusCache = new Map<string, { is_active: boolean; expires: number }>();
+
   async validate(payload: IJwtStaffPayload): Promise<IJwtStaffPayload> {
     if (payload.userType !== 'STAFF') {
       throw new UnauthorizedException('Invalid token type');
     }
 
-    // Scope is read live, never trusted from the token. The access token lives
-    // 90 days, so a scope baked into it outlived every narrowing an admin made:
-    // the API kept serving the old, wider data until the client happened to
-    // refresh, and requests fired before that refresh landed used it too.
+    const now = Date.now();
+    const cachedUser = this.userStatusCache.get(payload.sub);
+    const needUserCheck = !cachedUser || cachedUser.expires <= now;
+
+    // Scope is read live, never trusted from the token. A short in-memory cache
+    // absorbs concurrent requests on page loads.
     const [user, scope] = await Promise.all([
-      this.prisma.users.findUnique({
-        where: { id: payload.sub },
-        select: { id: true, is_active: true },
-      }),
+      needUserCheck
+        ? this.prisma.users.findUnique({
+            where: { id: payload.sub },
+            select: { id: true, is_active: true },
+          })
+        : null,
       this.scopeService.resolveEffective(payload.sub),
     ]);
 
-    if (!user || !user.is_active) {
+    let isActive: boolean;
+    if (needUserCheck) {
+      if (!user) {
+        throw new UnauthorizedException('Account not found');
+      }
+      isActive = Boolean(user.is_active);
+      this.userStatusCache.set(payload.sub, { is_active: isActive, expires: now + 30_000 });
+    } else {
+      isActive = cachedUser!.is_active;
+    }
+
+    if (!isActive) {
       throw new UnauthorizedException('Account is inactive');
     }
 

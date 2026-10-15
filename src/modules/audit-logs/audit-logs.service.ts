@@ -230,13 +230,13 @@ export class AuditLogsService {
     const parentId = await this.log(parent);
     if (parentId == null || children.length === 0) return parentId;
 
-    for (const child of children) {
-      await this.log({
+    await this.logMany(
+      children.map((child) => ({
         ...child,
         changed_by: child.changed_by ?? parent.changed_by,
         parent_id: parentId,
-      });
-    }
+      })),
+    );
     return parentId;
   }
 

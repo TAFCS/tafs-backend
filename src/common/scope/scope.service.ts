@@ -72,8 +72,42 @@ export class ScopeService {
    * reached every class. Narrowing `classes` to the segments' classes makes
    * every class-based check enforce segment without each one remembering to.
    */
+  private effectiveScopeCache = new Map<string, { scope: UserScope; expires: number }>();
+
+  /**
+   * The scope a session is actually held to: `resolve()` with SEGMENT folded
+   * into CLASS. Use for issuing tokens and checking requests; use `resolve()`
+   * wherever the raw entries are shown or edited (the access admin panel), or
+   * the derived classes would be saved back as explicit class scope.
+   *
+   * Segment scope means "students in classes of these segments", but most
+   * checks are written against class alone (assertClass, classIdsFor, a
+   * class_id filter) and silently skipped segment — a segment-scoped user
+   * reached every class. Narrowing `classes` to the segments' classes makes
+   * every class-based check enforce segment without each one remembering to.
+   *
+   * A short-lived (30s) in-memory cache absorbs concurrent request bursts
+   * on page loads without repeatedly hammering Postgres.
+   */
   async resolveEffective(userId: string): Promise<UserScope> {
-    return this.withCategoryDepartments(await this.withSegmentClasses(await this.resolve(userId)));
+    const cached = this.effectiveScopeCache.get(userId);
+    const now = Date.now();
+    if (cached && cached.expires > now) {
+      return cached.scope;
+    }
+    const resolved = await this.withCategoryDepartments(
+      await this.withSegmentClasses(await this.resolve(userId)),
+    );
+    this.effectiveScopeCache.set(userId, { scope: resolved, expires: now + 30_000 });
+    return resolved;
+  }
+
+  invalidateScopeCache(userId?: string) {
+    if (userId) {
+      this.effectiveScopeCache.delete(userId);
+    } else {
+      this.effectiveScopeCache.clear();
+    }
   }
 
   /**
@@ -133,6 +167,7 @@ export class ScopeService {
       }
     });
 
+    this.invalidateScopeCache(userId);
     return this.resolve(userId);
   }
 

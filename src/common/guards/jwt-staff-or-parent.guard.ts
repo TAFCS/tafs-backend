@@ -20,6 +20,8 @@ export class JwtStaffOrParentGuard implements CanActivate {
     private readonly scopeService: ScopeService,
   ) {}
 
+  private userStatusCache = new Map<string, { is_active: boolean; expires: number }>();
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const token = this.extractToken(request);
@@ -35,14 +37,32 @@ export class JwtStaffOrParentGuard implements CanActivate {
       if (payload.userType === 'STAFF') {
         // Same as JwtStaffStrategy.validate: an inactive account is refused,
         // and scope is read live rather than trusted from the 90-day token.
+        const now = Date.now();
+        const cachedUser = this.userStatusCache.get(payload.sub);
+        const needUserCheck = !cachedUser || cachedUser.expires <= now;
+
         const [user, scope] = await Promise.all([
-          this.prisma.users.findUnique({
-            where: { id: payload.sub },
-            select: { is_active: true },
-          }),
+          needUserCheck
+            ? this.prisma.users.findUnique({
+                where: { id: payload.sub },
+                select: { is_active: true },
+              })
+            : null,
           this.scopeService.resolveEffective(payload.sub),
         ]);
-        if (!user || !user.is_active) {
+
+        let isActive: boolean;
+        if (needUserCheck) {
+          if (!user) {
+            throw new UnauthorizedException('Account not found');
+          }
+          isActive = Boolean(user.is_active);
+          this.userStatusCache.set(payload.sub, { is_active: isActive, expires: now + 30_000 });
+        } else {
+          isActive = cachedUser!.is_active;
+        }
+
+        if (!isActive) {
           throw new UnauthorizedException('Account is inactive');
         }
         request.user = {

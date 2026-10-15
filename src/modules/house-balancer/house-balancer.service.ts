@@ -501,12 +501,12 @@ export class HouseBalancerService {
       const studentByCc = new Map(students.map((s) => [s.cc, s]));
 
       for (const item of dto.assignments) {
+        const prior = studentByCc.get(item.student_id);
+        if (!prior || prior.house_id === item.house_id) continue;
         await tx.students.update({
           where: { cc: item.student_id },
           data: { house_id: item.house_id },
         });
-        const prior = studentByCc.get(item.student_id);
-        if (!prior || prior.house_id === item.house_id) continue;
         await this.progressionHistory.recordProgressionChange(tx, {
           studentCc: item.student_id,
           campusId: prior.campus_id,
@@ -538,7 +538,7 @@ export class HouseBalancerService {
         moves,
         moves_count: moves.length,
       };
-    });
+    }, { maxWait: 10000, timeout: 60000 });
 
     await this.auditLogs.logGroup(
       {
@@ -875,12 +875,12 @@ export class HouseBalancerService {
         const studentByCc = new Map(students.map((student) => [student.cc, student]));
         moves.push(...this.buildMoves(students, group.assignments, houses));
         for (const assignment of group.assignments) {
+          const prior = studentByCc.get(assignment.student_id);
+          if (!prior || prior.house_id === assignment.house_id) continue;
           await tx.students.update({
             where: { cc: assignment.student_id },
             data: { house_id: assignment.house_id },
           });
-          const prior = studentByCc.get(assignment.student_id);
-          if (!prior || prior.house_id === assignment.house_id) continue;
           await this.progressionHistory.recordProgressionChange(tx, {
             studentCc: assignment.student_id,
             campusId: prior.campus_id,
@@ -918,7 +918,7 @@ export class HouseBalancerService {
         moves,
         moves_count: moves.length,
       };
-    });
+    }, { maxWait: 15000, timeout: 120000 });
 
     const classLabel = dto.class_id
       ? (
