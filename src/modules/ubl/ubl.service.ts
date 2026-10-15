@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VouchersService } from '../vouchers/vouchers.service';
-import { ccFromUblConsumerNumber, ubl1BillChannelFee, ubl1BillConsumerNumber, ublCc } from '../../utils/ubl.util';
+import { ccFromUblConsumerNumber, isUbl1BillConsumerNumber, ubl1BillCharge, ubl1BillConsumerNumber, ublCc } from '../../utils/ubl.util';
 import { UblBillInquiryQueryDto, UblBillPaymentDto } from './dto/ubl-bill.dto';
 
 /**
@@ -147,8 +147,17 @@ export class UblService {
             if ('error' in r) return r.error;
             const { cc, student, voucher } = r;
             const p = this.payable(voucher, today);
-            const channelFee = dto.channel === 'ONEBILL' ? ubl1BillChannelFee() : 0;
             if (p.withinDue.lte(0)) return reply('ALREADY_PAID', { voucher_number: voucher.voucher_number });
+            // A 15-digit 1Bill number is quoted the bill + the 1Bill charge; a CC the bill alone.
+            const oneBill = isUbl1BillConsumerNumber(dto.consumer_number);
+            const withCharge = (amount: Prisma.Decimal) => {
+                const bill = Number(amount.toFixed(2));
+                const charge = oneBill ? ubl1BillCharge(bill) : 0;
+                return { amount: Number(amount.add(charge).toFixed(2)), charge };
+            };
+            const within = withCharge(p.withinDue);
+            const after = withCharge(p.afterDue);
+            const now = p.overdue ? after : within;
 
             return reply('OK', {
                 consumer_number: dto.consumer_number,
@@ -165,12 +174,11 @@ export class UblService {
                 due_date: toYmd(dateOnly(voucher.due_date)),
                 validity_date: toYmd(dateOnly(voucher.validity_date)),
                 currency: 'PKR',
-                amount_within_due_date: Number(p.withinDue.add(channelFee).toFixed(2)),
-                amount_after_due_date: Number(p.afterDue.add(channelFee).toFixed(2)),
+                amount_within_due_date: within.amount,
+                amount_after_due_date: after.amount,
                 late_fee: Number(p.lateFee.toFixed(2)),
-                channel: dto.channel,
-                channel_fee: channelFee,
-                amount_payable: Number(p.payableNow.add(channelFee).toFixed(2)),
+                channel_fee: now.charge,
+                amount_payable: now.amount,
             });
         } catch (err) {
             this.logger.error('UBL bill inquiry error', err as any);
@@ -182,6 +190,15 @@ export class UblService {
         try {
             if ((dto.payment_method === 'CHEQUE' || dto.payment_method === 'PAY_ORDER') && !dto.instrument_number) {
                 return reply('INVALID_REQUEST', { response_desc: 'instrument_number is required for CHEQUE and PAY_ORDER' });
+            }
+
+            const oneBill = isUbl1BillConsumerNumber(dto.consumer_number);
+            if (oneBill !== (dto.channel === 'ONEBILL')) {
+                return reply('INVALID_REQUEST', {
+                    response_desc: oneBill
+                        ? 'channel must be ONEBILL for a 1Bill consumer number'
+                        : 'channel ONEBILL requires the 15-digit 1Bill consumer number',
+                });
             }
 
             // Idempotent on UBL's transaction id: a retry after a timeout never books twice.
@@ -202,7 +219,7 @@ export class UblService {
 
             const p = this.payable(voucher, txnDate);
             if (p.payableNow.lte(0)) return reply('ALREADY_PAID', { voucher_number: voucher.voucher_number });
-            const channelFee = new Prisma.Decimal(dto.channel === 'ONEBILL' ? ubl1BillChannelFee() : 0);
+            const channelFee = new Prisma.Decimal(oneBill ? ubl1BillCharge(Number(p.payableNow.toFixed(2))) : 0);
             const expected = p.payableNow.add(channelFee);
             const received = new Prisma.Decimal(dto.amount);
             if (!received.eq(expected)) {

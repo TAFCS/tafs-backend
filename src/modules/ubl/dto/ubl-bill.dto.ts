@@ -2,9 +2,9 @@ import { Type } from 'class-transformer';
 import { IsIn, IsISO8601, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
 
 /**
- * Collection channel the request came through. Mandatory on every call:
- * ONEBILL inquiries are quoted +30 PKR (1Bill's aggregator fee) and payments
- * are reconciled per channel. See docs/ubl-api (TAFSD-294).
+ * Collection channel a payment came through, for reconciliation. Whether the
+ * 1Bill charge applies is decided by the consumer number (15 digits = 1Bill),
+ * not by this. See docs/ubl-api (TAFSD-294).
  */
 export const UBL_CHANNELS = ['ONEBILL', 'OTC', 'APP', 'INTERNET_BANKING'] as const;
 export type UblChannel = (typeof UBL_CHANNELS)[number];
@@ -23,14 +23,16 @@ export const UBL_PAYMENT_METHODS = [
 export type UblPaymentMethod = (typeof UBL_PAYMENT_METHODS)[number];
 
 export class UblBillInquiryQueryDto {
-    /** A student's CC, or a 1Bill consumer number ([10-digit prefix][4-digit CC]). */
+    /** A student's CC (normal amount), or a 15-digit 1Bill consumer number ([10-digit prefix][5-digit CC]) (1Bill amount). */
     @IsString()
     @IsNotEmpty()
     @Matches(/^\d{1,20}$/, { message: 'consumer_number must be digits only' })
     consumer_number!: string;
 
+    /** No longer used — the consumer number decides the amount. Accepted so older callers aren't rejected. */
+    @IsOptional()
     @IsIn(UBL_CHANNELS as unknown as string[])
-    channel!: UblChannel;
+    channel?: UblChannel;
 }
 
 export class UblBillPaymentDto {
@@ -45,7 +47,7 @@ export class UblBillPaymentDto {
     @IsIn(UBL_PAYMENT_METHODS as unknown as string[])
     payment_method!: UblPaymentMethod;
 
-    /** Amount the payer paid, in PKR. For ONEBILL this includes the 30 PKR fee. */
+    /** Amount the payer paid, in PKR. For a 1Bill number this includes the 1Bill charge. */
     @Type(() => Number)
     @IsNumber({ maxDecimalPlaces: 2 })
     @Min(0.01)

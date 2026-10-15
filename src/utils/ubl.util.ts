@@ -13,15 +13,48 @@ export const UBL_1BILL_PREFIX_PLACEHOLDER = '1000000000';
 export const UBL_CC_DIGITS = 5;
 
 /**
- * Assumed 1Bill aggregator charge, borne by the payer and never booked as fees.
- * Not yet confirmed by UBL — set UBL_1BILL_CHANNEL_FEE once they do.
+ * 1Bill charge by transaction slab, borne by the payer and never booked as fees
+ * (TAFSD-294): 1LINK's Same Day Settlement Service Fee + its Direct Biller /
+ * Bill Aggregator charge, the sum rounded up to whole rupees.
+ *   Up to 5K      4 + 12.50 = 16.50 → 17
+ *   5K–10K        5 + 15.50 = 20.50 → 21
+ *   10K–100K     14 + 39    = 53
+ *   100K–250K    22 + 62.50 = 84.50 → 85
+ *   250K–1M      44 + 125   = 169
+ *   1M–2.5M      88 + 250   = 338
+ *   2.5M–5M     131 + 375   = 506
+ *   above 5M    175 + 500   = 675
  */
-export const UBL_1BILL_CHANNEL_FEE_DEFAULT = 30;
+export const UBL_1BILL_CHARGE_SLABS: ReadonlyArray<{ upTo: number; charge: number }> = [
+    { upTo: 5_000, charge: 17 },
+    { upTo: 10_000, charge: 21 },
+    { upTo: 100_000, charge: 53 },
+    { upTo: 250_000, charge: 85 },
+    { upTo: 1_000_000, charge: 169 },
+    { upTo: 2_500_000, charge: 338 },
+    { upTo: 5_000_000, charge: 506 },
+    { upTo: Number.POSITIVE_INFINITY, charge: 675 },
+];
 
-export function ubl1BillChannelFee(): number {
-    const raw = (process.env.UBL_1BILL_CHANNEL_FEE ?? '').trim();
-    const configured = Number(raw);
-    return raw !== '' && Number.isFinite(configured) && configured >= 0 ? configured : UBL_1BILL_CHANNEL_FEE_DEFAULT;
+function slabCharge(transactionAmount: number): number {
+    return UBL_1BILL_CHARGE_SLABS.find((s) => transactionAmount <= s.upTo)!.charge;
+}
+
+/**
+ * The 1Bill charge on a bill. The slab is that of the transaction 1LINK sees —
+ * bill + charge — so when the charge pushes the total past a slab boundary the
+ * next slab's charge applies (99,980 + 53 > 100,000 → 85).
+ */
+export function ubl1BillCharge(billAmount: number): number {
+    const first = slabCharge(billAmount);
+    return slabCharge(billAmount + first);
+}
+
+/** True when UBL sent a 15-digit 1Bill consumer number rather than a bare CC. */
+export function isUbl1BillConsumerNumber(consumerNumber: string): boolean {
+    const raw = (consumerNumber ?? '').trim();
+    const prefix = ubl1BillPrefix();
+    return raw.length === prefix.length + UBL_CC_DIGITS && raw.startsWith(prefix);
 }
 
 /** CC as printed on UBL vouchers and used in 1Bill numbers: 5 digits, zero-padded. */
