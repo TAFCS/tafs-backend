@@ -12,7 +12,9 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -30,11 +32,12 @@ import {
 @ApiTags('Staff Lesson Reschedules')
 @ApiBearerAuth()
 @Controller('attendance/staff-lesson-reschedules')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class StaffLessonReschedulesController {
   constructor(private readonly service: StaffLessonReschedulesService) {}
 
   @Get('teachers')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async listTeachers(
     @Query() query: ListStaffLessonTeachersQueryDto,
@@ -45,6 +48,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Get('teachers/:employeeId/hold-status')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async teacherHoldStatus(
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -56,6 +60,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Get('teachers/:employeeId/slots')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async teacherSlots(
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -67,6 +72,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Get('source-date-status')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async sourceDateStatus(
     @Query() query: StaffLessonSourceDateStatusQueryDto,
@@ -77,6 +83,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Get()
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async findAll(
     @Query() query: ListStaffLessonReschedulesQueryDto,
@@ -87,6 +94,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Get(':id')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
   async findOne(
     @Param('id', ParseIntPipe) id: number,
@@ -97,6 +105,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Post()
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   async create(
     @Body() dto: CreateStaffLessonRescheduleDto,
@@ -107,6 +116,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Post(':id/complete')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   async complete(
     @Param('id', ParseIntPipe) id: number,
@@ -117,6 +127,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Post(':id/cancel')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   async cancel(
     @Param('id', ParseIntPipe) id: number,
@@ -127,6 +138,7 @@ export class StaffLessonReschedulesController {
   }
 
   @Post(':id/reverse')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'StaffAttendance'))
   async reverse(
     @Param('id', ParseIntPipe) id: number,

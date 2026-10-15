@@ -14,7 +14,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -49,6 +49,7 @@ export class AccessController {
   // one. The packs CRUD routes below belong to that tile entirely and carry its
   // `manage` action.
   @Get('packs')
+  @RequireAnyTile('system.access_packs', 'system.people_access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async listPacks() {
     const packs = await this.accessService.listPacks();

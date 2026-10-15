@@ -15,7 +15,9 @@ import { SubmitStudentFeesDto } from './dto/submit-student-fees.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -26,7 +28,8 @@ export class FeesController {
 
   // POST /api/v1/fees/student
   @Post('student')
-  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @RequireAnyTile('finance.student_overrides')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
   async submitStudentFees(@Body() dto: SubmitStudentFeesDto, @CurrentUser() user: IJwtStaffPayload) {

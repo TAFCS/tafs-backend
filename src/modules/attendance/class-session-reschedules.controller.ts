@@ -13,7 +13,9 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Action } from '../auth/casl/actions';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -30,11 +32,12 @@ import {
 @ApiTags('Class Session Reschedules')
 @ApiBearerAuth()
 @Controller('attendance/class-reschedules')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class ClassSessionReschedulesController {
   constructor(private readonly service: ClassSessionReschedulesService) {}
 
   @Get('eligible-slots')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
   async eligibleSlots(
     @Query() query: EligibleSlotsQueryDto,
@@ -45,6 +48,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Get('source-date-hold-status')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
   async sourceDateHoldStatus(
     @Query() query: SourceDateHoldStatusQueryDto,
@@ -55,6 +59,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Get()
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
   async findAll(
     @Query() query: ListClassReschedulesQueryDto,
@@ -65,6 +70,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Get(':id')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
   async findOne(
     @Param('id', ParseIntPipe) id: number,
@@ -75,6 +81,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Post()
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
   async create(
     @Body() dto: CreateClassRescheduleDto,
@@ -85,6 +92,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Post(':id/cancel')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
   async cancel(
     @Param('id', ParseIntPipe) id: number,
@@ -95,6 +103,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Post(':id/update-makeup')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
   async updateMakeup(
     @Param('id', ParseIntPipe) id: number,
@@ -106,6 +115,7 @@ export class ClassSessionReschedulesController {
   }
 
   @Post(':id/reverse')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'RollSession'))
   async reverse(
     @Param('id', ParseIntPipe) id: number,

@@ -115,12 +115,12 @@ describe('Access Packs', () => {
     for (const a of t.actions!) expect(holder.actionIds).toContain(actionKey('system.access_packs', a.id));
   });
 
-  it('puts pack create / update / delete on `manage` and leaves the list open (People & Access shares it)', () => {
+  it('puts pack create / update / delete on `manage` and opens the list to both tiles (People & Access shares it)', () => {
     const p = AccessController.prototype;
     for (const h of ['createPack', 'updatePack', 'deletePack']) {
       expect(meta(p, h)?.actionKeys).toEqual([actionKey('system.access_packs', 'manage')]);
     }
-    expect(meta(p, 'listPacks')).toBeUndefined();
+    expect(meta(p, 'listPacks')?.tileIds).toEqual(['system.access_packs', 'system.people_access']);
   });
 });
 

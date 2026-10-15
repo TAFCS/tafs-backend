@@ -11,7 +11,7 @@ import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
-import { RequireAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { createApiResponse } from '../../../utils/serializer.util';
@@ -40,6 +40,7 @@ export class DepartmentsController {
   }
 
   @Get(':id')
+  @RequireAnyTile('hr.departments')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   async findOne(@Param('id', ParseIntPipe) id: number) {
     const data = await this.departmentsService.findOne(id);

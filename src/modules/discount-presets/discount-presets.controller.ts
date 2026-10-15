@@ -16,7 +16,7 @@ import { DiscountPresetsService } from './discount-presets.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateDiscountPresetDto, UpdateDiscountPresetDto } from './dto/discount-presets.dto';
@@ -29,6 +29,7 @@ export class DiscountPresetsController {
     constructor(private readonly discountPresetsService: DiscountPresetsService) {}
 
     @Get()
+    @RequireAnyTile('school-setup.discount_presets', 'finance.student_overrides')
     @CheckPolicies((ability) => ability.can(Action.Read, 'Fee') || ability.can(Action.Manage, 'all'))
     async findAll(@Query('active') active?: string) {
         const onlyActive = active === 'true';
@@ -37,6 +38,7 @@ export class DiscountPresetsController {
     }
 
     @Get(':id')
+    @RequireAnyTile('school-setup.discount_presets', 'finance.student_overrides')
     @CheckPolicies((ability) => ability.can(Action.Read, 'Fee') || ability.can(Action.Manage, 'all'))
     async findOne(@Param('id', ParseIntPipe) id: number) {
         const data = await this.discountPresetsService.findOne(id);
