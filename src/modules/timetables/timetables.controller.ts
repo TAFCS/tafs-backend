@@ -17,7 +17,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -86,6 +86,7 @@ export class TimetablesController {
   }
 
   @Get('blocks')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async listBlocks() {
     const data = await this.service.listBlocks();
@@ -93,6 +94,7 @@ export class TimetablesController {
   }
 
   @Get('day-slots')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async getDaySlots(
     @Query() query: DaySlotsQueryDto,
@@ -126,6 +128,7 @@ export class TimetablesController {
   }
 
   @Get('group-day-slots')
+  @RequireAnyTile('attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async getDaySlotsByGroup(
     @Query() query: GroupDaySlotsQueryDto,
@@ -210,6 +213,7 @@ export class TimetablesController {
   }
 
   @Get('teachers/:employeeId/slots')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async listTeacherSlots(
     @Param('employeeId', ParseIntPipe) employeeId: number,
@@ -220,6 +224,7 @@ export class TimetablesController {
   }
 
   @Get('teachers/:employeeId/expected-times')
+  @RequireAnyTile('attendance.timetables')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async getExpectedTimes(
     @Param('employeeId', ParseIntPipe) employeeId: number,

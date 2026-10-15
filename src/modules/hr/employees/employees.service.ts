@@ -41,6 +41,9 @@ import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
 const SEED_ACTOR_ID = '00000000-0000-0000-0000-000000000001';
 import { TileGrantDto } from '../../access/dto/access.dto';
 
+/** Largest value a Postgres INT4 column can hold. */
+const INT4_MAX = 2_147_483_647;
+
 export class ClassSectionAssignmentDto {
   @IsInt()
   class_id: number;
@@ -200,6 +203,14 @@ export class CreateEmployeeDto {
 
   @IsOptional() @IsBoolean()
   payroll_enabled?: boolean;
+
+  /** TAFSD-278: legally exempt from EOBI — payroll skips it entirely. */
+  @IsOptional() @IsBoolean()
+  eobi_exempt?: boolean;
+
+  /** TAFSD-278: legally exempt from SESSI — payroll skips it entirely. */
+  @IsOptional() @IsBoolean()
+  sessi_exempt?: boolean;
 
   @IsOptional() @IsInt()
   campus_id?: number;
@@ -1400,6 +1411,8 @@ export class EmployeesService {
             late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
             monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
             payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
+            eobi_exempt: rest.eobi_exempt !== undefined ? rest.eobi_exempt : undefined,
+            sessi_exempt: rest.sessi_exempt !== undefined ? rest.sessi_exempt : undefined,
             campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
             days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
             photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
@@ -1476,6 +1489,8 @@ export class EmployeesService {
       { key: 'monthly_pay', label: 'Monthly Pay' },
       { key: 'payroll_enabled', label: 'On Payroll' },
       { key: 'employment_subtype', label: 'Employment Subtype' },
+      { key: 'eobi_exempt', label: 'EOBI Exempt' },
+      { key: 'sessi_exempt', label: 'SESSI Exempt' },
       { key: 'days_per_week', label: 'Working Days / Week' },
       { key: 'check_in_source', label: 'Check-in Source' },
       { key: 'reporting_time', label: 'Expected Check-in' },
@@ -1663,7 +1678,8 @@ export class EmployeesService {
       }
     }
 
-    if (isNumeric) {
+    // An id past INT4 can't exist, and Prisma throws (500) binding it (TAFSD-326).
+    if (isNumeric && Number(trimmed) <= INT4_MAX) {
       const exact = await this.prisma.employee_profiles.findFirst({
         where: { id: Number(trimmed), ...scopeWhere },
         select: { id: true, full_name: true, employee_code: true },

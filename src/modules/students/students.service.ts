@@ -75,6 +75,9 @@ import { ProgressionHistoryService, type PrismaTx } from './progression-history.
 import { invalidateUnpaidVoucherPdfs } from '../vouchers/invalidate-unpaid-pdfs';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 
+/** Largest value a Postgres INT4 column can hold. */
+const INT4_MAX = 2_147_483_647;
+
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
@@ -3469,8 +3472,9 @@ export class StudentsService {
     const isNumeric = /^\d+$/.test(q);
     const results: Prisma.studentsGetPayload<{ select: typeof select }>[] = [];
 
-    // 1. Check for exact CC match if query is numeric
-    if (isNumeric) {
+    // 1. Check for exact CC match if query is numeric. A number past INT4 can't
+    // be a CC, and Prisma throws (500) trying to bind it (TAFSD-326).
+    if (isNumeric && Number(q) <= INT4_MAX) {
       const exactMatch = await this.prisma.students.findFirst({
         where: { ...scopedFilter, cc: Number(q) },
         select,

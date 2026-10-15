@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
@@ -21,6 +21,15 @@ import {
 } from './tiles.manifest';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
 import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
+
+export type LiveStaffSession = {
+  isActive: boolean;
+  role: StaffRole;
+  capabilityKeys: string[];
+  actionIds: string[];
+};
+
+const LIVE_SESSION_TTL_MS = 30_000;
 
 @Injectable()
 export class AccessService {
@@ -230,6 +239,47 @@ export class AccessService {
 
   async getCatalog() {
     return catalogFromManifest();
+  }
+
+  /**
+   * The caller's account state and effective access, read live on every
+   * request (TAFSD-308) instead of trusted from the 90-day token: revoking a
+   * tile, pack, permission or role takes effect on the next API call, with no
+   * re-login. A short in-memory cache absorbs the burst of requests a page load
+   * makes; every write below that changes someone's access drops their entry.
+   * Writes this service does not see (another instance, a raw SQL fix) are
+   * bounded by the TTL.
+   */
+  private liveSessionCache = new Map<string, { session: LiveStaffSession; expires: number }>();
+
+  async resolveLiveSession(userId: string): Promise<LiveStaffSession | null> {
+    const now = Date.now();
+    const cached = this.liveSessionCache.get(userId);
+    if (cached && cached.expires > now) return cached.session;
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { is_active: true, role: true },
+    });
+    if (!user) {
+      this.liveSessionCache.delete(userId);
+      return null;
+    }
+    const access = await this.resolveEffective(userId, user.role);
+    const session: LiveStaffSession = {
+      isActive: Boolean(user.is_active),
+      role: user.role,
+      capabilityKeys: access.capabilityKeys,
+      actionIds: access.actionIds,
+    };
+    this.liveSessionCache.set(userId, { session, expires: now + LIVE_SESSION_TTL_MS });
+    return session;
+  }
+
+  /** Drop one user's cached session, or everyone's (role or pack changes). */
+  invalidateLiveSession(userId?: string) {
+    if (userId) this.liveSessionCache.delete(userId);
+    else this.liveSessionCache.clear();
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
@@ -478,25 +528,21 @@ export class AccessService {
         });
       }
 
-      await tx.user_tile_grants.deleteMany({
-        where: { user_id: userId, tile_id: { notIn: grantTileIds } },
-      });
-      for (const grant of grants) {
-        await tx.user_tile_grants.upsert({
-          where: { user_id_tile_id: { user_id: userId, tile_id: grant.tileId } },
-          update: {
-            allow: grant.allow,
-            granted_by: actorId,
-            granted_at: new Date(),
-            note: grant.note ?? null,
-          },
-          create: {
+      // Replace the whole grant set in two statements. An upsert per grant
+      // cost one round trip each, so a user with ~65 grants ran past the
+      // transaction timeout and the save returned 500. Every row was rewritten
+      // with a fresh granted_at anyway, so the stored result is the same.
+      await tx.user_tile_grants.deleteMany({ where: { user_id: userId } });
+      if (grants.length > 0) {
+        await tx.user_tile_grants.createMany({
+          data: grants.map((grant) => ({
             user_id: userId,
             tile_id: grant.tileId,
             allow: grant.allow,
             granted_by: actorId,
             note: grant.note ?? null,
-          },
+          })),
+          skipDuplicates: true,
         });
       }
 
@@ -518,13 +564,17 @@ export class AccessService {
           });
         }
       }
-    });
+    }, { maxWait: 10000, timeout: 20000 });
+    this.invalidateLiveSession(userId);
 
+    // Collected and written in one insert after the change commits; one
+    // awaited log() per changed tile was another round trip each.
+    const auditEntries: AuditLogParams[] = [];
     const beforePacks = existingPacks.map((p) => p.pack_id).sort().join(',');
     const afterPacks = [...packIds].sort().join(',');
     const changedBy = actorLabel ?? actorId;
     if (beforePacks !== afterPacks) {
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: userId,
         action: 'UPDATED',
@@ -544,7 +594,7 @@ export class AccessService {
       const before = beforeGrantMap.get(tileId);
       const after = afterGrantMap.get(tileId);
       if (before === after) continue;
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: `${userId}:${tileId}`,
         action: after === undefined ? 'DELETED' : before === undefined ? 'CREATED' : 'UPDATED',
@@ -573,7 +623,7 @@ export class AccessService {
       const before = summarise(previous);
       const after = summarise(next);
       if (before !== after) {
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: userId,
           action: 'UPDATED',
@@ -596,7 +646,7 @@ export class AccessService {
         const wasAllowed = before.get(k);
         const isAllowed = after.get(k);
         if (wasAllowed === isAllowed) continue;
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: `${userId}:${k}`,
           action: isAllowed === undefined ? 'DELETED' : wasAllowed === undefined ? 'CREATED' : 'UPDATED',
@@ -616,6 +666,8 @@ export class AccessService {
         });
       }
     }
+
+    await this.auditLogs.logMany(auditEntries);
 
     return this.getUserAccess(userId, actingUser);
   }
@@ -694,6 +746,8 @@ export class AccessService {
     });
 
     if (tileActions) await this.writePackActions(id, tileActions);
+    // Everyone holding the pack sees the change on their next request.
+    this.invalidateLiveSession();
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -729,6 +783,7 @@ export class AccessService {
       changed_by: actorLabel ?? 'system',
       note: `Deleted access pack "${existing.name}".`,
     });
+    this.invalidateLiveSession();
     return { deleted: true };
   }
 

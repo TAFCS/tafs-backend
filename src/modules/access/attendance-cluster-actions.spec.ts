@@ -121,22 +121,24 @@ describe('Timetables', () => {
     keysExist(['attendance.timetables#view', 'attendance.timetables#periods.manage', 'attendance.timetables#slots.manage']);
   });
 
-  it('accounts for every route: decorated, or left open on purpose with a reason', () => {
-    assertEveryRouteAccountedFor(TimetablesController, {
-      listBlocks: 'no webapp caller; policy check only',
-      getDaySlots: 'no webapp caller; policy check only',
-      getDaySlotsByGroup: 'also read by the A-Level Roll Call page (hr/roll-call)',
-      listTeacherSlots: 'no webapp caller; policy check only',
-      getExpectedTimes: 'no webapp caller; policy check only',
-    });
+  it('accounts for every route, and pins the shared lookups to the tiles that call them (TAFSD-287)', () => {
+    assertEveryRouteAccountedFor(TimetablesController, {});
+    const p = TimetablesController.prototype;
+    for (const h of ['listBlocks', 'getDaySlots', 'listTeacherSlots', 'getExpectedTimes']) {
+      expect(meta(p, h)).toEqual({ mode: 'tile', actionKeys: [], tileIds: ['attendance.timetables'] });
+    }
+    // also read by the A-Level Roll Call page (hr/roll-call)
+    expect(meta(p, 'getDaySlotsByGroup')?.tileIds).toEqual(['attendance.timetables', 'attendance.alevel_roll_call']);
   });
 
-  it('puts subject writes on the slot editor action and leaves the shared list open', () => {
+  it('puts subject writes on the slot editor action and opens the shared list to both tiles', () => {
     const p = SubjectsController.prototype;
     for (const h of ['create', 'update', 'remove']) {
       expect(meta(p, h)?.actionKeys).toEqual([actionKey('attendance.timetables', 'slots.manage')]);
     }
-    assertEveryRouteAccountedFor(SubjectsController, { list: 'read by both Timetables and Teaching Groups' });
+    // read by both Timetables and Teaching Groups, so open to either tile (TAFSD-287)
+    assertEveryRouteAccountedFor(SubjectsController, {});
+    expect(meta(p, 'list')?.tileIds).toEqual(['attendance.timetables', 'attendance.teaching_groups']);
   });
 });
 
@@ -850,12 +852,15 @@ describe('ZK Device Logs', () => {
     expect((ZkScanResolutionController.prototype as any).assertSuperAdmin).toBeUndefined();
   });
 
-  it('gates the global mapping routes and leaves per-person create / edit to the directories', () => {
+  it('gates the global mapping routes and shares per-person create / edit with the directories', () => {
     const p = ZkAttendanceMappingController.prototype;
     for (const h of ['collisionCheck', 'pinLookup', 'getUnmapped']) expect(meta(p, h)?.actionKeys).toEqual([actionKey(Z, 'mappings.view')]);
     expect(meta(p, 'simulateScan')?.actionKeys).toEqual([actionKey(Z, 'simulate')]);
     expect(meta(p, 'deleteMapping')?.actionKeys).toEqual([actionKey(Z, 'mappings.delete')]);
-    for (const h of ['createMapping', 'updateMapping', 'getMappings']) expect(meta(p, h)).toBeUndefined();
+    // Per-person mappings are also edited from the Employee and Student Directory biometric tabs (TAFSD-287).
+    for (const h of ['createMapping', 'updateMapping', 'getMappings']) {
+      expect(meta(p, h)?.tileIds).toEqual([Z, 'hr.employee_directory', 'student.directory']);
+    }
     const guards: unknown[] = Reflect.getMetadata('__guards__', ZkAttendanceMappingController) ?? [];
     expect(guards).toContain(TileActionGuard);
   });

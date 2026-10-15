@@ -105,8 +105,11 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const accessToken = req.cookies?.tafs_access as string | undefined;
+    // Full user projection (tiles, scope, payroll) without bcrypt / token
+    // rotation — webapp boot prefers this over POST /staff/refresh.
+    const sessionUser = await this.authService.getStaffSessionUser(user.sub);
     return createApiResponse(
-      { ...user, accessToken },
+      { ...sessionUser, accessToken },
       HttpStatus.OK,
       'Staff session fetched',
     );

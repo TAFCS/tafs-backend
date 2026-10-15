@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AttendanceSource, RollRecordStatus } from '@prisma/client';
 import { StudentAttendanceService } from './student-attendance.service';
 
@@ -31,6 +31,7 @@ describe('StudentAttendanceService.bulkManualMark', () => {
       assertCampus: jest.fn(),
       assertClass: jest.fn(),
       assertSection: jest.fn(),
+      canSeeStudent: jest.fn().mockReturnValue(true),
       scopeOf: jest.fn().mockReturnValue({
         campuses: [],
         segments: [],
@@ -83,6 +84,35 @@ describe('StudentAttendanceService.bulkManualMark', () => {
     await expect(
       service.bulkManualMark(dto as any, { campusId: 1, sub: 'staff1', username: 'staff1' } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses students outside the caller\'s class / segment scope', async () => {
+    const { service, prisma, scope } = makeService();
+
+    prisma.students.findMany.mockResolvedValue([
+      {
+        cc: 10,
+        full_name: 'Out Of Scope',
+        campus_id: 1,
+        class_id: 1,
+        section_id: 1,
+        classes: { description: 'Grade 1', segment_id: 1 },
+        sections: { description: 'A' },
+      },
+    ]);
+    scope.canSeeStudent.mockReturnValue(false);
+
+    const dto = {
+      date: '2026-06-22',
+      campus_id: 1,
+      records: [{ student_cc: 10, status: RollRecordStatus.PRESENT }],
+    };
+
+    await expect(
+      service.bulkManualMark(dto as any, { campusId: 1, sub: 'staff1', username: 'staff1' } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(scope.canSeeStudent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ class_id: 1, segment_id: 1 }));
+    expect(prisma.attendance_student_daily.upsert).not.toHaveBeenCalled();
   });
 
   it('upserts attendance_student_daily with source=MANUAL, status and marked_by', async () => {

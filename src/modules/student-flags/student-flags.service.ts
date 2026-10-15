@@ -208,4 +208,18 @@ export class StudentFlagsService implements OnModuleInit {
 
     return notifications;
   }
+
+  /** Badge count only — avoids shipping the full notification list to the header. */
+  async countPendingNotifications(user: IJwtStaffPayload): Promise<number> {
+    return this.prisma.student_flags.count({
+      where: {
+        work_done: false,
+        OR: [{ reminder_date: { lte: new Date() } }, { reminder_date: null }],
+        students: {
+          deleted_at: null,
+          ...this.scope.whereForStudents(user),
+        },
+      },
+    });
+  }
 }

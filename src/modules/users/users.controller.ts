@@ -16,7 +16,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -45,6 +45,7 @@ export class UsersController {
   // decorated here, same as any other route this tile shares with another.
   // See the scope/tile-permission handoff and the Vouchers rollout for why.
   @Get('check-username')
+  @RequireAnyTile('hr.employee_directory', 'hr.register_employee')
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   async checkUsername(@Query('username') username: string) {
     const available = await this.usersService.isUsernameAvailable(username || '');
@@ -136,6 +137,7 @@ export class UsersController {
   // tile-permission handoff on shared-controller tiles.
 
   @Get('permissions/all')
+  @RequireAnyTile('system.access_packs')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Permission'))
   async listAllPermissions() {
     const permissions = await this.usersService.listAllPermissions();
@@ -143,6 +145,7 @@ export class UsersController {
   }
 
   @Get('roles/:role/permissions')
+  @RequireAnyTile('system.access_packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async getRolePermissions(@Param('role') role: StaffRole) {
     const permissions = await this.usersService.listRolePermissions(role);
@@ -150,6 +153,7 @@ export class UsersController {
   }
 
   @Post('roles/permissions')
+  @RequireAnyTile('system.access_packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async updateRolePermission(
     @Body() dto: UpdateRolePermissionDto,

@@ -4,9 +4,11 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScopeService } from '../scope/scope.service';
+import { AccessService } from '../../modules/access/access.service';
 import {
   IJwtParentPayload,
   IJwtStaffPayload,
@@ -18,7 +20,19 @@ export class JwtStaffOrParentGuard implements CanActivate {
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly scopeService: ScopeService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Resolved lazily and app-wide: this guard is attached in many modules that
+   * do not import AccessModule, so it cannot take AccessService as a
+   * constructor dependency.
+   */
+  private accessService?: AccessService;
+  private access(): AccessService {
+    this.accessService ??= this.moduleRef.get(AccessService, { strict: false });
+    return this.accessService;
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -33,23 +47,25 @@ export class JwtStaffOrParentGuard implements CanActivate {
         | IJwtParentPayload;
 
       if (payload.userType === 'STAFF') {
-        // Same as JwtStaffStrategy.validate: an inactive account is refused,
-        // and scope is read live rather than trusted from the 90-day token.
-        const [user, scope] = await Promise.all([
-          this.prisma.users.findUnique({
-            where: { id: payload.sub },
-            select: { is_active: true },
-          }),
+        // Same as JwtStaffStrategy.validate: account state, role,
+        // capabilities, tile actions and scope are read live, never trusted
+        // from the 90-day token (TAFSD-307, TAFSD-308).
+        const [session, scope] = await Promise.all([
+          this.access().resolveLiveSession(payload.sub),
           this.scopeService.resolveEffective(payload.sub),
         ]);
-        if (!user || !user.is_active) {
+        if (!session) {
+          throw new UnauthorizedException('Account not found');
+        }
+        if (!session.isActive) {
           throw new UnauthorizedException('Account is inactive');
         }
         request.user = {
           ...payload,
+          role: session.role,
           allowedClassIds: payload.allowedClassIds ?? [],
-          permissions: payload.permissions ?? [],
-          actions: payload.actions ?? [],
+          permissions: session.capabilityKeys,
+          actions: session.actionIds,
           scope,
         };
         return true;

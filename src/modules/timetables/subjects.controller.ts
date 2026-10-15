@@ -17,7 +17,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -38,6 +38,7 @@ export class SubjectsController {
   constructor(private readonly service: SubjectsService) {}
 
   @Get()
+  @RequireAnyTile('attendance.timetables', 'attendance.teaching_groups')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async list(@Query() query: ListSubjectsQueryDto) {
     const data = await this.service.list(query);

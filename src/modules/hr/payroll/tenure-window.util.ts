@@ -174,3 +174,58 @@ export function totalWindowDays(windows: TenureWindow[]): number {
   }
   return total;
 }
+
+/**
+ * Tenure inside one cycle, shaped for display (attendance-by-cycle matrix and
+ * its Excel export). Dates are YYYY-MM-DD, windows inclusive. Days outside
+ * every window are the same days payroll prorates away — they are shown as
+ * "not on roll", never as absences.
+ */
+export interface CycleTenure {
+  windows: { start: string; end: string }[];
+  in_tenure_days: number;
+  period_days: number;
+  /** Set when the employee joined inside the cycle (or joins after it). */
+  joined_on: string | null;
+  /** Set when the employee left inside the cycle. */
+  left_on: string | null;
+  /** More than one window: left and came back within the cycle. */
+  rejoined: boolean;
+}
+
+export type OffRollReason = 'BEFORE_JOIN' | 'AFTER_LEAVE' | 'BETWEEN_TENURES';
+
+const ymd = (d: Date) => toDateOnly(d).toISOString().slice(0, 10);
+
+export function describeCycleTenure(inputs: TenureInputs): CycleTenure {
+  const periodStart = toDateOnly(inputs.periodStart);
+  const periodEnd = toDateOnly(inputs.periodEnd);
+  const windows = computeTenureWindows(inputs);
+  const periodDays = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+
+  const first = windows[0];
+  const last = windows[windows.length - 1];
+  const joinDate = inputs.joinDate ? toDateOnly(inputs.joinDate) : null;
+  let joinedOn: string | null = null;
+  if (first && first.start.getTime() > periodStart.getTime()) joinedOn = ymd(first.start);
+  else if (!first && joinDate && joinDate.getTime() > periodEnd.getTime()) joinedOn = ymd(joinDate);
+
+  return {
+    windows: windows.map((w) => ({ start: ymd(w.start), end: ymd(w.end) })),
+    in_tenure_days: totalWindowDays(windows),
+    period_days: periodDays,
+    joined_on: joinedOn,
+    left_on: last && last.end.getTime() < periodEnd.getTime() ? ymd(last.end) : null,
+    rejoined: windows.length > 1,
+  };
+}
+
+/** Why a day is off the roll, or null when the employee was on roll that day. */
+export function offRollReason(date: string, tenure: Pick<CycleTenure, 'windows'>): OffRollReason | null {
+  const { windows } = tenure;
+  if (windows.length === 0) return 'BEFORE_JOIN';
+  if (windows.some((w) => date >= w.start && date <= w.end)) return null;
+  if (date < windows[0].start) return 'BEFORE_JOIN';
+  if (date > windows[windows.length - 1].end) return 'AFTER_LEAVE';
+  return 'BETWEEN_TENURES';
+}

@@ -43,7 +43,7 @@ import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { Action } from '../auth/casl/actions';
@@ -105,7 +105,8 @@ export class VouchersController {
 
     /** Compute arrears for a student before a given fee_date. */
     @Get('arrears')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @RequireAnyTile('finance.single_voucher')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -136,7 +137,8 @@ export class VouchersController {
      * /fee-challan prefill the dates and offer the override (TAFSD-174).
      */
     @Get('pay-immediate-preview')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @RequireAnyTile('finance.single_voucher')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -193,7 +195,8 @@ export class VouchersController {
     }
 
     @Get('by-student/:cc')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @RequireAnyTile('finance.receive_deposit')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
@@ -634,7 +637,8 @@ export class VouchersController {
     }
 
     @Post('batch-preview')
-    @UseGuards(JwtStaffGuard, PoliciesGuard)
+    @RequireAnyTile('finance.vouchers', 'finance.bulk_voucher')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
     async batchPreview(@Body() dto: BatchPreviewDto, @CurrentUser() user: IJwtStaffPayload) {

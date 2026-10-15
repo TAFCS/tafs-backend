@@ -52,14 +52,21 @@ export class ZkPushService {
     const sns = Object.keys(ZK_DEVICES).filter(
       (sn) => !codes || codes.includes(ZK_DEVICES[sn].campusCode),
     );
-    const rows = sns.length
-      ? await this.prisma.zk_push_logs.groupBy({
-          by: ['sn'],
-          where: { sn: { in: sns } },
-          _max: { received_at: true },
-        })
-      : [];
-    const lastPush = new Map(rows.map((r) => [r.sn, r._max.received_at]));
+    // One "latest row" lookup per device on the (sn, received_at) index. The
+    // old GROUP BY read every push log on each call (~0.5 s, up to 7.5 s), and
+    // Home/Dashboard poll this every minute per open tab (TAFSD-326).
+    const rows = await Promise.all(
+      sns.map((sn) =>
+        this.prisma.zk_push_logs.findFirst({
+          where: { sn },
+          orderBy: { received_at: 'desc' },
+          select: { sn: true, received_at: true },
+        }),
+      ),
+    );
+    const lastPush = new Map(
+      rows.filter((r): r is { sn: string; received_at: Date } => !!r).map((r) => [r.sn, r.received_at]),
+    );
 
     return sns.map((sn) => {
       const info = ZK_DEVICES[sn];

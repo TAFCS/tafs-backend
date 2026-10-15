@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -1246,6 +1246,33 @@ export class StaffEditingService {
 
     if (cnic !== undefined) {
       data.cnic = (cnic && cnic !== "N/A") ? cnic : null;
+      if (data.cnic) {
+        const conflict = await this.prisma.guardians.findUnique({
+          where: { cnic: data.cnic as string },
+          include: {
+            student_guardians: {
+              include: {
+                students: { select: { cc: true, gr_number: true, full_name: true } },
+              },
+            },
+          },
+        });
+        if (conflict && conflict.id !== id) {
+          if (
+            conflict.student_guardians.length === 0 &&
+            (!conflict.full_name || conflict.full_name === 'UNKNOWN' || conflict.full_name === 'N/A')
+          ) {
+            await this.prisma.guardians.delete({ where: { id: conflict.id } });
+          } else {
+            const linked = conflict.student_guardians
+              .map((sg) => `${sg.students.full_name} (${sg.students.gr_number ?? sg.student_id})`)
+              .join(', ');
+            throw new ConflictException(
+              `CNIC ${data.cnic} is already registered to guardian #${conflict.id} (${conflict.full_name || 'No name'})${linked ? ` linked to ${linked}` : ''}.`,
+            );
+          }
+        }
+      }
     }
 
     if (dto.email && !dto.email_address) {
@@ -1353,6 +1380,7 @@ export class StaffEditingService {
       };
     } catch (e: any) {
       if (e?.code === 'P2025') throw new NotFoundException(`Guardian #${id} not found`);
+      if (e?.code === 'P2002') throw new ConflictException(`CNIC ${data.cnic} is already registered to another guardian`);
       throw e;
     }
   }

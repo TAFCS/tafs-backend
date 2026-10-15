@@ -6,7 +6,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { ScopeService } from '../../common/scope/scope.service';
 import { actionsCover } from '../access/tiles.manifest';
 import { Action } from '../auth/casl/actions';
@@ -36,6 +36,7 @@ export class ZkAttendanceMappingController {
   ) {}
 
   @Get()
+  @RequireAnyTile('attendance.zk_device_logs', 'hr.employee_directory', 'student.directory')
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Student'))
   async getMappings(
@@ -101,6 +102,7 @@ export class ZkAttendanceMappingController {
   }
 
   @Post()
+  @RequireAnyTile('attendance.zk_device_logs', 'hr.employee_directory', 'student.directory')
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async createMapping(@Body() dto: CreateDeviceMappingDto, @CurrentUser() user: IJwtStaffPayload) {
@@ -115,6 +117,7 @@ export class ZkAttendanceMappingController {
   }
 
   @Patch(':id')
+  @RequireAnyTile('attendance.zk_device_logs', 'hr.employee_directory', 'student.directory')
   @UseGuards(PoliciesGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee') || ability.can(Action.Manage, 'Student'))
   async updateMapping(

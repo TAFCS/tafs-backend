@@ -201,31 +201,29 @@ export class NoticeBoardService {
   // (badged in the UI). Other people's pending posts live on the review page
   // only — superadmins included.
   async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload) {
-    const fetched = await this.prisma.notice_board_posts.findMany({
-      where: {
-        deleted_at: null,
-        OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
-        ...(cursor ? { id: { lt: cursor } } : {}),
-      },
-      orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
-      include: POST_LIST_INCLUDE,
-      take: 30,
-    });
-
-    // A scoped caller only sees posts whose audience is inside their scope.
-    // Filtered after the page is fetched, so a page may come back short — the
-    // cursor (last visible id) still moves forward correctly.
-    const posts: typeof fetched = [];
-    for (const p of fetched) {
-      try {
-        await this.assertCanManagePost(user, p);
-        posts.push(p);
-      } catch {
-        /* outside this caller's scope — omitted */
-      }
+    // A scoped caller sees posts that reached at least one of their students,
+    // plus their own. Most posts reach one campus or one family, so batches are
+    // read until a full page is visible (bounded, so a narrow scope can't scan
+    // the whole table).
+    const reach = await this._scopeReach(user);
+    const PAGE = 30;
+    const BATCH = reach ? 150 : PAGE;
+    const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
+    for (let skip = 0; fetchedPosts.length < PAGE && skip < BATCH * 8; skip += BATCH) {
+      const batch = await this._postBatch(cursor, user, skip, BATCH);
+      fetchedPosts.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
+      if (batch.length < BATCH) break;
+    }
+    const posts: ((typeof fetchedPosts)[number] & { viewer_can_manage: boolean })[] = [];
+    for (const p of fetchedPosts.slice(0, PAGE)) {
+      posts.push({ ...p, viewer_can_manage: !reach || (await this._canManagePost(user, p)) });
     }
 
-    const postsWithReach = await this._withTargetsAndReach(posts);
+    const withTargets = await this._withTargetsAndReach(posts);
+    // A post seen through overlap must not list targeted students outside the caller's scope.
+    const postsWithReach = reach
+      ? withTargets.map((p) => ({ ...p, targeted_students: p.targeted_students.filter((t) => reach.seesStudent(t!.cc)) }))
+      : withTargets;
 
     const allHolidays = await this.prisma.academic_calendar_days.findMany({
       where: {
@@ -235,20 +233,14 @@ export class NoticeBoardService {
       orderBy: { date: 'desc' },
       take: 30,
     });
-    // Same rule as posts: a scoped caller only sees holiday notices whose own
-    // campus/class/section is inside their scope.
-    const holidays = this.scope.isExempt(user)
-      ? allHolidays
-      : allHolidays.filter((h) => {
-          try {
-            this.scope.assertCampus(user, h.campus_id);
-            if (h.class_id != null) this.scope.assertClass(user, h.class_id);
-            if (h.section_id != null) this.scope.assertSection(user, h.section_id);
-            return true;
-          } catch {
-            return false;
-          }
-        });
+    // Same rule as posts: a scoped caller sees holiday notices that reached at
+    // least one of their students.
+    const holidays: (typeof allHolidays[number] & { viewer_can_manage: boolean })[] = [];
+    for (const h of allHolidays) {
+      const audience = { posted_by: h.created_by, ...this._holidayAudience(h), student_ccs: [] };
+      if (reach && !reach.reaches(audience)) continue;
+      holidays.push({ ...h, viewer_can_manage: !reach || (await this._canManagePost(user, audience)) });
+    }
 
     const userIds = holidays.map((h) => h.created_by).filter((cb): cb is string => !!cb);
     const creators = userIds.length
@@ -300,6 +292,7 @@ export class NoticeBoardService {
         users: { full_name: creatorName || h.created_by || 'System' },
         _count: { post_reads: holidayReadCounts.get(h.id) ?? 0 },
         total_reached: holidayReachCache.get(reachKey) ?? 0,
+        viewer_can_manage: h.viewer_can_manage,
       };
     });
 
@@ -310,6 +303,77 @@ export class NoticeBoardService {
     });
 
     return merged;
+  }
+
+  private _postBatch(cursor: number | undefined, user: IJwtStaffPayload, skip: number, take: number) {
+    return this.prisma.notice_board_posts.findMany({
+      where: {
+        deleted_at: null,
+        OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
+        ...(cursor ? { id: { lt: cursor } } : {}),
+      },
+      orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
+      include: POST_LIST_INCLUDE,
+      skip,
+      take,
+    });
+  }
+
+  /**
+   * TAFSD-315: which posts belong on a scoped caller's board — those that
+   * reached at least one student in their scope (an all-campus notice their
+   * parents got too), plus their own. null means the caller sees everything
+   * (superadmin, or no scope set). Editing, deleting and read stats still
+   * need the whole audience in scope (assertCanManagePost).
+   */
+  private async _scopeReach(user: IJwtStaffPayload) {
+    if (this.scope.isExempt(user)) return null;
+    const inScope = this.scope.whereForStudents(user);
+    if (Object.keys(inScope).length === 0) return null;
+
+    const students = await this.prisma.students.findMany({
+      where: { deleted_at: null, ...inScope },
+      select: { cc: true, campus_id: true, class_id: true, section_id: true },
+    });
+    const ccs = new Set(students.map((st) => st.cc));
+    const placements = [
+      ...new Map(students.map((st) => [`${st.campus_id}:${st.class_id}:${st.section_id}`, st])).values(),
+    ];
+    const hits = (list: number[], id: number | null) => list.length === 0 || (id != null && list.includes(id));
+
+    return {
+      seesStudent: (cc: number) => ccs.has(cc),
+      reaches: (post: {
+        posted_by: string | null;
+        campus_ids: unknown;
+        class_ids: unknown;
+        section_ids: unknown;
+        student_ccs: unknown;
+      }) => {
+        if (post.posted_by === user.sub) return true;
+        // Student targeting is exclusive, as in _resolveAudienceFamilyIds.
+        const targeted = (post.student_ccs as number[]) ?? [];
+        if (targeted.length) return targeted.some((cc) => ccs.has(cc));
+        const campusIds = (post.campus_ids as number[]) ?? [];
+        const classIds = (post.class_ids as number[]) ?? [];
+        const sectionIds = (post.section_ids as number[]) ?? [];
+        return placements.some(
+          (pl) => hits(campusIds, pl.campus_id) && hits(classIds, pl.class_id) && hits(sectionIds, pl.section_id),
+        );
+      },
+    };
+  }
+
+  private async _canManagePost(
+    user: IJwtStaffPayload,
+    post: { campus_ids: unknown; class_ids: unknown; section_ids: unknown; student_ccs: unknown },
+  ): Promise<boolean> {
+    try {
+      await this.assertCanManagePost(user, post);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Adds targeted_students and total_reached to each post, for the admin views. */
@@ -1139,6 +1203,26 @@ export class NoticeBoardService {
     return counts;
   }
 
+  private audienceCountCache = new Map<string, { value: number; expires: number }>();
+
+  private _audienceKey(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): string {
+    const ccs = ((post.student_ccs as number[]) ?? []).slice().sort().join(',');
+    if (ccs) return `ccs:${ccs}`;
+    const cmp = ((post.campus_ids as number[]) ?? []).slice().sort().join(',');
+    const cls = ((post.class_ids as number[]) ?? []).slice().sort().join(',');
+    const sec = ((post.section_ids as number[]) ?? []).slice().sort().join(',');
+    const st = ((post.student_statuses as string[]) ?? []).slice().sort().join(',');
+    const ay = ((post.academic_years as string[]) ?? []).slice().sort().join(',');
+    return `${cmp}|${cls}|${sec}|${st}|${ay}`;
+  }
+
   private async _countAudienceFamilies(post: {
     campus_ids: unknown;
     class_ids: unknown;
@@ -1147,6 +1231,13 @@ export class NoticeBoardService {
     student_statuses: unknown;
     academic_years: unknown;
   }): Promise<number> {
+    const cacheKey = this._audienceKey(post);
+    const hit = this.audienceCountCache.get(cacheKey);
+    const now = Date.now();
+    if (hit && hit.expires > now) {
+      return hit.value;
+    }
+
     const studentCcs = (post.student_ccs as number[]) ?? [];
     if (studentCcs.length) {
       const students = await this.prisma.students.findMany({
@@ -1157,11 +1248,13 @@ export class NoticeBoardService {
         },
         select: { family_id: true },
       });
-      return new Set(
+      const count = new Set(
         students
           .map((s) => s.family_id)
           .filter((id): id is number => id != null),
       ).size;
+      this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+      return count;
     }
 
     const campusIds = (post.campus_ids as number[]) ?? [];
@@ -1170,7 +1263,7 @@ export class NoticeBoardService {
     const studentStatuses = (post.student_statuses as student_status[]) ?? [];
     const academicYears = (post.academic_years as string[]) ?? [];
 
-    return this.prisma.families.count({
+    const count = await this.prisma.families.count({
       where: {
         deleted_at: null,
         students: {
@@ -1187,5 +1280,7 @@ export class NoticeBoardService {
         },
       },
     });
+    this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+    return count;
   }
 }

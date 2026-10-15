@@ -89,7 +89,23 @@ export class AuthService {
     return this.issueStaffSession(user);
   }
 
-  private async issueStaffSession(user: {
+  /**
+   * Full staff user projection for the webapp (same shape as login/refresh)
+   * without rotating tokens or running bcrypt. Used by GET /auth/staff/me so
+   * a page reload does not pay the refresh path when the access cookie is live.
+   */
+  async getStaffSessionUser(userId: string) {
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      include: { campuses: true },
+    });
+    if (!user || !user.is_active) {
+      throw new UnauthorizedException('Account is inactive');
+    }
+    return this.buildStaffUserResponse(user);
+  }
+
+  private async buildStaffUserResponse(user: {
     id: string;
     username: string;
     full_name: string;
@@ -113,6 +129,33 @@ export class AuthService {
       select: { id: true, payroll_enabled: true },
     });
 
+    return {
+      id: user.id,
+      username: user.username,
+      fullName: user.full_name,
+      role: user.role,
+      campusId: user.campus_id,
+      campusName: user.campuses?.campus_name ?? null,
+      allowedClassIds,
+      permissions,
+      effectiveTileIds,
+      effectiveActions,
+      scope,
+      payrollEnabled: employeeProfile?.payroll_enabled ?? true,
+      hasEmployeeProfile: !!employeeProfile,
+    };
+  }
+
+  private async issueStaffSession(user: {
+    id: string;
+    username: string;
+    full_name: string;
+    role: IJwtStaffPayload['role'];
+    campus_id: number | null;
+    allowed_class_ids: number[] | null;
+    campuses?: { campus_name: string } | null;
+  }) {
+    const staffUser = await this.buildStaffUserResponse(user);
     const isSuperAdmin = user.role === StaffRole.SUPER_ADMIN;
 
     const payload: IJwtStaffPayload = {
@@ -121,18 +164,18 @@ export class AuthService {
       fullName: user.full_name,
       role: user.role,
       campusId: user.campus_id,
-      allowedClassIds,
+      allowedClassIds: staffUser.allowedClassIds,
       userType: 'STAFF',
       // For SUPER_ADMIN, CASL grants Manage 'all' and TileActionGuard bypasses checks.
       // Omit the 60+ permission/action strings from the JWT to prevent exceeding
       // the browser 4KB cookie limit (which causes browser to silently drop tafs_access).
-      permissions: isSuperAdmin ? [] : permissions,
+      permissions: isSuperAdmin ? [] : staffUser.permissions,
       // Compacted (`tile#*` for a tile the user holds in full) for the same
       // 4KB reason as the SUPER_ADMIN omission above: spelling out all 49
       // actions costs ~1.9KB and put a fully-privileged CAMPUS_ADMIN token
       // over the cookie limit. TileActionGuard and useTileAccess expand it.
-      actions: isSuperAdmin ? [] : compactActionKeys(effectiveActions),
-      scope: isSuperAdmin ? EMPTY_SCOPE : scope,
+      actions: isSuperAdmin ? [] : compactActionKeys(staffUser.effectiveActions),
+      scope: isSuperAdmin ? EMPTY_SCOPE : staffUser.scope,
     };
 
     const { accessToken, refreshToken } =
@@ -142,21 +185,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        role: user.role,
-        campusId: user.campus_id,
-        campusName: user.campuses?.campus_name ?? null,
-        allowedClassIds,
-        permissions,
-        effectiveTileIds,
-        effectiveActions,
-        scope,
-        payrollEnabled: employeeProfile?.payroll_enabled ?? true,
-        hasEmployeeProfile: !!employeeProfile,
-      },
+      user: staffUser,
     };
   }
 
@@ -751,7 +780,7 @@ export class AuthService {
 
     await this.prisma.users.update({
       where: { id: otpResult.userId },
-      data: { password_hash: passwordHash },
+      data: { password_hash: passwordHash, password_reveal: encryptSecret(dto.newPassword) },
     });
 
     // Revoke all existing refresh tokens, forcing re-login on all devices

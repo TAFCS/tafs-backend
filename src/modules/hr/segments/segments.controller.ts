@@ -20,7 +20,7 @@ import { ScopeService } from '../../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
-import { RequireAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { Action } from '../../auth/casl/actions';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -53,6 +53,7 @@ export class SegmentsController {
   }
 
   @Get('campus-map')
+  @RequireAnyTile('school-setup.segments')
   @CheckPolicies(
     (ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Class'),
   )
@@ -74,6 +75,7 @@ export class SegmentsController {
   }
 
   @Get('classes-available')
+  @RequireAnyTile('school-setup.segments')
   @CheckPolicies(
     (ability) => ability.can(Action.Read, 'Employee') || ability.can(Action.Read, 'Class'),
   )

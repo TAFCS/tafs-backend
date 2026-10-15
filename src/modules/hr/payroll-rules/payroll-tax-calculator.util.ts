@@ -20,3 +20,35 @@ export function calculateMonthlyIncomeTax(annualIncome: number, slabs: IncomeTax
   const annualTax = new Prisma.Decimal(slab.fixed_amount).plus(excess.times(slab.rate_percent).dividedBy(100));
   return annualTax.dividedBy(12).toDecimalPlaces(2);
 }
+
+export interface StatutoryRuleValues {
+  /** null when no EOBI rule is in force for the period. */
+  eobi: { employer_percent?: number; employee_percent?: number; wage_base_amount?: number } | null;
+  /** null when no SESSI rule is in force for the period. */
+  sessi: { employer_percent?: number; wage_base_amount?: number } | null;
+}
+
+export interface StatutoryContributions {
+  eobiDeduction: Prisma.Decimal;
+  eobiEmployerCost: Prisma.Decimal;
+  sessiEmployerCost: Prisma.Decimal;
+}
+
+/**
+ * EOBI (employee deduction + employer cost) and SESSI (employer cost) for one
+ * payroll line. TAFSD-278: an exempt employee gets nothing for that scheme —
+ * not a reduced amount, no amount at all, on either side.
+ */
+export function calculateStatutoryContributions(
+  rules: StatutoryRuleValues,
+  exempt: { eobi: boolean; sessi: boolean },
+): StatutoryContributions {
+  const zero = new Prisma.Decimal(0);
+  const eobi = exempt.eobi ? null : rules.eobi;
+  const sessi = exempt.sessi ? null : rules.sessi;
+  return {
+    eobiDeduction: eobi ? calculateStatutoryContribution(eobi.wage_base_amount ?? 0, eobi.employee_percent ?? 0) : zero,
+    eobiEmployerCost: eobi ? calculateStatutoryContribution(eobi.wage_base_amount ?? 0, eobi.employer_percent ?? 0) : zero,
+    sessiEmployerCost: sessi ? calculateStatutoryContribution(sessi.wage_base_amount ?? 0, sessi.employer_percent ?? 0) : zero,
+  };
+}
