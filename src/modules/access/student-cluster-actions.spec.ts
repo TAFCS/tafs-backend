@@ -740,8 +740,11 @@ describe('Section Allocation Rules (two tiles, one page)', () => {
     const held = new Set(r.actionIds);
     // ...and does NOT hold the Student Directory tile.
     expect(r.tileIds).not.toContain('student.directory');
+    // The roster list is a tile allowlist (TAFSD-196/203): holding the tile is enough.
+    const list = meta(StudentsController.prototype, 'findAll')!;
+    expect(list.mode).toBe('tile');
+    expect(list.tileIds).toEqual(expect.arrayContaining(['student.section_allocation', 'school-setup.section_allocation']));
     for (const [ctrl, handler] of [
-      [StudentsController, 'findAll'],
       [StudentsController, 'assignStudent'],
       [CampusesController, 'upsertCampusSection'],
     ] as const) {
@@ -752,13 +755,15 @@ describe('Section Allocation Rules (two tiles, one page)', () => {
   });
 
   it('keeps the shared routes open to every tile that already calls them', () => {
-    const list = meta(StudentsController.prototype, 'findAll')!.actionKeys;
-    expect(list).toEqual(
+    const listTiles = meta(StudentsController.prototype, 'findAll')!.tileIds;
+    expect(listTiles).toEqual(
       expect.arrayContaining([
-        'student.directory#view',
-        'student.academic_actions#view',
-        'student.section_allocation#view',
-        'school-setup.section_allocation#view',
+        'student.directory',
+        'student.academic_actions',
+        'student.section_allocation',
+        'school-setup.section_allocation',
+        'student.families',
+        'attendance.teaching_groups',
       ]),
     );
     expect(meta(StudentsController.prototype, 'assignStudent')!.actionKeys).toEqual(
@@ -773,6 +778,6 @@ describe('Section Allocation Rules (two tiles, one page)', () => {
         'school-setup.section_allocation#rules.edit',
       ]),
     );
-    keysExist([...list, ...put, 'student.section_allocation#move', 'school-setup.section_allocation#move']);
+    keysExist([...put, 'student.section_allocation#move', 'school-setup.section_allocation#move']);
   });
 });

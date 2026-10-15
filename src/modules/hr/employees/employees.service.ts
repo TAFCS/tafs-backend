@@ -929,6 +929,46 @@ export class EmployeesService {
     });
   }
 
+  /**
+   * Lean, safe-to-share employee list for pickers: no CNIC, pay, phone or
+   * schedule. `has_monthly_pay` stands in for the amount (Payroll's test run
+   * only needs to know whether pay is set).
+   */
+  async listPicker(caller: IJwtStaffPayload) {
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: this.scope.whereForEmployees(caller),
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        job_title: true,
+        photo_url: true,
+        employment_status: true,
+        campus_id: true,
+        department_id: true,
+        staff_category_id: true,
+        segment_id: true,
+        monthly_pay: true,
+        users: { select: { full_name: true } },
+        campuses: { select: { id: true, campus_name: true } },
+        departments: { select: { id: true, name: true } },
+        staff_categories: { select: { id: true, name: true, code: true } },
+        segments: { select: { id: true, code: true, name: true, display_order: true } },
+        employee_class_section_assignments: {
+          select: {
+            id: true,
+            class_id: true,
+            section_id: true,
+            classes: { select: { description: true, class_code: true, segment_id: true } },
+            sections: { select: { description: true } },
+          },
+        },
+      },
+      orderBy: { full_name: 'asc' },
+    });
+    return rows.map(({ monthly_pay, ...rest }) => ({ ...rest, has_monthly_pay: monthly_pay != null }));
+  }
+
   async findOne(id: number, caller?: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id },

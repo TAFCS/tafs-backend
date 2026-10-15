@@ -55,6 +55,8 @@ export class StudentsController {
     'attendance.teaching_groups',
     'attendance.zk_device_logs',
     'communication.notice_board',
+    'student.enrollments',
+    'student.families',
   )
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);
@@ -66,15 +68,19 @@ export class StudentsController {
   }
 
   // Also the roster / preview list behind Academic Actions (bulk promote) and
-  // Section Allocation Rules, so those tiles' holders are not refused by a
-  // directory-only action. The policy check and scope are unchanged.
+  // Section Allocation Rules, the family-member lookup on Families, and the
+  // section roster on Teaching Groups. An allowlist of tiles (holding a tile
+  // means holding its `view`), not "any staff member"; scope is unchanged. The
+  // Read Student policy check is dropped on purpose: a Families or Teaching
+  // Groups user holds none of the student capabilities it demands.
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAnyAction(
-    'student.directory#view',
-    'student.academic_actions#view',
-    'student.section_allocation#view',
-    'school-setup.section_allocation#view',
+  @RequireAnyTile(
+    'student.directory',
+    'student.academic_actions',
+    'student.section_allocation',
+    'school-setup.section_allocation',
+    'student.families',
+    'attendance.teaching_groups',
   )
   async findAll(
     @Query() query: GetStudentsDto,

@@ -70,21 +70,49 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
   }
 
-  // The employee search box is shared by the Employee Directory, Payroll, the
-  // Academic Calendar and ZK Device Logs. Open to a holder of ANY of those
-  // tiles (an allowlist, not "any staff member"); results stay limited to the
-  // caller's scope. The Read Employee policy check is dropped on purpose: a user
-  // delegated only one of those tiles does not hold it.
+  // The employee search box is shared by every page that picks an employee.
+  // Open to a holder of ANY of those tiles (an allowlist, not "any staff
+  // member"); results stay limited to the caller's scope. The Read Employee
+  // policy check is dropped on purpose: a user delegated only one of those
+  // tiles does not hold it. Add a tile here when a new page gains an employee
+  // search.
   @Get('search-simple')
   @RequireAnyTile(
     'hr.employee_directory',
     'hr.payroll',
+    'hr.employee_loans',
+    'hr.security_deposits',
     'attendance.academic_calendar',
     'attendance.zk_device_logs',
+    'attendance.saturday_schedules',
+    'attendance.shift_overrides',
+    'attendance.timetables',
+    'attendance.teaching_groups',
   )
   async searchSimple(@Query('q') q: string, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.employeesService.searchSimple(q || '', user);
     return createApiResponse(data, HttpStatus.OK, 'Search results retrieved successfully');
+  }
+
+  // Lean employee list for the pages that load everyone into a dropdown or a
+  // roster (Departments, Payroll test run, the calendar, schedules, timetable
+  // slot editor, teaching groups). GET /hr/employees returns the full record
+  // (CNIC, pay, phone, schedule), which these tiles must not get just because
+  // they need a name to pick. Identity and org fields only, scope-limited.
+  @Get('picker')
+  @RequireAnyTile(
+    'hr.employee_directory',
+    'hr.departments',
+    'hr.payroll',
+    'attendance.academic_calendar',
+    'attendance.saturday_schedules',
+    'attendance.shift_overrides',
+    'attendance.timetables',
+    'attendance.teaching_groups',
+  )
+  async listPicker(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.listPicker(user);
+    return createApiResponse(data, HttpStatus.OK, 'Employees retrieved successfully');
   }
 
   @Get(':id/work-schedule')
