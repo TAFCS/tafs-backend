@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { Prisma, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -11,6 +13,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { ORIGINATION_OPTIONS } from '../../../common/support-ticket-routing';
 import { TicketRoutingService } from './ticket-routing.service';
+import { ChatGateway } from '../../chat/chat.gateway';
 import {
   CreateRoutingRuleDto,
   CreateTicketQueueDto,
@@ -43,7 +46,16 @@ export class TicketRoutingAdminService {
     private readonly prisma: PrismaService,
     private readonly routing: TicketRoutingService,
     private readonly auditLogs: AuditLogsService,
+    @Inject(forwardRef(() => ChatGateway))
+    private readonly chatGateway: ChatGateway,
   ) {}
+
+  /** Live sockets follow the new membership at once (no reconnect). Best-effort. */
+  private syncLiveMembers(queueId: number, memberIds: string[]) {
+    this.chatGateway
+      .syncQueueRoom(queueId, memberIds)
+      .catch((err) => console.error('[TicketRouting] queue room sync failed:', err?.message));
+  }
 
   private assertAdmin(staff: IJwtStaffPayload) {
     if (staff.role !== 'SUPER_ADMIN') {
@@ -200,6 +212,7 @@ export class TicketRoutingAdminService {
   async createQueue(staff: IJwtStaffPayload, dto: CreateTicketQueueDto) {
     this.assertAdmin(staff);
     const queue = await this.saveQueue(staff, null, dto);
+    if (dto.member_ids) this.syncLiveMembers(queue.id, [...new Set(dto.member_ids)]);
     this.audit(staff, `queue:${queue.id}`, 'CREATED', `Ticket queue "${queue.name}" created`, null, queue);
     return queue;
   }
@@ -213,6 +226,7 @@ export class TicketRoutingAdminService {
       if (rules > 0) throw new ConflictException('Queue category cannot change while rules point at it');
     }
     const queue = await this.saveQueue(staff, id, dto);
+    if (dto.member_ids) this.syncLiveMembers(id, [...new Set(dto.member_ids)]);
     this.audit(staff, `queue:${id}`, 'UPDATED', `Ticket queue "${queue.name}" updated`, before, queue);
     return queue;
   }
@@ -228,6 +242,7 @@ export class TicketRoutingAdminService {
       throw new ConflictException(`Queue has ${before._count.tickets} open tickets; switch it off instead`);
     }
     await this.prisma.ticket_queues.delete({ where: { id } });
+    this.syncLiveMembers(id, []);
     this.audit(staff, `queue:${id}`, 'DELETED', `Ticket queue "${before.name}" deleted`, before, null);
     return { id };
   }
