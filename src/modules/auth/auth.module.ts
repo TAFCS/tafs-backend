@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { UsersModule } from '../users/users.module';
+import { AccessModule } from '../access/access.module';
 import { JwtStaffStrategy } from './strategies/jwt-staff.strategy';
 import { JwtParentStrategy } from './strategies/jwt-parent.strategy';
 import { CaslAbilityFactory } from './casl/casl-ability.factory';
@@ -17,6 +18,7 @@ import { OtpModule } from '../otp/otp.module';
 @Module({
   imports: [
     forwardRef(() => UsersModule),
+    forwardRef(() => AccessModule),
     forwardRef(() => ParentChangeRequestsModule),
     FcmModule,
     OtpModule,

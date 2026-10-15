@@ -22,6 +22,15 @@ import {
 import { readUntilMigrated } from '../../utils/pending-migration.util';
 import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
 
+export type LiveStaffSession = {
+  isActive: boolean;
+  role: StaffRole;
+  capabilityKeys: string[];
+  actionIds: string[];
+};
+
+const LIVE_SESSION_TTL_MS = 30_000;
+
 @Injectable()
 export class AccessService {
   constructor(
@@ -230,6 +239,47 @@ export class AccessService {
 
   async getCatalog() {
     return catalogFromManifest();
+  }
+
+  /**
+   * The caller's account state and effective access, read live on every
+   * request (TAFSD-308) instead of trusted from the 90-day token: revoking a
+   * tile, pack, permission or role takes effect on the next API call, with no
+   * re-login. A short in-memory cache absorbs the burst of requests a page load
+   * makes; every write below that changes someone's access drops their entry.
+   * Writes this service does not see (another instance, a raw SQL fix) are
+   * bounded by the TTL.
+   */
+  private liveSessionCache = new Map<string, { session: LiveStaffSession; expires: number }>();
+
+  async resolveLiveSession(userId: string): Promise<LiveStaffSession | null> {
+    const now = Date.now();
+    const cached = this.liveSessionCache.get(userId);
+    if (cached && cached.expires > now) return cached.session;
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { is_active: true, role: true },
+    });
+    if (!user) {
+      this.liveSessionCache.delete(userId);
+      return null;
+    }
+    const access = await this.resolveEffective(userId, user.role);
+    const session: LiveStaffSession = {
+      isActive: Boolean(user.is_active),
+      role: user.role,
+      capabilityKeys: access.capabilityKeys,
+      actionIds: access.actionIds,
+    };
+    this.liveSessionCache.set(userId, { session, expires: now + LIVE_SESSION_TTL_MS });
+    return session;
+  }
+
+  /** Drop one user's cached session, or everyone's (role or pack changes). */
+  invalidateLiveSession(userId?: string) {
+    if (userId) this.liveSessionCache.delete(userId);
+    else this.liveSessionCache.clear();
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
@@ -515,6 +565,7 @@ export class AccessService {
         }
       }
     }, { maxWait: 10000, timeout: 20000 });
+    this.invalidateLiveSession(userId);
 
     // Collected and written in one insert after the change commits; one
     // awaited log() per changed tile was another round trip each.
@@ -695,6 +746,8 @@ export class AccessService {
     });
 
     if (tileActions) await this.writePackActions(id, tileActions);
+    // Everyone holding the pack sees the change on their next request.
+    this.invalidateLiveSession();
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -730,6 +783,7 @@ export class AccessService {
       changed_by: actorLabel ?? 'system',
       note: `Deleted access pack "${existing.name}".`,
     });
+    this.invalidateLiveSession();
     return { deleted: true };
   }
 

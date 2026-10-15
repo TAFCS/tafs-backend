@@ -4,7 +4,10 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
+import { AccessService } from '../access/access.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
@@ -31,6 +34,8 @@ export class UsersService {
     private prisma: PrismaService,
     private auditLogs: AuditLogsService,
     private scope: ScopeService,
+    @Inject(forwardRef(() => AccessService))
+    private readonly accessService: AccessService,
   ) {}
 
   /**
@@ -372,6 +377,7 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
+    this.accessService.invalidateLiveSession(id);
 
     const changes: string[] = [];
     if (dto.full_name !== undefined && existing.full_name !== record.full_name) {
@@ -419,6 +425,7 @@ export class UsersService {
       where: { id },
       data: { is_active: false, updated_at: new Date() },
     });
+    this.accessService.invalidateLiveSession(id);
     await this.auditLogs.log({
       entity_type: 'USER',
       entity_id: id,
@@ -439,6 +446,7 @@ export class UsersService {
       where: { id },
       data: { is_active: true, updated_at: new Date() },
     });
+    this.accessService.invalidateLiveSession(id);
     await this.auditLogs.log({
       entity_type: 'USER',
       entity_id: id,
@@ -554,6 +562,7 @@ export class UsersService {
         note: dto.note ?? null,
       },
     });
+    this.accessService.invalidateLiveSession(userId);
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -591,6 +600,7 @@ export class UsersService {
     await this.prisma.user_permissions.deleteMany({
       where: { user_id: userId, permission_id: permission.id },
     });
+    this.accessService.invalidateLiveSession(userId);
 
     if (existing) {
       await this.auditLogs.log({
@@ -646,6 +656,7 @@ export class UsersService {
           permission_id: dto.permission_id,
         },
       });
+      this.accessService.invalidateLiveSession();
 
       if (!existing) {
         await this.auditLogs.log({
@@ -668,6 +679,7 @@ export class UsersService {
           permission_id: dto.permission_id,
         },
       });
+      this.accessService.invalidateLiveSession();
 
       if (existing) {
         await this.auditLogs.log({
