@@ -73,6 +73,7 @@ export class ScopeService {
    * every class-based check enforce segment without each one remembering to.
    */
   private effectiveScopeCache = new Map<string, { scope: UserScope; expires: number }>();
+  private effectiveScopeInFlight = new Map<string, Promise<UserScope>>();
 
   /**
    * The scope a session is actually held to: `resolve()` with SEGMENT folded
@@ -91,22 +92,37 @@ export class ScopeService {
    */
   async resolveEffective(userId: string): Promise<UserScope> {
     const cached = this.effectiveScopeCache.get(userId);
-    const now = Date.now();
-    if (cached && cached.expires > now) {
+    if (cached && cached.expires > Date.now()) {
       return cached.scope;
     }
-    const resolved = await this.withCategoryDepartments(
-      await this.withSegmentClasses(await this.resolve(userId)),
-    );
-    this.effectiveScopeCache.set(userId, { scope: resolved, expires: now + 30_000 });
-    return resolved;
+    // Concurrent requests on a cache miss share one resolution (TAFSD-326).
+    const pending = this.effectiveScopeInFlight.get(userId);
+    if (pending) return pending;
+    // Declared first: the loader compares itself against the in-flight entry.
+    let load!: Promise<UserScope>;
+    load = (async () => {
+      const resolved = await this.withCategoryDepartments(
+        await this.withSegmentClasses(await this.resolve(userId)),
+      );
+      // Invalidated while loading: answer this request, but don't cache what may be stale.
+      if (this.effectiveScopeInFlight.get(userId) === load) {
+        this.effectiveScopeCache.set(userId, { scope: resolved, expires: Date.now() + 30_000 });
+      }
+      return resolved;
+    })().finally(() => {
+      if (this.effectiveScopeInFlight.get(userId) === load) this.effectiveScopeInFlight.delete(userId);
+    });
+    this.effectiveScopeInFlight.set(userId, load);
+    return load;
   }
 
   invalidateScopeCache(userId?: string) {
     if (userId) {
       this.effectiveScopeCache.delete(userId);
+      this.effectiveScopeInFlight.delete(userId);
     } else {
       this.effectiveScopeCache.clear();
+      this.effectiveScopeInFlight.clear();
     }
   }
 

@@ -10,7 +10,6 @@ import { JwtStaffStrategy } from './strategies/jwt-staff.strategy';
 import { JwtParentStrategy } from './strategies/jwt-parent.strategy';
 import { CaslAbilityFactory } from './casl/casl-ability.factory';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
-import { PrismaService } from '../../../prisma/prisma.service';
 import { ParentChangeRequestsModule } from '../parent-change-requests/parent-change-requests.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { OtpModule } from '../otp/otp.module';
@@ -40,7 +39,6 @@ import { OtpModule } from '../otp/otp.module';
     JwtParentStrategy,
     CaslAbilityFactory,
     PoliciesGuard,
-    PrismaService,
   ],
   exports: [AuthService, CaslAbilityFactory, PoliciesGuard, JwtModule],
 })
