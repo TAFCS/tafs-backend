@@ -1,17 +1,15 @@
--- TAFSD-327: reporting hierarchy. One row per (employee, manager) line; a
--- person may have several managers, at most one marked primary.
+-- TAFSD-327: reporting hierarchy. One row per (employee, manager) line. A
+-- super admin may set any lines they like; there are no structural rules.
 
 -- CreateTable
 CREATE TABLE "employee_reporting_lines" (
     "id" SERIAL NOT NULL,
     "employee_id" INTEGER NOT NULL,
     "manager_id" INTEGER NOT NULL,
-    "is_primary" BOOLEAN NOT NULL DEFAULT false,
     "created_at" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_by" VARCHAR(255),
 
-    CONSTRAINT "employee_reporting_lines_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "employee_reporting_lines_not_self" CHECK ("employee_id" <> "manager_id")
+    CONSTRAINT "employee_reporting_lines_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -19,9 +17,6 @@ CREATE UNIQUE INDEX "employee_reporting_lines_employee_id_manager_id_key" ON "em
 
 -- CreateIndex
 CREATE INDEX "employee_reporting_lines_manager_id_idx" ON "employee_reporting_lines"("manager_id");
-
--- At most one primary line per employee.
-CREATE UNIQUE INDEX "employee_reporting_lines_one_primary" ON "employee_reporting_lines"("employee_id") WHERE "is_primary";
 
 -- AddForeignKey
 ALTER TABLE "employee_reporting_lines" ADD CONSTRAINT "employee_reporting_lines_employee_id_fkey" FOREIGN KEY ("employee_id") REFERENCES "employee_profiles"("id") ON DELETE CASCADE ON UPDATE CASCADE;

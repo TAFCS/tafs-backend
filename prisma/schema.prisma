@@ -1393,15 +1393,14 @@ model employee_profiles {
   @@index([segment_id])
 }
 
-/// TAFSD-327: who reports to whom. A person may report to more than one
-/// manager (principals report to two directresses). Set only by SUPER_ADMIN on
-/// the Reporting Hierarchy page. The primary line is mirrored onto
-/// employee_profiles.reporting_manager_id so existing readers keep working.
+/// TAFSD-327: who reports to whom. Set only by SUPER_ADMIN on the Reporting
+/// Hierarchy page, with no structural rules: any number of managers, any
+/// level, any department or campus. The first line (lowest id) is mirrored
+/// onto employee_profiles.reporting_manager_id so existing readers keep working.
 model employee_reporting_lines {
   id          Int               @id @default(autoincrement())
   employee_id Int
   manager_id  Int
-  is_primary  Boolean           @default(false)
   created_at  DateTime          @default(now()) @db.Timestamp(6)
   created_by  String?           @db.VarChar(255)
   employee    employee_profiles @relation("ReportingLineEmployee", fields: [employee_id], references: [id], onDelete: Cascade)
