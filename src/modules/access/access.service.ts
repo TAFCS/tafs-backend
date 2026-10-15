@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
@@ -478,25 +478,21 @@ export class AccessService {
         });
       }
 
-      await tx.user_tile_grants.deleteMany({
-        where: { user_id: userId, tile_id: { notIn: grantTileIds } },
-      });
-      for (const grant of grants) {
-        await tx.user_tile_grants.upsert({
-          where: { user_id_tile_id: { user_id: userId, tile_id: grant.tileId } },
-          update: {
-            allow: grant.allow,
-            granted_by: actorId,
-            granted_at: new Date(),
-            note: grant.note ?? null,
-          },
-          create: {
+      // Replace the whole grant set in two statements. An upsert per grant
+      // cost one round trip each, so a user with ~65 grants ran past the
+      // transaction timeout and the save returned 500. Every row was rewritten
+      // with a fresh granted_at anyway, so the stored result is the same.
+      await tx.user_tile_grants.deleteMany({ where: { user_id: userId } });
+      if (grants.length > 0) {
+        await tx.user_tile_grants.createMany({
+          data: grants.map((grant) => ({
             user_id: userId,
             tile_id: grant.tileId,
             allow: grant.allow,
             granted_by: actorId,
             note: grant.note ?? null,
-          },
+          })),
+          skipDuplicates: true,
         });
       }
 
@@ -518,13 +514,16 @@ export class AccessService {
           });
         }
       }
-    });
+    }, { maxWait: 10000, timeout: 20000 });
 
+    // Collected and written in one insert after the change commits; one
+    // awaited log() per changed tile was another round trip each.
+    const auditEntries: AuditLogParams[] = [];
     const beforePacks = existingPacks.map((p) => p.pack_id).sort().join(',');
     const afterPacks = [...packIds].sort().join(',');
     const changedBy = actorLabel ?? actorId;
     if (beforePacks !== afterPacks) {
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: userId,
         action: 'UPDATED',
@@ -544,7 +543,7 @@ export class AccessService {
       const before = beforeGrantMap.get(tileId);
       const after = afterGrantMap.get(tileId);
       if (before === after) continue;
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: `${userId}:${tileId}`,
         action: after === undefined ? 'DELETED' : before === undefined ? 'CREATED' : 'UPDATED',
@@ -573,7 +572,7 @@ export class AccessService {
       const before = summarise(previous);
       const after = summarise(next);
       if (before !== after) {
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: userId,
           action: 'UPDATED',
@@ -596,7 +595,7 @@ export class AccessService {
         const wasAllowed = before.get(k);
         const isAllowed = after.get(k);
         if (wasAllowed === isAllowed) continue;
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: `${userId}:${k}`,
           action: isAllowed === undefined ? 'DELETED' : wasAllowed === undefined ? 'CREATED' : 'UPDATED',
@@ -616,6 +615,8 @@ export class AccessService {
         });
       }
     }
+
+    await this.auditLogs.logMany(auditEntries);
 
     return this.getUserAccess(userId, actingUser);
   }

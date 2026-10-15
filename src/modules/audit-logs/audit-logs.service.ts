@@ -192,6 +192,34 @@ export class AuditLogsService {
   }
 
   /**
+   * Log several independent events in one insert. Same fire-and-forget
+   * contract as log(); use it instead of awaiting log() in a loop, which costs
+   * one database round trip per row.
+   */
+  async logMany(entries: AuditLogParams[]): Promise<void> {
+    if (entries.length === 0) return;
+    try {
+      await this.prisma.audit_logs.createMany({
+        data: entries.map((params) => ({
+          entity_type: params.entity_type,
+          entity_id: params.entity_id,
+          action: params.action,
+          section: params.section ?? this.deriveSectionFromEntityType(params.entity_type),
+          field: params.field || null,
+          old_value: params.old_value || null,
+          new_value: params.new_value || null,
+          changed_by: params.changed_by,
+          student_id: params.student_id || null,
+          note: params.note || null,
+          parent_id: params.parent_id ?? null,
+        })),
+      });
+    } catch (err) {
+      console.error('[AuditLog] Failed to write log entries:', err);
+    }
+  }
+
+  /**
    * One user action → one parent row + optional child detail rows.
    * Children inherit changed_by from the parent when omitted.
    */
