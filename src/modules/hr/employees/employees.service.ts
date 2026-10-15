@@ -1488,6 +1488,7 @@ export class EmployeesService {
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
       { key: 'payroll_enabled', label: 'On Payroll' },
+      { key: 'employment_subtype', label: 'Employment Subtype' },
       { key: 'eobi_exempt', label: 'EOBI Exempt' },
       { key: 'sessi_exempt', label: 'SESSI Exempt' },
       { key: 'days_per_week', label: 'Working Days / Week' },

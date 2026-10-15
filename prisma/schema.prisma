@@ -2852,6 +2852,8 @@ enum EmployeeStatus {
 enum EmploymentSubtype {
   PERMANENT
   NON_PERMANENT
+  // TAFSD-321: on contract — never made permanent by length of service.
+  CONTRACTUAL
 }
 
 enum otp_purpose {
