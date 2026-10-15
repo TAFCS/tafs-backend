@@ -323,7 +323,7 @@ Content-Type: application/json
 \endhead
 \texttt{consumer\_number} & digits & Yes & Same value used in the inquiry \\
 \texttt{amount} & number & Yes & Amount collected, whole PKR. Must equal \texttt{amount\_payable} \\
-\texttt{channel} & enum & Yes & \texttt{OTC}, \texttt{APP}, \texttt{INTERNET\_BANKING} or \texttt{ONEBILL}. Must be \texttt{ONEBILL} for a 15-digit number \\
+\texttt{channel} & enum & CC only & For a CC: \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. For a 15-digit number it may be omitted; it is always recorded as \texttt{ONEBILL} \\
 \texttt{payment\_method} & enum & Yes & See Section~\ref{sec:method} \\
 \texttt{transaction\_id} & string & Yes & UBL's unique transaction reference (max 100 characters) \\
 \texttt{transaction\_datetime} & ISO 8601 & Yes & With offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00} \\
@@ -375,7 +375,6 @@ POST /api/v1/ubl/bill-payment
 {
   "consumer_number": "100000000008088",
   "amount": 90053,
-  "channel": "ONEBILL",
   "payment_method": "ACCOUNT_TRANSFER",
   "transaction_id": "UBL20261005110000123",
   "transaction_datetime": "2026-10-05T11:00:00+05:00",
@@ -442,7 +441,7 @@ POST /api/v1/ubl/bill-payment
 \texttt{06} & Amount does not match the payable amount & Payment \\
 \texttt{07} & A newer voucher has been issued; inquire again & Payment \\
 \texttt{08} & Duplicate transaction; already posted (treat as success) & Payment \\
-\texttt{09} & Invalid request (e.g.\ cheque without \texttt{instrument\_number}, or a 15-digit number with a channel other than \texttt{ONEBILL}) & Payment \\
+\texttt{09} & Invalid request (e.g.\ cheque without \texttt{instrument\_number}, or a CC payment without a \texttt{channel}) & Payment \\
 \texttt{10} & Invalid credentials & Inquiry, Payment \\
 \texttt{99} & General error; nothing booked, retry later & Inquiry, Payment \\
 \bottomrule

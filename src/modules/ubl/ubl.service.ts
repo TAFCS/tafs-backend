@@ -192,14 +192,15 @@ export class UblService {
                 return reply('INVALID_REQUEST', { response_desc: 'instrument_number is required for CHEQUE and PAY_ORDER' });
             }
 
+            // The consumer number decides 1Bill; channel only splits CC payments by where they came in.
             const oneBill = isUbl1BillConsumerNumber(dto.consumer_number);
-            if (oneBill !== (dto.channel === 'ONEBILL')) {
-                return reply('INVALID_REQUEST', {
-                    response_desc: oneBill
-                        ? 'channel must be ONEBILL for a 1Bill consumer number'
-                        : 'channel ONEBILL requires the 15-digit 1Bill consumer number',
-                });
+            if (oneBill && dto.channel && dto.channel !== 'ONEBILL') {
+                return reply('INVALID_REQUEST', { response_desc: 'A 1Bill consumer number is always channel ONEBILL' });
             }
+            if (!oneBill && (!dto.channel || dto.channel === 'ONEBILL')) {
+                return reply('INVALID_REQUEST', { response_desc: 'channel is required for a CC: OTC, APP or INTERNET_BANKING' });
+            }
+            const channel = oneBill ? 'ONEBILL' : dto.channel!;
 
             // Idempotent on UBL's transaction id: a retry after a timeout never books twice.
             const existing = await this.prisma.deposits.findFirst({
@@ -252,7 +253,7 @@ export class UblService {
             }
 
             const methodNote = [
-                `UBL ${dto.channel}`,
+                `UBL ${channel}`,
                 dto.payment_method,
                 dto.instrument_number ? `instrument ${dto.instrument_number}` : null,
                 dto.branch_code ? `branch ${dto.branch_code}` : null,
@@ -284,7 +285,7 @@ export class UblService {
                         deposit_date: txnAt,
                         remarks: methodNote,
                         bank_code: dto.payer_bank_code ?? null,
-                        bank_name: dto.payer_bank_name ?? (dto.channel === 'ONEBILL' ? null : 'UBL'),
+                        bank_name: dto.payer_bank_name ?? (oneBill ? null : 'UBL'),
                     },
                 });
             }
@@ -302,7 +303,7 @@ export class UblService {
                     `UBL bill payment posted for voucher #${voucher.id}.`,
                     `Booked=Rs. ${booked.toFixed(0)}`,
                     `Received=Rs. ${received.toFixed(0)}`,
-                    `Channel=${dto.channel}`,
+                    `Channel=${channel}`,
                     `Method=${dto.payment_method}`,
                     `Txn=${dto.transaction_id}`,
                 ].join(' | '),

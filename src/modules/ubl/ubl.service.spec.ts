@@ -212,7 +212,15 @@ describe('UblService', () => {
         const { svc, vouchers } = build();
         expect(((await svc.billPayment(pay({ channel: 'OTC' }))) as any).response_code).toBe('09');
         expect(((await svc.billPayment(pay({ consumer_number: '8088', amount: 90000 }))) as any).response_code).toBe('09');
+        expect(((await svc.billPayment(pay({ consumer_number: '8088', channel: undefined, amount: 90000 }))) as any).response_code).toBe('09');
         expect(vouchers.recordDeposit).not.toHaveBeenCalled();
+    });
+
+    it('accepts a 1Bill payment without a channel and records it as ONEBILL', async () => {
+        const { svc, prisma } = build();
+        const res: any = await svc.billPayment(pay({ channel: undefined }));
+        expect(res.response_code).toBe('00');
+        expect(prisma.deposits.update.mock.calls[0][0].data.remarks).toContain('UBL ONEBILL');
     });
 
     it('requires an instrument number for cheques', async () => {

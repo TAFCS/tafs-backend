@@ -41,8 +41,10 @@ export class UblBillPaymentDto {
     @Matches(/^\d{1,20}$/, { message: 'consumer_number must be digits only' })
     consumer_number!: string;
 
+    /** Required for a CC (OTC, APP or INTERNET_BANKING); optional for a 1Bill number, which is always ONEBILL. */
+    @IsOptional()
     @IsIn(UBL_CHANNELS as unknown as string[])
-    channel!: UblChannel;
+    channel?: UblChannel;
 
     @IsIn(UBL_PAYMENT_METHODS as unknown as string[])
     payment_method!: UblPaymentMethod;
