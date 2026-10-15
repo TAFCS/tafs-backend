@@ -780,7 +780,7 @@ export class AuthService {
 
     await this.prisma.users.update({
       where: { id: otpResult.userId },
-      data: { password_hash: passwordHash },
+      data: { password_hash: passwordHash, password_reveal: encryptSecret(dto.newPassword) },
     });
 
     // Revoke all existing refresh tokens, forcing re-login on all devices
