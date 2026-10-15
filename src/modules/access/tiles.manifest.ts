@@ -62,6 +62,13 @@ export type TileManifestEntry = {
    * re-expressed as packs and actions.
    */
   legacyFullAccessCapabilities?: string[];
+  /**
+   * Only a SUPER_ADMIN ever holds this tile. It is left out of every other
+   * user's effective tiles whatever they were granted, hidden from the People &
+   * Access and Access Packs pickers, and refused by the grant APIs. Its routes
+   * check the role themselves; there are no actions to hand out.
+   */
+  superAdminOnly?: boolean;
 };
 
 /**
@@ -1019,6 +1026,9 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.access_packs', module: 'system', label: 'Access Packs', description: 'Reusable tile bundles layered on top of roles', href: '/system/permissions', capabilities: ['system.permissions.manage'], actions: ACCESS_PACKS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
   { id: 'system.activity_logs', module: 'system', label: 'Activity Logs', description: 'Full audit log across all modules', href: '/system/logs', capabilities: ['system.users.view'], actions: ACTIVITY_LOGS_ACTIONS, legacyFullAccessCapabilities: ['system.users.view'] },
   { id: 'system.backups', module: 'system', label: 'Database Backups', description: 'Data backup management', href: '/admin/backups', capabilities: ['system.backups.view'], actions: BACKUPS_ACTIONS },
+  // TAFSD-327: who reports to whom. Super admins only, by design: permissions
+  // will follow this tree, so nobody inside it may edit it.
+  { id: 'system.reporting_hierarchy', module: 'system', label: 'Reporting Hierarchy', description: 'Set who reports to whom', href: '/system/reporting-hierarchy', capabilities: ['system.permissions.manage'], superAdminOnly: true },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 
@@ -1140,7 +1150,12 @@ export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
   })),
   legacyFullAccessCapabilities: t.legacyFullAccessCapabilities ?? [],
   requiresExplicitAllow: (t.surface ?? 'web') === 'web',
+  superAdminOnly: t.superAdminOnly ?? false,
 }));
+
+export const SUPER_ADMIN_ONLY_TILE_IDS = new Set(
+  TILES_MANIFEST.filter((t) => t.superAdminOnly).map((t) => t.id),
+);
 
 export function catalogFromManifest() {
   const byModule = new Map<string, Array<TileManifestEntry & { sort_order: number }>>();
@@ -1162,6 +1177,7 @@ export function catalogFromManifest() {
         surface: t.surface ?? 'web',
         sort_order: t.sort_order,
         capabilities: t.capabilities,
+        super_admin_only: t.superAdminOnly ?? false,
         actions: (t.actions ?? []).map((a, i) => ({
           id: a.id,
           key: actionKey(t.id, a.id),

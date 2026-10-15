@@ -1368,6 +1368,8 @@ model employee_profiles {
   departments                        departments?                         @relation(fields: [department_id], references: [id])
   reporting_manager                  employee_profiles?                   @relation("ReportingManager", fields: [reporting_manager_id], references: [id])
   subordinates                       employee_profiles[]                  @relation("ReportingManager")
+  reporting_lines                    employee_reporting_lines[]           @relation("ReportingLineEmployee")
+  managed_reporting_lines            employee_reporting_lines[]           @relation("ReportingLineManager")
   segments                           segments?                            @relation(fields: [segment_id], references: [id])
   staff_categories                   staff_categories?                    @relation(fields: [staff_category_id], references: [id])
   users                              users?                               @relation(fields: [user_id], references: [id])
@@ -1389,6 +1391,24 @@ model employee_profiles {
 
   @@index([employment_status])
   @@index([segment_id])
+}
+
+/// TAFSD-327: who reports to whom. A person may report to more than one
+/// manager (principals report to two directresses). Set only by SUPER_ADMIN on
+/// the Reporting Hierarchy page. The primary line is mirrored onto
+/// employee_profiles.reporting_manager_id so existing readers keep working.
+model employee_reporting_lines {
+  id          Int               @id @default(autoincrement())
+  employee_id Int
+  manager_id  Int
+  is_primary  Boolean           @default(false)
+  created_at  DateTime          @default(now()) @db.Timestamp(6)
+  created_by  String?           @db.VarChar(255)
+  employee    employee_profiles @relation("ReportingLineEmployee", fields: [employee_id], references: [id], onDelete: Cascade)
+  manager     employee_profiles @relation("ReportingLineManager", fields: [manager_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, manager_id])
+  @@index([manager_id])
 }
 
 model salary_increment_settings {

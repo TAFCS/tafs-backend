@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
-import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
+import { EmployeeProgressionService, EmployeeProgressionSnapshot, progressionSnapshotFromRow } from './employee-progression.service';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -43,6 +43,9 @@ import { TileGrantDto } from '../../access/dto/access.dto';
 
 /** Largest value a Postgres INT4 column can hold. */
 const INT4_MAX = 2_147_483_647;
+
+const REPORTING_MANAGER_MOVED =
+  'Reporting managers are set on the Reporting Hierarchy page, by a super admin.';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -674,23 +677,9 @@ export class EmployeesService {
 
   /** Snapshot the tracked employment state of an employee_profiles row (with relations loaded). */
   private progressionSnapshotFrom(row: any): EmployeeProgressionSnapshot {
-    return {
-      campusId: row.campus_id ?? null,
-      segmentId: row.segment_id ?? null,
-      departmentId: row.department_id ?? null,
-      staffCategoryId: row.staff_category_id ?? null,
-      reportingManagerId: row.reporting_manager_id ?? null,
-      jobTitle: row.job_title ?? null,
-      employmentType: row.employment_type ?? null,
-      employmentStatus: row.employment_status,
-      monthlyPay: row.monthly_pay ?? null,
-      payrollEnabled: row.payroll_enabled ?? true,
-      classSections: (row.employee_class_section_assignments ?? []).map((a: any) => ({
-        class_id: a.class_id,
-        section_id: a.section_id ?? null,
-      })),
-    };
+    return progressionSnapshotFromRow(row);
   }
+
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
   async getProgressionPeriods(id: number, caller?: IJwtStaffPayload) {
@@ -973,6 +962,7 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
     this.assertFieldsEditable(dto, caller);
+    if (dto.reporting_manager_id) throw new BadRequestException(REPORTING_MANAGER_MOVED);
     this.assertDestinationInScope(caller, {
       campus_id: dto.campus_id ?? null,
       segment_id: dto.segment_id ?? null,
@@ -1048,7 +1038,6 @@ export class EmployeesService {
             employment_status: status,
             ...permanenceFields(status, rest.employment_subtype),
             department_id: rest.department_id || null,
-            reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
             employee_code_dep: codeFields.employee_code_dep,
             employee_code_number: codeFields.employee_code_number,
@@ -1287,6 +1276,15 @@ export class EmployeesService {
     if (portal_account && existing.user_id) {
       throw new BadRequestException('This employee already has a portal account.');
     }
+    // TAFSD-327: reporting lines belong to the Reporting Hierarchy page
+    // (SUPER_ADMIN only), which keeps reporting_manager_id in step with
+    // employee_reporting_lines. Forms still echo the current value back.
+    if (
+      rest.reporting_manager_id !== undefined &&
+      (rest.reporting_manager_id || null) !== (existing.reporting_manager_id ?? null)
+    ) {
+      throw new BadRequestException(REPORTING_MANAGER_MOVED);
+    }
     const account = await this.preparePortalAccount(portal_account, rest, caller);
 
     // Only enforce fixed-time requirements when this patch touches schedule fields.
@@ -1383,7 +1381,6 @@ export class EmployeesService {
               ? permanenceFields(existing.employment_status, rest.employment_subtype)
               : {}),
             department_id: rest.department_id !== undefined ? rest.department_id : undefined,
-            reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
             employee_code: codeFields
               ? codeFields.employee_code
               : rest.employee_code !== undefined

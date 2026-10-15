@@ -104,6 +104,26 @@ function openPeriodToSnapshot(open: {
   };
 }
 
+/** The tracked snapshot of an employee_profiles row (with its class/section assignments included). */
+export function progressionSnapshotFromRow(row: any): EmployeeProgressionSnapshot {
+  return {
+    campusId: row.campus_id ?? null,
+    segmentId: row.segment_id ?? null,
+    departmentId: row.department_id ?? null,
+    staffCategoryId: row.staff_category_id ?? null,
+    reportingManagerId: row.reporting_manager_id ?? null,
+    jobTitle: row.job_title ?? null,
+    employmentType: row.employment_type ?? null,
+    employmentStatus: row.employment_status,
+    monthlyPay: row.monthly_pay ?? null,
+    payrollEnabled: row.payroll_enabled ?? true,
+    classSections: (row.employee_class_section_assignments ?? []).map((a: any) => ({
+      class_id: a.class_id,
+      section_id: a.section_id ?? null,
+    })),
+  };
+}
+
 @Injectable()
 export class EmployeeProgressionService {
   /**
