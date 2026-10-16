@@ -2780,7 +2780,7 @@ export class FinancialReportsService {
       );
     }
 
-    return this.buildDefaultersStudentReport(items, data.as_of_date, query, basename);
+    return this.buildDefaultersStudentReport(items, data.as_of_date, query, basename, user);
   }
 
   /**
@@ -2810,6 +2810,7 @@ export class FinancialReportsService {
     asOfDate: string,
     query: ExportDefaultersQueryDto,
     basename: string,
+    generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
   ): Promise<ExportFile> {
     type Item = Record<string, unknown>;
     const items = allItems;
@@ -3050,6 +3051,10 @@ export class FinancialReportsService {
     const dateLine = `DATE : ${asOf
       .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
       .toUpperCase()}`;
+    // TAFSD-338: when and by whom, under DAY / DATE.
+    const generatedLine = `GENERATED ON ${this.formatPktDateTime(new Date())}${
+      generatedBy ? ` BY ${await this.staffLabel(generatedBy)}` : ''
+    }`;
 
     if (campuses.length === 0) {
       // Still a workbook, so the admin sees "nothing matched" rather than an
@@ -3185,17 +3190,19 @@ export class FinancialReportsService {
         sheet.getRow(line).height = height;
         line++;
       };
-      banner(heading.school, 16, 28);
-      if (heading.classesLine) banner(heading.classesLine, 11, 18);
-      banner(DEFAULTER_SHEET_LIST_TITLE, 14, 22);
-      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 13, 20);
-      banner(heading.session, 12, 18);
+      // TAFSD-338: header text a size or two up from the body rows.
+      banner(heading.school, 20, 32);
+      if (heading.classesLine) banner(heading.classesLine, 13, 20);
+      banner(DEFAULTER_SHEET_LIST_TITLE, 17, 26);
+      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 15, 22);
+      banner(heading.session, 14, 20);
 
       line++;
-      for (const text of [dayLine, dateLine]) {
-        const cell = sheet.getCell(line++, 1);
+      for (const text of [dayLine, dateLine, generatedLine]) {
+        const cell = sheet.getCell(line, 1);
         cell.value = text;
-        cell.font = { name: 'Arial', bold: true, size: 9 };
+        cell.font = { name: 'Arial', bold: true, size: 11 };
+        sheet.getRow(line++).height = 16;
       }
       line++;
       const filterLines = defaulterFilterLines(
@@ -3206,7 +3213,7 @@ export class FinancialReportsService {
         undefined,
         groupLine,
       );
-      filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 13 : 11, i === 0 && monthsLine ? 20 : 16));
+      filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 14 : 12, i === 0 && monthsLine ? 22 : 18));
 
       // Breakdown sheets have two header rows: the month over its head
       // sub-columns, and the head names under it. Other columns span both.
@@ -3227,20 +3234,20 @@ export class FinancialReportsService {
             sheet.getCell(HEADER_LAST, col).border = box;
             sheet.mergeCells(HEADER_ROW, col, HEADER_LAST, col);
           }
-          styleHeader(sheet.getCell(HEADER_ROW, col), spec.header, spec.amount ? 9 : 11);
+          styleHeader(sheet.getCell(HEADER_ROW, col), spec.header, spec.amount ? 11 : 13);
           return;
         }
-        styleHeader(sheet.getCell(HEADER_LAST, col), spec.header, 9);
+        styleHeader(sheet.getCell(HEADER_LAST, col), spec.header, 10);
         // First sub-column of its month: write the month and merge across the group.
         if (specs[i - 1]?.group === spec.group) return;
         let end = i;
         while (specs[end + 1]?.group === spec.group) end++;
         for (let c = col; c <= end + 1; c++) sheet.getCell(HEADER_ROW, c).border = box;
         if (end > i) sheet.mergeCells(HEADER_ROW, col, HEADER_ROW, end + 1);
-        styleHeader(sheet.getCell(HEADER_ROW, col), spec.group, 11);
+        styleHeader(sheet.getCell(HEADER_ROW, col), spec.group, 13);
       });
-      sheet.getRow(HEADER_ROW).height = twoRowHeader ? 20 : 30;
-      if (twoRowHeader) sheet.getRow(HEADER_LAST).height = 30;
+      sheet.getRow(HEADER_ROW).height = twoRowHeader ? 24 : 36;
+      if (twoRowHeader) sheet.getRow(HEADER_LAST).height = 34;
 
       let rowIdx = HEADER_LAST + 1;
       const writeStudent = (r: SheetRow, i: number) => {
@@ -4761,6 +4768,16 @@ export class FinancialReportsService {
     if (query.payment_method?.length) lines.push(`PAYMENT METHOD: ${query.payment_method.join(', ').toUpperCase()}`);
     if (query.bank_name?.length) lines.push(`BANK: ${query.bank_name.join(', ').toUpperCase()}`);
     return lines;
+  }
+
+  /** "Aawaiz Ali (aawaiz)" — full name and username, either alone when the other is missing. */
+  private async staffLabel(user: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>): Promise<string> {
+    const fullName =
+      user.fullName?.trim() ||
+      (await this.prisma.users.findUnique({ where: { id: user.sub }, select: { full_name: true } }))?.full_name?.trim();
+    const username = user.username?.trim();
+    if (fullName && username && fullName.toLowerCase() !== username.toLowerCase()) return `${fullName.toUpperCase()} (${username})`;
+    return (fullName || username || 'UNKNOWN').toUpperCase();
   }
 
   /** "01-09-2026 10:28 AM" in Pakistan time. */
