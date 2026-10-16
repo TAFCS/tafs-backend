@@ -174,10 +174,13 @@ const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'progression.edit', label: 'Edit progression', implies: ['progression.view'] },
 
   { id: 'portal.view', label: 'View portal account', implies: ['view'] },
-  // RETIRED (TAFSD-365): portal.edit, portal.reveal_password,
-  // portal.reset_password, portal.change_username. A login's role, campus,
-  // active state, username and password are access, so those routes are
-  // SUPER_ADMIN only. Do not reuse the ids.
+  // Never on your own login or a SUPER_ADMIN's, never a role above your own
+  // access, and credentials only for logins that hold no more than you
+  // (TAFSD-365).
+  { id: 'portal.edit', label: 'Edit portal account', description: 'Role, campus and account status', implies: ['portal.view'] },
+  { id: 'portal.reveal_password', label: 'Reveal portal password', description: 'Audited on every use', implies: ['portal.view'] },
+  { id: 'portal.reset_password', label: 'Reset portal password', implies: ['portal.edit'] },
+  { id: 'portal.change_username', label: 'Change username', implies: ['portal.edit'] },
 
   { id: 'biometric.view', label: 'View biometric', implies: ['view'] },
   { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['biometric.view'] },
@@ -392,21 +395,32 @@ const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
 
-// People & Access is delegable to READ only. Every write on the page -- create
-// a login, edit name/password/role/active state, reveal a password, and the
-// packs, tiles, sub-permissions, capability overrides and scope -- is
-// SUPER_ADMIN only (@RequireSuperAdmin on the route, assertSuperAdmin in the
-// service). Whoever can write access can write it for themselves, so there is
-// no safe action to delegate.
+// People & Access. Tab-shaped: PUT /users/:id and PUT /users/:id/access each
+// write fields of more than one tab, so both are field-partitioned
+// (UsersService / AccessService) rather than carrying one @RequireAction.
 //
-// RETIRED (TAFSD-365): identity.edit, job.edit, reveal_password, access.edit,
-// scope.edit, create. Do not reuse those ids: AccessSync deactivates their rows,
-// and any grant still pointing at them stays in history but resolves to nothing.
-// A scoped holder of `view` only sees users inside their own campus scope
-// (AccessService.assertCanManageUser, UsersService.whereForUsers).
+// Every action here is the SUPER_ADMIN's to hand out, but holding one never
+// lets the holder (TAFSD-365, AccessService.assertMayManageUser /
+// assertNoLeak / assertMayAssignRole):
+//   - change their OWN account, access or scope,
+//   - touch a SUPER_ADMIN's account, or make anyone SUPER_ADMIN,
+//   - give anyone a tile, sub-permission, capability or role they do not hold
+//     themselves, or scope wider than their own,
+//   - reset, reveal or set the password of an account that holds more than
+//     they do (that would be a way to become it).
+// A scoped holder only sees users inside their own campus scope.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record, read-only. Every change on this page is super admin only.', default: true },
+  { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record', default: true },
+
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, password, role, active status (never above your own access)', implies: ['view'] },
+  { id: 'job.edit', label: 'Edit job assignment', description: 'Legacy campus/class fields', implies: ['view'] },
+  { id: 'reveal_password', label: 'Reveal a stored password', description: 'Only for accounts that hold no more than you', implies: ['view'] },
+
+  { id: 'access.edit', label: 'Edit access', description: 'Packs, tiles and sub-permissions -- only ones you hold yourself', implies: ['view'] },
+  { id: 'scope.edit', label: 'Edit data scope', description: 'No wider than your own scope', implies: ['view'] },
+
+  { id: 'create', label: 'Create a person', implies: ['view'] },
 ];
 
 // Route-shaped, single tile — no other tile shares any route on
@@ -558,13 +572,16 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
-// Access Packs. Delegable to READ only: create / update / delete are SUPER_ADMIN
-// only, because editing a pack changes the access of everyone it is assigned
-// to, the editor included. So is changing a role's baseline
-// (POST /users/roles/permissions). RETIRED (TAFSD-365): `manage`.
+// Access Packs. `manage` creates, edits and deletes packs and edits role
+// baselines (POST /users/roles/permissions). A holder may only put tiles,
+// sub-permissions and capabilities they hold themselves into a pack or role,
+// may not edit a pack assigned to themselves or their own role, and never the
+// SUPER_ADMIN role (TAFSD-365).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACCESS_PACKS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles, read-only. Creating, editing and deleting packs is super admin only.', default: true },
+  { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles', default: true },
+
+  { id: 'manage', label: 'Create, edit and delete access packs', description: 'And role baselines -- only with what you hold yourself', implies: ['view'] },
 ];
 
 // Database Backups. BackupsController had only JwtStaffGuard: any logged-in
@@ -1161,3 +1178,4 @@ export function catalogFromManifest() {
     })),
   };
 }
+export const PEOPLE_ACCESS_ACTIONS_FOR_TEST = PEOPLE_ACCESS_ACTIONS;

@@ -27,11 +27,6 @@ export class TileActionGuard implements CanActivate {
       REQUIRE_ACTION_KEY,
       [context.getHandler(), context.getClass()],
     );
-    if (meta?.mode === 'super_admin') {
-      const user: IJwtStaffPayload | IJwtParentPayload | undefined = context.switchToHttp().getRequest().user;
-      if (user?.userType === 'STAFF' && (user as IJwtStaffPayload).role === StaffRole.SUPER_ADMIN) return true;
-      throw new ForbiddenException('Only a super admin can do this.');
-    }
     if (meta?.mode === 'tile' && (meta.tileIds?.length ?? 0) > 0) {
       return this.canActivateForTiles(context, meta.tileIds!);
     }

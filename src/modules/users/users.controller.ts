@@ -16,7 +16,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyTile, RequireSuperAdmin } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -54,7 +54,7 @@ export class UsersController {
 
   @Get(':id/reveal-password')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#reveal_password')
   async revealPassword(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
     const data = await this.usersService.revealPassword(id, caller.username || caller.sub, caller);
     return createApiResponse(data, HttpStatus.OK, 'Password revealed successfully');
@@ -71,18 +71,19 @@ export class UsersController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'User'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#create')
   async createUser(@Body() dto: CreateUserDto, @CurrentUser() creator: IJwtStaffPayload) {
     const user = await this.usersService.createUser(dto, creator.sub, creator);
     return createApiResponse(user, HttpStatus.CREATED, 'User created successfully');
   }
 
-  // Every write on this controller changes who may do what, so every write is
-  // SUPER_ADMIN only -- for other users and for the caller's own account alike.
-  // UsersService repeats the check (assertSuperAdmin).
+  // Only `view` at the route: this PUT writes fields of both the Identity and
+  // Job tabs, so UsersService authorises it per field (USER_FIELD_TAB_MAP) and,
+  // for a non-super-admin, refuses their own account, a SUPER_ADMIN's, a role
+  // above their own access and a password on an account above them.
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#view')
   async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() editor: IJwtStaffPayload) {
     const user = await this.usersService.updateUser(id, dto, editor.username || editor.sub, editor);
     return createApiResponse(user, HttpStatus.OK, 'User updated successfully');
@@ -99,7 +100,7 @@ export class UsersController {
 
   @Post(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#access.edit')
   async setPermission(
     @Param('id') id: string,
     @Body() dto: SetPermissionDto,
@@ -117,7 +118,7 @@ export class UsersController {
 
   @Delete(':id/permissions/:key')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#access.edit')
   async removePermissionOverride(
     @Param('id') id: string,
     @Param('key') key: string,
@@ -134,8 +135,9 @@ export class UsersController {
 
   // permissions/all, roles/:role/permissions, and roles/permissions below
   // belong to the separate Access Packs tile (system.access_packs, the
-  // /system/permissions page). Changing what a role grants changes the access
-  // of every user on that role at once, so the write is SUPER_ADMIN only.
+  // /system/permissions page). The write needs that tile's `manage`; a
+  // non-super-admin may not touch SUPER_ADMIN's or their own role, and may
+  // only add capabilities they hold (UsersService).
 
   @Get('permissions/all')
   @RequireAnyTile('system.access_packs')
@@ -154,7 +156,7 @@ export class UsersController {
   }
 
   @Post('roles/permissions')
-  @RequireSuperAdmin()
+  @RequireAction('system.access_packs#manage')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async updateRolePermission(
     @Body() dto: UpdateRolePermissionDto,

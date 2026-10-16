@@ -14,7 +14,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyTile, RequireSuperAdmin } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -44,9 +44,8 @@ export class AccessController {
   }
 
   // Read by both the Access Packs page and People & Access. The writes below
-  // are SUPER_ADMIN only: a pack is a bundle of tiles and sub-permissions, so
-  // whoever edits one edits the access of everyone it is assigned to,
-  // themselves included.
+  // need access_packs#manage, and AccessService.assertPackChangeAllowed keeps a
+  // non-super-admin to adding only what they hold, never on a pack of their own.
   @Get('packs')
   @RequireAnyTile('system.access_packs', 'system.people_access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
@@ -57,7 +56,7 @@ export class AccessController {
 
   @Post('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.access_packs#manage')
   async createPack(@Body() dto: CreateAccessPackDto, @CurrentUser() user: IJwtStaffPayload) {
     const pack = await this.accessService.createPack(dto, user.username || user.sub, user);
     return createApiResponse(pack, HttpStatus.CREATED, 'Access pack created successfully');
@@ -65,7 +64,7 @@ export class AccessController {
 
   @Put('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.access_packs#manage')
   async updatePack(
     @Param('id') id: string,
     @Body() dto: UpdateAccessPackDto,
@@ -77,7 +76,7 @@ export class AccessController {
 
   @Delete('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.access_packs#manage')
   async deletePack(@Param('id') id: string, @CurrentUser() user: IJwtStaffPayload) {
     const result = await this.accessService.deletePack(id, user.username || user.sub, user);
     return createApiResponse(result, HttpStatus.OK, 'Access pack deleted successfully');
@@ -91,11 +90,13 @@ export class AccessController {
     return createApiResponse(access, HttpStatus.OK, 'User access retrieved successfully');
   }
 
-  // Packs, tiles, sub-permissions and scope. SUPER_ADMIN only: none of it is
-  // delegable, because whoever can write it can write it for themselves.
+  // Only `view` at the route: this PUT writes fields of both the Access and
+  // Scope tabs, so AccessService partitions it (access.edit / scope.edit) and,
+  // for a non-super-admin, refuses self, SUPER_ADMIN targets and anything
+  // given beyond their own access or scope.
   @Put('users/:id/access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireSuperAdmin()
+  @RequireAction('system.people_access#view')
   async setUserAccess(
     @Param('id') id: string,
     @Body() dto: SetUserAccessDto,

@@ -41,6 +41,10 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
 
   // ── Class & Sections tab ──
   class_section_assignments: 'classes',
+
+  // ── Portal Account tab ── (linking an existing login; never your own or a
+  // SUPER_ADMIN's -- EmployeesService.assertMayLinkLogin)
+  user_id: 'portal',
 };
 
 /**
@@ -56,12 +60,11 @@ export const EMPLOYEE_FIELD_ACTION_OVERRIDES: Record<string, string> = {
 };
 
 /**
- * Fields no action covers: only an acting SUPER_ADMIN may send them (TAFSD-365).
- * `user_id` attaches an existing login to this record, which changes whose pay,
- * attendance and leave the record is -- and so who the "not your own record"
- * check protects. `packIds` / `tileGrants` grant the new login access, which
- * only a SUPER_ADMIN may do anywhere (an empty list is not a grant and passes).
+ * Fields that hand the new login access. They belong to People & Access, not
+ * this tile: sending a non-empty list needs `system.people_access#access.edit`,
+ * and a non-super-admin may only give what they hold themselves
+ * (EmployeesService.create -> AccessService.assertNoLeak). TAFSD-365.
  */
-export const EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS = ['user_id', 'packIds', 'tileGrants'];
+export const EMPLOYEE_ACCESS_GRANT_FIELDS = ['packIds', 'tileGrants'];
 
 export const EMPLOYEE_DIRECTORY_TILE_ID = 'hr.employee_directory';

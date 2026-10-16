@@ -5,16 +5,19 @@
 > - **Every web tile is done.** All 62 web tiles declare actions, every
 >   controller behind them runs `TileActionGuard`, and every tile has a webapp
 >   `use<Tile>Access` hook in use. Rollout items 3 and 5 are complete.
-> - **Changing access is SUPER_ADMIN only — never delegable.** New
->   `@RequireSuperAdmin()` (route) + `assertSuperAdmin()` (service,
->   `src/common/auth/super-admin.ts`) on: `PUT /access/users/:id/access`, pack
->   create/update/delete, every `/users` write (create, update, reveal password,
->   capability overrides, role baselines), and the Employee Directory portal
->   account routes. People & Access and Access Packs keep only `view`; the
->   retired action ids (`identity.edit`, `job.edit`, `access.edit`,
->   `scope.edit`, `reveal_password`, `create`, `access_packs#manage`,
->   `portal.edit/reset_password/change_username/reveal_password`) must not be
->   reused. `super-admin-only-access.spec.ts` fails if a write loses the guard.
+> - **People & Access, Access Packs and portal actions are delegable, with
+>   guards.** The SUPER_ADMIN decides who holds them. For anyone else
+>   `AccessService` refuses: their own account/access/scope and any
+>   SUPER_ADMIN account (`assertMayManageUser`); giving any tile, sub-permission
+>   or capability they do not hold (`assertNoLeak`, computed with
+>   `effectiveWith` before and after the change; packs via
+>   `assertPackChangeAllowed`); the SUPER_ADMIN role or any role carrying a
+>   capability they lack (`assertMayAssignRole`); scope wider than theirs,
+>   including an empty = unrestricted dimension, which used to slip through
+>   (`assertGrantableScope`); and setting, resetting or revealing a password or
+>   username on an account holding more than they do (`assertNotAbove`). Role
+>   baselines need `access_packs#manage`, never the SUPER_ADMIN or own role.
+>   `delegated-access-guards.spec.ts` covers all of it.
 > - **Nobody but a SUPER_ADMIN changes their own records, or a SUPER_ADMIN's.**
 >   `assertMayChangeRecordOf` / `assertMayChangeEmployee` on employee writes,
 >   salary increments, loans, security deposits, per-line payroll, leave

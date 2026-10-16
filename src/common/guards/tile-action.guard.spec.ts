@@ -90,22 +90,3 @@ describe('TileActionGuard', () => {
     expect(() => guard.canActivate(contextFor(legacy))).toThrow(ForbiddenException);
   });
 });
-
-describe('TileActionGuard @RequireSuperAdmin', () => {
-  const guard = guardWith({ mode: 'super_admin', actionKeys: [] });
-
-  it('lets a SUPER_ADMIN through', () => {
-    expect(guard.canActivate(contextFor(staff([], StaffRole.SUPER_ADMIN)))).toBe(true);
-  });
-
-  it('refuses any other role, whatever actions it holds', () => {
-    const everything = ['system.people_access#*', 'system.access_packs#*'];
-    for (const role of [StaffRole.CAMPUS_ADMIN, StaffRole.PRINCIPAL, StaffRole.EMPLOYEE]) {
-      expect(() => guard.canActivate(contextFor(staff(everything, role)))).toThrow(ForbiddenException);
-    }
-  });
-
-  it('refuses a parent session', () => {
-    expect(() => guard.canActivate(contextFor({ userType: 'PARENT', sub: 'p1' }))).toThrow(ForbiddenException);
-  });
-});

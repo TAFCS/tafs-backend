@@ -3,7 +3,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
 import { hhmm, parseHhmm, timingsSnapshotFrom, WEEKDAY_SHORT } from './employee-day-timings.util';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
-import { assertMayChangeRecordOf, assertSuperAdmin } from '../../../common/auth/super-admin';
+import { assertMayChangeRecordOf } from '../../../common/auth/super-admin';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -31,7 +31,7 @@ import {
   EMPLOYEE_DIRECTORY_TILE_ID,
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
   EMPLOYEE_FIELD_TAB_MAP,
-  EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS,
+  EMPLOYEE_ACCESS_GRANT_FIELDS,
 } from './employee-field-tabs';
 import { AccessService } from '../../access/access.service';
 import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
@@ -747,6 +747,25 @@ export class EmployeesService {
     return row;
   }
 
+  /** Linking a login to a record: never your own login, never a SUPER_ADMIN's. */
+  private async assertMayLinkLogin(userId: string, caller?: IJwtStaffPayload) {
+    if (!caller || caller.role === StaffRole.SUPER_ADMIN) return;
+    const login = await this.prisma.users.findUnique({ where: { id: userId }, select: { id: true, role: true } });
+    if (login) this.accessService.assertMayManageUser(caller, login);
+  }
+
+  private async portalLogin(userId: string) {
+    const login = await this.prisma.users.findUnique({ where: { id: userId }, select: { id: true, role: true } });
+    if (!login) throw new BadRequestException('This employee has no linked portal account.');
+    return login;
+  }
+
+  /** Revealing a password or renaming a login: never one above the caller (TAFSD-365). */
+  private async assertCredentialsReachable(employeeId: number, caller?: IJwtStaffPayload) {
+    const row = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId }, select: { user_id: true } });
+    if (row?.user_id) await this.accessService.assertNotAbove(caller, await this.portalLogin(row.user_id));
+  }
+
   /**
    * assertCanTouch for writes: in scope, and not the caller's own record or a
    * SUPER_ADMIN's (see assertMayChangeRecordOf). Every route that changes an
@@ -779,14 +798,14 @@ export class EmployeesService {
     const sent = Object.entries(dto)
       .filter(([, v]) => v !== undefined)
       .map(([field]) => field);
-    // An empty pack/grant list grants nothing, so it does not count as sent.
-    const superAdminOnly = sent.filter((f) => {
-      if (!EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS.includes(f)) return false;
+    // Access grants belong to People & Access. An empty list grants nothing.
+    const grants = sent.filter((f) => {
+      if (!EMPLOYEE_ACCESS_GRANT_FIELDS.includes(f)) return false;
       const v = (dto as Record<string, unknown>)[f];
       return !(Array.isArray(v) && v.length === 0);
     });
-    if (superAdminOnly.length > 0) {
-      throw new ForbiddenException(`Only a super admin can set: ${superAdminOnly.join(', ')}.`);
+    if (grants.length > 0 && !(caller.actions ?? []).includes('system.people_access#access.edit')) {
+      throw new ForbiddenException(`You do not have permission to give access: ${grants.join(', ')}.`);
     }
 
     // The Register Employee tile fills the whole intake form by design; its
@@ -1201,6 +1220,20 @@ export class EmployeesService {
     this.assertFieldsEditable(dto, caller, {
       registering: !!caller?.actions?.includes('hr.register_employee#create'),
     });
+    if (dto.user_id) await this.assertMayLinkLogin(dto.user_id, caller);
+    // Checked BEFORE anything is written: refusing the packs/tiles only after
+    // the employee and login were committed would leave a half-made person.
+    if (caller && caller.role !== StaffRole.SUPER_ADMIN && (dto.packIds?.length || dto.tileGrants?.length)) {
+      const role = dto.portal_account?.role ?? StaffRole.EMPLOYEE;
+      const [before, after] = await Promise.all([
+        this.accessService.effectiveWith(null, role),
+        this.accessService.effectiveWith(null, role, {
+          packIds: dto.packIds ?? [],
+          grants: (dto.tileGrants ?? []).map((g) => ({ tileId: g.tileId, allow: g.allow })),
+        }),
+      ]);
+      await this.accessService.assertNoLeak(caller, before, after);
+    }
     this.assertDestinationInScope(caller, {
       campus_id: dto.campus_id ?? null,
       segment_id: dto.segment_id ?? null,
@@ -1429,14 +1462,14 @@ export class EmployeesService {
         'Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.',
       );
     }
-    // A delegate registering staff may create the two base logins the form
-    // picks on its own: EMPLOYEE (staff app self-service) and TEACHER (adds
-    // student roll call and directory view; web tiles still need an explicit
-    // allow). Every other role carries admin capabilities, so choosing one is
-    // an access decision and SUPER_ADMIN only (TAFSD-365).
+    // Anyone registering staff may create the two base logins the form picks
+    // on its own: EMPLOYEE (staff app self-service) and TEACHER (adds student
+    // roll call and directory view; web tiles still need an explicit allow).
+    // Any other role must carry nothing the caller lacks, and never
+    // SUPER_ADMIN (AccessService.assertMayAssignRole, TAFSD-365).
     const role = portalAccount.role ?? StaffRole.EMPLOYEE;
-    if (!DELEGABLE_LOGIN_ROLES.includes(role) && caller?.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only a super admin can create a login with this role.');
+    if (!DELEGABLE_LOGIN_ROLES.includes(role)) {
+      await this.accessService.assertMayAssignRole(caller, role);
     }
 
     const taken = await this.prisma.users.findFirst({
@@ -1489,6 +1522,7 @@ export class EmployeesService {
     const { user_id: sentUserId, ...withoutLink } = dto;
     const linkChanged = sentUserId !== undefined && (sentUserId || null) !== (touch.user_id ?? null);
     this.assertFieldsEditable(linkChanged ? dto : withoutLink, caller);
+    if (linkChanged && sentUserId) await this.assertMayLinkLogin(sentUserId, caller);
     // Also check where it is being moved TO -- otherwise a scoped user could
     // reassign someone to a campus they cannot see and lose them.
     this.assertDestinationInScope(caller, {
@@ -2418,15 +2452,18 @@ export class EmployeesService {
   }
 
   async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto, caller: IJwtStaffPayload) {
-    assertSuperAdmin(caller, "edit a portal account");
     await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
     }
-
-    if (dto.role === StaffRole.SUPER_ADMIN && caller.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    const login = await this.portalLogin(employee.user_id);
+    this.accessService.assertMayManageUser(caller, login);
+    if (dto.role !== undefined && dto.role !== login.role) {
+      await this.accessService.assertMayAssignRole(caller, dto.role);
+    }
+    if (dto.campus_id !== undefined) {
+      this.scope.assertCampus(caller, dto.campus_id ?? null);
     }
 
     const existingUser = await this.prisma.users.findUnique({
@@ -2514,12 +2551,12 @@ export class EmployeesService {
     dto: ResetEmployeePasswordDto,
     caller?: IJwtStaffPayload,
   ) {
-    assertSuperAdmin(caller, "reset a portal password");
     await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
     }
+    await this.accessService.assertNotAbove(caller, await this.portalLogin(employee.user_id));
     if (!dto.password || dto.password.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters.');
     }
@@ -2544,8 +2581,8 @@ export class EmployeesService {
   }
 
   async revealAccountPassword(employeeId: number, caller?: IJwtStaffPayload) {
-    assertSuperAdmin(caller, "reveal a portal password");
     await this.assertCanTouch(employeeId, caller);
+    await this.assertCredentialsReachable(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -2574,8 +2611,8 @@ export class EmployeesService {
   }
 
   async changeAccountUsername(employeeId: number, dto: ChangeEmployeeUsernameDto, caller?: IJwtStaffPayload) {
-    assertSuperAdmin(caller, "change a portal username");
     await this.assertCanTouch(employeeId, caller);
+    await this.assertCredentialsReachable(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');

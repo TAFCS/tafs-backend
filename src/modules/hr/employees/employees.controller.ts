@@ -7,7 +7,7 @@ import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeS
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyAction, RequireAnyTile, RequireSuperAdmin } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
@@ -306,13 +306,12 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Date of leaving updated successfully');
   }
 
-  // The portal-account writes below are SUPER_ADMIN only (TAFSD-365): a login's
-  // role, campus, active state, username and password decide what it can do,
-  // and whoever could set them could set them for themselves. The service
-  // repeats the check.
+  // Portal-account writes. Beyond the action, a non-super-admin is refused on
+  // their own login or a SUPER_ADMIN's, a role above their own access, and
+  // credentials of a login that holds more than they do (TAFSD-365).
   @Patch(':id/account')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireSuperAdmin()
+  @RequireAction('hr.employee_directory#portal.edit')
   async updateAccount(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmployeeAccountDto,
@@ -324,7 +323,7 @@ export class EmployeesController {
 
   @Post(':id/account/reset-password')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireSuperAdmin()
+  @RequireAction('hr.employee_directory#portal.reset_password')
   async resetAccountPassword(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ResetEmployeePasswordDto,
@@ -336,7 +335,7 @@ export class EmployeesController {
 
   @Get(':id/account/reveal-password')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireSuperAdmin()
+  @RequireAction('hr.employee_directory#portal.reveal_password')
   async revealAccountPassword(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -347,7 +346,7 @@ export class EmployeesController {
 
   @Patch(':id/account/username')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireSuperAdmin()
+  @RequireAction('hr.employee_directory#portal.change_username')
   async changeAccountUsername(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ChangeEmployeeUsernameDto,

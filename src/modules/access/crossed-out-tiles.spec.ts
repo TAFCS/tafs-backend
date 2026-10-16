@@ -102,7 +102,7 @@ const GATED: [string, any, number][] = [
   ['subjects', SubjectsController, 1],
   ['teaching-groups', TeachingGroupsController, 3],
   ['timetables', TimetablesController, 5],
-  // updateRolePermission moved to @RequireSuperAdmin (TAFSD-365).
+  // updateRolePermission now needs access_packs#manage, not just the tile (TAFSD-365).
   ['users', UsersController, 3],
   ['deposits', DepositsController, 1],
   ['vouchers', VouchersController, 4],

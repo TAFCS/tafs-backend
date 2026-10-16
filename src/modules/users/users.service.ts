@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
@@ -21,7 +22,8 @@ import { StaffRole } from '@prisma/client';
 import { encryptSecret, decryptSecret } from '../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { assertSuperAdmin } from '../../common/auth/super-admin';
+import { isSuperAdmin } from '../../common/auth/super-admin';
+import { PEOPLE_ACCESS_TILE_ID, USER_FIELD_TAB_MAP } from './user-field-tabs';
 
 @Injectable()
 export class UsersService {
@@ -87,6 +89,76 @@ export class UsersService {
       department_id: target.employee_profile?.department_id ?? null,
       staff_category_id: target.employee_profile?.staff_category_id ?? null,
     });
+  }
+
+  /**
+   * Authorises PUT /users/:id field by field against `<tab>.edit`, mirroring
+   * EmployeesService.assertFieldsEditable. The target-level rules (not self,
+   * not a SUPER_ADMIN, no role or password above the caller) are separate.
+   */
+  private assertFieldsEditable(dto: UpdateUserDto, actingUser?: IJwtStaffPayload) {
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    const held = new Set(actingUser.actions ?? []);
+    const denied = Object.entries(dto)
+      .filter(([, v]) => v !== undefined)
+      .map(([field]) => field)
+      .filter((field) => {
+        const tab = USER_FIELD_TAB_MAP[field];
+        return tab !== undefined && !held.has(`${PEOPLE_ACCESS_TILE_ID}#${tab}.edit`);
+      });
+    if (denied.length > 0) {
+      throw new ForbiddenException(`You do not have permission to edit: ${denied.join(', ')}.`);
+    }
+  }
+
+  /**
+   * A per-user capability override (set, or removed when `granted` is null)
+   * may not be on your own account or a SUPER_ADMIN's, and may not leave the
+   * target holding a capability you lack -- removing a deny counts, since it
+   * can hand a capability back.
+   */
+  private async assertOverrideAllowed(
+    actingUser: IJwtStaffPayload | undefined,
+    target: { id: string; role: StaffRole; user_permissions: { granted: boolean; permissions: { key: string } }[] },
+    key: string,
+    granted: boolean | null,
+  ) {
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    this.accessService.assertMayManageUser(actingUser, target);
+    const current = target.user_permissions.map((up) => ({ key: up.permissions.key, granted: up.granted }));
+    const next = current.filter((p) => p.key !== key);
+    if (granted !== null) next.push({ key, granted });
+    const [before, after] = await Promise.all([
+      this.accessService.resolveEffective(target.id, target.role),
+      this.accessService.effectiveWith(target.id, target.role, { userPerms: next }),
+    ]);
+    await this.accessService.assertNoLeak(actingUser, before, after);
+  }
+
+  /**
+   * A role baseline is every user on that role at once: never SUPER_ADMIN's,
+   * never your own role (that would be changing your own access), and you can
+   * only add a capability you hold yourself.
+   */
+  private async assertRoleBaselineChangeAllowed(
+    actingUser: IJwtStaffPayload | undefined,
+    role: StaffRole,
+    key: string,
+    granted: boolean,
+  ) {
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    if (role === StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a super admin can change what the SUPER_ADMIN role grants.');
+    }
+    if (role === actingUser.role) {
+      throw new ForbiddenException('You cannot change what your own role grants. Ask a super admin.');
+    }
+    if (granted) {
+      const mine = await this.accessService.resolveEffective(actingUser.sub, actingUser.role);
+      if (!mine.capabilityKeys.includes(key)) {
+        throw new ForbiddenException(`You can only give a role permissions you hold yourself. Not yours to give: ${key}.`);
+      }
+    }
   }
 
   // ─── Auth helpers ────────────────────────────────────────────────────────────
@@ -217,8 +289,10 @@ export class UsersService {
   }
 
   async revealPassword(id: string, revealedBy: string, actingUser?: IJwtStaffPayload) {
-    assertSuperAdmin(actingUser, "reveal a user's password");
-    await this.findUserById(id, actingUser);
+    const target = await this.findUserById(id, actingUser);
+    // Knowing the password is becoming the account: only for accounts that
+    // hold no more than the caller, never their own or a SUPER_ADMIN's.
+    await this.accessService.assertNotAbove(actingUser, target);
     const user = await this.prisma.users.findUnique({
       where: { id },
       select: { username: true, password_reveal: true },
@@ -242,7 +316,7 @@ export class UsersService {
   }
 
   async createUser(dto: CreateUserDto, createdById: string, actingUser?: IJwtStaffPayload) {
-    assertSuperAdmin(actingUser, 'create a login');
+    await this.accessService.assertMayAssignRole(actingUser, dto.role);
     if (isLegacyTafsEmailUsername(dto.username)) {
       throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
     }
@@ -302,10 +376,15 @@ export class UsersService {
   }
 
   async updateUser(id: string, dto: UpdateUserDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
-    // Name, password, role, active state and the legacy campus/class fields are
-    // all account and access data: SUPER_ADMIN only, for others and self alike.
-    assertSuperAdmin(actingUser, 'edit a login');
     const existing = await this.findUserById(id, actingUser);
+    this.assertFieldsEditable(dto, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
+    if (dto.role !== undefined && dto.role !== existing.role) {
+      await this.accessService.assertMayAssignRole(actingUser, dto.role);
+    }
+    if (dto.password) {
+      await this.accessService.assertNotAbove(actingUser, existing);
+    }
     // Assert the TARGET campus is in scope too, or a scoped admin could move
     // a user's campus outside their own reach.
     if (dto.campus_id !== undefined && actingUser) {
@@ -381,8 +460,8 @@ export class UsersService {
   }
 
   async deactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
-    assertSuperAdmin(actingUser, 'deactivate a login');
-    const existing = await this.findUserById(id);
+    const existing = await this.findUserById(id, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
     const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: false, updated_at: new Date() },
@@ -403,8 +482,8 @@ export class UsersService {
   }
 
   async reactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
-    assertSuperAdmin(actingUser, 'reactivate a login');
-    const existing = await this.findUserById(id);
+    const existing = await this.findUserById(id, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
     const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: true, updated_at: new Date() },
@@ -494,13 +573,13 @@ export class UsersService {
     changedBy?: string,
     actingUser?: IJwtStaffPayload,
   ) {
-    assertSuperAdmin(actingUser, 'override a user\'s capabilities');
     const permission = await this.prisma.permissions.findUnique({
       where: { key: dto.permission_key },
     });
     if (!permission) throw new NotFoundException(`Permission key "${dto.permission_key}" not found`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.findUserById(userId, actingUser);
+    await this.assertOverrideAllowed(actingUser, user, dto.permission_key, dto.granted);
     const existing = await this.prisma.user_permissions.findUnique({
       where: {
         user_id_permission_id: {
@@ -557,13 +636,13 @@ export class UsersService {
     changedBy?: string,
     actingUser?: IJwtStaffPayload,
   ) {
-    assertSuperAdmin(actingUser, 'override a user\'s capabilities');
     const permission = await this.prisma.permissions.findUnique({
       where: { key: permissionKey },
     });
     if (!permission) throw new NotFoundException(`Permission key "${permissionKey}" not found`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.findUserById(userId, actingUser);
+    await this.assertOverrideAllowed(actingUser, user, permissionKey, null);
     const existing = await this.prisma.user_permissions.findUnique({
       where: {
         user_id_permission_id: {
@@ -603,12 +682,12 @@ export class UsersService {
   }
 
   async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
-    assertSuperAdmin(actingUser, 'change what a role grants');
     const permission = await this.prisma.permissions.findUnique({
       where: { id: dto.permission_id },
       select: { id: true, key: true },
     });
     if (!permission) throw new NotFoundException(`Permission id ${dto.permission_id} not found`);
+    await this.assertRoleBaselineChangeAllowed(actingUser, dto.role, permission.key, dto.granted);
 
     const existing = await this.prisma.role_permissions.findUnique({
       where: {

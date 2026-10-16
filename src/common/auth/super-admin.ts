@@ -7,20 +7,8 @@ export function isSuperAdmin(actor?: Pick<IJwtStaffPayload, 'role'> | null): boo
 }
 
 /**
- * Service-side twin of @RequireSuperAdmin. Anything that changes who may do
- * what (role, tiles, packs, sub-permissions, scope, capability overrides,
- * login credentials) goes through here, so a route that forgets the decorator
- * still refuses. A missing actor is refused too: these writes always have one.
- */
-export function assertSuperAdmin(actor: Pick<IJwtStaffPayload, 'role'> | null | undefined, what: string): void {
-  if (!isSuperAdmin(actor)) {
-    throw new ForbiddenException(`Only a super admin can ${what}.`);
-  }
-}
-
-/**
- * The record-level half of "only SUPER_ADMIN changes access": a delegate may
- * change other people's records within their grant, but never
+ * Whatever sub-permissions a SUPER_ADMIN hands someone, they let that person
+ * change OTHER people's records within the grant -- never
  *   - a record belonging to their own login (their own pay, status, leave,
  *     attendance...), and
  *   - a record belonging to a SUPER_ADMIN login (deactivating or editing the

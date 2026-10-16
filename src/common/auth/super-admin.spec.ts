@@ -1,17 +1,9 @@
 import { ForbiddenException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
-import { assertMayChangeEmployee, assertMayChangeRecordOf, assertSuperAdmin } from './super-admin';
+import { assertMayChangeEmployee, assertMayChangeRecordOf } from './super-admin';
 
 const SA = { role: StaffRole.SUPER_ADMIN, sub: 'sa' };
 const HR = { role: StaffRole.CAMPUS_ADMIN, sub: 'hr' };
-
-describe('assertSuperAdmin', () => {
-  it('passes a SUPER_ADMIN and refuses everyone else, including a missing actor', () => {
-    expect(() => assertSuperAdmin(SA, 'x')).not.toThrow();
-    expect(() => assertSuperAdmin(HR, 'x')).toThrow(ForbiddenException);
-    expect(() => assertSuperAdmin(undefined, 'x')).toThrow(ForbiddenException);
-  });
-});
 
 describe('assertMayChangeRecordOf', () => {
   it('lets a delegate change someone else\'s record', () => {

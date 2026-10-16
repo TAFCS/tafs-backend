@@ -38,21 +38,8 @@ export const RequireAnyAction = (...actionKeys: string[]) =>
 export const RequireAnyTile = (...tileIds: string[]) =>
   SetMetadata(REQUIRE_ACTION_KEY, { mode: 'tile' as const, actionKeys: [] as string[], tileIds });
 
-/**
- * Only an acting SUPER_ADMIN passes. For routes that change who may do what:
- * a user's role, tiles, packs, sub-permissions, scope, capability overrides
- * and login credentials. These are never delegable, because whoever can write
- * them can write them for themselves.
- *
- * Like @RequireAnyTile it replaces the action check on the route, and it sits
- * alongside @CheckPolicies. The service repeats the check (assertSuperAdmin)
- * so a route added later without the decorator still refuses.
- */
-export const RequireSuperAdmin = () =>
-  SetMetadata(REQUIRE_ACTION_KEY, { mode: 'super_admin' as const, actionKeys: [] as string[] });
-
 export type RequireActionMetadata = {
-  mode: 'all' | 'any' | 'tile' | 'super_admin';
+  mode: 'all' | 'any' | 'tile';
   actionKeys: string[];
   /** Only for mode 'tile'. */
   tileIds?: string[];
