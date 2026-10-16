@@ -1,3 +1,4 @@
+import { timingsForDate } from '../hr/employees/employee-day-timings.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -148,6 +149,7 @@ export class AttendanceObjectionsService {
             employee_code: true,
             leaving_time: true,
             reporting_time: true,
+            employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
           },
         },
         scan: { select: { id: true, scan_time: true, direction: true, device_sn: true, device_pin: true } },
@@ -218,8 +220,14 @@ export class AttendanceObjectionsService {
         // Day-level objection (zero biometric scans recorded for the day):
         // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
         checkInAt = existing.claimed_time;
-        if (existing.employee.leaving_time) {
-          const lt = new Date(existing.employee.leaving_time);
+        // That weekday's leaving time (TAFSD-363: Friday may differ).
+        const leavingTime = timingsForDate(
+          existing.employee,
+          existing.employee.employee_day_timings,
+          new Date(existing.attendance_date),
+        ).leaving_time;
+        if (leavingTime) {
+          const lt = new Date(leavingTime);
           const d = new Date(existing.attendance_date);
           checkOutAt = new Date(
             Date.UTC(

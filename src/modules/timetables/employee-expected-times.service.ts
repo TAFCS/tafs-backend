@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { CheckInSource } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { TeacherCheckinDerivationService } from './teacher-checkin-derivation.service';
+import { timingsForDate, type DayTimingRow } from '../hr/employees/employee-day-timings.util';
 
 export type ExpectedTimesSource = 'OVERRIDE' | 'TIMETABLE' | 'FIXED' | 'POLICY' | 'NONE';
 
@@ -43,6 +44,7 @@ export class EmployeeExpectedTimesService {
         leaving_time: true,
         late_relaxation_minutes: true,
         campus_id: true,
+        employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
       },
     });
 
@@ -85,6 +87,7 @@ export class EmployeeExpectedTimesService {
       leaving_time: Date | null;
       late_relaxation_minutes: number | null;
       campus_id: number | null;
+      employee_day_timings?: DayTimingRow[];
     },
     employeeId: number,
     effectiveCampusId: number,
@@ -118,14 +121,19 @@ export class EmployeeExpectedTimesService {
   }
 
   private async resolveFixedOrPolicy(
-    employee: {
+    profile: {
       reporting_time: Date | null;
       leaving_time: Date | null;
       late_relaxation_minutes: number | null;
+      employee_day_timings?: DayTimingRow[];
     },
     campusId: number,
     date: Date,
   ): Promise<ExpectedTimesResult> {
+    // TAFSD-363: a weekday with its own timings (Friday) replaces the normal
+    // reporting / leaving time, side by side.
+    const day = timingsForDate(profile, profile.employee_day_timings, date);
+    const employee = { ...profile, reporting_time: day.reporting_time, leaving_time: day.leaving_time };
     if (employee.reporting_time) {
       return {
         expectedCheckIn: employee.reporting_time,

@@ -1,3 +1,4 @@
+import { timingsForDate } from '../employees/employee-day-timings.util';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -74,7 +75,15 @@ function describeShiftChange(
 
 const overrideInclude = {
   employee_profiles: {
-    select: { id: true, full_name: true, campus_id: true, user_id: true, reporting_time: true, leaving_time: true },
+    select: {
+      id: true,
+      full_name: true,
+      campus_id: true,
+      user_id: true,
+      reporting_time: true,
+      leaving_time: true,
+      employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
+    },
   },
 } satisfies Prisma.employee_shift_overridesInclude;
 
@@ -165,12 +174,9 @@ export class ShiftOverridesService {
     for (const row of rows) {
       const userId = row.employee_profiles.user_id;
       if (!userId) continue;
-      const changeSummary = describeShiftChange(
-        startTime,
-        endTime,
-        row.employee_profiles.reporting_time,
-        row.employee_profiles.leaving_time,
-      );
+      // The hours that day would otherwise have had, Friday timings included.
+      const usual = timingsForDate(row.employee_profiles, row.employee_profiles.employee_day_timings, row.date);
+      const changeSummary = describeShiftChange(startTime, endTime, usual.reporting_time, usual.leaving_time);
       void this.noticeBoard
         .createScheduleNotice(
           row.employee_id,
