@@ -601,7 +601,9 @@ const listSelect = {
   users: { select: { full_name: true } },
   campuses: { select: { id: true, campus_name: true } },
   departments: { select: { id: true, name: true } },
-  staff_categories: { select: { id: true, name: true, code: true } },
+  // department_id feeds the Directory's Category filter, which only offers the
+  // picked departments' categories (TAFSD-276/368).
+  staff_categories: { select: { id: true, name: true, code: true, department_id: true } },
   segments: { select: { id: true, name: true } },
   device_user_mappings: { select: { device_sn: true, is_active: true } },
 };
