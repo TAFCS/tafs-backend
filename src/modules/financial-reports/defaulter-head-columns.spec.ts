@@ -162,3 +162,24 @@ describe('defaulters export: contact column (TAFSD-340)', () => {
     expect(s.loadDefaulterContacts).not.toHaveBeenCalled();
   });
 });
+
+describe('defaulters export: months back (TAFSD-355)', () => {
+  it('carries exactly months_back month columns, folding older months into EARLIER', async () => {
+    // strip_months 3 would give AUG, SEP, OCT; months_back 1 keeps only OCT.
+    const { hdr, row } = await sheetOf(await build()({ format: 'xlsx', months_back: 1 }));
+    const header = row(hdr);
+    expect(header).toContain('EARLIER');
+    expect(header).toContain('OCT');
+    expect(header).not.toContain('SEP');
+    expect(header).not.toContain('AUG');
+    // AUG 12000 + SEP 4000 owed by the first student both land in EARLIER.
+    expect(row(hdr + 1)[header.indexOf('EARLIER')]).toBe(16000);
+    expect(row(hdr + 1)[header.indexOf('DEFAULTING AMOUNT')]).toBe(16000);
+  });
+
+  it('no EARLIER column when nothing is older than the window', async () => {
+    const { hdr, row } = await sheetOf(await build()({ format: 'xlsx', months_back: 6 }));
+    expect(row(hdr)).not.toContain('EARLIER');
+    expect(row(hdr).filter((h) => ['MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT'].includes(String(h)))).toHaveLength(6);
+  });
+});
