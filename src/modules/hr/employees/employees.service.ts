@@ -1016,6 +1016,11 @@ export class EmployeesService {
         staff_category_id: true,
         segment_id: true,
         monthly_pay: true,
+        // TAFSD-363: the bulk day-timings picker shows each person's current times.
+        check_in_source: true,
+        reporting_time: true,
+        leaving_time: true,
+        employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
         users: { select: { full_name: true } },
         campuses: { select: { id: true, campus_name: true } },
         departments: { select: { id: true, name: true } },
@@ -1033,7 +1038,17 @@ export class EmployeesService {
       },
       orderBy: { full_name: 'asc' },
     });
-    return rows.map(({ monthly_pay, ...rest }) => ({ ...rest, has_monthly_pay: monthly_pay != null }));
+    return rows.map(({ monthly_pay, reporting_time, leaving_time, employee_day_timings, ...rest }) => ({
+      ...rest,
+      has_monthly_pay: monthly_pay != null,
+      reporting_time: hhmm(reporting_time),
+      leaving_time: hhmm(leaving_time),
+      day_timings: employee_day_timings.map((d) => ({
+        day_of_week: d.day_of_week,
+        reporting_time: hhmm(d.reporting_time),
+        leaving_time: hhmm(d.leaving_time),
+      })),
+    }));
   }
 
   async findOne(id: number, caller?: IJwtStaffPayload) {
