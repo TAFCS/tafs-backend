@@ -24,6 +24,7 @@ import {
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { formatPkPhone, normalizePkPhone } from '../../common/utils/phone.util';
 import {
   bandForMonthsBehind,
   LPS_PER_ARREAR_MONTH,
@@ -2820,6 +2821,11 @@ export class FinancialReportsService {
     );
     const siblingGrs = await this.loadSiblingGrNumbers(items.map((r) => Number(r.cc)));
     const linkToGr = (r: Item) => (siblingGrs.get(Number(r.cc)) ?? []).join(', ');
+    // TAFSD-340: "FATHER 0312-2244523", one per guardian, primary contact first.
+    const contacts = query.columns?.length && !query.columns.includes('contact')
+      ? new Map<number, string[]>()
+      : await this.loadDefaulterContacts(items.map((r) => Number(r.cc)));
+    const contactFor = (r: Item) => contacts.get(Number(r.cc)) ?? [];
     const statusFor = (r: Item) => DEFAULTER_STATUS_LABELS[String(r.student_status ?? '')] ?? '';
 
     type SheetRow = {
@@ -3008,6 +3014,7 @@ export class FinancialReportsService {
         ['level', 'Level', (r) => level(r.item)],
         ['name', 'Student Name', (r) => String(r.item.student_name ?? '')],
         ['status', 'Status', (r) => statusFor(r.item)],
+        ['contact', 'Contact', (r) => contactFor(r.item).join(', ')],
       ];
       const before = fixed.filter(([k]) => show(k));
       const header = [
@@ -3114,6 +3121,17 @@ export class FinancialReportsService {
           fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
         });
       if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
+      if (show('contact'))
+        specs.push({
+          header: 'CONTACT',
+          width: 24,
+          wrap: true,
+          fill: (c, r) => {
+            const lines = contactFor(r.item);
+            c.value = lines.join('\n');
+            return lines.length;
+          },
+        });
       if (show('months')) {
         const order = headOrder(campus.rows);
         for (const col of sheetColumns(campus.rows)) {
@@ -3252,16 +3270,19 @@ export class FinancialReportsService {
       let rowIdx = HEADER_LAST + 1;
       const writeStudent = (r: SheetRow, i: number) => {
         const row = sheet.getRow(rowIdx);
+        let lineCount = 1;
         specs.forEach((spec, c) => {
           const cell = row.getCell(c + 1);
-          spec.fill(cell, r, i);
+          const lines = spec.fill(cell, r, i);
+          if (typeof lines === 'number') lineCount = Math.max(lineCount, lines);
           cell.border = box;
           cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: Boolean(spec.wrap) };
           cell.font = spec.amount
             ? { name: SERIF, bold: true, size: 12 }
             : { name: SERIF, bold: Boolean(spec.monthTotal), size: spec.group ? 10 : 11 };
         });
-        row.height = 22;
+        // Excel won't grow a row to fit wrapped text it didn't write itself.
+        row.height = Math.max(22, lineCount * 14 + 6);
         rowIdx++;
       };
 
@@ -3462,6 +3483,54 @@ export class FinancialReportsService {
    * 5,000 students, not one per student. Deleted students and blank GRs are
    * skipped; the student's own GR is never listed.
    */
+  /**
+   * cc -> guardian phone numbers for the CONTACT column (TAFSD-340): each
+   * guardian's primary phone (else WhatsApp), labelled by relationship,
+   * primary contact first, then father, mother and the rest; duplicates
+   * dropped, at most three. Falls back to the family's home phone.
+   */
+  private async loadDefaulterContacts(ids: number[]): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>();
+    const rank = (rel: string, primary: boolean) =>
+      primary ? 0 : rel === 'FATHER' ? 1 : rel === 'MOTHER' ? 2 : 3;
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const students = await this.prisma.students.findMany({
+        where: { cc: { in: ids.slice(i, i + CHUNK) } },
+        select: {
+          cc: true,
+          families: { select: { home_phone: true } },
+          student_guardians: {
+            select: {
+              relationship: true,
+              is_primary_contact: true,
+              guardians: { select: { primary_phone: true, whatsapp_number: true, deleted_at: true } },
+            },
+          },
+        },
+      });
+      for (const st of students) {
+        const seen = new Set<string>();
+        const lines: string[] = [];
+        const guardians = st.student_guardians
+          .filter((sg) => sg.guardians && !sg.guardians.deleted_at)
+          .map((sg) => ({ ...sg, rel: sg.relationship.trim().toUpperCase() }))
+          .sort((a, b) => rank(a.rel, !!a.is_primary_contact) - rank(b.rel, !!b.is_primary_contact));
+        for (const sg of guardians) {
+          const raw = sg.guardians.primary_phone?.trim() || sg.guardians.whatsapp_number?.trim();
+          const key = normalizePkPhone(raw);
+          if (!key || seen.has(key) || lines.length >= 3) continue;
+          seen.add(key);
+          lines.push(`${sg.rel} ${formatPkPhone(raw)}`);
+        }
+        const home = normalizePkPhone(st.families?.home_phone);
+        if (!lines.length && home) lines.push(`HOME ${formatPkPhone(home)}`);
+        if (lines.length) result.set(st.cc, lines);
+      }
+    }
+    return result;
+  }
+
   /** cc -> the student's family, for grouping the defaulters sheet by family (TAFSD-337). */
   private async loadDefaulterFamilies(ids: number[]): Promise<Map<number, { id: number; household_name: string }>> {
     const result = new Map<number, { id: number; household_name: string }>();

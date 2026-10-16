@@ -426,6 +426,7 @@ export const DEFAULTER_COLUMN_KEYS = [
   'level',
   'name',
   'status',
+  'contact',
   'months',
   'amount',
   'remarks',
