@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, Inject, forwardRef, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, Inject, forwardRef, ConflictException, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -20,12 +20,20 @@ import { ScopeService } from '../../common/scope/scope.service';
 import { EMPTY_SCOPE } from '../../common/scope/scope.types';
 import { encryptSecret } from '../../common/utils/reversible-secret.util';
 import { compactActionKeys } from '../access/tiles.manifest';
+import { auditActorLabel } from '../../common/utils/audit-actor.util';
 
 export const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 export const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 const ACCESS_TOKEN_TTL = '90d';
 const REFRESH_TOKEN_TTL = '90d';
+
+/**
+ * An impersonation token is short-lived on purpose: when it lapses the webapp
+ * falls back to the admin's own refresh cookie, which ends the impersonation.
+ */
+export const IMPERSONATION_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const IMPERSONATION_TOKEN_TTL = '2h';
 
 @Injectable()
 export class AuthService {
@@ -94,7 +102,10 @@ export class AuthService {
    * without rotating tokens or running bcrypt. Used by GET /auth/staff/me so
    * a page reload does not pay the refresh path when the access cookie is live.
    */
-  async getStaffSessionUser(userId: string) {
+  async getStaffSessionUser(
+    userId: string,
+    impersonator?: { id: string; fullName: string } | null,
+  ) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
       include: { campuses: true },
@@ -102,7 +113,117 @@ export class AuthService {
     if (!user || !user.is_active) {
       throw new UnauthorizedException('Account is inactive');
     }
-    return this.buildStaffUserResponse(user);
+    const staffUser = await this.buildStaffUserResponse(user);
+    return { ...staffUser, impersonator: impersonator ?? null };
+  }
+
+  // ─── Impersonation (TAFSD-361) ─────────────────────────────────────────────
+  //
+  // Only the access cookie is swapped. The admin's own refresh cookie is left
+  // in place, and no refresh token is ever issued for the impersonated user
+  // (storeStaffRefreshToken revokes every existing one, which would sign them
+  // out of the staff app). Exiting is a normal refresh on the admin's cookie.
+
+  async impersonateStaff(actor: IJwtStaffPayload, targetUserId: string) {
+    if (actor.impersonatorId) {
+      throw new BadRequestException('Exit the current impersonation first.');
+    }
+    if (actor.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a super admin can impersonate.');
+    }
+    if (targetUserId === actor.sub) {
+      throw new BadRequestException('You cannot impersonate yourself.');
+    }
+
+    const target = await this.prisma.users.findUnique({
+      where: { id: targetUserId },
+      include: { campuses: true },
+    });
+    if (!target) throw new NotFoundException('User not found');
+    if (!target.is_active) {
+      throw new BadRequestException('This account is inactive.');
+    }
+    if (target.role === StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Another super admin cannot be impersonated.');
+    }
+
+    const actorName = actor.fullName?.trim() || actor.username;
+    const staffUser = await this.buildStaffUserResponse(target);
+    const payload: IJwtStaffPayload = {
+      ...this.buildStaffAccessPayload(target, staffUser),
+      impersonatorId: actor.sub,
+      impersonatorName: actorName,
+    };
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('JWT_SECRET'),
+      expiresIn: IMPERSONATION_TOKEN_TTL,
+    });
+
+    this.auditLogs.log({
+      entity_type: 'USER',
+      entity_id: target.id,
+      action: 'IMPERSONATION_STARTED',
+      section: 'system',
+      changed_by: auditActorLabel(actor),
+      note: `${actorName} started impersonating ${target.full_name} (${target.username}).`,
+    });
+
+    return {
+      accessToken,
+      user: { ...staffUser, impersonator: { id: actor.sub, fullName: actorName } },
+    };
+  }
+
+  /**
+   * Ends an impersonation by refreshing the admin's own session. The
+   * (possibly expired) impersonation access token is used to check the
+   * refresh cookie belongs to the impersonating admin, and for the audit row.
+   */
+  async exitImpersonation(
+    rawRefreshToken: string | undefined,
+    rawAccessToken: string | undefined,
+  ) {
+    let impersonation: IJwtStaffPayload | null = null;
+    if (rawAccessToken) {
+      try {
+        // Signature still checked; an expired impersonation token can exit.
+        impersonation = this.jwtService.verify<IJwtStaffPayload>(rawAccessToken, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          ignoreExpiration: true,
+        });
+      } catch {
+        impersonation = null;
+      }
+    }
+
+    if (impersonation?.impersonatorId && rawRefreshToken) {
+      let refreshSub: string | null = null;
+      try {
+        refreshSub = this.jwtService.verify<{ sub: string }>(rawRefreshToken, {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        }).sub;
+      } catch {
+        refreshSub = null;
+      }
+      if (refreshSub !== impersonation.impersonatorId) {
+        throw new UnauthorizedException('Session does not match the impersonating admin');
+      }
+    }
+
+    const session = await this.refreshStaffToken(rawRefreshToken);
+
+    if (impersonation?.impersonatorId) {
+      this.auditLogs.log({
+        entity_type: 'USER',
+        entity_id: impersonation.sub,
+        action: 'IMPERSONATION_ENDED',
+        section: 'system',
+        changed_by: impersonation.impersonatorName || impersonation.impersonatorId,
+        note: `${impersonation.impersonatorName ?? 'Admin'} stopped impersonating ${impersonation.fullName ?? impersonation.username}.`,
+      });
+    }
+
+    return session;
   }
 
   private async buildStaffUserResponse(user: {
@@ -156,9 +277,32 @@ export class AuthService {
     campuses?: { campus_name: string } | null;
   }) {
     const staffUser = await this.buildStaffUserResponse(user);
+    const payload = this.buildStaffAccessPayload(user, staffUser);
+
+    const { accessToken, refreshToken } =
+      await this.generateTokenPair(payload);
+    await this.storeStaffRefreshToken(user.id, refreshToken);
+
+    return {
+      accessToken,
+      refreshToken,
+      user: staffUser,
+    };
+  }
+
+  private buildStaffAccessPayload(
+    user: {
+      id: string;
+      username: string;
+      full_name: string;
+      role: IJwtStaffPayload['role'];
+      campus_id: number | null;
+    },
+    staffUser: Awaited<ReturnType<AuthService['buildStaffUserResponse']>>,
+  ): IJwtStaffPayload {
     const isSuperAdmin = user.role === StaffRole.SUPER_ADMIN;
 
-    const payload: IJwtStaffPayload = {
+    return {
       sub: user.id,
       username: user.username,
       fullName: user.full_name,
@@ -176,16 +320,6 @@ export class AuthService {
       // over the cookie limit. TileActionGuard and useTileAccess expand it.
       actions: isSuperAdmin ? [] : compactActionKeys(staffUser.effectiveActions),
       scope: isSuperAdmin ? EMPTY_SCOPE : staffUser.scope,
-    };
-
-    const { accessToken, refreshToken } =
-      await this.generateTokenPair(payload);
-    await this.storeStaffRefreshToken(user.id, refreshToken);
-
-    return {
-      accessToken,
-      refreshToken,
-      user: staffUser,
     };
   }
 

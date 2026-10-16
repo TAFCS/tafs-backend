@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
+import { StaffRole } from '@prisma/client';
 import { IJwtStaffPayload } from '../interfaces/jwt-payload.interface';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { AccessService } from '../../access/access.service';
@@ -49,8 +50,21 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
       throw new UnauthorizedException('Account is inactive');
     }
 
+    // An impersonation token is only good while the admin behind it is still
+    // an active SUPER_ADMIN. Their name goes into fullName so audit rows and
+    // anything else that records "who" credit the admin, not the target.
+    let fullName = payload.fullName;
+    if (payload.impersonatorId) {
+      const impersonator = await this.accessService.resolveLiveSession(payload.impersonatorId);
+      if (!impersonator?.isActive || impersonator.role !== StaffRole.SUPER_ADMIN) {
+        throw new UnauthorizedException('Impersonation is no longer allowed');
+      }
+      fullName = `${payload.impersonatorName ?? 'Admin'} (as ${payload.fullName ?? payload.username})`;
+    }
+
     return {
       ...payload,
+      fullName,
       role: session.role,
       allowedClassIds: payload.allowedClassIds ?? [],
       permissions: session.capabilityKeys,
