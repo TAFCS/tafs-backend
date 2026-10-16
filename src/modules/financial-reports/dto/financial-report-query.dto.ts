@@ -432,10 +432,21 @@ export const DEFAULTER_COLUMN_KEYS = [
 ] as const;
 export type DefaulterColumnKey = (typeof DEFAULTER_COLUMN_KEYS)[number];
 
+export const DEFAULTER_GROUP_BY = ['class', 'section', 'family'] as const;
+export type DefaulterGroupBy = (typeof DEFAULTER_GROUP_BY)[number];
+
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
+
+  /**
+   * TAFSD-337: list the students in groups — by class, section or family —
+   * each with a heading, a subtotal and a blank row before the next.
+   */
+  @IsOptional()
+  @IsIn(DEFAULTER_GROUP_BY)
+  group_by?: DefaulterGroupBy;
 
   /** TAFSD-293: list each owed fee head and its amount inside the month cells. */
   @IsOptional()

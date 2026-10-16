@@ -76,3 +76,51 @@ describe('defaulters export: head sub-columns (TAFSD-335)', () => {
     expect(first).toContain('9000,3000,12000,4000,4000');
   });
 });
+
+describe('defaulters export: group by (TAFSD-337)', () => {
+  function grouped() {
+    const service = new FinancialReportsService({} as any, {} as any, {} as any);
+    const s = service as any;
+    const months = new Map<number, Map<number, any>>();
+    const items = [
+      { cc: 1, class_id: 16, class_name: 'VII', section: 'B', owed: 100 },
+      { cc: 2, class_id: 15, class_name: 'VI', section: 'A', owed: 200 },
+      { cc: 3, class_id: 16, class_name: 'VII', section: 'A', owed: 300 },
+    ].map((r) => {
+      months.set(r.cc, new Map([[AUG, { owed: r.owed, partial: false, heads: [{ name: 'Tuition', owed: r.owed, partial: false }] }]]));
+      return { ...r, gr_number: String(r.cc), student_name: `S${r.cc}`, campus: 'GEJ', campus_code: 'GEJ', student_status: 'ENROLLED', category: 'DEFAULTER' };
+    });
+    s.loadDefaulterOwedMonths = jest.fn(async () => months);
+    s.loadSiblingGrNumbers = jest.fn(async () => new Map());
+    s.loadDefaulterFilterNames = jest.fn(async () => ({ campuses: new Map(), classes: new Map(), sections: new Map(), segments: new Map() }));
+    s.loadDefaulterFamilies = jest.fn(async () => new Map([[1, { id: 9, household_name: 'Family of Zaidi' }], [3, { id: 9, household_name: 'Family of Zaidi' }], [2, { id: 4, household_name: 'Family of Ahmed' }]]));
+    return (query: Record<string, unknown>) => s.buildDefaultersStudentReport(items, '2026-10-16', { strip_months: 3, format: 'xlsx', ...query }, 'x');
+  }
+  const col1 = async (query: Record<string, unknown>) => {
+    const { ws, hdr } = await sheetOf(await grouped()(query));
+    const out: unknown[] = [];
+    for (let r = hdr + 1; r <= ws.rowCount; r++) {
+      const v = ws.getCell(r, 1).value;
+      const amount = ws.getCell(r, ws.getRow(hdr).cellCount - 1).value;
+      out.push(typeof v === 'string' ? v : v == null && amount != null ? `= ${amount}` : v ?? '');
+    }
+    return out;
+  };
+
+  it('orders classes by level with heading, S# restart, subtotal and a blank row', async () => {
+    expect(await col1({ group_by: 'class' })).toEqual([
+      'CLASS VI · 1 STUDENT', 1, '= 200', '',
+      'CLASS VII · 2 STUDENTS', 1, 2, '= 400', '',
+      '= 600',
+    ]);
+  });
+
+  it('groups by section and by family', async () => {
+    expect((await col1({ group_by: 'section' })).filter((v) => typeof v === 'string' && /·/.test(v))).toEqual([
+      'VI A · 1 STUDENT', 'VII A · 1 STUDENT', 'VII B · 1 STUDENT',
+    ]);
+    expect((await col1({ group_by: 'family' })).filter((v) => typeof v === 'string' && /·/.test(v))).toEqual([
+      'FAMILY OF AHMED · #4 · 1 STUDENT', 'FAMILY OF ZAIDI · #9 · 2 STUDENTS',
+    ]);
+  });
+});

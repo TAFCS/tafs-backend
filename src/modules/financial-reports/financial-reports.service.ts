@@ -35,6 +35,7 @@ import type {
   DefaulterSortField,
   DefaulterView,
   ExportDefaultersQueryDto,
+  DefaulterGroupBy,
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
@@ -2930,6 +2931,52 @@ export class FinancialReportsService {
     // one it is the whole school and gets the plain name.
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
 
+    // TAFSD-337: groups within each campus sheet, in class order (classes.id
+    // runs in level order), then section, then household name. Rows keep the
+    // on-screen sort inside their group.
+    const groupBy: DefaulterGroupBy | undefined = query.group_by;
+    const families = groupBy === 'family' ? await this.loadDefaulterFamilies(items.map((r) => Number(r.cc))) : null;
+    type SheetGroup = { label: string; rows: SheetRow[] };
+    const groupsOf = (rows: SheetRow[]): SheetGroup[] => {
+      if (!groupBy) return [{ label: '', rows }];
+      const byKey = new Map<string, { label: string; sort: Array<number | string>; rows: SheetRow[] }>();
+      for (const r of rows) {
+        const classId = r.item.class_id == null ? Number.MAX_SAFE_INTEGER : Number(r.item.class_id);
+        const className = String(r.item.class_name ?? '').trim() || 'No class';
+        const section = String(r.item.section ?? '').trim();
+        let key: string;
+        let label: string;
+        let sort: Array<number | string>;
+        if (groupBy === 'class') {
+          key = String(classId);
+          label = `CLASS ${className}`.toUpperCase();
+          sort = [classId];
+        } else if (groupBy === 'section') {
+          key = `${classId}:${section}`;
+          label = `${className} ${section || '(no section)'}`.toUpperCase();
+          sort = [classId, section];
+        } else {
+          const fam = families?.get(Number(r.item.cc));
+          key = fam ? `f${fam.id}` : `s${r.item.cc}`;
+          label = fam ? `${fam.household_name} · #${fam.id}`.toUpperCase() : 'NO FAMILY ON FILE';
+          sort = [fam ? fam.household_name.toUpperCase() : '\uffff', fam?.id ?? Number(r.item.cc)];
+        }
+        if (!byKey.has(key)) byKey.set(key, { label, sort, rows: [] });
+        byKey.get(key)!.rows.push(r);
+      }
+      const cmp = (a: Array<number | string>, b: Array<number | string>) => {
+        for (let i = 0; i < a.length; i++) {
+          if (a[i] === b[i]) continue;
+          return typeof a[i] === 'number' && typeof b[i] === 'number'
+            ? (a[i] as number) - (b[i] as number)
+            : String(a[i]).localeCompare(String(b[i]));
+        }
+        return 0;
+      };
+      return [...byKey.values()].sort((a, b) => cmp(a.sort, b.sort)).map(({ label, rows: groupRows }) => ({ label, rows: groupRows }));
+    };
+    const groupLine = groupBy ? [`GROUPED BY ${groupBy.toUpperCase()}`] : [];
+
     // TAFSD-301: the columns the user picked, in the standard order. None
     // picked (the param omitted) is the full sheet, as before.
     const picked = new Set<DefaulterColumnKey>(query.columns?.length ? query.columns : DEFAULTER_COLUMN_KEYS);
@@ -2964,6 +3011,7 @@ export class FinancialReportsService {
       const before = fixed.filter(([k]) => show(k));
       const header = [
         'Campus',
+        ...(groupBy ? ['Group'] : []),
         ...before.map(([, h]) => h),
         ...monthCols.map((c) => c.header),
         ...(show('amount') ? ['Defaulting Amount'] : []),
@@ -2971,16 +3019,19 @@ export class FinancialReportsService {
       ];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
       for (const campus of campuses) {
-        campus.rows.forEach((r, i) => {
-          const cells = [
-            this.defaulterCampusLabel(campus.code, campus.name),
-            ...before.map(([, , v]) => v(r, i)),
-            ...monthCols.map((c) => c.value(r)),
-            ...(show('amount') ? [r.total] : []),
-            ...(show('remarks') ? [remarkFor(r)] : []),
-          ];
-          lines.push(cells.map((v) => this.csvCell(v)).join(','));
-        });
+        for (const group of groupsOf(campus.rows)) {
+          group.rows.forEach((r, i) => {
+            const cells = [
+              this.defaulterCampusLabel(campus.code, campus.name),
+              ...(groupBy ? [group.label] : []),
+              ...before.map(([, , v]) => v(r, i)),
+              ...monthCols.map((c) => c.value(r)),
+              ...(show('amount') ? [r.total] : []),
+              ...(show('remarks') ? [remarkFor(r)] : []),
+            ];
+            lines.push(cells.map((v) => this.csvCell(v)).join(','));
+          });
+        }
       }
       return {
         buffer: Buffer.from(`\ufeff${lines.join('\n')}`, 'utf8'),
@@ -3147,7 +3198,14 @@ export class FinancialReportsService {
         cell.font = { name: 'Arial', bold: true, size: 9 };
       }
       line++;
-      const filterLines = defaulterFilterLines(query, filterNames, monthsLine, heading.classesLine != null);
+      const filterLines = defaulterFilterLines(
+        query,
+        filterNames,
+        monthsLine,
+        heading.classesLine != null,
+        undefined,
+        groupLine,
+      );
       filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 13 : 11, i === 0 && monthsLine ? 20 : 16));
 
       // Breakdown sheets have two header rows: the month over its head
@@ -3185,7 +3243,7 @@ export class FinancialReportsService {
       if (twoRowHeader) sheet.getRow(HEADER_LAST).height = 30;
 
       let rowIdx = HEADER_LAST + 1;
-      campus.rows.forEach((r, i) => {
+      const writeStudent = (r: SheetRow, i: number) => {
         const row = sheet.getRow(rowIdx);
         specs.forEach((spec, c) => {
           const cell = row.getCell(c + 1);
@@ -3198,37 +3256,61 @@ export class FinancialReportsService {
         });
         row.height = 22;
         rowIdx++;
-      });
+      };
 
       // TOTAL — the grand total under DEFAULTING AMOUNT, as on the paper sheet,
       // with a labelled box over the few columns before it. Without DEFAULTING
       // AMOUNT, each month column gets its own total. A breakdown sheet totals
-      // every head and month sub-column as well.
+      // every head and month sub-column as well. Groups get the same row as
+      // their SUBTOTAL.
       const totalCols = specs
         .map((spec, i) => ({ spec, col: i + 1 }))
         .filter(({ spec }) => spec.total && (spec.amount || !show('amount') || breakdown));
-      if (totalCols.length) {
+      const writeTotal = (rows: SheetRow[], text: string) => {
+        if (!totalCols.length) return;
         const totalRow = sheet.getRow(rowIdx);
         const firstTotal = totalCols[0].col;
         if (firstTotal > 1) {
           const labelFrom = Math.max(1, firstTotal - 3);
           if (firstTotal - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, firstTotal - 1);
           const label = totalRow.getCell(labelFrom);
-          label.value = 'TOTAL';
+          label.value = text;
           label.font = { name: SERIF, bold: true, size: 12 };
           label.alignment = { horizontal: 'center', vertical: 'middle' };
           for (let c = labelFrom; c < firstTotal; c++) totalRow.getCell(c).border = box;
         }
         for (const { spec, col } of totalCols) {
           const cell = totalRow.getCell(col);
-          cell.value = this.roundMoney(campus.rows.reduce((sum, r) => sum + spec.total!(r), 0));
+          cell.value = this.roundMoney(rows.reduce((sum, r) => sum + spec.total!(r), 0));
           cell.numFmt = spec.amount ? '0.00' : '0';
           cell.font = { name: SERIF, bold: true, size: 12 };
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
           cell.border = box;
         }
         totalRow.height = 22;
+        rowIdx++;
+      };
+
+      if (!groupBy) {
+        campus.rows.forEach(writeStudent);
+      } else {
+        // TAFSD-337: heading, the group's students (S# restarts), SUBTOTAL,
+        // then an empty row before the next group.
+        for (const group of groupsOf(campus.rows)) {
+          if (lastCol > 1) sheet.mergeCells(rowIdx, 1, rowIdx, lastCol);
+          const heading = sheet.getCell(rowIdx, 1);
+          heading.value = `${group.label} · ${group.rows.length} ${group.rows.length === 1 ? 'STUDENT' : 'STUDENTS'}`;
+          heading.font = { name: SERIF, bold: true, size: 12 };
+          heading.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+          heading.border = box;
+          sheet.getRow(rowIdx).height = 22;
+          rowIdx++;
+          group.rows.forEach(writeStudent);
+          writeTotal(group.rows, 'SUBTOTAL');
+          rowIdx++;
+        }
       }
+      writeTotal(campus.rows, 'TOTAL');
 
       sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_LAST }];
       sheet.pageSetup = {
@@ -3373,6 +3455,22 @@ export class FinancialReportsService {
    * 5,000 students, not one per student. Deleted students and blank GRs are
    * skipped; the student's own GR is never listed.
    */
+  /** cc -> the student's family, for grouping the defaulters sheet by family (TAFSD-337). */
+  private async loadDefaulterFamilies(ids: number[]): Promise<Map<number, { id: number; household_name: string }>> {
+    const result = new Map<number, { id: number; household_name: string }>();
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const rows = await this.prisma.students.findMany({
+        where: { cc: { in: ids.slice(i, i + CHUNK) }, family_id: { not: null } },
+        select: { cc: true, families: { select: { id: true, household_name: true } } },
+      });
+      for (const r of rows) {
+        if (r.families) result.set(r.cc, { id: r.families.id, household_name: r.families.household_name.trim() });
+      }
+    }
+    return result;
+  }
+
   private async loadSiblingGrNumbers(ids: number[]): Promise<Map<number, string[]>> {
     const result = new Map<number, string[]>();
     const CHUNK = 5_000;
