@@ -1825,10 +1825,14 @@ export class FinancialReportsService {
     for (const elig of eligibility.values()) {
       const student = studentByCc.get(elig.student_id);
       if (!student) continue;
-      const moneyRow = money.get(elig.student_id) ?? EMPTY_MONEY;
+      const moneyRow = money.get(elig.student_id);
+      // A voucher whose status went stale (left EXPIRED or PARTIALLY_PAID
+      // after every head and surcharge on it was paid) owes nothing: not a
+      // defaulter, rather than a row with a defaulting amount of 0 (TAFSD-336).
+      if (!moneyRow && elig.lps_outstanding <= 0) continue;
       rows.push({
         ...elig,
-        ...moneyRow,
+        ...(moneyRow ?? EMPTY_MONEY),
         severity: bandForMonthsBehind(elig.months_behind, elig.category),
         student,
       });
@@ -2017,8 +2021,26 @@ export class FinancialReportsService {
   }
 
   /**
+   * The defaulter money predicate on `sf`: a head counts when it was dated
+   * before as_of, or when it sits on an EXPIRED voucher. The second covers a
+   * bill issued ahead of its month (November tuition billed in October) that
+   * lapsed unpaid: the family is on the report for it, so its amount must be
+   * too (TAFSD-336 — those rows showed a defaulting amount of 0).
+   */
+  private owedByAsOfSql(asOfDate: string) {
+    return Prisma.sql`(
+      sf.fee_date < ${asOfDate}::date
+      OR EXISTS (
+        SELECT 1 FROM public.voucher_heads vh
+        JOIN public.vouchers v ON v.id = vh.voucher_id
+        WHERE vh.student_fee_id = sf.id AND v.status = 'EXPIRED'
+      )
+    )`;
+  }
+
+  /**
    * Money for a set of already-eligible students: every unpaid, non-discount
-   * head dated before as_of. Independent of months_behind —
+   * head dated before as_of, or on an expired voucher (owedByAsOfSql). Independent of months_behind —
    * loadDefaulterEligibility answers "does this student belong on the report
    * and how many months"; this answers "how much".
    */
@@ -2039,7 +2061,7 @@ export class FinancialReportsService {
       FROM public.student_fees sf
       WHERE sf.student_id IN (${Prisma.join(ids)})
         AND sf.fee_date IS NOT NULL
-        AND sf.fee_date < ${asOfDate}::date
+        AND ${this.owedByAsOfSql(asOfDate)}
         AND sf.is_arrear_surcharge = false
         AND sf.is_discount = false
         AND sf.status <> 'PAID'
@@ -3270,7 +3292,7 @@ export class FinancialReportsService {
         LEFT JOIN public.fee_types ft ON ft.id = sf.fee_type_id
         WHERE sf.student_id IN (${Prisma.join(chunk)})
           AND sf.fee_date IS NOT NULL
-          AND sf.fee_date < ${asOfDate}::date
+          AND ${this.owedByAsOfSql(asOfDate)}
           AND sf.is_arrear_surcharge = false
           AND sf.is_discount = false
           AND sf.status <> 'PAID'
