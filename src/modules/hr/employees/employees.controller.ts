@@ -7,7 +7,7 @@ import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeS
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile, RequireSuperAdmin } from '../../../decorators/require-action.decorator';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
 import { Action } from '../../auth/casl/actions';
@@ -306,9 +306,13 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Date of leaving updated successfully');
   }
 
+  // The portal-account writes below are SUPER_ADMIN only (TAFSD-365): a login's
+  // role, campus, active state, username and password decide what it can do,
+  // and whoever could set them could set them for themselves. The service
+  // repeats the check.
   @Patch(':id/account')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireAction('hr.employee_directory#portal.edit')
+  @RequireSuperAdmin()
   async updateAccount(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmployeeAccountDto,
@@ -320,7 +324,7 @@ export class EmployeesController {
 
   @Post(':id/account/reset-password')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireAction('hr.employee_directory#portal.reset_password')
+  @RequireSuperAdmin()
   async resetAccountPassword(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ResetEmployeePasswordDto,
@@ -332,7 +336,7 @@ export class EmployeesController {
 
   @Get(':id/account/reveal-password')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireAction('hr.employee_directory#portal.reveal_password')
+  @RequireSuperAdmin()
   async revealAccountPassword(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -343,7 +347,7 @@ export class EmployeesController {
 
   @Patch(':id/account/username')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
-  @RequireAction('hr.employee_directory#portal.change_username')
+  @RequireSuperAdmin()
   async changeAccountUsername(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ChangeEmployeeUsernameDto,

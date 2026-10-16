@@ -32,7 +32,10 @@ export class ChatController {
   }
 
   @Get('family/:familyId/students')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Get all students belonging to a family' })
   getFamilyStudents(@Param('familyId', ParseIntPipe) familyId: number, @CurrentUser() user: any) {
     return this.chatService.getFamilyStudents(familyId, user);
@@ -161,7 +164,10 @@ export class ChatController {
   }
 
   @Post('mark-read/admin/:familyId')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin marks messages for a family as read' })
   async markAdminRead(@Param('familyId', ParseIntPipe) familyId: number, @CurrentUser() user: any) {
     await this.chatService.assertFamilyVisible(user, familyId);
@@ -180,7 +186,10 @@ export class ChatController {
   }
 
   @Get('admin/messages/:messageId/acknowledgments')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin: see which families have acknowledged a message' })
   getAcknowledgments(@Param('messageId') messageId: string) {
     return this.chatService.getAcknowledgments(messageId);

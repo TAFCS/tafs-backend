@@ -3,6 +3,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
 import { hhmm, parseHhmm, timingsSnapshotFrom, WEEKDAY_SHORT } from './employee-day-timings.util';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
+import { assertMayChangeRecordOf, assertSuperAdmin } from '../../../common/auth/super-admin';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
@@ -30,6 +31,7 @@ import {
   EMPLOYEE_DIRECTORY_TILE_ID,
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
   EMPLOYEE_FIELD_TAB_MAP,
+  EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS,
 } from './employee-field-tabs';
 import { AccessService } from '../../access/access.service';
 import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
@@ -44,6 +46,10 @@ import { TileGrantDto } from '../../access/dto/access.dto';
 
 /** Largest value a Postgres INT4 column can hold. */
 const INT4_MAX = 2_147_483_647;
+
+
+/** Roles a non-super-admin may give a login it creates while registering staff. */
+const DELEGABLE_LOGIN_ROLES: StaffRole[] = [StaffRole.EMPLOYEE, StaffRole.TEACHER];
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -677,6 +683,7 @@ export class EmployeesService {
    * assignment, not an attribute (see common/scope/scope.types.ts).
    */
   private static readonly SCOPE_SELECT = {
+    user_id: true,
     campus_id: true,
     segment_id: true,
     department_id: true,
@@ -741,6 +748,24 @@ export class EmployeesService {
   }
 
   /**
+   * assertCanTouch for writes: in scope, and not the caller's own record or a
+   * SUPER_ADMIN's (see assertMayChangeRecordOf). Every route that changes an
+   * employee goes through here, so a delegate cannot raise their own pay,
+   * close their own file, or offboard the account that administers them.
+   */
+  private async assertCanChange(id: number, caller?: IJwtStaffPayload) {
+    const row = await this.assertCanTouch(id, caller);
+    if (caller && caller.role !== StaffRole.SUPER_ADMIN) {
+      const link = await this.prisma.employee_profiles.findUnique({
+        where: { id },
+        select: { user_id: true, users: { select: { role: true } } },
+      });
+      assertMayChangeRecordOf(caller, { userId: link?.user_id, userRole: link?.users?.role }, 'employee record');
+    }
+    return row;
+  }
+
+  /**
    * Authorises an edit field by field against `<tab>.edit`.
    *
    * A caller whose session predates sub-permissions (no `actions`) is left
@@ -748,22 +773,36 @@ export class EmployeesService {
    * would lock out every open session for 90 days until their token rotates.
    * The route-level @RequireAction is the boundary that does fail closed.
    */
-  private assertFieldsEditable(dto: object, caller?: IJwtStaffPayload) {
+  private assertFieldsEditable(dto: object, caller?: IJwtStaffPayload, opts?: { registering?: boolean }) {
     if (!caller || caller.role === StaffRole.SUPER_ADMIN) return;
+
+    const sent = Object.entries(dto)
+      .filter(([, v]) => v !== undefined)
+      .map(([field]) => field);
+    // An empty pack/grant list grants nothing, so it does not count as sent.
+    const superAdminOnly = sent.filter((f) => {
+      if (!EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS.includes(f)) return false;
+      const v = (dto as Record<string, unknown>)[f];
+      return !(Array.isArray(v) && v.length === 0);
+    });
+    if (superAdminOnly.length > 0) {
+      throw new ForbiddenException(`Only a super admin can set: ${superAdminOnly.join(', ')}.`);
+    }
+
+    // The Register Employee tile fills the whole intake form by design; its
+    // `create` action is the grant. Tab partitioning is for the Directory.
+    if (opts?.registering) return;
     if (caller.actions === undefined) return;
 
     const held = new Set(caller.actions);
-    const denied = Object.entries(dto)
-      .filter(([, v]) => v !== undefined)
-      .map(([field]) => field)
-      .filter((field) => {
-        const override = EMPLOYEE_FIELD_ACTION_OVERRIDES[field];
-        const actionId = override ?? (EMPLOYEE_FIELD_TAB_MAP[field]
-          ? `${EMPLOYEE_FIELD_TAB_MAP[field]}.edit`
-          : null);
-        if (!actionId) return false;
-        return !held.has(`${EMPLOYEE_DIRECTORY_TILE_ID}#${actionId}`);
-      });
+    const denied = sent.filter((field) => {
+      const override = EMPLOYEE_FIELD_ACTION_OVERRIDES[field];
+      const actionId = override ?? (EMPLOYEE_FIELD_TAB_MAP[field]
+        ? `${EMPLOYEE_FIELD_TAB_MAP[field]}.edit`
+        : null);
+      if (!actionId) return false;
+      return !held.has(`${EMPLOYEE_DIRECTORY_TILE_ID}#${actionId}`);
+    });
 
     if (denied.length > 0) {
       throw new ForbiddenException(
@@ -771,6 +810,7 @@ export class EmployeesService {
       );
     }
   }
+
 
   /**
    * Confirms the caller may place an employee at this destination, so a scoped
@@ -1158,7 +1198,9 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    this.assertFieldsEditable(dto, caller);
+    this.assertFieldsEditable(dto, caller, {
+      registering: !!caller?.actions?.includes('hr.register_employee#create'),
+    });
     this.assertDestinationInScope(caller, {
       campus_id: dto.campus_id ?? null,
       segment_id: dto.segment_id ?? null,
@@ -1387,9 +1429,14 @@ export class EmployeesService {
         'Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.',
       );
     }
+    // A delegate registering staff may create the two base logins the form
+    // picks on its own: EMPLOYEE (staff app self-service) and TEACHER (adds
+    // student roll call and directory view; web tiles still need an explicit
+    // allow). Every other role carries admin capabilities, so choosing one is
+    // an access decision and SUPER_ADMIN only (TAFSD-365).
     const role = portalAccount.role ?? StaffRole.EMPLOYEE;
-    if (role === StaffRole.SUPER_ADMIN && caller?.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    if (!DELEGABLE_LOGIN_ROLES.includes(role) && caller?.role !== StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a super admin can create a login with this role.');
     }
 
     const taken = await this.prisma.users.findFirst({
@@ -1436,8 +1483,12 @@ export class EmployeesService {
   }
 
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
-    this.assertFieldsEditable(dto, caller);
+    const touch = await this.assertCanChange(id, caller);
+    // The Advanced form resends the linked login on every save. Resending the
+    // same one is not a change, so only a different user_id needs SUPER_ADMIN.
+    const { user_id: sentUserId, ...withoutLink } = dto;
+    const linkChanged = sentUserId !== undefined && (sentUserId || null) !== (touch.user_id ?? null);
+    this.assertFieldsEditable(linkChanged ? dto : withoutLink, caller);
     // Also check where it is being moved TO -- otherwise a scoped user could
     // reassign someone to a campus they cannot see and lose them.
     this.assertDestinationInScope(caller, {
@@ -1732,6 +1783,7 @@ export class EmployeesService {
     changedBy?: string,
     opts?: { purge?: boolean; caller?: IJwtStaffPayload },
   ) {
+    await this.assertCanChange(id, opts?.caller);
     const existing = await this.findOne(id, opts?.caller);
 
     if (opts?.purge) {
@@ -1975,7 +2027,7 @@ export class EmployeesService {
   }
 
   async updateStatus(id: number, dto: UpdateEmployeeStatusDto, caller: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
+    await this.assertCanChange(id, caller);
     if (caller.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can change employee status');
     }
@@ -2096,7 +2148,7 @@ export class EmployeesService {
 
   /** Edits the date of leaving of an employee who is already marked LEFT / TERMINATED. */
   async updateLeavingDate(id: number, dto: UpdateEmployeeLeavingDateDto, caller: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
+    await this.assertCanChange(id, caller);
     if (caller.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can change the date of leaving');
     }
@@ -2127,7 +2179,7 @@ export class EmployeesService {
   }
 
   async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: { full_name: true, days_per_week: true, employee_work_schedules: true },
@@ -2178,7 +2230,7 @@ export class EmployeesService {
   }
 
   async clearWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: { full_name: true, days_per_week: true, employee_work_schedules: true },
@@ -2262,7 +2314,7 @@ export class EmployeesService {
   }
 
   async updateDayTimings(employeeId: number, dto: UpdateDayTimingsDto, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     const days = this.normaliseDayTimings(dto.days);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
@@ -2316,7 +2368,7 @@ export class EmployeesService {
    */
   async bulkSetDayTiming(dto: BulkDayTimingDto, caller?: IJwtStaffPayload) {
     const ids = [...new Set(dto.employee_ids)];
-    for (const id of ids) await this.assertCanTouch(id, caller);
+    for (const id of ids) await this.assertCanChange(id, caller);
     const [day] = this.normaliseDayTimings([dto]);
     let updated = 0;
     for (const id of ids) {
@@ -2366,6 +2418,7 @@ export class EmployeesService {
   }
 
   async updateAccount(employeeId: number, dto: UpdateEmployeeAccountDto, caller: IJwtStaffPayload) {
+    assertSuperAdmin(caller, "edit a portal account");
     await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
@@ -2419,6 +2472,7 @@ export class EmployeesService {
         allowed_class_ids: true,
       },
     });
+    this.accessService.invalidateLiveSession(employee.user_id);
 
     const changes: string[] = [];
     if (dto.email !== undefined && (existingUser?.email ?? null) !== (updated.email ?? null)) {
@@ -2460,6 +2514,8 @@ export class EmployeesService {
     dto: ResetEmployeePasswordDto,
     caller?: IJwtStaffPayload,
   ) {
+    assertSuperAdmin(caller, "reset a portal password");
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -2488,6 +2544,7 @@ export class EmployeesService {
   }
 
   async revealAccountPassword(employeeId: number, caller?: IJwtStaffPayload) {
+    assertSuperAdmin(caller, "reveal a portal password");
     await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
@@ -2517,6 +2574,7 @@ export class EmployeesService {
   }
 
   async changeAccountUsername(employeeId: number, dto: ChangeEmployeeUsernameDto, caller?: IJwtStaffPayload) {
+    assertSuperAdmin(caller, "change a portal username");
     await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
@@ -2568,7 +2626,7 @@ export class EmployeesService {
     changedBy?: string,
     caller?: IJwtStaffPayload,
   ) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     await this.findOne(employeeId);
     const name = dto.employer_name?.trim();
     if (!name) {
@@ -2622,7 +2680,7 @@ export class EmployeesService {
     if (!existing) {
       throw new NotFoundException(`Previous employer with ID ${id} not found`);
     }
-    await this.assertCanTouch(existing.employee_id, caller);
+    await this.assertCanChange(existing.employee_id, caller);
 
     await this.prisma.employee_previous_employers.delete({ where: { id } });
 

@@ -23,6 +23,7 @@ import {
   ListAttendanceObjectionsQueryDto,
   ReviewAttendanceObjectionDto,
 } from './dto/attendance-objections.dto';
+import { assertMayChangeEmployee } from '../../common/auth/super-admin';
 
 @Injectable()
 export class AttendanceObjectionsService {
@@ -166,6 +167,7 @@ export class AttendanceObjectionsService {
     if (user.role !== StaffRole.SUPER_ADMIN && existing.employee.user_id === user.sub) {
       throw new ForbiddenException('You cannot review your own attendance objection.');
     }
+    await assertMayChangeEmployee(this.prisma, user, existing.employee.id, 'attendance objection');
 
     const updated = await this.prisma.attendance_objections.update({
       where: { id },

@@ -174,10 +174,10 @@ const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'progression.edit', label: 'Edit progression', implies: ['progression.view'] },
 
   { id: 'portal.view', label: 'View portal account', implies: ['view'] },
-  { id: 'portal.edit', label: 'Edit portal account', description: 'Role, campus and account status', implies: ['portal.view'] },
-  { id: 'portal.reveal_password', label: 'Reveal portal password', description: 'Audited on every use', implies: ['portal.view'] },
-  { id: 'portal.reset_password', label: 'Reset portal password', implies: ['portal.edit'] },
-  { id: 'portal.change_username', label: 'Change username', implies: ['portal.edit'] },
+  // RETIRED (TAFSD-365): portal.edit, portal.reveal_password,
+  // portal.reset_password, portal.change_username. A login's role, campus,
+  // active state, username and password are access, so those routes are
+  // SUPER_ADMIN only. Do not reuse the ids.
 
   { id: 'biometric.view', label: 'View biometric', implies: ['view'] },
   { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['biometric.view'] },
@@ -392,30 +392,21 @@ const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
 
-// Tab-shaped, like Employee/Student Directory: PUT /users/:id and
-// PUT /users/:id/access each write fields belonging to more than one tab
-// through one route, so both are field-partitioned (UsersService.updateUser
-// against USER_FIELD_TAB_MAP; AccessService.setUserAccess by DTO key) rather
-// than carrying a single @RequireAction. `role` is a field neither tab-action
-// covers — changing it requires the actor to BE SUPER_ADMIN, not merely hold
-// an action, since the generic CASL mapper turns almost any granted
-// capability into full Manage and role is how SUPER_ADMIN itself is granted.
-// A campus-scoped holder of this tile is also restricted to managing users
-// within, and granting scope no wider than, their own scope — see
-// AccessService.assertCanManageUser/assertGrantableScope and the
-// scope/tile-permission handoff §8, which left this as an open decision.
+// People & Access is delegable to READ only. Every write on the page -- create
+// a login, edit name/password/role/active state, reveal a password, and the
+// packs, tiles, sub-permissions, capability overrides and scope -- is
+// SUPER_ADMIN only (@RequireSuperAdmin on the route, assertSuperAdmin in the
+// service). Whoever can write access can write it for themselves, so there is
+// no safe action to delegate.
+//
+// RETIRED (TAFSD-365): identity.edit, job.edit, reveal_password, access.edit,
+// scope.edit, create. Do not reuse those ids: AccessSync deactivates their rows,
+// and any grant still pointing at them stays in history but resolves to nothing.
+// A scoped holder of `view` only sees users inside their own campus scope
+// (AccessService.assertCanManageUser, UsersService.whereForUsers).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record', default: true },
-
-  { id: 'identity.edit', label: 'Edit identity', description: 'Name, password, active status', implies: ['view'] },
-  { id: 'job.edit', label: 'Edit job assignment', description: 'Legacy campus/class fields', implies: ['view'] },
-  { id: 'reveal_password', label: 'Reveal a stored password', implies: ['view'] },
-
-  { id: 'access.edit', label: 'Edit access', description: 'Packs, tiles, and sub-permission grants', implies: ['view'] },
-  { id: 'scope.edit', label: 'Edit data scope', implies: ['view'] },
-
-  { id: 'create', label: 'Create a person', implies: ['view'] },
+  { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record, read-only. Every change on this page is super admin only.', default: true },
 ];
 
 // Route-shaped, single tile — no other tile shares any route on
@@ -567,18 +558,13 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
-// Access Packs. The pack list is also read by People & Access (to assign a
-// pack), so it stays undecorated; create / update / delete belong to this tile
-// alone. Bridged from system.permissions.manage, the capability the routes'
-// Manage Permission policy already required and which no default role but
-// SUPER_ADMIN holds, so nothing changes for anyone today. A pack only describes
-// tiles and actions: nobody gains any of them until a pack is ASSIGNED, which is
-// People & Access's `access.edit`.
+// Access Packs. Delegable to READ only: create / update / delete are SUPER_ADMIN
+// only, because editing a pack changes the access of everyone it is assigned
+// to, the editor included. So is changing a role's baseline
+// (POST /users/roles/permissions). RETIRED (TAFSD-365): `manage`.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACCESS_PACKS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles', default: true },
-
-  { id: 'manage', label: 'Create, edit and delete access packs', implies: ['view'] },
+  { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles, read-only. Creating, editing and deleting packs is super admin only.', default: true },
 ];
 
 // Database Backups. BackupsController had only JwtStaffGuard: any logged-in
@@ -1175,4 +1161,3 @@ export function catalogFromManifest() {
     })),
   };
 }
-export const PEOPLE_ACCESS_ACTIONS_FOR_TEST = PEOPLE_ACCESS_ACTIONS;

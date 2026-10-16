@@ -1,5 +1,4 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
   ConflictException,
@@ -22,11 +21,7 @@ import { StaffRole } from '@prisma/client';
 import { encryptSecret, decryptSecret } from '../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import {
-  PEOPLE_ACCESS_TILE_ID,
-  USER_FIELD_TAB_MAP,
-  USER_SUPER_ADMIN_ONLY_FIELDS,
-} from './user-field-tabs';
+import { assertSuperAdmin } from '../../common/auth/super-admin';
 
 @Injectable()
 export class UsersService {
@@ -92,44 +87,6 @@ export class UsersService {
       department_id: target.employee_profile?.department_id ?? null,
       staff_category_id: target.employee_profile?.staff_category_id ?? null,
     });
-  }
-
-  /**
-   * Authorises an edit field by field against `<tab>.edit`, mirroring
-   * EmployeesService.assertFieldsEditable. `role` is excluded from the
-   * generic map on purpose — see USER_SUPER_ADMIN_ONLY_FIELDS — and checked
-   * directly against the actor's own role instead.
-   *
-   * A caller whose session predates sub-permissions (no `actions`) is left
-   * alone: the coarse CASL check already gated them, and failing closed here
-   * would lock out every open session for 90 days until their token rotates.
-   * The route-level @RequireAction is the boundary that does fail closed.
-   */
-  private assertFieldsEditable(dto: UpdateUserDto, actingUser?: IJwtStaffPayload) {
-    if (USER_SUPER_ADMIN_ONLY_FIELDS.some((f) => (dto as Record<string, unknown>)[f] !== undefined)) {
-      if (!actingUser || actingUser.role !== StaffRole.SUPER_ADMIN) {
-        throw new ForbiddenException('Only a super admin may change a user\'s role.');
-      }
-    }
-
-    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
-    if (actingUser.actions === undefined) return;
-
-    const held = new Set(actingUser.actions);
-    const denied = Object.entries(dto)
-      .filter(([field, v]) => v !== undefined && !USER_SUPER_ADMIN_ONLY_FIELDS.includes(field))
-      .map(([field]) => field)
-      .filter((field) => {
-        const tab = USER_FIELD_TAB_MAP[field];
-        if (!tab) return false;
-        return !held.has(`${PEOPLE_ACCESS_TILE_ID}#${tab}.edit`);
-      });
-
-    if (denied.length > 0) {
-      throw new ForbiddenException(
-        `You do not have permission to edit: ${denied.join(', ')}.`,
-      );
-    }
   }
 
   // ─── Auth helpers ────────────────────────────────────────────────────────────
@@ -260,6 +217,7 @@ export class UsersService {
   }
 
   async revealPassword(id: string, revealedBy: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, "reveal a user's password");
     await this.findUserById(id, actingUser);
     const user = await this.prisma.users.findUnique({
       where: { id },
@@ -284,6 +242,7 @@ export class UsersService {
   }
 
   async createUser(dto: CreateUserDto, createdById: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'create a login');
     if (isLegacyTafsEmailUsername(dto.username)) {
       throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
     }
@@ -343,8 +302,10 @@ export class UsersService {
   }
 
   async updateUser(id: string, dto: UpdateUserDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    // Name, password, role, active state and the legacy campus/class fields are
+    // all account and access data: SUPER_ADMIN only, for others and self alike.
+    assertSuperAdmin(actingUser, 'edit a login');
     const existing = await this.findUserById(id, actingUser);
-    this.assertFieldsEditable(dto, actingUser);
     // Assert the TARGET campus is in scope too, or a scoped admin could move
     // a user's campus outside their own reach.
     if (dto.campus_id !== undefined && actingUser) {
@@ -419,7 +380,8 @@ export class UsersService {
     return record;
   }
 
-  async deactivateUser(id: string, changedBy?: string) {
+  async deactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'deactivate a login');
     const existing = await this.findUserById(id);
     const record = await this.prisma.users.update({
       where: { id },
@@ -440,7 +402,8 @@ export class UsersService {
     return record;
   }
 
-  async reactivateUser(id: string, changedBy?: string) {
+  async reactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'reactivate a login');
     const existing = await this.findUserById(id);
     const record = await this.prisma.users.update({
       where: { id },
@@ -524,7 +487,14 @@ export class UsersService {
     });
   }
 
-  async setPermission(userId: string, dto: SetPermissionDto, grantedById: string, changedBy?: string) {
+  async setPermission(
+    userId: string,
+    dto: SetPermissionDto,
+    grantedById: string,
+    changedBy?: string,
+    actingUser?: IJwtStaffPayload,
+  ) {
+    assertSuperAdmin(actingUser, 'override a user\'s capabilities');
     const permission = await this.prisma.permissions.findUnique({
       where: { key: dto.permission_key },
     });
@@ -581,7 +551,13 @@ export class UsersService {
     return result;
   }
 
-  async removePermissionOverride(userId: string, permissionKey: string, changedBy?: string) {
+  async removePermissionOverride(
+    userId: string,
+    permissionKey: string,
+    changedBy?: string,
+    actingUser?: IJwtStaffPayload,
+  ) {
+    assertSuperAdmin(actingUser, 'override a user\'s capabilities');
     const permission = await this.prisma.permissions.findUnique({
       where: { key: permissionKey },
     });
@@ -626,7 +602,8 @@ export class UsersService {
     });
   }
 
-  async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string) {
+  async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'change what a role grants');
     const permission = await this.prisma.permissions.findUnique({
       where: { id: dto.permission_id },
       select: { id: true, key: true },

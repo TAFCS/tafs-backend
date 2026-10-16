@@ -102,7 +102,8 @@ const GATED: [string, any, number][] = [
   ['subjects', SubjectsController, 1],
   ['teaching-groups', TeachingGroupsController, 3],
   ['timetables', TimetablesController, 5],
-  ['users', UsersController, 4],
+  // updateRolePermission moved to @RequireSuperAdmin (TAFSD-365).
+  ['users', UsersController, 3],
   ['deposits', DepositsController, 1],
   ['vouchers', VouchersController, 4],
 ];

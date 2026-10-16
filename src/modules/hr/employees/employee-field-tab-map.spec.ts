@@ -1,6 +1,7 @@
 import {
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
   EMPLOYEE_FIELD_TAB_MAP,
+  EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS,
 } from './employee-field-tabs';
 import { EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST } from '../../access/tiles.manifest';
 
@@ -24,7 +25,7 @@ const DTO_FIELDS = [
   'spouse_name', 'spouse_cnic', 'spouse_photo_url', 'account_number',
   'bank_name', 'emergency_contact_name', 'emergency_contact_phone',
   'emergency_contact_relationship', 'class_section_assignments',
-  'previous_employers',
+  'previous_employers', 'packIds', 'tileGrants',
 ];
 
 /**
@@ -37,6 +38,7 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
     const known = new Set([
       ...Object.keys(EMPLOYEE_FIELD_TAB_MAP),
       ...Object.keys(EMPLOYEE_FIELD_ACTION_OVERRIDES),
+      ...EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS,
     ]);
     const unmapped = DTO_FIELDS.filter((f) => !known.has(f));
 
@@ -47,7 +49,11 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
 
   it('maps nothing that is not a real DTO field', () => {
     const dto = new Set(DTO_FIELDS);
-    const stale = Object.keys(EMPLOYEE_FIELD_TAB_MAP).filter((f) => !dto.has(f));
+    const stale = [
+      ...Object.keys(EMPLOYEE_FIELD_TAB_MAP),
+      ...Object.keys(EMPLOYEE_FIELD_ACTION_OVERRIDES),
+      ...EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS,
+    ].filter((f) => !dto.has(f));
     expect(stale).toEqual([]);
   });
 
@@ -66,6 +72,13 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
       (actionId) => !declared.has(actionId),
     );
     expect(missing).toEqual([]);
+  });
+
+  it('never leaves a super-admin-only field reachable through a tab or override', () => {
+    const leaked = EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS.filter(
+      (f) => EMPLOYEE_FIELD_TAB_MAP[f] !== undefined || EMPLOYEE_FIELD_ACTION_OVERRIDES[f] !== undefined,
+    );
+    expect(leaked).toEqual([]);
   });
 
   it('never maps a field to both a tab and an override', () => {

@@ -23,6 +23,7 @@ import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
 import { effectiveManualStatus } from '../../attendance/manual-late.util';
+import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -1023,6 +1024,7 @@ export class PayrollService {
     status: 'APPLIED' | 'EXEMPTED',
     user: IJwtStaffPayload,
   ) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -1205,6 +1207,7 @@ export class PayrollService {
    * so the line keeps its id.
    */
   async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload, fullPay?: boolean) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -1277,6 +1280,7 @@ export class PayrollService {
    * waived; statutory deductions and loan/deposit installments still apply.
    */
   async setFullPayOverride(runId: number, employeeId: number, enabled: boolean, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const result = await this.regenerateLine(runId, employeeId, user, enabled);
     void this.auditLogs.log({
       entity_type: 'PAYROLL_RUN',
@@ -1297,6 +1301,7 @@ export class PayrollService {
    * every employee has gone through here.
    */
   async finalizeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -1372,6 +1377,7 @@ export class PayrollService {
    * leave them out until an explicit "Include" reverses it.
    */
   async excludeLine(runId: number, employeeId: number, dto: ExcludePayrollLineDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -1416,6 +1422,7 @@ export class PayrollService {
 
   /** Reverses excludeLine — re-computes the employee's line and removes the exclusion record. */
   async includeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -2324,6 +2331,7 @@ export class PayrollService {
   }
 
   async disburseLine(runId: number, employeeId: number, dto: DisbursePayrollLineDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${runId} not found`);
@@ -2431,6 +2439,7 @@ export class PayrollService {
    * is additive.
    */
   async settleLine(runId: number, employeeId: number, dto: SettlePayrollLineDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({
       where: { id: runId },
       include: { campuses: { select: { campus_name: true } } },

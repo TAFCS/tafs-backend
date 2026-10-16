@@ -20,6 +20,7 @@ import {
 import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { isPermanentForLeave, monthsUntilPermanent } from '../employees/employment-permanence.util';
+import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 /** What leave policy reads to decide permanence (TAFSD-321). */
 type PermanenceProfile = {
@@ -241,6 +242,8 @@ export class LeaveRequestsService {
     }
 
     const existing = await this.getById(id, user);
+    // Nobody decides their own leave, and only a super admin decides a super admin's.
+    await assertMayChangeEmployee(this.prisma, user, existing.employee_id, 'leave request');
     if (existing.status !== LeaveRequestStatus.PENDING) {
       throw new BadRequestException('Only pending requests can be reviewed');
     }
@@ -309,6 +312,7 @@ export class LeaveRequestsService {
     }
 
     const existing = await this.getById(id, user);
+    await assertMayChangeEmployee(this.prisma, user, existing.employee_id, 'leave request');
     if (existing.status !== LeaveRequestStatus.APPROVED) {
       throw new BadRequestException('Only approved requests can be revoked');
     }

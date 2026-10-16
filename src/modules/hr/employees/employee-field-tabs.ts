@@ -41,9 +41,6 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
 
   // ── Class & Sections tab ──
   class_section_assignments: 'classes',
-
-  // ── Portal Account tab ──
-  portal_account: 'portal', user_id: 'portal',
 };
 
 /**
@@ -52,6 +49,19 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
  */
 export const EMPLOYEE_FIELD_ACTION_OVERRIDES: Record<string, string> = {
   employment_status: 'status.change',
+  // Creating a login alongside the record. Only the plain EMPLOYEE role (staff
+  // app self-service) is open to a delegate; any other role is SUPER_ADMIN only
+  // (EmployeesService.preparePortalAccount).
+  portal_account: 'create',
 };
+
+/**
+ * Fields no action covers: only an acting SUPER_ADMIN may send them (TAFSD-365).
+ * `user_id` attaches an existing login to this record, which changes whose pay,
+ * attendance and leave the record is -- and so who the "not your own record"
+ * check protects. `packIds` / `tileGrants` grant the new login access, which
+ * only a SUPER_ADMIN may do anywhere (an empty list is not a grant and passes).
+ */
+export const EMPLOYEE_SUPER_ADMIN_ONLY_FIELDS = ['user_id', 'packIds', 'tileGrants'];
 
 export const EMPLOYEE_DIRECTORY_TILE_ID = 'hr.employee_directory';

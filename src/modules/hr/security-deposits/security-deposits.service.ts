@@ -21,6 +21,7 @@ import {
   scheduleJson,
 } from '../installment-schedule.util';
 import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateDepositInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: SecurityDepositStatus[] = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED];
@@ -156,6 +157,7 @@ export class SecurityDepositsService {
   }
 
   async create(employeeId: number, dto: CreateSecurityDepositDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     await this.assertEmployee(employeeId, user);
     const profile = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
@@ -229,6 +231,7 @@ export class SecurityDepositsService {
   }
 
   async updateSchedule(employeeId: number, dto: UpdateDepositInstallmentScheduleDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
       await this.lockEmployeePlans(employeeId, tx);
@@ -267,6 +270,7 @@ export class SecurityDepositsService {
   }
 
   async refund(employeeId: number, dto: RefundSecurityDepositDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     const amount = money(dto.amount);
     await this.prisma.$transaction(async (tx) => {
       const plan = await this.requireOpenPlan(employeeId, user, tx);
@@ -309,6 +313,7 @@ export class SecurityDepositsService {
   }
 
   async forfeit(employeeId: number, dto: ForfeitSecurityDepositDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     const amount = money(dto.amount);
     const reason = dto.reason.trim();
     if (!reason) {
@@ -362,6 +367,7 @@ export class SecurityDepositsService {
    * started. Whatever is held is still refunded or forfeited separately.
    */
   async closePlan(employeeId: number, dto: ClosePlanDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     let uncollected = ZERO;
     await this.prisma.$transaction(async (tx) => {
       const plan = await this.requireOpenPlan(employeeId, user, tx);
@@ -422,6 +428,7 @@ export class SecurityDepositsService {
   }
 
   async cancel(employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'security deposit');
     await this.prisma.$transaction(async (tx) => {
       const plan = await this.requireOpenPlan(employeeId, user, tx);
       if (money(plan.recovered_amount).gt(0)) {

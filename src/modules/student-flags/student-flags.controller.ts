@@ -3,13 +3,18 @@ import { StudentFlagsService } from './student-flags.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
+import { RequireAnyAction } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('student-flags')
 @ApiBearerAuth()
 @Controller('student-flags')
-@UseGuards(JwtStaffGuard)
+// Reading and ticking off reminders is open to any staff member for students in
+// their scope (the header notification panel). Adding or removing a flag edits
+// the student record, so it needs the directory's edit rights (TAFSD-365).
+@UseGuards(JwtStaffGuard, TileActionGuard)
 export class StudentFlagsController {
   constructor(private readonly svc: StudentFlagsService) {}
 
@@ -42,6 +47,7 @@ export class StudentFlagsController {
   }
 
   @Post(':cc')
+  @RequireAnyAction('student.directory#identity.edit', 'student.directory#academic.edit')
   @ApiOperation({ summary: 'Add a flag with optional reminder date' })
   async addFlag(
     @Param('cc', ParseIntPipe) cc: number,
@@ -66,6 +72,7 @@ export class StudentFlagsController {
   }
 
   @Delete(':cc/:flag')
+  @RequireAnyAction('student.directory#identity.edit', 'student.directory#academic.edit')
   @ApiOperation({ summary: 'Remove a flag' })
   async removeFlag(
     @Param('cc', ParseIntPipe) cc: number,

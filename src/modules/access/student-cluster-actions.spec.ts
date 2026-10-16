@@ -258,12 +258,26 @@ describe('Enrollments', () => {
     expect(guards).toContain(TileActionGuard);
   });
 
-  // Certificates / admission order / houses are shared with Student Directory
-  // tabs and the Register page: pinning them to this tile would lock those out.
-  it.each(['getAdmissionOrder', 'getLeavingCertificate', 'getLeavingCertificatePdf', 'logCertificateGeneration', 'getCertificateHistory', 'getHouses'])(
-    'leaves the shared route %s without a tile action',
-    (h) => expect(meta(EnrollmentController.prototype, h)).toBeUndefined(),
-  );
+  // Certificates and the admission order are shared with Student Directory
+  // tabs, Registration and Transfers, so each accepts ANY of those pages'
+  // actions rather than pinning to this tile (TAFSD-365: they used to accept
+  // any staff member at all). Houses is a plain lookup and stays open.
+  const CERT = 'student.directory#certificates.view';
+  const ADM = [CERT, 'student.enrollments#view', 'student.registration#view'];
+  it.each<[string, 'all' | 'any', string[]]>([
+    ['getAdmissionOrder', 'any', ADM],
+    ['getLeavingCertificate', 'all', [CERT]],
+    ['getLeavingCertificatePdf', 'all', [CERT]],
+    ['logCertificateGeneration', 'any', [...ADM, 'student.transfers#print']],
+    ['getCertificateHistory', 'all', [CERT]],
+  ])('opens the shared route %s to every page that prints it', (h, mode, keys) => {
+    expect(meta(EnrollmentController.prototype, h)).toEqual({ mode, actionKeys: keys });
+    keysExist(keys);
+  });
+
+  it('leaves the houses lookup without a tile action', () => {
+    expect(meta(EnrollmentController.prototype, 'getHouses')).toBeUndefined();
+  });
 
   function svc(opts: { student?: unknown; canSee?: boolean; sectionThrows?: boolean }) {
     const prisma = {

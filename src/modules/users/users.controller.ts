@@ -16,7 +16,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile, RequireSuperAdmin } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -54,7 +54,7 @@ export class UsersController {
 
   @Get(':id/reveal-password')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
-  @RequireAction('system.people_access#reveal_password')
+  @RequireSuperAdmin()
   async revealPassword(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
     const data = await this.usersService.revealPassword(id, caller.username || caller.sub, caller);
     return createApiResponse(data, HttpStatus.OK, 'Password revealed successfully');
@@ -71,19 +71,18 @@ export class UsersController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'User'))
-  @RequireAction('system.people_access#create')
+  @RequireSuperAdmin()
   async createUser(@Body() dto: CreateUserDto, @CurrentUser() creator: IJwtStaffPayload) {
     const user = await this.usersService.createUser(dto, creator.sub, creator);
     return createApiResponse(user, HttpStatus.CREATED, 'User created successfully');
   }
 
-  // Only `view` is required at the route: this PUT writes fields across both
-  // the Identity and Job tabs (plus role, which is its own, stricter check),
-  // so authorisation happens per field in UsersService.assertFieldsEditable
-  // against USER_FIELD_TAB_MAP.
+  // Every write on this controller changes who may do what, so every write is
+  // SUPER_ADMIN only -- for other users and for the caller's own account alike.
+  // UsersService repeats the check (assertSuperAdmin).
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
-  @RequireAction('system.people_access#view')
+  @RequireSuperAdmin()
   async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() editor: IJwtStaffPayload) {
     const user = await this.usersService.updateUser(id, dto, editor.username || editor.sub, editor);
     return createApiResponse(user, HttpStatus.OK, 'User updated successfully');
@@ -91,7 +90,7 @@ export class UsersController {
 
   @Get(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.people_access#access.edit')
+  @RequireAction('system.people_access#view')
   async getUserPermissions(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
     const user = await this.usersService.findUserById(id, caller);
     const permissions = await this.usersService.getUserPermissionState(id, user.role);
@@ -100,7 +99,7 @@ export class UsersController {
 
   @Post(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.people_access#access.edit')
+  @RequireSuperAdmin()
   async setPermission(
     @Param('id') id: string,
     @Body() dto: SetPermissionDto,
@@ -111,13 +110,14 @@ export class UsersController {
       dto,
       grantor.sub,
       grantor.username || grantor.sub,
+      grantor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Permission override set successfully');
   }
 
   @Delete(':id/permissions/:key')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.people_access#access.edit')
+  @RequireSuperAdmin()
   async removePermissionOverride(
     @Param('id') id: string,
     @Param('key') key: string,
@@ -127,14 +127,15 @@ export class UsersController {
       id,
       key,
       editor.username || editor.sub,
+      editor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Permission override removed successfully');
   }
 
   // permissions/all, roles/:role/permissions, and roles/permissions below
   // belong to the separate Access Packs tile (system.access_packs, the
-  // /system/permissions page) — not decorated here. See the scope/
-  // tile-permission handoff on shared-controller tiles.
+  // /system/permissions page). Changing what a role grants changes the access
+  // of every user on that role at once, so the write is SUPER_ADMIN only.
 
   @Get('permissions/all')
   @RequireAnyTile('system.access_packs')
@@ -153,7 +154,7 @@ export class UsersController {
   }
 
   @Post('roles/permissions')
-  @RequireAnyTile('system.access_packs')
+  @RequireSuperAdmin()
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async updateRolePermission(
     @Body() dto: UpdateRolePermissionDto,
@@ -162,6 +163,7 @@ export class UsersController {
     const result = await this.usersService.updateRolePermission(
       dto,
       editor.username || editor.sub,
+      editor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Role permission updated successfully');
   }

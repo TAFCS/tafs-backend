@@ -1,5 +1,35 @@
 # Handoff — universal scope + tile sub-permissions
 
+> **Audit 2026-10-17 (TAFSD-365) — read this first; it supersedes parts below.**
+>
+> - **Every web tile is done.** All 62 web tiles declare actions, every
+>   controller behind them runs `TileActionGuard`, and every tile has a webapp
+>   `use<Tile>Access` hook in use. Rollout items 3 and 5 are complete.
+> - **Changing access is SUPER_ADMIN only — never delegable.** New
+>   `@RequireSuperAdmin()` (route) + `assertSuperAdmin()` (service,
+>   `src/common/auth/super-admin.ts`) on: `PUT /access/users/:id/access`, pack
+>   create/update/delete, every `/users` write (create, update, reveal password,
+>   capability overrides, role baselines), and the Employee Directory portal
+>   account routes. People & Access and Access Packs keep only `view`; the
+>   retired action ids (`identity.edit`, `job.edit`, `access.edit`,
+>   `scope.edit`, `reveal_password`, `create`, `access_packs#manage`,
+>   `portal.edit/reset_password/change_username/reveal_password`) must not be
+>   reused. `super-admin-only-access.spec.ts` fails if a write loses the guard.
+> - **Nobody but a SUPER_ADMIN changes their own records, or a SUPER_ADMIN's.**
+>   `assertMayChangeRecordOf` / `assertMayChangeEmployee` on employee writes,
+>   salary increments, loans, security deposits, per-line payroll, leave
+>   review, objection review, attendance overrides and employee photos.
+> - **§2 token trap and §5c.3 stale sessions are gone:** role, actions and scope
+>   are read live per request (TAFSD-307/308). `actions === undefined` no longer
+>   happens for a validated staff request.
+> - **§4 item 4 is functionally done:** the 12 `assertCampusAccess` copies all
+>   delegate to `ScopeService.assertCampus`. Deleting the wrappers is cosmetic.
+> - **§8 resolved:** the admin-panel scope question (writes are SUPER_ADMIN
+>   only, so moot); `listPacks` returns `tileActions` and the pack editor shows
+>   sub-permissions; the migrations are applied, so the unguarded-write hole is
+>   closed in practice. Still open: item 6 (retire `users.campus_id` /
+>   `allowed_class_ids`), class/section scope for employees, the legacy bridge.
+
 **Status (2026-09-12, end of day):** the foundation is built, **deployed, and
 migrated**, and the first two items of the rollout are done. This file is the
 recipe for the rest, one page at a time.

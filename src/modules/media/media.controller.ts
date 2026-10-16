@@ -25,8 +25,33 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import { hasStaffSelfPermission, LEAVE_APPLY } from '../../common/staff-self-service.util';
 import type { IJwtParentPayload, IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
-type Caller = IJwtStaffPayload | IJwtParentPayload;
 import { PrismaService } from '../../../prisma/prisma.service';
+import { actionsCover } from '../access/tiles.manifest';
+import { assertMayChangeRecordOf, isSuperAdmin } from '../../common/auth/super-admin';
+
+type Caller = IJwtStaffPayload | IJwtParentPayload;
+
+// Which tile actions let a STAFF caller write each kind of photo (TAFSD-365).
+// Scope alone used to be enough, so anyone in scope could replace a photo or a
+// guardian CNIC from any page. These are the actions of the pages that upload.
+const STUDENT_PHOTO_WRITERS = [
+  'student.directory#identity.edit',
+  'student.registration#register',
+  'student.registration#admission_form',
+  'student.quick_registration#create',
+];
+const GUARDIAN_PHOTO_WRITERS = [
+  'student.directory#guardians.edit',
+  'student.families#edit',
+  'student.registration#register',
+  'student.registration#admission_form',
+  'student.quick_registration#create',
+];
+const EMPLOYEE_PHOTO_WRITERS = [
+  'hr.employee_directory#profile.edit',
+  'hr.employee_directory#create',
+  'hr.register_employee#create',
+];
 
 @ApiTags('media')
 @Controller('media')
@@ -44,7 +69,18 @@ export class MediaController {
   // guardians, for a change request; staff are held to their data scope.
   // Missing and out-of-reach both 404, so an id's existence is not confirmed.
 
+  private assertStaffMayWrite(user: Caller, writers: string[]) {
+    if (user.userType === 'PARENT') return;
+    const staff = user as IJwtStaffPayload;
+    if (isSuperAdmin(staff)) return;
+    const held = new Set(staff.actions ?? []);
+    if (!writers.some((k) => actionsCover(held, k))) {
+      throw new ForbiddenException(`Missing permission: ${writers.join(' or ')}.`);
+    }
+  }
+
   private async assertStudentAccess(user: Caller, cc: number, temp: boolean) {
+    this.assertStaffMayWrite(user, STUDENT_PHOTO_WRITERS);
     const where = user.userType === 'PARENT'
       ? (temp ? { cc, family_id: user.familyId } : null)
       : { cc, ...this.scope.whereForStudents(user) };
@@ -54,6 +90,7 @@ export class MediaController {
   }
 
   private async assertGuardianAccess(user: Caller, guardianId: number, temp: boolean) {
+    this.assertStaffMayWrite(user, GUARDIAN_PHOTO_WRITERS);
     if (user.userType !== 'PARENT' && this.scope.isUnrestricted(user)) return;
     const students = user.userType === 'PARENT'
       ? (temp ? { family_id: user.familyId } : null)
@@ -66,10 +103,13 @@ export class MediaController {
 
   private async assertEmployeeAccess(user: Caller, employeeId: number) {
     if (user.userType === 'PARENT') throw new NotFoundException(`Employee #${employeeId} not found`);
-    const visible = await this.prisma.employee_profiles.count({
+    this.assertStaffMayWrite(user, EMPLOYEE_PHOTO_WRITERS);
+    const row = await this.prisma.employee_profiles.findFirst({
       where: { id: employeeId, ...this.scope.whereForEmployees(user) },
+      select: { user_id: true, users: { select: { role: true } } },
     });
-    if (!visible) throw new NotFoundException(`Employee #${employeeId} not found`);
+    if (!row) throw new NotFoundException(`Employee #${employeeId} not found`);
+    assertMayChangeRecordOf(user, { userId: row.user_id, userRole: row.users?.role }, 'employee record');
   }
 
   @Post('student/:cc/photo/:type')

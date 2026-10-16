@@ -6,7 +6,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
@@ -99,7 +99,12 @@ export class EnrollmentController {
     );
   }
 
+  // Certificates and orders were scope-checked but open to any staff member
+  // (TAFSD-365). Each is now tied to the pages that print it: the Student
+  // Directory's certificates tab, Enrollments and Registration (admission
+  // order), and Transfers (transfer order, which only logs here).
   @Get(':cc/admission-order')
+  @RequireAnyAction('student.directory#certificates.view', 'student.enrollments#view', 'student.registration#view')
   @ApiOperation({ summary: 'Get student data for admission order PDF' })
   async getAdmissionOrder(
     @Param('cc', ParseIntPipe) cc: number,
@@ -114,6 +119,7 @@ export class EnrollmentController {
   }
 
   @Get(':cc/leaving-certificate')
+  @RequireAction('student.directory#certificates.view')
   @ApiOperation({ summary: 'Get student data for leaving certificate (SLC) PDF' })
   async getLeavingCertificate(
     @Param('cc', ParseIntPipe) cc: number,
@@ -135,6 +141,7 @@ export class EnrollmentController {
    * previous build keeps working through a deploy.
    */
   @Post([':cc/leaving-certificate/pdf', ':cc/leaving-certificate/tafsal-pdf'])
+  @RequireAction('student.directory#certificates.view')
   @ApiOperation({ summary: 'Render the leaving certificate onto its pre-printed blank' })
   async getLeavingCertificatePdf(
     @Param('cc', ParseIntPipe) cc: number,
@@ -152,6 +159,7 @@ export class EnrollmentController {
   }
 
   @Post(':cc/log-certificate-generation')
+  @RequireAnyAction('student.directory#certificates.view', 'student.enrollments#view', 'student.registration#view', 'student.transfers#print')
   @ApiOperation({ summary: 'Log certificate issuance/download event' })
   async logCertificateGeneration(
     @Param('cc', ParseIntPipe) cc: number,
@@ -174,6 +182,7 @@ export class EnrollmentController {
   }
 
   @Get(':cc/certificate-history')
+  @RequireAction('student.directory#certificates.view')
   @ApiOperation({ summary: 'Get history of generated certificates and documents' })
   async getCertificateHistory(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.enrollmentService.getCertificateHistory(cc, user);

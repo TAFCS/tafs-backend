@@ -870,7 +870,10 @@ export class StaffAttendanceService {
       ],
     };
     const [atCampus, inScope] = await Promise.all([
-      this.prisma.employee_profiles.findMany({ where: onCampus, select: { id: true, user_id: true } }),
+      this.prisma.employee_profiles.findMany({
+        where: onCampus,
+        select: { id: true, user_id: true, users: { select: { role: true } } },
+      }),
       this.prisma.employee_profiles.findMany({
         where: { ...onCampus, ...this.scope.whereForEmployees(user) },
         select: { id: true },
@@ -891,6 +894,9 @@ export class StaffAttendanceService {
     // Nobody overrides their own attendance day; it goes to whoever manages them.
     if (user.role !== StaffRole.SUPER_ADMIN && atCampus.some((e) => e.user_id === user.sub)) {
       throw new ForbiddenException('You cannot change your own attendance. Ask someone who manages your attendance.');
+    }
+    if (user.role !== StaffRole.SUPER_ADMIN && atCampus.some((e) => e.users?.role === StaffRole.SUPER_ADMIN)) {
+      throw new ForbiddenException("Only a super admin can change a super admin's attendance.");
     }
     const inScopeIds = new Set(inScope.map((e) => e.id));
     const outOfScope = employeeIds.filter((id) => !inScopeIds.has(id));

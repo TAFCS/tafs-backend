@@ -14,7 +14,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile, RequireSuperAdmin } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -43,11 +43,10 @@ export class AccessController {
     return createApiResponse(options, HttpStatus.OK, 'Scope options retrieved successfully');
   }
 
-  // Shared with the separate Access Packs tile (system.access_packs, the
-  // /system/permissions page) -- read-only here, so left undecorated rather
-  // than requiring a system.people_access action for a page that isn't this
-  // one. The packs CRUD routes below belong to that tile entirely and carry its
-  // `manage` action.
+  // Read by both the Access Packs page and People & Access. The writes below
+  // are SUPER_ADMIN only: a pack is a bundle of tiles and sub-permissions, so
+  // whoever edits one edits the access of everyone it is assigned to,
+  // themselves included.
   @Get('packs')
   @RequireAnyTile('system.access_packs', 'system.people_access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
@@ -58,29 +57,29 @@ export class AccessController {
 
   @Post('packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.access_packs#manage')
+  @RequireSuperAdmin()
   async createPack(@Body() dto: CreateAccessPackDto, @CurrentUser() user: IJwtStaffPayload) {
-    const pack = await this.accessService.createPack(dto, user.username || user.sub);
+    const pack = await this.accessService.createPack(dto, user.username || user.sub, user);
     return createApiResponse(pack, HttpStatus.CREATED, 'Access pack created successfully');
   }
 
   @Put('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.access_packs#manage')
+  @RequireSuperAdmin()
   async updatePack(
     @Param('id') id: string,
     @Body() dto: UpdateAccessPackDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const pack = await this.accessService.updatePack(id, dto, user.username || user.sub);
+    const pack = await this.accessService.updatePack(id, dto, user.username || user.sub, user);
     return createApiResponse(pack, HttpStatus.OK, 'Access pack updated successfully');
   }
 
   @Delete('packs/:id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.access_packs#manage')
+  @RequireSuperAdmin()
   async deletePack(@Param('id') id: string, @CurrentUser() user: IJwtStaffPayload) {
-    const result = await this.accessService.deletePack(id, user.username || user.sub);
+    const result = await this.accessService.deletePack(id, user.username || user.sub, user);
     return createApiResponse(result, HttpStatus.OK, 'Access pack deleted successfully');
   }
 
@@ -92,12 +91,11 @@ export class AccessController {
     return createApiResponse(access, HttpStatus.OK, 'User access retrieved successfully');
   }
 
-  // Only `view` is required at the route: this PUT writes fields belonging to
-  // both the Access and Scope tabs, so authorisation happens per field in
-  // AccessService.assertUserAccessFieldsEditable.
+  // Packs, tiles, sub-permissions and scope. SUPER_ADMIN only: none of it is
+  // delegable, because whoever can write it can write it for themselves.
   @Put('users/:id/access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.people_access#view')
+  @RequireSuperAdmin()
   async setUserAccess(
     @Param('id') id: string,
     @Body() dto: SetUserAccessDto,

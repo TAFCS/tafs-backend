@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +11,7 @@ import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import { ScopeService } from '../../common/scope/scope.service';
 import { EMPTY_SCOPE, type UserScope } from '../../common/scope/scope.types';
+import { assertSuperAdmin } from '../../common/auth/super-admin';
 import {
   actionKey,
   catalogFromManifest,
@@ -20,7 +20,6 @@ import {
   MANIFEST_TILE_IDS,
 } from './tiles.manifest';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
-import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
 
 export type LiveStaffSession = {
   isActive: boolean;
@@ -31,6 +30,18 @@ export type LiveStaffSession = {
 
 const LIVE_SESSION_TTL_MS = 30_000;
 
+/** Pack action rows grouped by pack, minus actions retired from the manifest. */
+function groupLiveActions(rows: { pack_id: string; tile_id: string; action_id: string }[]) {
+  const byPack = new Map<string, { tileId: string; actionId: string }[]>();
+  for (const row of rows) {
+    if (!MANIFEST_ACTION_KEYS.has(actionKey(row.tile_id, row.action_id))) continue;
+    const list = byPack.get(row.pack_id) ?? [];
+    list.push({ tileId: row.tile_id, actionId: row.action_id });
+    byPack.set(row.pack_id, list);
+  }
+  return byPack;
+}
+
 @Injectable()
 export class AccessService {
   constructor(
@@ -40,88 +51,18 @@ export class AccessService {
   ) {}
 
   /**
-   * Restricts a campus-scoped admin (holds this tile + a non-empty campus
-   * scope of their own) to managing access for users within that same scope.
-   * An admin unrestricted on campus (including SUPER_ADMIN, whose scope
-   * always resolves empty) is unaffected. This was an explicit open decision
-   * in the scope/tile-permission handoff §8 — resolved here to close the
-   * escalation path it named ("should a campus-scoped admin be able to grant
-   * access outside their own scope? Currently yes.").
+   * A scoped viewer of People & Access only sees users inside their own
+   * campus scope. Writes never reach here unscoped-or-not: they are SUPER_ADMIN
+   * only (assertSuperAdmin), and a SUPER_ADMIN's scope always resolves empty.
+   *
+   * Throws NotFoundException, not Forbidden: a 403 would confirm a real user
+   * exists outside the caller's scope and turn the route into an enumerator.
    */
-  // Throws NotFoundException, not Forbidden — a 403 here would confirm a real
-  // user exists outside the caller's scope and turn this route into an
-  // enumerator, exactly the anti-pattern the scope/tile-permission handoff
-  // warns against for :id lookups.
   private assertCanManageUser(actingUser: IJwtStaffPayload, targetCampusId: number | null, userId: string) {
     const adminScope = this.scopeService.scopeOf(actingUser);
     if (adminScope.campuses.length === 0) return;
     if (targetCampusId == null || !adminScope.campuses.includes(targetCampusId)) {
       throw new NotFoundException(`User ${userId} not found`);
-    }
-  }
-
-  /**
-   * The other half of the same restriction: a campus-scoped admin may not
-   * grant a target user scope values wider than their own, dimension by
-   * dimension. An admin unrestricted on a given dimension imposes no bound
-   * on that dimension.
-   */
-  private assertGrantableScope(actingUser: IJwtStaffPayload, granted: Partial<UserScope>) {
-    const adminScope = this.scopeService.scopeOf(actingUser);
-    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
-      if (adminScope[field].length === 0) continue;
-      const requested = granted[field] ?? [];
-      const outOfBounds = requested.filter((id) => !adminScope[field].includes(id));
-      if (outOfBounds.length > 0) {
-        throw new ForbiddenException(
-          `You may not grant ${field} outside your own scope: ${outOfBounds.join(', ')}.`,
-        );
-      }
-    }
-  }
-
-  /**
-   * Field-partitions setUserAccess between the Access tab (packIds,
-   * tileGrants, tileActionGrants -> access.edit) and the Scope tab
-   * (scope -> scope.edit).
-   *
-   * packIds and tileGrants are NOT optional on SetUserAccessDto — the
-   * webapp's single saveAccess() handler always sends both, on every save
-   * from either tab (see the People & Access page). So "the field is
-   * present" cannot mean "the caller intends to change it" the way it does
-   * for UpdateUserDto; a scope-only editor must be able to resave scope
-   * without incidentally needing access.edit just because packIds/tileGrants
-   * rode along unchanged. Compared against the persisted state instead.
-   *
-   * A caller whose session predates sub-permissions (no `actions`) is left
-   * alone, same rationale as UsersService.assertFieldsEditable.
-   */
-  private assertUserAccessFieldsEditable(
-    actingUser: IJwtStaffPayload,
-    dto: SetUserAccessDto,
-    packIds: string[],
-    grants: { tileId: string; allow: boolean }[],
-    existingPacks: { pack_id: string }[],
-    existingGrants: { tile_id: string; allow: boolean }[],
-  ) {
-    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
-    if (actingUser.actions === undefined) return;
-
-    const packsChanged =
-      JSON.stringify([...packIds].sort()) !==
-      JSON.stringify(existingPacks.map((p) => p.pack_id).sort());
-    const grantsChanged =
-      JSON.stringify([...grants].map((g) => [g.tileId, g.allow]).sort()) !==
-      JSON.stringify(existingGrants.map((g) => [g.tile_id, g.allow]).sort());
-    const touchesAccess = packsChanged || grantsChanged || dto.tileActionGrants !== undefined;
-    const touchesScope = dto.scope !== undefined;
-
-    const held = new Set(actingUser.actions);
-    if (touchesAccess && !held.has(`${PEOPLE_ACCESS_TILE_ID}#access.edit`)) {
-      throw new ForbiddenException('You do not have permission to edit access grants.');
-    }
-    if (touchesScope && !held.has(`${PEOPLE_ACCESS_TILE_ID}#scope.edit`)) {
-      throw new ForbiddenException('You do not have permission to edit data scope.');
     }
   }
 
@@ -415,13 +356,7 @@ export class AccessService {
         }),
       [] as { pack_id: string; tile_id: string; action_id: string }[],
     );
-    const actionsByPack = new Map<string, { tileId: string; actionId: string }[]>();
-    for (const row of packActionRows) {
-      actionsByPack.set(row.pack_id, [
-        ...(actionsByPack.get(row.pack_id) ?? []),
-        { tileId: row.tile_id, actionId: row.action_id },
-      ]);
-    }
+    const actionsByPack = groupLiveActions(packActionRows);
 
     const roleKeySet = new Set(rolePerms.map((rp) => rp.permissions.key));
     const roleTileIds = MANIFEST_EFFECTIVE_TILES
@@ -450,7 +385,9 @@ export class AccessService {
         note: g.note,
         grantedAt: g.granted_at,
       })),
-      actionGrants: actionGrants.map((g) => ({
+      // Retired actions (no longer in the manifest) are left out, so the editor
+      // never resends them and trips assertActionsExist on the next save.
+      actionGrants: actionGrants.filter((g) => MANIFEST_ACTION_KEYS.has(actionKey(g.tile_id, g.action_id))).map((g) => ({
         tileId: g.tile_id,
         actionId: g.action_id,
         allow: g.allow,
@@ -473,9 +410,8 @@ export class AccessService {
       select: { id: true, username: true, campus_id: true },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    assertSuperAdmin(actingUser, "change a user's access");
     if (dto.scope !== undefined) {
-      this.assertGrantableScope(actingUser, dto.scope);
       await this.assertSegmentsFitDepartments(dto.scope);
       await this.assertStaffCategoriesFitDepartments(dto.scope);
     }
@@ -506,7 +442,6 @@ export class AccessService {
       where: { user_id: userId },
       select: { tile_id: true, allow: true },
     });
-    this.assertUserAccessFieldsEditable(actingUser, dto, packIds, grants, existingPacks, existingGrants);
     const existingActionGrants = await readUntilMigrated(
       () =>
         this.prisma.user_tile_action_grants.findMany({
@@ -676,13 +611,25 @@ export class AccessService {
   }
 
   async listPacks() {
-    return this.prisma.access_packs.findMany({
-      orderBy: [{ is_system: 'desc' }, { name: 'asc' }],
-      include: { tiles: { select: { tile_id: true } } },
-    });
+    const [packs, actionRows] = await Promise.all([
+      this.prisma.access_packs.findMany({
+        orderBy: [{ is_system: 'desc' }, { name: 'asc' }],
+        include: { tiles: { select: { tile_id: true } } },
+      }),
+      readUntilMigrated(
+        () =>
+          this.prisma.access_pack_tile_actions.findMany({
+            select: { pack_id: true, tile_id: true, action_id: true },
+          }),
+        [] as { pack_id: string; tile_id: string; action_id: string }[],
+      ),
+    ]);
+    const actionsByPack = groupLiveActions(actionRows);
+    return packs.map((p) => ({ ...p, tileActions: actionsByPack.get(p.id) ?? [] }));
   }
 
-  async createPack(dto: CreateAccessPackDto, actorLabel?: string) {
+  async createPack(dto: CreateAccessPackDto, actorLabel?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'create an access pack');
     const tileIds = [...new Set(dto.tileIds ?? [])];
     await this.assertTilesExist(tileIds);
     const tileActions = dto.tileActions ?? [];
@@ -713,7 +660,8 @@ export class AccessService {
     return pack;
   }
 
-  async updatePack(id: string, dto: UpdateAccessPackDto, actorLabel?: string) {
+  async updatePack(id: string, dto: UpdateAccessPackDto, actorLabel?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'edit an access pack');
     const existing = await this.prisma.access_packs.findUnique({
       where: { id },
       include: { tiles: { select: { tile_id: true } } },
@@ -766,7 +714,8 @@ export class AccessService {
     return pack;
   }
 
-  async deletePack(id: string, actorLabel?: string) {
+  async deletePack(id: string, actorLabel?: string, actingUser?: IJwtStaffPayload) {
+    assertSuperAdmin(actingUser, 'delete an access pack');
     const existing = await this.prisma.access_packs.findUnique({
       where: { id },
       select: { id: true, name: true, is_system: true },
