@@ -2876,12 +2876,26 @@ export class FinancialReportsService {
       }
       return owed > 0 ? { owed: this.roundMoney(owed), partial, heads } : null;
     };
-    // TAFSD-293: "TUITION FEE 9,000" per line; a part-paid head keeps its "BP".
+    // TAFSD-293/335: with the breakdown on, each month column becomes a group
+    // of sub-columns, one per fee head owed in it, then the month's TOTAL.
     const breakdown = Boolean(query.breakdown_by_head);
-    const headLines = (heads: Map<string, { owed: number; partial: boolean }>) =>
-      [...heads].map(
-        ([name, h]) => `${name.toUpperCase()} ${h.partial ? 'BP ' : ''}${h.owed.toLocaleString('en-US')}`,
-      );
+    // Heads in the order first seen, walking months oldest first, so every
+    // month group lists its heads in the same order.
+    const headOrder = (rows: SheetRow[]) => {
+      const order = new Map<string, number>();
+      for (const r of rows) {
+        for (const idx of [...r.months.keys()].sort((a, b) => a - b)) {
+          for (const h of r.months.get(idx)!.heads) if (!order.has(h.name)) order.set(h.name, order.size);
+        }
+      }
+      return order;
+    };
+    /** The heads owed in this column by at least one of the rows. */
+    const headsIn = (rows: SheetRow[], col: SheetCol, order: Map<string, number>) => {
+      const names = new Set<string>();
+      for (const r of rows) for (const name of cellFor(r, col)?.heads.keys() ?? []) names.add(name);
+      return [...names].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    };
     const remarkFor = (r: SheetRow) =>
       r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '';
     // The months line only when months behind or the arrear month was filtered;
@@ -2900,7 +2914,22 @@ export class FinancialReportsService {
     const show = (key: DefaulterColumnKey) => picked.has(key);
 
     if (query.format === 'csv') {
-      const cols = show('months') ? sheetColumns(sheetRows) : [];
+      const order = headOrder(sheetRows);
+      // One CSV column per month, or per month head plus the month TOTAL.
+      const monthCols: Array<{ header: string; value: (r: SheetRow) => number | '' }> = [];
+      for (const col of show('months') ? sheetColumns(sheetRows) : []) {
+        if (!breakdown) {
+          monthCols.push({ header: col.label, value: (r) => cellFor(r, col)?.owed ?? '' });
+          continue;
+        }
+        for (const name of headsIn(sheetRows, col, order)) {
+          monthCols.push({
+            header: `${col.label} ${name.toUpperCase()}`,
+            value: (r) => cellFor(r, col)?.heads.get(name)?.owed ?? '',
+          });
+        }
+        monthCols.push({ header: `${col.label} TOTAL`, value: (r) => cellFor(r, col)?.owed ?? '' });
+      }
       const fixed: Array<[DefaulterColumnKey, string, (r: SheetRow, i: number) => string | number]> = [
         ['sno', 'S#', (_r, i) => i + 1],
         ['cc', 'C.C.', (r) => Number(r.item.cc)],
@@ -2914,7 +2943,7 @@ export class FinancialReportsService {
       const header = [
         'Campus',
         ...before.map(([, h]) => h),
-        ...cols.map((c) => c.label),
+        ...monthCols.map((c) => c.header),
         ...(show('amount') ? ['Defaulting Amount'] : []),
         ...(show('remarks') ? ['Remarks'] : []),
       ];
@@ -2924,11 +2953,7 @@ export class FinancialReportsService {
           const cells = [
             this.defaulterCampusLabel(campus.code, campus.name),
             ...before.map(([, , v]) => v(r, i)),
-            ...cols.map((c) => {
-              const cell = cellFor(r, c);
-              if (!cell) return '';
-              return breakdown ? headLines(cell.heads).join('; ') : cell.owed;
-            }),
+            ...monthCols.map((c) => c.value(r)),
             ...(show('amount') ? [r.total] : []),
             ...(show('remarks') ? [remarkFor(r)] : []),
           ];
@@ -2983,6 +3008,10 @@ export class FinancialReportsService {
         fill: (cell: ExcelJS.Cell, r: SheetRow, i: number) => number | void;
         amount?: boolean;
         month?: boolean;
+        /** Breakdown: the month label this head sub-column sits under. */
+        group?: string;
+        /** Breakdown: the month's TOTAL sub-column. */
+        monthTotal?: boolean;
       };
       const specs: Spec[] = [];
       if (show('sno')) specs.push({ header: 'S#', width: 5, fill: (c, _r, i) => void (c.value = i + 1) });
@@ -3008,28 +3037,43 @@ export class FinancialReportsService {
         });
       if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
       if (show('months')) {
+        const order = headOrder(campus.rows);
         for (const col of sheetColumns(campus.rows)) {
+          const monthCell = (cell: ExcelJS.Cell, r: SheetRow) => {
+            const owed = cellFor(r, col);
+            if (!owed) return;
+            cell.value = owed.owed;
+            // Part-paid month: the remaining balance, shown "BP 10940" as on
+            // the manual sheets. Still a number, so the row sums.
+            cell.numFmt = owed.partial ? '"BP "0' : '0';
+          };
+          if (!breakdown) {
+            specs.push({ header: col.label, width: 10, month: true, total: (r) => cellFor(r, col)?.owed ?? 0, fill: monthCell });
+            continue;
+          }
+          for (const name of headsIn(campus.rows, col, order)) {
+            specs.push({
+              group: col.label,
+              header: name.toUpperCase(),
+              width: 11,
+              month: true,
+              total: (r) => cellFor(r, col)?.heads.get(name)?.owed ?? 0,
+              fill: (cell, r) => {
+                const head = cellFor(r, col)?.heads.get(name);
+                if (!head) return;
+                cell.value = head.owed;
+                cell.numFmt = head.partial ? '"BP "0' : '0';
+              },
+            });
+          }
           specs.push({
-            header: col.label,
-            width: breakdown ? 22 : 10,
-            wrap: breakdown,
+            group: col.label,
+            header: 'TOTAL',
+            width: 11,
             month: true,
-            // A breakdown cell is text and can't be summed.
-            total: breakdown ? undefined : (r) => cellFor(r, col)?.owed ?? 0,
-            fill: (cell, r) => {
-              const owed = cellFor(r, col);
-              if (!owed) return;
-              if (breakdown) {
-                // Text, one head per line — DEFAULTING AMOUNT and TOTAL stay numeric.
-                const lines = headLines(owed.heads);
-                cell.value = lines.join('\n');
-                return lines.length;
-              }
-              cell.value = owed.owed;
-              // Part-paid month: the remaining balance, shown "BP 10940" as on
-              // the manual sheets. Still a number, so the row sums.
-              cell.numFmt = owed.partial ? '"BP "0' : '0';
-            },
+            monthTotal: true,
+            total: (r) => cellFor(r, col)?.owed ?? 0,
+            fill: monthCell,
           });
         }
       }
@@ -3084,44 +3128,63 @@ export class FinancialReportsService {
       const filterLines = defaulterFilterLines(query, filterNames, monthsLine, heading.classesLine != null);
       filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 13 : 11, i === 0 && monthsLine ? 20 : 16));
 
+      // Breakdown sheets have two header rows: the month over its head
+      // sub-columns, and the head names under it. Other columns span both.
       const HEADER_ROW = line;
-      const headerRow = sheet.getRow(HEADER_ROW);
-      specs.forEach((spec, i) => {
-        const cell = headerRow.getCell(i + 1);
-        cell.value = spec.header;
-        cell.font = { name: SERIF, bold: true, size: spec.amount ? 9 : 11 };
+      const twoRowHeader = specs.some((spec) => spec.group);
+      const HEADER_LAST = twoRowHeader ? HEADER_ROW + 1 : HEADER_ROW;
+      const styleHeader = (cell: ExcelJS.Cell, text: string, size: number) => {
+        cell.value = text;
+        cell.font = { name: SERIF, bold: true, size };
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
         cell.border = box;
-        sheet.getColumn(i + 1).width = spec.width;
+      };
+      specs.forEach((spec, i) => {
+        const col = i + 1;
+        sheet.getColumn(col).width = spec.width;
+        if (!spec.group) {
+          if (twoRowHeader) {
+            sheet.getCell(HEADER_LAST, col).border = box;
+            sheet.mergeCells(HEADER_ROW, col, HEADER_LAST, col);
+          }
+          styleHeader(sheet.getCell(HEADER_ROW, col), spec.header, spec.amount ? 9 : 11);
+          return;
+        }
+        styleHeader(sheet.getCell(HEADER_LAST, col), spec.header, 9);
+        // First sub-column of its month: write the month and merge across the group.
+        if (specs[i - 1]?.group === spec.group) return;
+        let end = i;
+        while (specs[end + 1]?.group === spec.group) end++;
+        for (let c = col; c <= end + 1; c++) sheet.getCell(HEADER_ROW, c).border = box;
+        if (end > i) sheet.mergeCells(HEADER_ROW, col, HEADER_ROW, end + 1);
+        styleHeader(sheet.getCell(HEADER_ROW, col), spec.group, 11);
       });
-      headerRow.height = 30;
+      sheet.getRow(HEADER_ROW).height = twoRowHeader ? 20 : 30;
+      if (twoRowHeader) sheet.getRow(HEADER_LAST).height = 30;
 
-      let rowIdx = HEADER_ROW + 1;
+      let rowIdx = HEADER_LAST + 1;
       campus.rows.forEach((r, i) => {
         const row = sheet.getRow(rowIdx);
-        let lineCount = 1;
         specs.forEach((spec, c) => {
           const cell = row.getCell(c + 1);
-          const lines = spec.fill(cell, r, i);
-          if (typeof lines === 'number') lineCount = Math.max(lineCount, lines);
+          spec.fill(cell, r, i);
           cell.border = box;
           cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: Boolean(spec.wrap) };
           cell.font = spec.amount
             ? { name: SERIF, bold: true, size: 12 }
-            : { name: SERIF, size: breakdown && spec.month ? 8 : 11 };
+            : { name: SERIF, bold: Boolean(spec.monthTotal), size: spec.group ? 10 : 11 };
         });
-        // Excel won't grow a row to fit wrapped text it didn't write itself.
-        row.height = breakdown ? Math.max(22, lineCount * 11 + 6) : 22;
+        row.height = 22;
         rowIdx++;
       });
 
       // TOTAL — the grand total under DEFAULTING AMOUNT, as on the paper sheet,
       // with a labelled box over the few columns before it. Without DEFAULTING
-      // AMOUNT, each month column that is still a number gets its own total;
-      // with nothing numeric left there is no TOTAL row.
+      // AMOUNT, each month column gets its own total. A breakdown sheet totals
+      // every head and month sub-column as well.
       const totalCols = specs
         .map((spec, i) => ({ spec, col: i + 1 }))
-        .filter(({ spec }) => spec.total && (spec.amount || !show('amount')));
+        .filter(({ spec }) => spec.total && (spec.amount || !show('amount') || breakdown));
       if (totalCols.length) {
         const totalRow = sheet.getRow(rowIdx);
         const firstTotal = totalCols[0].col;
@@ -3145,7 +3208,7 @@ export class FinancialReportsService {
         totalRow.height = 22;
       }
 
-      sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_ROW }];
+      sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_LAST }];
       sheet.pageSetup = {
         paperSize: 9, // A4
         orientation: 'landscape',
@@ -3153,7 +3216,7 @@ export class FinancialReportsService {
         fitToWidth: 1,
         fitToHeight: 0,
         horizontalCentered: true,
-        printTitlesRow: `${HEADER_ROW}:${HEADER_ROW}`,
+        printTitlesRow: `${HEADER_ROW}:${HEADER_LAST}`,
         margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
       };
     }
