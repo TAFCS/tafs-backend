@@ -2860,11 +2860,12 @@ export class FinancialReportsService {
       ]
         .filter(Boolean)
         .join(' ');
-    // The page's month window: strip_months calendar months ending at as_of's
-    // month. Month index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
+    // The month window: months_back (TAFSD-355, picked at export) or else the
+    // page's strip_months, in calendar months ending at as_of's month. Month
+    // index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
     const asOfYm = this.parseYearMonthOfDate(asOfDate);
     const windowHi = asOfYm.year * 12 + (asOfYm.month - 1);
-    const windowLo = windowHi - (Math.min(Math.max(query.strip_months ?? 12, 1), 24) - 1);
+    const windowLo = windowHi - (Math.min(Math.max(query.months_back ?? query.strip_months ?? 12, 1), 24) - 1);
     type SheetCol = { label: string; from: number; to: number };
     const sheetColumns = (rows: SheetRow[]): SheetCol[] => {
       let earlier = false;

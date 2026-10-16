@@ -449,6 +449,18 @@ export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsIn(DEFAULTER_GROUP_BY)
   group_by?: DefaulterGroupBy;
 
+  /**
+   * TAFSD-355: how many month columns the sheet carries, ending at the as-of
+   * month. Older owed months fold into EARLIER. Omitted = strip_months, the
+   * page's own window.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  months_back?: number;
+
   /** TAFSD-293: list each owed fee head and its amount inside the month cells. */
   @IsOptional()
   @Transform(toOptionalBoolean)
