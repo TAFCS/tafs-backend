@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
+import { hhmm, parseHhmm, timingsSnapshotFrom, WEEKDAY_SHORT } from './employee-day-timings.util';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
   IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail, IsDateString,
-  ValidateNested, Min, MinLength, MaxLength,
+  ValidateNested, Min, Max, MinLength, MaxLength, Matches, ValidateIf, ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -365,6 +366,42 @@ export class WorkScheduleDayDto {
   is_working?: boolean;
 }
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+/** TAFSD-363: one weekday's own timings. A null side uses the normal time. */
+export class DayTimingDto {
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  day_of_week: number;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'reporting_time must be HH:MM' })
+  reporting_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'leaving_time must be HH:MM' })
+  leaving_time?: string | null;
+}
+
+/** Replaces all of the employee's per-weekday timings. An empty list clears them. */
+export class UpdateDayTimingsDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  days: DayTimingDto[];
+}
+
+/** Sets (or, with both times null, clears) one weekday's timings for many employees. */
+export class BulkDayTimingDto extends DayTimingDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  employee_ids: number[];
+}
+
 export class UpdateWorkScheduleDto {
   @IsArray()
   @ValidateNested({ each: true })
@@ -446,6 +483,12 @@ const includeRelations = {
   device_user_mappings: true,
   employee_previous_employers: {
     orderBy: { id: 'desc' as const },
+  },
+  // TAFSD-363: the timings snapshot on progression periods reads these.
+  employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+  employee_day_timings: {
+    select: { day_of_week: true, reporting_time: true, leaving_time: true },
+    orderBy: { day_of_week: 'asc' as const },
   },
 };
 
@@ -689,7 +732,31 @@ export class EmployeesService {
         class_id: a.class_id,
         section_id: a.section_id ?? null,
       })),
+      // Only when the row carries the schedule relations; otherwise the open
+      // period's timings carry forward rather than reading as "all cleared".
+      timings:
+        row.employee_work_schedules !== undefined && row.employee_day_timings !== undefined
+          ? timingsSnapshotFrom(row)
+          : undefined,
     };
+  }
+
+  /**
+   * TAFSD-363: after a timings write outside updateEmployee (working days,
+   * per-weekday timings), record it on the progression timeline. A no-op
+   * when nothing tracked actually changed.
+   */
+  private async recordTimingProgression(employeeId: number, changedBy: string | null) {
+    await this.prisma.$transaction(async (tx) => {
+      const row = await tx.employee_profiles.findUnique({ where: { id: employeeId }, include: includeRelations });
+      if (!row) return;
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId,
+        ...this.progressionSnapshotFrom(row),
+        changeType: 'TIMING_CHANGED',
+        changedBy,
+      });
+    });
   }
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
@@ -2025,6 +2092,7 @@ export class EmployeesService {
         note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
         changed_by: caller?.username || caller?.sub || 'system',
       });
+      await this.recordTimingProgression(employeeId, caller?.username || caller?.sub || 'system');
     }
 
     return this.getWorkSchedule(employeeId);
@@ -2056,8 +2124,130 @@ export class EmployeesService {
       note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
       changed_by: caller?.username || caller?.sub || 'system',
     });
+    await this.recordTimingProgression(employeeId, caller?.username || caller?.sub || 'system');
 
     return this.getWorkSchedule(employeeId);
+  }
+
+  // ─── TAFSD-363: per-weekday timings ─────────────────────────────────────────
+
+  async getDayTimings(employeeId: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        reporting_time: true,
+        leaving_time: true,
+        employee_day_timings: { orderBy: { day_of_week: 'asc' } },
+      },
+    });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+    return {
+      employee_id: employee.id,
+      reporting_time: hhmm(employee.reporting_time),
+      leaving_time: hhmm(employee.leaving_time),
+      days: employee.employee_day_timings.map((d) => ({
+        day_of_week: d.day_of_week,
+        reporting_time: hhmm(d.reporting_time),
+        leaving_time: hhmm(d.leaving_time),
+      })),
+    };
+  }
+
+  async updateDayTimings(employeeId: number, dto: UpdateDayTimingsDto, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
+    const days = this.normaliseDayTimings(dto.days);
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { full_name: true, employee_day_timings: true },
+    });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    const before = this.describeDayTimings(employee.employee_day_timings);
+    await this.prisma.$transaction([
+      this.prisma.employee_day_timings.deleteMany({ where: { employee_id: employeeId } }),
+      ...days.map((d) =>
+        this.prisma.employee_day_timings.create({
+          data: {
+            employee_id: employeeId,
+            day_of_week: d.day_of_week,
+            reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+            leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+          },
+        }),
+      ),
+    ]);
+    const after = this.describeDayTimings(
+      days.map((d) => ({
+        day_of_week: d.day_of_week,
+        reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+        leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+      })),
+    );
+    if (before !== after) {
+      const changedBy = caller?.username || caller?.sub || 'system';
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(employeeId),
+        action: 'UPDATED',
+        section: 'hr',
+        field: 'Day Timings',
+        old_value: before,
+        new_value: after,
+        note: `${employee.full_name ?? `#${employeeId}`} — day timings: ${before} → ${after}`,
+        changed_by: changedBy,
+      });
+      await this.recordTimingProgression(employeeId, changedBy);
+    }
+    return this.getDayTimings(employeeId, caller);
+  }
+
+  /**
+   * One weekday's timings for many employees at once (Friday hours are
+   * usually school-wide). Both times null clears that day. Each employee is
+   * scope-checked, audited and gets a progression entry.
+   */
+  async bulkSetDayTiming(dto: BulkDayTimingDto, caller?: IJwtStaffPayload) {
+    const ids = [...new Set(dto.employee_ids)];
+    for (const id of ids) await this.assertCanTouch(id, caller);
+    const [day] = this.normaliseDayTimings([dto]);
+    let updated = 0;
+    for (const id of ids) {
+      const current = await this.prisma.employee_day_timings.findMany({ where: { employee_id: id } });
+      const others = current
+        .filter((d) => d.day_of_week !== dto.day_of_week)
+        .map((d) => ({ day_of_week: d.day_of_week, reporting_time: hhmm(d.reporting_time), leaving_time: hhmm(d.leaving_time) }));
+      await this.updateDayTimings(id, { days: day ? [...others, day] : others }, caller);
+      updated++;
+    }
+    return { updated };
+  }
+
+  private normaliseDayTimings(days: DayTimingDto[]) {
+    const seen = new Set<number>();
+    const out: { day_of_week: number; reporting_time: string | null; leaving_time: string | null }[] = [];
+    for (const d of days) {
+      if (seen.has(d.day_of_week)) throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]} is listed twice`);
+      seen.add(d.day_of_week);
+      const reporting = d.reporting_time ? d.reporting_time.slice(0, 5) : null;
+      const leaving = d.leaving_time ? d.leaving_time.slice(0, 5) : null;
+      if (reporting && leaving && leaving <= reporting) {
+        throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]}: leaving time must be after reporting time`);
+      }
+      // Both empty means "use the normal timings": no row.
+      if (reporting || leaving) out.push({ day_of_week: d.day_of_week, reporting_time: reporting, leaving_time: leaving });
+    }
+    return out.sort((a, b) => a.day_of_week - b.day_of_week);
+  }
+
+  /** "Fri 07:30–12:00, Sat –13:00", or "none". */
+  private describeDayTimings(rows: { day_of_week: number; reporting_time: Date | null; leaving_time: Date | null }[]) {
+    const parts = [...rows]
+      .filter((r) => r.reporting_time || r.leaving_time)
+      .sort((a, b) => a.day_of_week - b.day_of_week)
+      .map((r) => `${WEEKDAY_SHORT[r.day_of_week]} ${hhmm(r.reporting_time) ?? ''}–${hhmm(r.leaving_time) ?? ''}`);
+    return parts.length ? parts.join(', ') : 'none';
   }
 
   /** Effective working days, the way attendance and payroll resolve them. */

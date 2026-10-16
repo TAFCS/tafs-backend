@@ -1377,6 +1377,7 @@ model employee_profiles {
   salary_increments                  salary_increments[]
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
+  employee_day_timings               employee_day_timings[]
   leave_requests                     leave_requests[]
   payroll_flags                      payroll_flags[]
   payroll_run_exclusions             payroll_run_exclusions[]
@@ -1448,6 +1449,11 @@ model employee_progression_periods {
   change_type          String            @db.VarChar(30)
   changed_by           String?           @db.VarChar(255)
   notes                String?           @db.VarChar(255)
+  /// TAFSD-363: the employee's timings while this period was open —
+  /// { check_in_source, reporting_time, leaving_time, late_relaxation_minutes,
+  ///   days_per_week, working_days, day_timings }. NULL on periods recorded
+  /// before timings were tracked.
+  timings              Json?
   valid_from           DateTime          @default(now()) @db.Timestamp(6)
   valid_to             DateTime?         @db.Timestamp(6)
   campuses             campuses?         @relation(fields: [campus_id], references: [id])
@@ -1498,6 +1504,25 @@ model academic_calendar_days {
   @@index([campus_id, date, applies_to])
   @@index([class_id, section_id])
   @@index([staff_category_id])
+}
+
+/// TAFSD-363: timings for one weekday that differ from the employee's normal
+/// reporting_time / leaving_time (Friday, at TAFS). Each side falls back to
+/// the normal time when null, so a row can change just the leaving time.
+/// No row = the normal timings. Independent of employee_work_schedules,
+/// which decides whether the day is worked at all.
+model employee_day_timings {
+  id             Int               @id @default(autoincrement())
+  employee_id    Int
+  /// 0 = Sunday … 6 = Saturday, matching JS getUTCDay().
+  day_of_week    Int               @db.SmallInt
+  reporting_time DateTime?         @db.Time(0)
+  leaving_time   DateTime?         @db.Time(0)
+  created_at     DateTime          @default(now()) @db.Timestamp(6)
+  updated_at     DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  employee       employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, day_of_week])
 }
 
 model employee_work_schedules {

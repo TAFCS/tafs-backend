@@ -1,6 +1,6 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Put, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateDayTimingsDto, BulkDayTimingDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -115,6 +115,14 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employees retrieved successfully');
   }
 
+  @Post('day-timings/bulk')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async bulkSetDayTiming(@Body() dto: BulkDayTimingDto, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.bulkSetDayTiming(dto, user);
+    return createApiResponse(data, HttpStatus.OK, `Day timings updated for ${data.updated} employee(s)`);
+  }
+
   @Get(':id/work-schedule')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
   @RequireAction('hr.employee_directory#schedule_pay.view')
@@ -144,6 +152,27 @@ export class EmployeesController {
   ) {
     const data = await this.employeesService.clearWorkSchedule(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
+  }
+
+  // TAFSD-363: per-weekday timings (Friday).
+  @Get(':id/day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async getDayTimings(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.getDayTimings(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings retrieved successfully');
+  }
+
+  @Put(':id/day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async updateDayTimings(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateDayTimingsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.updateDayTimings(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings updated successfully');
   }
 
   @Patch(':id/status')
