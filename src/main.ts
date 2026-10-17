@@ -12,35 +12,35 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 
-/** If the Nest event loop stays blocked, Railway shows 499s with no app logs. */
+/**
+ * Log event-loop stalls. Do NOT process.exit — under deploy/traffic spikes a
+ * 2s lag streak was restart-looping the box so healthz never stayed up.
+ */
 function startEventLoopWatchdog() {
   const histogram = monitorEventLoopDelay({ resolution: 20 });
   histogram.enable();
-  let blockedStreak = 0;
   setInterval(() => {
     const maxMs = histogram.max / 1e6;
     const p99Ms = histogram.percentile(99) / 1e6;
     histogram.reset();
     if (maxMs > 2000) {
-      blockedStreak += 1;
       // eslint-disable-next-line no-console
       console.error(
-        `[event-loop] blocked max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms streak=${blockedStreak}`,
+        `[event-loop] blocked max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms`,
       );
-    } else {
-      blockedStreak = 0;
-    }
-    // Self-heal: exit so Railway restarts instead of sitting dead until a human.
-    if (blockedStreak >= 3) {
-      // eslint-disable-next-line no-console
-      console.error('[event-loop] sustained block — exiting for Railway restart');
-      process.exit(1);
     }
   }, 5000).unref();
 }
 
+function bootLog(step: string) {
+  // eslint-disable-next-line no-console
+  console.log(`[boot] ${step}`);
+}
+
 async function bootstrap() {
+  bootLog('NestFactory.create (Prisma connect + onModuleInit)…');
   const app = await NestFactory.create(AppModule);
+  bootLog('NestFactory.create done');
 
   const redisUrl = process.env.REDIS_URL?.trim();
   const isProduction = process.env.NODE_ENV === 'production';
@@ -53,6 +53,7 @@ async function bootstrap() {
   }
 
   if (redisUrl) {
+    bootLog('connecting Redis…');
     try {
       await redisIoAdapter.connectToRedis(redisUrl);
       app.useWebSocketAdapter(redisIoAdapter);
@@ -184,11 +185,14 @@ async function bootstrap() {
     )
     .build();
 
+  bootLog('building Swagger document…');
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env.PORT ?? 8080;
-  await app.listen(port);
+  const port = Number(process.env.PORT ?? 8080);
+  // Railway routes to 0.0.0.0 — binding only localhost would look like a total outage.
+  bootLog(`listen(0.0.0.0:${port})…`);
+  await app.listen(port, '0.0.0.0');
 
   // Fail hung requests instead of letting Railway/Vercel clients sit until they
   // abort with 499 and pile up more sockets. getrequest/login must never wait
@@ -199,9 +203,14 @@ async function bootstrap() {
   server.keepAliveTimeout = 60_000;
   startEventLoopWatchdog();
 
+  bootLog(`ready on :${port}`);
   // eslint-disable-next-line no-console
-  console.log(`🚀 Server running at: http://localhost:${port}/api/v1`);
+  console.log(`🚀 Server running at: http://0.0.0.0:${port}/api/v1`);
   // eslint-disable-next-line no-console
-  console.log(`📖 Swagger docs available at: http://localhost:${port}/api/docs`);
+  console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
 }
-bootstrap();
+bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error('[boot] FATAL', err);
+  process.exit(1);
+});

@@ -15,7 +15,24 @@ export class AccessSyncService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
-    await this.sync();
+    // Bound boot: a stuck DELETE/INSERT on access_* under lock contention used
+    // to prevent Nest from calling listen(), so Railway served 499/timeouts.
+    const SYNC_MS = 20_000;
+    try {
+      await Promise.race([
+        this.sync(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`access tile sync timed out after ${SYNC_MS}ms`)),
+            SYNC_MS,
+          ),
+        ),
+      ]);
+    } catch (err: any) {
+      this.logger.error(
+        `Access tile sync failed at boot (continuing): ${err?.message ?? err}`,
+      );
+    }
   }
 
   async sync() {

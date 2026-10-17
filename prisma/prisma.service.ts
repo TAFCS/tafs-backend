@@ -20,6 +20,11 @@ function getOptimizedDatabaseUrl(): string | undefined {
     if (!url.searchParams.has('connect_timeout')) {
       url.searchParams.set('connect_timeout', '5');
     }
+    // Fail lock waits fast (boot DDL used to hang forever on ACCESS EXCLUSIVE).
+    // Do not set a low statement_timeout here — finance txs legitimately run 30–120s.
+    if (!url.searchParams.has('options')) {
+      url.searchParams.set('options', '-c lock_timeout=5000');
+    }
     return url.toString();
   } catch {
     return raw;
@@ -44,7 +49,18 @@ export class PrismaService
   }
 
   async onModuleInit() {
-    await this.$connect();
+    const CONNECT_MS = 10_000;
+    this.logger.log(`Prisma $connect (timeout ${CONNECT_MS}ms)…`);
+    await Promise.race([
+      this.$connect(),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Prisma $connect timed out after ${CONNECT_MS}ms`)),
+          CONNECT_MS,
+        ),
+      ),
+    ]);
+    this.logger.log('Prisma connected');
   }
 
   async onModuleDestroy() {
