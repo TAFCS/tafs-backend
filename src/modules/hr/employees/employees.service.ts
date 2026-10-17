@@ -400,6 +400,63 @@ export class BulkDayTimingDto extends DayTimingDto {
   @ArrayMinSize(1)
   @IsInt({ each: true })
   employee_ids: number[];
+
+  /** TAFSD-369: YYYY-MM-DD; defaults to today. A later date schedules the change. */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+}
+
+/** TAFSD-369: change timings / working days effective from a date. Omitted fields keep their value. */
+export class TimingsChangeDto {
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+
+  @IsOptional()
+  @IsEnum(CheckInSource)
+  check_in_source?: 'FIXED' | 'TIMETABLE';
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'reporting_time must be HH:MM' })
+  reporting_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'leaving_time must be HH:MM' })
+  leaving_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(0)
+  @Max(240)
+  late_relaxation_minutes?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsArray()
+  @IsInt({ each: true })
+  working_days?: number[] | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  @Max(7)
+  days_per_week?: number | null;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  day_timings?: DayTimingDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string | null;
 }
 
 export class UpdateWorkScheduleDto {
@@ -650,6 +707,11 @@ export class EmployeesService {
    * Throws NotFound -- never Forbidden -- when out of scope, so the directory
    * cannot be used to enumerate employees at other campuses by probing ids.
    */
+  /** Scope check for callers outside this service (TAFSD-369 timings endpoints). */
+  async assertCanEdit(id: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
+  }
+
   private async assertCanTouch(id: number, caller?: IJwtStaffPayload) {
     const row = await this.prisma.employee_profiles.findUnique({
       where: { id },

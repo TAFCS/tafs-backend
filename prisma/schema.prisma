@@ -1378,6 +1378,7 @@ model employee_profiles {
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
   employee_day_timings               employee_day_timings[]
+  employee_scheduled_timing_changes  employee_scheduled_timing_changes[]
   leave_requests                     leave_requests[]
   payroll_flags                      payroll_flags[]
   payroll_run_exclusions             payroll_run_exclusions[]
@@ -1454,6 +1455,9 @@ model employee_progression_periods {
   ///   days_per_week, working_days, day_timings }. NULL on periods recorded
   /// before timings were tracked.
   timings              Json?
+  /// valid_from is when this period takes EFFECT (TAFSD-369); recorded_at is
+  /// when the change was saved. They differ for back-dated changes.
+  recorded_at          DateTime          @default(now()) @db.Timestamp(6)
   valid_from           DateTime          @default(now()) @db.Timestamp(6)
   valid_to             DateTime?         @db.Timestamp(6)
   campuses             campuses?         @relation(fields: [campus_id], references: [id])
@@ -1504,6 +1508,23 @@ model academic_calendar_days {
   @@index([campus_id, date, applies_to])
   @@index([class_id, section_id])
   @@index([staff_category_id])
+}
+
+/// TAFSD-369: a timings change saved now that takes effect on a future date.
+/// A daily job applies it on effective_from (profile fields + a progression
+/// period starting that day), then deletes the row.
+model employee_scheduled_timing_changes {
+  id             Int               @id @default(autoincrement())
+  employee_id    Int
+  effective_from DateTime          @db.Date
+  /// The full timings snapshot to apply (EmployeeTimingsSnapshot).
+  timings        Json
+  changed_by     String?           @db.VarChar(255)
+  recorded_at    DateTime          @default(now()) @db.Timestamp(6)
+  employee       employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, effective_from])
+  @@index([effective_from])
 }
 
 /// TAFSD-363: timings for one weekday that differ from the employee's normal
