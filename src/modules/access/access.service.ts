@@ -884,6 +884,21 @@ export class AccessService {
    * only ADD tiles and sub-permissions you hold yourself (removing is fine).
    * `packId` null is a new pack.
    */
+  /**
+   * Packs carry Staff App tabs only. Web tiles are granted per user in People
+   * & Access; computeEffectiveAccess ignores any web tile left in a pack, so
+   * adding one here would only look like access while giving none (TAFSD-374).
+   */
+  private assertStaffAppOnly(tileIds: string[], tileActions: { tileId: string }[]) {
+    const web = new Set(MANIFEST_EFFECTIVE_TILES.filter((t) => t.requiresExplicitAllow).map((t) => t.id));
+    const refused = [...new Set([...tileIds, ...tileActions.map((a) => a.tileId)])].filter((id) => web.has(id));
+    if (refused.length > 0) {
+      throw new BadRequestException(
+        `Access packs carry Staff App tabs only. Give web tiles per person in People & Access: ${refused.join(', ')}.`,
+      );
+    }
+  }
+
   private async assertPackChangeAllowed(
     actor: IJwtStaffPayload | undefined,
     packId: string | null,
@@ -946,6 +961,7 @@ export class AccessService {
     await this.assertTilesExist(tileIds);
     const tileActions = dto.tileActions ?? [];
     this.assertActionsExist(tileActions);
+    this.assertStaffAppOnly(tileIds, tileActions);
     await this.assertPackChangeAllowed(actingUser, null, tileIds, tileActions);
 
     const pack = await this.prisma.access_packs.create({
@@ -985,6 +1001,7 @@ export class AccessService {
 
     const tileActions = dto.tileActions;
     if (tileActions) this.assertActionsExist(tileActions);
+    this.assertStaffAppOnly(tileIds ?? [], tileActions ?? []);
     await this.assertPackChangeAllowed(actingUser, id, tileIds ?? [], tileActions ?? []);
 
     const pack = await this.prisma.$transaction(async (tx) => {

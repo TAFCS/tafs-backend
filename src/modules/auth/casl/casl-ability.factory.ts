@@ -7,7 +7,7 @@ import {
 import { StaffRole } from '@prisma/client';
 import { Action } from './actions';
 import { AppSubjects } from './subjects';
-import { actionsCover } from '../../access/tiles.manifest';
+import { actionsCover, userHoldsTile } from '../../access/tiles.manifest';
 import {
   IJwtStaffPayload,
   IJwtParentPayload,
@@ -44,6 +44,22 @@ export class CaslAbilityFactory {
       can(Action.Read, 'StaffAttendance');
     }
 
+    // Shared routes whose coarse check names a subject the calling tile's own
+    // capabilities do not map to. These used to pass only because the Staff
+    // App self-service keys (held by every employee) mapped to Read
+    // StaffAttendance / Manage Timetable -- which opened them to everyone
+    // (TAFSD-374). Now only holders of the tiles whose pages call them pass;
+    // each route's @RequireAction still decides exactly who.
+    //   staff timeline / day history: Employee Directory, Timetables, Payroll
+    //   lesson reschedules: Timetables
+    if (['hr.employee_directory', 'attendance.timetables', 'hr.payroll'].some((t) => userHoldsTile(user, t))) {
+      can(Action.Read, 'StaffAttendance');
+    }
+    //   teaching groups list / group day slots: A-Level Roll Call
+    if (userHoldsTile(user, 'attendance.alevel_roll_call')) {
+      can(Action.Read, 'Timetable');
+    }
+
     // 2. Map new permissions to CASL (for other roles)
     // This allows us to use existing @CheckPolicies decorators with Action and Subject
     const permissions = user.permissions || [];
@@ -74,13 +90,17 @@ export class CaslAbilityFactory {
         return;
       }
 
-      if (perm === 'attendance.self.view') {
-        can(Action.Read, 'StaffAttendance');
-        return;
-      }
-
-      if (perm === 'payroll.self.view') {
-        can(Action.Read, 'Payroll');
+      // Staff App self-service keys (every employee holds them through the
+      // self-service pack). The self routes check these raw keys themselves
+      // (assertStaffSelfPermission); mapping them to Read StaffAttendance /
+      // Read Payroll / Manage Timetable opened the ERP's own routes to every
+      // employee (TAFSD-374), so they grant no CASL ability at all.
+      if (
+        perm === 'attendance.self.view' ||
+        perm === 'payroll.self.view' ||
+        perm === 'hr.timetable.self_view' ||
+        perm === 'hr.leave.apply'
+      ) {
         return;
       }
 

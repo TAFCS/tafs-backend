@@ -89,7 +89,7 @@ export function computeEffectiveAccess(args: {
     allPermissionKeys,
     activeTiles,
     roleKeys,
-    packTileIds,
+    packTileIds: rawPackTileIds,
     allowTileIds,
     denyTileIds,
     userPerms,
@@ -106,6 +106,19 @@ export function computeEffectiveAccess(args: {
   }
 
   const tilesById = new Map(activeTiles.map((t) => [t.id, t]));
+
+  // Packs carry Staff App tabs; web tiles are granted per user (TAFSD-284).
+  // A web tile left in a pack used to keep feeding its capabilities into the
+  // CASL checks, and its sub-permissions into a web tile the user was also
+  // granted directly -- an old pack could turn a view-only grant into delete.
+  // So a pack's web tiles, and their actions, count for nothing (TAFSD-374).
+  const isPackTile = (id: string) => {
+    const tile = tilesById.get(id);
+    return tile != null && !tile.requiresExplicitAllow;
+  };
+  const packTileIds = rawPackTileIds.filter(isPackTile);
+  const packActionsForApp = packActions.filter((a) => isPackTile(a.tileId));
+
   const denied = new Set(denyTileIds);
   const remainingPack = packTileIds.filter((id) => !denied.has(id));
 
@@ -155,7 +168,7 @@ export function computeEffectiveAccess(args: {
   // on a tile they cannot open is meaningless, and a denied tile takes its
   // actions with it.
   const packActionsByTile = new Map<string, string[]>();
-  for (const a of packActions) {
+  for (const a of packActionsForApp) {
     packActionsByTile.set(a.tileId, [...(packActionsByTile.get(a.tileId) ?? []), a.actionId]);
   }
   const userAllowByTile = new Map<string, string[]>();

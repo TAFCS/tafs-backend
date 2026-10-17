@@ -15,9 +15,6 @@ import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StaffRole } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
-import { PoliciesGuard } from '../../common/guards/policies.guard';
-import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -25,7 +22,7 @@ import { GetZkLogsQueryDto } from './dto/zk-push.dto';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkPushService } from './zk-push.service';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { ScopeService } from '../../common/scope/scope.service';
 import { effectiveScopeOf } from '../../common/scope/scope.types';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -237,9 +234,17 @@ export class ZkLogsController {
   ) {}
 
   /** Device heartbeat for the attendance dashboard. Campus users see only their campus's devices. */
+  // Shown on the attendance dashboard and admin home. It used to accept Read
+  // StaffAttendance alone, which every employee held through the Staff App
+  // self-service keys (TAFSD-374); now only the attendance tiles that show it.
   @Get('zk-device-health')
-  @UseGuards(PoliciesGuard)
-  @CheckPolicies((ability) => ability.can(Action.Read, 'StaffAttendance'))
+  @RequireAnyTile(
+    'attendance.zk_device_logs',
+    'attendance.employee_attendance_cycle',
+    'attendance.student_attendance',
+    'attendance.student_attendance_cycle',
+    'attendance.quick_check_in',
+  )
   async getDeviceHealth(@CurrentUser() user: IJwtStaffPayload) {
     let campusCodes: string[] | null = null;
     if (user.role !== StaffRole.SUPER_ADMIN) {
