@@ -39,7 +39,14 @@ function bootLog(step: string) {
 
 async function bootstrap() {
   bootLog('NestFactory.create (Prisma connect + onModuleInit)…');
-  const app = await NestFactory.create(AppModule);
+  // Production: keep Nest logs but drop per-route "Mapped {…}" spam. That flood
+  // hits Railway's rate limit and the real crash line is "Messages dropped".
+  const app = await NestFactory.create(AppModule, {
+    logger:
+      process.env.NODE_ENV === 'production'
+        ? ['error', 'warn']
+        : ['error', 'warn', 'log', 'debug', 'verbose'],
+  });
   bootLog('NestFactory.create done');
 
   const redisUrl = process.env.REDIS_URL?.trim();
@@ -170,27 +177,9 @@ async function bootstrap() {
     morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
   );
 
-  const config = new DocumentBuilder()
-    .setTitle('TAFS API')
-    .setDescription('TAFS Backend API documentation')
-    .setVersion('1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        in: 'header',
-      },
-      'access-token',
-    )
-    .build();
-
-  bootLog('building Swagger document…');
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
-
   const port = Number(process.env.PORT ?? 8080);
   // Railway routes to 0.0.0.0 — binding only localhost would look like a total outage.
+  // Listen BEFORE Swagger so healthchecks pass even if document build is heavy.
   bootLog(`listen(0.0.0.0:${port})…`);
   await app.listen(port, '0.0.0.0');
 
@@ -206,8 +195,30 @@ async function bootstrap() {
   bootLog(`ready on :${port}`);
   // eslint-disable-next-line no-console
   console.log(`🚀 Server running at: http://0.0.0.0:${port}/api/v1`);
-  // eslint-disable-next-line no-console
-  console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
+
+  // Swagger after listen — skipped in production (CPU/memory + duplicate-DTO noise
+  // was part of the crash loop; use /api/docs on non-prod only).
+  if (!isProduction) {
+    bootLog('building Swagger document…');
+    const config = new DocumentBuilder()
+      .setTitle('TAFS API')
+      .setDescription('TAFS Backend API documentation')
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          in: 'header',
+        },
+        'access-token',
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+    // eslint-disable-next-line no-console
+    console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
+  }
 }
 bootstrap().catch((err) => {
   // eslint-disable-next-line no-console

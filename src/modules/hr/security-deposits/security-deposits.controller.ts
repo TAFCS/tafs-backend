@@ -10,7 +10,7 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { SecurityDepositsService } from './security-deposits.service';
-import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateDepositInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 // Every route here is ALSO reachable from EmployeeSecurityDepositTab.tsx
 // inside the Employee Directory (gated there on
@@ -48,7 +48,7 @@ export class SecurityDepositsController {
   @RequireAnyAction('hr.security_deposits#schedule.edit', 'hr.employee_directory#security_deposit.edit')
   async updateSchedule(
     @Param('employeeId', ParseIntPipe) employeeId: number,
-    @Body() dto: UpdateInstallmentScheduleDto,
+    @Body() dto: UpdateDepositInstallmentScheduleDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const data = await this.securityDeposits.updateSchedule(employeeId, dto, user);

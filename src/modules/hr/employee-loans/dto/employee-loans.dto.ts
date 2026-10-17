@@ -61,7 +61,7 @@ export class CreateLoanDto {
   notes?: string;
 }
 
-export class UpdateInstallmentScheduleDto {
+export class UpdateLoanInstallmentScheduleDto {
   @ApiProperty({ type: [Number], example: [10000, 0, 10000], description: 'Remaining monthly amounts in order. Use 0 to skip a cycle. Must sum to the outstanding balance.' })
   @IsArray()
   @ArrayMinSize(1)

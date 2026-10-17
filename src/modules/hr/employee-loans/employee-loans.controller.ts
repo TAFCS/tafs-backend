@@ -10,7 +10,7 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { EmployeeLoansService } from './employee-loans.service';
-import { CreateLoanDto, LumpSumRepaymentDto, UpdateInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
 
 // Every route here is ALSO reachable from EmployeeLoanTab.tsx inside the
 // Employee Directory (gated there on hr.employee_directory#loan.edit / .view)
@@ -48,7 +48,7 @@ export class EmployeeLoansController {
   @RequireAnyAction('hr.employee_loans#schedule.edit', 'hr.employee_directory#loan.edit')
   async updateSchedule(
     @Param('employeeId', ParseIntPipe) employeeId: number,
-    @Body() dto: UpdateInstallmentScheduleDto,
+    @Body() dto: UpdateLoanInstallmentScheduleDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const data = await this.employeeLoans.updateSchedule(employeeId, dto, user);

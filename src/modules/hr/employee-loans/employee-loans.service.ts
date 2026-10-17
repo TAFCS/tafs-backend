@@ -22,7 +22,7 @@ import {
   scheduleJson,
   shiftScheduleAfterCollection,
 } from '../installment-schedule.util';
-import { CreateLoanDto, LumpSumRepaymentDto, UpdateInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: LoanStatus[] = [LoanStatus.ACTIVE, LoanStatus.OUTSTANDING];
@@ -212,7 +212,7 @@ export class EmployeeLoansService {
     return this.getForEmployee(employeeId);
   }
 
-  async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
+  async updateSchedule(employeeId: number, dto: UpdateLoanInstallmentScheduleDto, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
       const loan = await tx.employee_loans.findFirst({

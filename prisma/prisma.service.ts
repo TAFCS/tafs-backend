@@ -20,11 +20,10 @@ function getOptimizedDatabaseUrl(): string | undefined {
     if (!url.searchParams.has('connect_timeout')) {
       url.searchParams.set('connect_timeout', '5');
     }
-    // Fail lock waits fast (boot DDL used to hang forever on ACCESS EXCLUSIVE).
-    // Do not set a low statement_timeout here — finance txs legitimately run 30–120s.
-    if (!url.searchParams.has('options')) {
-      url.searchParams.set('options', '-c lock_timeout=5000');
-    }
+    // Do NOT put lock_timeout/statement_timeout in URL `options` — DigitalOcean
+    // PgBouncer rejects them: FATAL: unsupported startup parameter in options.
+    // Boot DDL uses SET LOCAL lock_timeout inside its own transaction instead.
+    url.searchParams.delete('options');
     return url.toString();
   } catch {
     return raw;

@@ -20,7 +20,7 @@ import {
   scheduleAsNumbers,
   scheduleJson,
 } from '../installment-schedule.util';
-import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateDepositInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: SecurityDepositStatus[] = [SecurityDepositStatus.ACTIVE, SecurityDepositStatus.COMPLETED];
@@ -228,7 +228,7 @@ export class SecurityDepositsService {
     return { ...(await this.getForEmployee(employeeId)), warnings };
   }
 
-  async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
+  async updateSchedule(employeeId: number, dto: UpdateDepositInstallmentScheduleDto, user: IJwtStaffPayload) {
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
       await this.lockEmployeePlans(employeeId, tx);
