@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
+import { findStudentSearchHits } from './student-search-match';
 import { ScopeService } from '../../common/scope/scope.service';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
@@ -256,25 +257,12 @@ export class StudentsService {
     const { search, campus_id, class_id, section_id, house_id, status, discipline, has_photo, had_quick_admission } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
-    if (search) {
-      const isNumeric = /^\d+$/.test(search);
-      const isShortNumeric = isNumeric && search.length <= 5;
-
-      where.OR = [
-        { full_name: { contains: search, mode: 'insensitive' } },
-        { gr_number: { contains: search, mode: 'insensitive' } },
-        ...(isNumeric ? [{ cc: Number(search) }] : []),
-        // Only search CNIC if it's not a short numeric string (likely intended for CC/GR)
-        ...(!isShortNumeric ? [{
-          student_guardians: {
-            some: {
-              guardians: {
-                cnic: { contains: search, mode: Prisma.QueryMode.insensitive }
-              }
-            }
-          }
-        }] : []),
-      ];
+    if (search?.trim()) {
+      // TAFSD-344: name, GR, CC, B-form, phones, guardian names / CNICs /
+      // phones, family name / number (see student-search-match.ts).
+      const hits = await findStudentSearchHits(this.prisma, search, 5000);
+      // In AND, so a later cc filter (the "abnormal" audit) narrows it rather than replacing it.
+      where.AND = [...((where.AND as Prisma.studentsWhereInput[]) ?? []), { cc: { in: hits.map((h) => h.cc) } }];
     }
     if (campus_id?.length)  where.campus_id  = { in: campus_id };
     if (class_id?.length)   where.class_id   = { in: class_id };
@@ -3441,6 +3429,7 @@ export class StudentsService {
   }
 
   async searchSimple(query: SearchSimpleQueryDto, user: IJwtStaffPayload) {
+    const SEARCH_SIMPLE_LIMIT = 10;
     const q = (query.q ?? '').trim();
     if (!q) return [];
 
@@ -3482,28 +3471,22 @@ export class StudentsService {
       if (exactMatch) results.push(exactMatch);
     }
 
-    // 2. Fetch partial matches for names and GR numbers
-    const where: Prisma.studentsWhereInput = {
-      ...scopedFilter,
-      OR: [
-        { full_name: { contains: q, mode: 'insensitive' } },
-        { gr_number: { contains: q, mode: 'insensitive' } },
-      ],
-    };
+    // 2. Everything else the text could mean (TAFSD-344): name, GR, B-form,
+    // phones, guardians, family. Ranked by how direct the match is, then
+    // narrowed by the caller's scope.
+    const hits = (await findStudentSearchHits(this.prisma, q, 300)).filter(
+      (h) => !results.some((r) => r.cc === h.cc),
+    );
+    const visible = hits.length
+      ? await this.prisma.students.findMany({ where: { ...scopedFilter, cc: { in: hits.map((h) => h.cc) } }, select })
+      : [];
+    const byCc = new Map(visible.map((r) => [r.cc, r]));
+    const others = hits
+      .filter((h) => byCc.has(h.cc))
+      .slice(0, SEARCH_SIMPLE_LIMIT - results.length)
+      .map((h) => ({ ...byCc.get(h.cc)!, matched_on: h.matched_on }));
 
-    // Exclude exact match if already added
-    if (results.length > 0) {
-      where.NOT = { cc: results[0].cc };
-    }
-
-    const others = await this.prisma.students.findMany({
-      where,
-      take: 5 - results.length,
-      select,
-      orderBy: { full_name: 'asc' },
-    });
-
-    return [...results, ...others];
+    return [...results.map((r) => ({ ...r, matched_on: 'C.C.' })), ...others];
   }
 
   async getPaymentHistory(studentId: number, academicYear: string, user?: IJwtStaffPayload) {
