@@ -12,6 +12,9 @@ export class RedisIoAdapter extends IoAdapter {
     this.pubClient = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
       connectTimeout: 5000,
+      // Without this, a wedged Redis holds Socket.IO (and under load the process)
+      // forever with no log line — same silent hang as the 499 outages.
+      commandTimeout: 5000,
       // Reconnect with exponential backoff — keeps Redis alive across brief outages
       retryStrategy: (times: number) => {
         if (times > 10) {

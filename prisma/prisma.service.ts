@@ -17,6 +17,9 @@ function getOptimizedDatabaseUrl(): string | undefined {
     if (!url.searchParams.has('pool_timeout')) {
       url.searchParams.set('pool_timeout', '10');
     }
+    if (!url.searchParams.has('connect_timeout')) {
+      url.searchParams.set('connect_timeout', '5');
+    }
     return url.toString();
   } catch {
     return raw;

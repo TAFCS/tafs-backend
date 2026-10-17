@@ -10,19 +10,20 @@ export class BackupsSchedulerService {
 
     /**
      * Automated Database Backup
-     * Runs twice a day, Pakistan Time (PKT): 4:00 PM, after school hours, and
-     * 12:00 AM. JSON export used to sync-stringify the whole DB on the Nest
-     * event loop (~75s) and freeze every route — it now streams with yields
-     * (see BackupsService.createJsonBackup). Still kept off the school day.
+     * Runs twice a day, Pakistan Time (PKT): 4:00 PM and 12:00 AM.
+     * SQL-only (pg_dump child process). Dual JSON dumps are opt-in via the
+     * admin trigger — loading every table through Prisma OOMed prod.
      */
     @Cron('0 0,16 * * *', {
         timeZone: 'Asia/Karachi',
     })
     async handleAutomatedBackup() {
-        this.logger.log('[Backup Scheduler] Starting scheduled database backup (PKT)...');
+        this.logger.log('[Backup Scheduler] Starting scheduled SQL backup (PKT)...');
         try {
             const result = await this.backupsService.createBackup();
-            this.logger.log(`[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName} and ${result.json.fileName}`);
+            this.logger.log(
+                `[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName}`,
+            );
         } catch (error) {
             this.logger.error(`[Backup Scheduler] Scheduled backup failed: ${error.message}`);
         }

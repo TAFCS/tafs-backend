@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-/** Cap so a 32-core box does not spawn 32 copies of yoga + FeeChallanPDF. */
-export const VOUCHER_PDF_MAX_WORKERS = 8;
+/** Cap so a small Railway box does not OOM under concurrent challan renders. */
+export const VOUCHER_PDF_MAX_WORKERS = 2;
 
 export function voucherPdfWorkerCount(): number {
     const available =

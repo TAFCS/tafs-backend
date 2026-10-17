@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 // Triggering reload to connect to Redis service
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { monitorEventLoopDelay } from 'perf_hooks';
 import * as express from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
@@ -10,6 +11,33 @@ import compression from 'compression';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
+
+/** If the Nest event loop stays blocked, Railway shows 499s with no app logs. */
+function startEventLoopWatchdog() {
+  const histogram = monitorEventLoopDelay({ resolution: 20 });
+  histogram.enable();
+  let blockedStreak = 0;
+  setInterval(() => {
+    const maxMs = histogram.max / 1e6;
+    const p99Ms = histogram.percentile(99) / 1e6;
+    histogram.reset();
+    if (maxMs > 2000) {
+      blockedStreak += 1;
+      // eslint-disable-next-line no-console
+      console.error(
+        `[event-loop] blocked max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms streak=${blockedStreak}`,
+      );
+    } else {
+      blockedStreak = 0;
+    }
+    // Self-heal: exit so Railway restarts instead of sitting dead until a human.
+    if (blockedStreak >= 3) {
+      // eslint-disable-next-line no-console
+      console.error('[event-loop] sustained block — exiting for Railway restart');
+      process.exit(1);
+    }
+  }, 5000).unref();
+}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -169,6 +197,7 @@ async function bootstrap() {
   server.requestTimeout = 60_000;
   server.headersTimeout = 65_000;
   server.keepAliveTimeout = 60_000;
+  startEventLoopWatchdog();
 
   // eslint-disable-next-line no-console
   console.log(`🚀 Server running at: http://localhost:${port}/api/v1`);

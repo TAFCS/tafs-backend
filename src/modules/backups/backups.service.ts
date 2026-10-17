@@ -58,7 +58,13 @@ export class BackupsService implements OnModuleInit {
         }
     }
 
-    async createBackup(changedBy?: string) {
+    /**
+     * @param includeJson  Off by default. JSON walks every table through Prisma
+     *   and has repeatedly OOMed/GC-thrashed the Railway box (silent 499s on
+     *   every route including getrequest). Scheduled backups are SQL-only;
+     *   pass true only for an intentional manual dual dump.
+     */
+    async createBackup(changedBy?: string, includeJson = false) {
         if (this.backupInFlight) {
             throw new InternalServerErrorException(
                 'A backup is already running. Wait for it to finish.',
@@ -68,21 +74,23 @@ export class BackupsService implements OnModuleInit {
         const now = new Date();
         const timestamp = this.formatTimestamp(now);
 
-        this.logger.log(`Starting dual-mode database backup (SQL then JSON) - ${timestamp}`);
+        this.logger.log(
+            `Starting database backup (${includeJson ? 'SQL + JSON' : 'SQL only'}) - ${timestamp}`,
+        );
 
         try {
-            // Sequential on purpose: parallel SQL+JSON used to saturate the Prisma
-            // pool and the JSON path blocked the Nest event loop (sync stringify +
-            // writeFileSync), which froze getrequest/socket.io until clients 499'd.
+            // pg_dump runs in a child process — it does not block the Nest event loop.
             const sql = await this.createSqlBackup(timestamp);
-            const json = await this.createJsonBackup(timestamp);
+            const json = includeJson ? await this.createJsonBackup(timestamp) : null;
 
             void this.auditLogs.log({
                 entity_type: 'BACKUP',
                 entity_id: sql.storageKey,
                 action: 'CREATED',
                 changed_by: changedBy ?? 'scheduled-job',
-                note: `Backup created: ${sql.fileName} and ${json.fileName}.`,
+                note: json
+                    ? `Backup created: ${sql.fileName} and ${json.fileName}.`
+                    : `Backup created: ${sql.fileName} (SQL only).`,
             });
 
             return { sql, json };
@@ -203,39 +211,45 @@ export class BackupsService implements OnModuleInit {
             const stream = createWriteStream(jsonPath, { encoding: 'utf8' });
             await writeChunk(stream, '{');
 
+            const PAGE = 500;
             let firstTable = true;
             for (const table of tables) {
                 const tableName = table.table_name;
+                this.logger.debug(`Backing up table: ${tableName}`);
+                if (!firstTable) await writeChunk(stream, ',');
+                firstTable = false;
+                await writeChunk(stream, `\n${JSON.stringify(tableName)}:`);
+                await writeChunk(stream, '[');
+
                 try {
-                    this.logger.debug(`Backing up table: ${tableName}`);
-                    const data: unknown[] = await this.prisma.$queryRawUnsafe(
-                        `SELECT * FROM "public"."${tableName}"`,
-                    );
-
-                    if (!firstTable) await writeChunk(stream, ',');
-                    firstTable = false;
-                    await writeChunk(stream, `\n${JSON.stringify(tableName)}:`);
-
-                    // Row-by-row so a large table cannot block the event loop for
-                    // the duration of one giant JSON.stringify(..., 2).
-                    await writeChunk(stream, '[');
-                    for (let i = 0; i < data.length; i++) {
-                        if (i > 0) await writeChunk(stream, ',');
-                        await writeChunk(stream, JSON.stringify(data[i], jsonReplacer));
-                        if (i % 50 === 0) await yieldEventLoop();
+                    // Page through the table. A single SELECT * on zk_attendance_scans /
+                    // audit_logs loaded hundreds of MB into V8 and GC-froze the process
+                    // for minutes (getrequest 499s with no error log).
+                    let offset = 0;
+                    let firstRow = true;
+                    for (;;) {
+                        const data: unknown[] = await this.prisma.$queryRawUnsafe(
+                            `SELECT * FROM "public"."${tableName}" LIMIT ${PAGE} OFFSET ${offset}`,
+                        );
+                        if (data.length === 0) break;
+                        for (let i = 0; i < data.length; i++) {
+                            if (!firstRow) await writeChunk(stream, ',');
+                            firstRow = false;
+                            await writeChunk(stream, JSON.stringify(data[i], jsonReplacer));
+                            if (i % 50 === 0) await yieldEventLoop();
+                        }
+                        offset += data.length;
+                        await yieldEventLoop();
+                        if (data.length < PAGE) break;
                     }
-                    await writeChunk(stream, ']');
-                    data.length = 0;
-                    await yieldEventLoop();
                 } catch (tableError: any) {
                     this.logger.warn(
-                        `Failed to back up table ${tableName}, skipping. Error: ${tableError.message}`,
+                        `Failed to back up table ${tableName}, writing empty array. Error: ${tableError.message}`,
                     );
-                    if (!firstTable) await writeChunk(stream, ',');
-                    firstTable = false;
-                    await writeChunk(stream, `\n${JSON.stringify(tableName)}:[]`);
-                    await yieldEventLoop();
                 }
+
+                await writeChunk(stream, ']');
+                await yieldEventLoop();
             }
 
             await writeChunk(stream, '\n}\n');

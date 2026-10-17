@@ -29,8 +29,15 @@ export class BackupsController {
     @Post('trigger')
     @RequireAction('system.backups#trigger')
     async triggerBackup(@CurrentUser() user: IJwtStaffPayload) {
-        const result = await this.backupsService.createBackup(user.username);
-        return createApiResponse(result, HttpStatus.CREATED, 'Dual-mode backup (SQL + JSON) triggered successfully');
+        // SQL only — same as the scheduler. Dual JSON is available via
+        // createBackup(user, true) if ops ever need it; do not re-enable here
+        // without watching Railway memory (it has taken prod down).
+        const result = await this.backupsService.createBackup(user.username, false);
+        return createApiResponse(
+            result,
+            HttpStatus.CREATED,
+            'SQL backup triggered successfully',
+        );
     }
 
     @Get('download/*key')
