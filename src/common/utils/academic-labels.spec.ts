@@ -1,5 +1,6 @@
 import {
     calendarYearOf,
+    formatAcademicSessionLabel,
     getConsolidatedMonthsLabel,
     getFullMonthYearLabel,
     getMonthYearLabel,
@@ -193,6 +194,27 @@ describe('isEligibleForDisciplineGroup', () => {
         expect(isEligibleForDisciplineGroup({ className: 'Class I' })).toBe(false);
         expect(isEligibleForDisciplineGroup({ className: 'Class V' })).toBe(false);
         expect(isEligibleForDisciplineGroup({ className: 'Grade 5' })).toBe(false);
+    });
+});
+
+describe('formatAcademicSessionLabel', () => {
+    it('shortens a full academic year with the Academic Session prefix', () => {
+        expect(formatAcademicSessionLabel('2025-2026')).toBe('Academic Session 2025–26');
+    });
+
+    it('accepts the short form already', () => {
+        expect(formatAcademicSessionLabel('2025-26')).toBe('Academic Session 2025–26');
+    });
+
+    it('shortens each year in a multi-session label', () => {
+        expect(formatAcademicSessionLabel('2025-2026, 2026-2027')).toBe(
+            'Academic Session 2025–26, 2026–27',
+        );
+    });
+
+    it('falls back to N/A when the year is missing', () => {
+        expect(formatAcademicSessionLabel(null)).toBe('Academic Session N/A');
+        expect(formatAcademicSessionLabel('N/A')).toBe('Academic Session N/A');
     });
 });
 

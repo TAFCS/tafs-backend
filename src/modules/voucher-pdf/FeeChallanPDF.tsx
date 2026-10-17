@@ -3,6 +3,7 @@ import { Page, Text, View, Document, StyleSheet, Image, Font, Svg, Rect } from '
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
+import { formatAcademicSessionLabel } from '../../common/utils/academic-labels';
 
 const LOGO_PATH = path.join(process.cwd(), 'src', 'assets', 'logo.png');
 const LOGO_BUFFER = fs.readFileSync(LOGO_PATH);
@@ -170,6 +171,14 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         borderRadius: 2,
         textTransform: 'uppercase',
+    },
+    // Centered under the campus name. Sourced from the voucher's own academic
+    // year (not "today") so reprints keep the session they were issued for.
+    academicSession: {
+        fontSize: 6,
+        color: '#333333',
+        marginTop: 0,
+        fontWeight: 'bold',
     },
     paidStamp: {
         position: 'absolute',
@@ -645,7 +654,9 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             <View style={styles.schoolInfo}>
                 <Text style={styles.schoolName}>THE AMERICAN FOUNDATION SCHOOL</Text>
                 <Text style={styles.schoolAddress}>{student.campus || "Main Campus"}</Text>
-                <Text style={styles.schoolAddress}>{details.academicYear}</Text>
+                <Text style={styles.academicSession}>
+                    {formatAcademicSessionLabel(details.academicYear)}
+                </Text>
                 <Text style={styles.schoolAddress}>{details.bank.name.toUpperCase()}</Text>
                 <Text style={styles.schoolAddress}>COLLECTION A/C {details.bank.account}</Text>
             </View>

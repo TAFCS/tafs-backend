@@ -160,6 +160,33 @@ export function deriveAcademicYear(dateStr: string, term?: TermContext): string 
 }
 
 /**
+ * Formats a stored academic year for the challan header badge, e.g.
+ * "2025-2026" → "Academic Session 2025–26".
+ *
+ * Accepts the short form already ("2025-26"), the full form ("2025-2026"),
+ * and the comma-separated multi-session label from
+ * resolveVoucherAcademicYearLabel. Uses an en-dash between the years.
+ */
+export function formatAcademicSessionLabel(academicYear: string | null | undefined): string {
+    const raw = (academicYear ?? '').trim();
+    if (!raw || raw === 'N/A') return 'Academic Session N/A';
+
+    const shortened = raw
+        .split(',')
+        .map((part) => {
+            const y = part.trim();
+            const m = y.match(/^(\d{4})\s*[-–]\s*(\d{2}|\d{4})$/);
+            if (!m) return y;
+            const start = m[1];
+            const end = m[2].length === 4 ? m[2].slice(-2) : m[2];
+            return `${start}–${end}`;
+        })
+        .join(', ');
+
+    return `Academic Session ${shortened}`;
+}
+
+/**
  * Resolve the academic year printed on a voucher challan header.
  *
  * Prefer a single shared academic_year from the fee heads being billed so the
