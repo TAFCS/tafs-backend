@@ -38,10 +38,11 @@ export class JwtStaffStrategy extends PassportStrategy(Strategy, 'jwt-staff') {
     // live, never trusted from the 90-day token (TAFSD-307 scope, TAFSD-308
     // the rest): revoking access takes effect on the next request. Both reads
     // sit behind short in-memory caches that access writes invalidate.
-    const [session, scope] = await Promise.all([
-      this.accessService.resolveLiveSession(payload.sub),
-      this.scopeService.resolveEffective(payload.sub),
-    ]);
+    // Sequential on purpose: Promise.all doubled cold-path DB connections
+    // (session alone already fans out several queries) and exhausted DO's
+    // max_connections when local + Railway shared the same database.
+    const session = await this.accessService.resolveLiveSession(payload.sub);
+    const scope = await this.scopeService.resolveEffective(payload.sub);
 
     if (!session) {
       throw new UnauthorizedException('Account not found');

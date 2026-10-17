@@ -106,12 +106,20 @@ async function bootstrap() {
   // eslint-disable-next-line no-console
   console.log('Allowed Origins Parsed:', corsOrigins);
 
-  // 2. Request Logger (Debug)
+  // 2. Request Logger (Debug) + slow-request probe (pool exhaustion shows up as piling 2s+ waits)
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS' || req.url.includes('auth')) {
       // eslint-disable-next-line no-console
       console.log(`[HTTP] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
     }
+    const started = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - started;
+      if (ms >= 2000) {
+        // eslint-disable-next-line no-console
+        console.warn(`[slow-request] ${req.method} ${req.originalUrl || req.url} ${ms}ms status=${res.statusCode}`);
+      }
+    });
     next();
   });
 

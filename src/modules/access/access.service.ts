@@ -283,28 +283,31 @@ export class AccessService {
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
-    const [allPerms, rolePerms, packRows, grants, userPerms, packActions, userActionGrants] =
-      await Promise.all([
-        this.prisma.permissions.findMany({ select: { key: true } }),
-        this.prisma.role_permissions.findMany({
-          where: { role },
-          include: { permissions: { select: { key: true } } },
-        }),
-        this.prisma.user_access_packs.findMany({
-          where: { user_id: userId },
-          include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
-        }),
-        this.prisma.user_tile_grants.findMany({
-          where: { user_id: userId },
-          select: { tile_id: true, allow: true },
-        }),
-        this.prisma.user_permissions.findMany({
-          where: { user_id: userId },
-          include: { permissions: { select: { key: true } } },
-        }),
-        this.readPackActions(userId),
-        this.readUserActionGrants(userId),
-      ]);
+    // Two-at-a-time, not Promise.all(7): a dashboard burst of N cold JWT
+    // validates was opening ~N×7 connections and hit DO "too many clients".
+    const allPerms = await this.prisma.permissions.findMany({ select: { key: true } });
+    const rolePerms = await this.prisma.role_permissions.findMany({
+      where: { role },
+      include: { permissions: { select: { key: true } } },
+    });
+    const [packRows, grants] = await Promise.all([
+      this.prisma.user_access_packs.findMany({
+        where: { user_id: userId },
+        include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
+      }),
+      this.prisma.user_tile_grants.findMany({
+        where: { user_id: userId },
+        select: { tile_id: true, allow: true },
+      }),
+    ]);
+    const [userPerms, packActions] = await Promise.all([
+      this.prisma.user_permissions.findMany({
+        where: { user_id: userId },
+        include: { permissions: { select: { key: true } } },
+      }),
+      this.readPackActions(userId),
+    ]);
+    const userActionGrants = await this.readUserActionGrants(userId);
 
     return computeEffectiveAccess({
       role,

@@ -1,19 +1,22 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
-function getOptimizedDatabaseUrl(): string | undefined {
+/** Default when DATABASE_URL omits connection_limit. Keep low: DO plans are tiny and local+Railway share one DB. */
+const DEFAULT_CONNECTION_LIMIT = 5;
+
+function getOptimizedDatabaseUrl(): { url: string; connectionLimit: number } | undefined {
   const raw = process.env.DATABASE_URL;
   if (!raw) return undefined;
   try {
     const url = new URL(raw);
-    const limit = url.searchParams.get('connection_limit');
-    // If connection_limit is missing or set to a low value (e.g. 1 or 2),
-    // raise it to 10 so concurrent dashboard and page requests don't queue up and time out.
-    if (!limit || Number(limit) < 10) {
-      url.searchParams.set('connection_limit', '10');
+    const existing = url.searchParams.get('connection_limit');
+    // Respect an explicit limit (scripts use 1–3). Only default when unset —
+    // never raise a low value to 10 (that exhausted DO max_connections).
+    if (!existing) {
+      url.searchParams.set('connection_limit', String(DEFAULT_CONNECTION_LIMIT));
     }
-    // Fail fast when the pool is saturated. A 30s wait held HTTP sockets open
-    // until clients aborted (nginx/Railway 499), which made outages worse.
+    const connectionLimit = Number(url.searchParams.get('connection_limit'));
+    // Fail fast when the pool is saturated.
     if (!url.searchParams.has('pool_timeout')) {
       url.searchParams.set('pool_timeout', '10');
     }
@@ -22,11 +25,10 @@ function getOptimizedDatabaseUrl(): string | undefined {
     }
     // Do NOT put lock_timeout/statement_timeout in URL `options` — DigitalOcean
     // PgBouncer rejects them: FATAL: unsupported startup parameter in options.
-    // Boot DDL uses SET LOCAL lock_timeout inside its own transaction instead.
     url.searchParams.delete('options');
-    return url.toString();
+    return { url: url.toString(), connectionLimit };
   } catch {
-    return raw;
+    return { url: raw, connectionLimit: DEFAULT_CONNECTION_LIMIT };
   }
 }
 
@@ -35,21 +37,25 @@ export class PrismaService
   extends PrismaClient
   implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
+  private readonly connectionLimit: number;
 
   constructor() {
-    const optimizedUrl = getOptimizedDatabaseUrl();
+    const optimized = getOptimizedDatabaseUrl();
     super({
-      ...(optimizedUrl ? { datasources: { db: { url: optimizedUrl } } } : {}),
+      ...(optimized ? { datasources: { db: { url: optimized.url } } } : {}),
       log: [
         { emit: 'stdout', level: 'warn' },
         { emit: 'stdout', level: 'error' },
       ],
     });
+    this.connectionLimit = optimized?.connectionLimit ?? DEFAULT_CONNECTION_LIMIT;
   }
 
   async onModuleInit() {
     const CONNECT_MS = 10_000;
-    this.logger.log(`Prisma $connect (timeout ${CONNECT_MS}ms)…`);
+    this.logger.log(
+      `Prisma $connect (timeout ${CONNECT_MS}ms, connection_limit=${this.connectionLimit})…`,
+    );
     await Promise.race([
       this.$connect(),
       new Promise<never>((_, reject) =>
@@ -59,7 +65,7 @@ export class PrismaService
         ),
       ),
     ]);
-    this.logger.log('Prisma connected');
+    this.logger.log(`Prisma connected (connection_limit=${this.connectionLimit})`);
   }
 
   async onModuleDestroy() {
