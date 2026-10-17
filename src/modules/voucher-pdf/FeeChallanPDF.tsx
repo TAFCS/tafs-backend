@@ -706,19 +706,19 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     <Text style={[styles.value, { textAlign: 'right', color: '#d97706' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
                 </View>
             </View>
-            {/* Month and group sit on separate lines: side by side, a multi-range month label
-                (e.g. "DEC 26 - JAN 27, MAR 27") ran into the group. Each value takes the rest of
-                its line (flex: 1) so an even longer label wraps instead of overflowing; top alignment
-                keeps the smaller label on the value's first line (paddingTop lines up the baselines). */}
+            {/* Month and group sit on separate full-width lines so full month names
+                (e.g. "AUGUST 25 - SEPTEMBER 25") never collide with GROUP. wrap={false}
+                keeps a single-line value; flex: 1 + the dedicated row give enough width
+                even for September or a multi-month range. */}
             <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, gap: 1.5 }}>
-                <View style={{ flexDirection: 'row', gap: 3, alignItems: 'flex-start' }}>
-                    <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold', paddingTop: 1.2 }}>FOR MONTH(S) OF:</Text>
-                    <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{details.month}</Text>
                 </View>
                 {student.group ? (
-                    <View style={{ flexDirection: 'row', gap: 3, alignItems: 'flex-start' }}>
-                        <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold', paddingTop: 1.2 }}>GROUP:</Text>
-                        <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{String(student.group).toUpperCase()}</Text>
+                    <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
+                        <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>GROUP:</Text>
+                        <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{String(student.group).toUpperCase()}</Text>
                     </View>
                 ) : null}
             </View>

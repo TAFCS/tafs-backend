@@ -598,19 +598,19 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     <Text style={[styles.value, { textAlign: 'right', color: '#d97706' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
                 </View>
             </View>
-            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            {/* Month and group on separate full-width lines (same as FeeChallanPDF) so
+                full month names never collide with GROUP or wrap/overflow. */}
+            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, gap: 1.5 }}>
                 <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
                     <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
-                    <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{details.month}</Text>
                 </View>
                 {student.group ? (
                     <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
                         <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>GROUP:</Text>
-                        <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{String(student.group).toUpperCase()}</Text>
+                        <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{String(student.group).toUpperCase()}</Text>
                     </View>
-                ) : (
-                    <View />
-                )}
+                ) : null}
             </View>
         </View>
 

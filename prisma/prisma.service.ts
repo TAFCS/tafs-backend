@@ -53,8 +53,11 @@ export class PrismaService
 
   async onModuleInit() {
     const CONNECT_MS = 10_000;
-    this.logger.log(
-      `Prisma $connect (timeout ${CONNECT_MS}ms, connection_limit=${this.connectionLimit})…`,
+    // console.log (not Nest Logger): production NestFactory logger is warn/error
+    // only, so Logger.log never appears in Railway Deploy Logs.
+    // eslint-disable-next-line no-console
+    console.log(
+      `[boot] Prisma $connect (timeout ${CONNECT_MS}ms, connection_limit=${this.connectionLimit})…`,
     );
     await Promise.race([
       this.$connect(),
@@ -65,7 +68,8 @@ export class PrismaService
         ),
       ),
     ]);
-    this.logger.log(`Prisma connected (connection_limit=${this.connectionLimit})`);
+    // eslint-disable-next-line no-console
+    console.log(`[boot] Prisma connected (connection_limit=${this.connectionLimit})`);
   }
 
   async onModuleDestroy() {

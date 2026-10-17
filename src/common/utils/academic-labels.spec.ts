@@ -116,21 +116,21 @@ describe('termRelativeSlot', () => {
 });
 
 describe('getConsolidatedMonthsLabel', () => {
-    it('collapses consecutive months into a range', () => {
+    it('collapses consecutive months into a range with full month names', () => {
         const label = getConsolidatedMonthsLabel([
             { month: 8, academicYear: '2025-2026', term: { termStartMonth: 8 } },
             { month: 9, academicYear: '2025-2026', term: { termStartMonth: 8 } },
             { month: 10, academicYear: '2025-2026', term: { termStartMonth: 8 } },
         ]);
-        expect(label).toBe('AUG 25 - OCT 25');
+        expect(label).toBe('AUGUST 25 - OCTOBER 25');
     });
 
-    it('splits non-consecutive months', () => {
+    it('splits non-consecutive months with full month names', () => {
         const label = getConsolidatedMonthsLabel([
             { month: 8, academicYear: '2025-2026', term: { termStartMonth: 8 } },
             { month: 1, academicYear: '2025-2026', term: { termStartMonth: 8 } },
         ]);
-        expect(label).toBe('AUG 25, JAN 26');
+        expect(label).toBe('AUGUST 25, JANUARY 26');
     });
 
     it('treats a term-crossing pair as one contiguous range', () => {
@@ -138,7 +138,14 @@ describe('getConsolidatedMonthsLabel', () => {
             { month: 7, academicYear: '2026-2027', term: { termStartMonth: 4 } },
             { month: 6, academicYear: '2025-2026', term: { termStartMonth: 8 } },
         ]);
-        expect(label).toBe('JUN 26 - JUL 26');
+        expect(label).toBe('JUNE 26 - JULY 26');
+    });
+
+    it('spells out the longest month name (September)', () => {
+        const label = getConsolidatedMonthsLabel([
+            { month: 9, academicYear: '2025-2026', term: { termStartMonth: 8 } },
+        ]);
+        expect(label).toBe('SEPTEMBER 25');
     });
 
     it('returns an empty string for no items', () => {
