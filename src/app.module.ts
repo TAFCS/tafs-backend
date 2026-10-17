@@ -53,7 +53,10 @@ import { ScopeModule } from './common/scope/scope.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ScheduleModule.forRoot(),
+    // SCHEDULERS_ENABLED=false keeps every @Cron job off. Only one live host
+    // may run them (duplicate digests/notifications otherwise), so it is set
+    // on any parallel or preview deployment.
+    ...(process.env.SCHEDULERS_ENABLED === 'false' ? [] : [ScheduleModule.forRoot()]),
     PrismaModule,
     UsersModule,
     AuthModule,
