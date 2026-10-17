@@ -55,15 +55,18 @@ export class ZkPushService {
     // One "latest row" lookup per device on the (sn, received_at) index. The
     // old GROUP BY read every push log on each call (~0.5 s, up to 7.5 s), and
     // Home/Dashboard poll this every minute per open tab (TAFSD-326).
-    const rows = await Promise.all(
-      sns.map((sn) =>
-        this.prisma.zk_push_logs.findFirst({
+    // Sequential, not Promise.all: eight parallel finds used to grab most of
+    // the Prisma pool on every Home-tab poll and starve login/dashboard work.
+    const rows: Array<{ sn: string; received_at: Date } | null> = [];
+    for (const sn of sns) {
+      rows.push(
+        await this.prisma.zk_push_logs.findFirst({
           where: { sn },
           orderBy: { received_at: 'desc' },
           select: { sn: true, received_at: true },
         }),
-      ),
-    );
+      );
+    }
     const lastPush = new Map(
       rows.filter((r): r is { sn: string; received_at: Date } => !!r).map((r) => [r.sn, r.received_at]),
     );
@@ -106,10 +109,23 @@ export class ZkPushService {
 
   async handlePush(payload: { sn: string; query: Record<string, string>; body: string }) {
     try {
+      // Cap stored body size. Full ATTLOG backfills can be multi‑MB; writing them
+      // wholesale into jsonb under concurrent device polls has OOMed the Railway
+      // box and left every route (including getrequest) hung until clients 499'd.
+      const MAX_STORED_BODY = 64_000;
+      const body = payload.body ?? '';
+      const stored = {
+        sn: payload.sn,
+        query: payload.query,
+        body:
+          body.length > MAX_STORED_BODY
+            ? `${body.slice(0, MAX_STORED_BODY)}\n…[truncated ${body.length - MAX_STORED_BODY} chars]`
+            : body,
+      };
       return await this.prisma.zk_push_logs.create({
         data: {
           sn: payload.sn,
-          raw_payload: payload as unknown as Prisma.InputJsonValue,
+          raw_payload: stored as unknown as Prisma.InputJsonValue,
         },
       });
     } catch (err: any) {

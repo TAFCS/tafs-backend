@@ -44,8 +44,9 @@ async function bootstrap() {
     );
   }
 
-  // Parse ZKTeco device bodies as raw text before NestJS touches them
-  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '8mb' }));
+  // Parse ZKTeco device bodies as raw text before NestJS touches them.
+  // 2mb is enough for a busy day's ATTLOG; 8mb concurrent backfills OOMed prod.
+  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '2mb' }));
 
   app.setGlobalPrefix('api/v1');
 
@@ -160,6 +161,14 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 8080;
   await app.listen(port);
+
+  // Fail hung requests instead of letting Railway/Vercel clients sit until they
+  // abort with 499 and pile up more sockets. getrequest/login must never wait
+  // minutes for a free event-loop turn behind a stuck upstream call.
+  const server = app.getHttpServer();
+  server.requestTimeout = 60_000;
+  server.headersTimeout = 65_000;
+  server.keepAliveTimeout = 60_000;
 
   // eslint-disable-next-line no-console
   console.log(`🚀 Server running at: http://localhost:${port}/api/v1`);

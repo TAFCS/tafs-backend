@@ -11,8 +11,9 @@ export class BackupsSchedulerService {
     /**
      * Automated Database Backup
      * Runs twice a day, Pakistan Time (PKT): 4:00 PM, after school hours, and
-     * 12:00 AM. A backup reads every table in-process for about 75 s, so it
-     * stays out of the busy school day (TAFSD-326).
+     * 12:00 AM. JSON export used to sync-stringify the whole DB on the Nest
+     * event loop (~75s) and freeze every route — it now streams with yields
+     * (see BackupsService.createJsonBackup). Still kept off the school day.
      */
     @Cron('0 0,16 * * *', {
         timeZone: 'Asia/Karachi',

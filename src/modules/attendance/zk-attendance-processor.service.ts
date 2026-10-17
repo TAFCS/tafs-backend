@@ -63,6 +63,9 @@ function isDailyRecordPunchProtected(existing: attendance_student_daily | null):
  */
 export const STUDENT_LATE_MARKING_ENABLED = false;
 
+/** Cap concurrent ATTLOG ingest so a device backfill cannot exhaust the Prisma pool. */
+const MAX_CONCURRENT_PUSH_PROCESS = 2;
+
 interface ParsedAttLogRow {
   pin: string;
   scanTime: Date;
@@ -206,6 +209,10 @@ export interface ProcessPushOptions {
 export class ZkAttendanceProcessorService {
   private readonly logger = new Logger(ZkAttendanceProcessorService.name);
 
+  /** In-flight ATTLOG processors + waiters. See MAX_CONCURRENT_PUSH_PROCESS. */
+  private activePushProcessors = 0;
+  private readonly pushWaiters: Array<() => void> = [];
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fcmService: FcmService,
@@ -288,17 +295,41 @@ export class ZkAttendanceProcessorService {
     },
     options?: ProcessPushOptions,
   ): Promise<ScanProcessResult[]> {
-    const table = (payload.query['table'] ?? payload.query['Table'] ?? '').toUpperCase();
+    await this.acquirePushSlot();
+    try {
+      const table = (payload.query['table'] ?? payload.query['Table'] ?? '').toUpperCase();
 
-    if (table === 'ATTLOG') {
-      return this.processAttLog(payload.sn, payload.body, payload.pushLogId, options);
+      if (table === 'ATTLOG') {
+        return await this.processAttLog(payload.sn, payload.body, payload.pushLogId, options);
+      }
+      if (table === 'OPERLOG') {
+        await this.processOperLog(payload.sn, payload.body);
+      }
+      // Other table types (USERINFO, BIOPHOTO, etc.) are already captured raw in
+      // zk_push_logs by ZkPushService — no further action needed.
+      return [];
+    } finally {
+      this.releasePushSlot();
     }
-    if (table === 'OPERLOG') {
-      await this.processOperLog(payload.sn, payload.body);
+  }
+
+  private acquirePushSlot(): Promise<void> {
+    if (this.activePushProcessors < MAX_CONCURRENT_PUSH_PROCESS) {
+      this.activePushProcessors += 1;
+      return Promise.resolve();
     }
-    // Other table types (USERINFO, BIOPHOTO, etc.) are already captured raw in
-    // zk_push_logs by ZkPushService — no further action needed.
-    return [];
+    return new Promise<void>((resolve) => {
+      this.pushWaiters.push(() => {
+        this.activePushProcessors += 1;
+        resolve();
+      });
+    });
+  }
+
+  private releasePushSlot(): void {
+    this.activePushProcessors = Math.max(0, this.activePushProcessors - 1);
+    const next = this.pushWaiters.shift();
+    if (next) next();
   }
 
   private async processAttLog(

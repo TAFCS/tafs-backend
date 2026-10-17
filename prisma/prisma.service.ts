@@ -12,9 +12,10 @@ function getOptimizedDatabaseUrl(): string | undefined {
     if (!limit || Number(limit) < 10) {
       url.searchParams.set('connection_limit', '10');
     }
-    // Set pool timeout to 30s instead of default 10s to absorb traffic spikes
+    // Fail fast when the pool is saturated. A 30s wait held HTTP sockets open
+    // until clients aborted (nginx/Railway 499), which made outages worse.
     if (!url.searchParams.has('pool_timeout')) {
-      url.searchParams.set('pool_timeout', '30');
+      url.searchParams.set('pool_timeout', '10');
     }
     return url.toString();
   } catch {

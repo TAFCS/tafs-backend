@@ -33,6 +33,11 @@ export class MailerService implements OnModuleInit {
         port,
         secure: port === 465,
         auth: { user, pass },
+        // Without these, a stuck Brevo hop held parent signup/OTP requests open
+        // for tens of seconds and contributed to the production 499 cascade.
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
       });
       console.log('[Mailer] Brevo SMTP transporter initialized');
     } catch (e) {
