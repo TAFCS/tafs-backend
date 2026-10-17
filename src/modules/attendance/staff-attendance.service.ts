@@ -1,3 +1,4 @@
+import { PeriodTimingsRow, scheduleFromSnapshot, timingsOnDate } from '../hr/employees/timings-history.util';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, StaffRole, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -565,12 +566,18 @@ export class StaffAttendanceService {
           employment_status: true,
           valid_from: true,
           valid_to: true,
+          timings: true,
         },
       }),
     ]);
 
+    // TAFSD-277: each day uses the working days and check-in source in effect on it.
+    const timingPeriods: PeriodTimingsRow[] = progressionPeriods.map((p) => ({ valid_from: p.valid_from, timings: p.timings }));
+    const everTimetable =
+      scheduleCtx?.check_in_source === CheckInSource.TIMETABLE ||
+      timingPeriods.some((p) => (p.timings as { check_in_source?: string } | null)?.check_in_source === CheckInSource.TIMETABLE);
     const [timetableActiveDays, makeupRescheduleDates, shiftOverrideDates] =
-      scheduleCtx?.check_in_source === CheckInSource.TIMETABLE
+      everTimetable
         ? await Promise.all([
             this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
             this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
@@ -653,6 +660,14 @@ export class StaffAttendanceService {
         continue;
       }
 
+      const daySnapshot = timingsOnDate(timingPeriods, d);
+      const daySchedule = daySnapshot
+        ? scheduleFromSnapshot(daySnapshot)
+        : {
+            days_per_week: scheduleCtx?.days_per_week ?? null,
+            employee_work_schedules: scheduleCtx?.employee_work_schedules ?? [],
+            check_in_source: scheduleCtx?.check_in_source ?? null,
+          };
       const resolved = campusId
         ? this.calendarResolver.resolveStaffDayFromRows(
             calendarRows,
@@ -661,10 +676,10 @@ export class StaffAttendanceService {
             scheduleCtx?.department_id ?? null,
             scheduleCtx?.staff_category_id ?? null,
             scheduleCtx?.staff_categories?.code ?? null,
-            scheduleCtx?.days_per_week ?? null,
-            scheduleCtx?.employee_work_schedules ?? [],
+            daySchedule.days_per_week,
+            daySchedule.employee_work_schedules,
             mandatorySaturdayDates,
-            scheduleCtx?.check_in_source,
+            daySchedule.check_in_source,
             timetableActiveDays,
             makeupRescheduleDates,
             shiftOverrideDates,

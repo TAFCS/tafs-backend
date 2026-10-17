@@ -115,6 +115,14 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employees retrieved successfully');
   }
 
+  @Get('day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async listDayTimings(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.listDayTimings(user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings retrieved successfully');
+  }
+
   @Post('day-timings/bulk')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
   @RequireAction('hr.employee_directory#schedule_pay.edit')

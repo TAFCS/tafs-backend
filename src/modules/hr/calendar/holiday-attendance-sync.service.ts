@@ -1,3 +1,4 @@
+import { PERIOD_TIMINGS_SELECT, scheduleFromSnapshot, timingsOnDate } from '../employees/timings-history.util';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { AttendanceSource, CheckInSource, Prisma, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -165,8 +166,14 @@ export class HolidayAttendanceSyncService {
             check_in_source: true,
             staff_categories: { select: { code: true } },
             employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+            // TAFSD-277: the working days in effect on `date`, not today's.
+            employee_progression_periods: { select: PERIOD_TIMINGS_SELECT },
           },
         });
+    for (const employee of employees) {
+      const snapshot = timingsOnDate(employee.employee_progression_periods ?? [], date);
+      if (snapshot) Object.assign(employee, scheduleFromSnapshot(snapshot));
+    }
 
     if (employees.length > 0) {
       const staffCalendarRows = await this.calendarResolver.loadStaffCalendarRows(campusId, date, date);
