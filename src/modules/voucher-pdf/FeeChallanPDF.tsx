@@ -178,7 +178,6 @@ const styles = StyleSheet.create({
         fontSize: 6,
         color: '#333333',
         marginTop: 0,
-        fontWeight: 'bold',
     },
     paidStamp: {
         position: 'absolute',
