@@ -38,8 +38,8 @@ export class AccessController {
   @Get('scope-options')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   @RequireAction('system.people_access#view')
-  async getScopeOptions() {
-    const options = await this.accessService.getScopeOptions();
+  async getScopeOptions(@CurrentUser() user: IJwtStaffPayload) {
+    const options = await this.accessService.getScopeOptions(user);
     return createApiResponse(options, HttpStatus.OK, 'Scope options retrieved successfully');
   }
 

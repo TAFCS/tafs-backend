@@ -194,8 +194,32 @@ export class UsersService {
     return !existing;
   }
 
+  /**
+   * Pay is Employee Directory data (schedule_pay.view). People & Access shows
+   * it on the Job tab, but holding People & Access is no reason to see every
+   * salary (TAFSD-373), so it is left out for anyone without that action.
+   */
+  private redactPay<T extends { employee_profile?: { monthly_pay?: unknown; payroll_enabled?: unknown } | null }>(
+    users: T[],
+    actingUser?: IJwtStaffPayload,
+  ): T[] {
+    if (!actingUser || isSuperAdmin(actingUser)) return users;
+    if ((actingUser.actions ?? []).includes('hr.employee_directory#schedule_pay.view')) return users;
+    return users.map((u) => {
+      if (!u.employee_profile) return u;
+      const { monthly_pay: _pay, payroll_enabled: _enabled, ...profile } = u.employee_profile;
+      return { ...u, employee_profile: profile };
+    });
+  }
+
+  /** findUserById for showing to the caller: the same scope 404, minus pay they may not see. */
+  async getUserForViewer(id: string, actingUser?: IJwtStaffPayload) {
+    const [user] = this.redactPay([await this.findUserById(id, actingUser)], actingUser);
+    return user;
+  }
+
   async listUsers(actingUser?: IJwtStaffPayload) {
-    return this.prisma.users.findMany({
+    const users = await this.prisma.users.findMany({
       where: this.whereForUsers(actingUser),
       orderBy: { created_at: 'asc' },
       select: {
@@ -236,6 +260,7 @@ export class UsersService {
         },
       },
     });
+    return this.redactPay(users, actingUser);
   }
 
   async findUserById(id: string, actingUser?: IJwtStaffPayload) {

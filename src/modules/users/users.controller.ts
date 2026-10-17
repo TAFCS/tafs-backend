@@ -64,7 +64,7 @@ export class UsersController {
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   @RequireAction('system.people_access#view')
   async findUser(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
-    const user = await this.usersService.findUserById(id, caller);
+    const user = await this.usersService.getUserForViewer(id, caller);
     return createApiResponse(user, HttpStatus.OK, 'User details retrieved successfully');
   }
 

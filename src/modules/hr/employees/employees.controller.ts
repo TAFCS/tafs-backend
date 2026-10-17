@@ -117,6 +117,9 @@ export class EmployeesController {
     'attendance.shift_overrides',
     'attendance.timetables',
     'attendance.teaching_groups',
+    // People & Access's Job tab picks a reporting manager (TAFSD-373); it used
+    // to load the full employee list, CNIC and pay included, for the names.
+    'system.people_access',
   )
   async listPicker(@CurrentUser() user: IJwtStaffPayload) {
     const data = await this.employeesService.listPicker(user);

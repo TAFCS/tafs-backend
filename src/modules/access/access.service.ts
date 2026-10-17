@@ -33,6 +33,20 @@ export type LiveStaffSession = {
 const LIVE_SESSION_TTL_MS = 30_000;
 
 
+const TARGET_PROFILE_SELECT = {
+  campus_id: true,
+  segment_id: true,
+  department_id: true,
+  staff_category_id: true,
+} as const;
+
+type TargetProfile = {
+  campus_id: number | null;
+  segment_id: number | null;
+  department_id: number | null;
+  staff_category_id: number | null;
+};
+
 type EffectiveAccess = { capabilityKeys: string[]; tileIds: string[]; actionIds: string[] };
 
 export type ProposedAccess = {
@@ -64,17 +78,29 @@ export class AccessService {
 
   /**
    * A scoped holder of People & Access only sees and manages users inside
-   * their own campus scope. A SUPER_ADMIN's scope always resolves empty.
+   * their FULL scope -- campus, segment, department and staff category -- by
+   * the same rule as the user list (UsersService.canSeeUser): the employee
+   * profile's dimensions when there is one, else the legacy users.campus_id.
+   * This used to check campus only, so a department-scoped viewer could read
+   * the access of people the list hid from them (TAFSD-373).
    *
    * Throws NotFoundException, not Forbidden: a 403 would confirm a real user
    * exists outside the caller's scope and turn the route into an enumerator.
    */
-  private assertCanManageUser(actingUser: IJwtStaffPayload, targetCampusId: number | null, userId: string) {
-    const adminScope = this.scopeService.scopeOf(actingUser);
-    if (adminScope.campuses.length === 0) return;
-    if (targetCampusId == null || !adminScope.campuses.includes(targetCampusId)) {
-      throw new NotFoundException(`User ${userId} not found`);
-    }
+  private assertCanManageUser(
+    actingUser: IJwtStaffPayload,
+    target: { campus_id: number | null; employee_profile: TargetProfile | null },
+    userId: string,
+  ) {
+    if (this.scopeService.isExempt(actingUser)) return;
+    const p = target.employee_profile;
+    const visible = this.scopeService.canSeeEmployee(actingUser, {
+      campus_id: p ? p.campus_id : target.campus_id,
+      segment_id: p?.segment_id ?? null,
+      department_id: p?.department_id ?? null,
+      staff_category_id: p?.staff_category_id ?? null,
+    });
+    if (!visible) throw new NotFoundException(`User ${userId} not found`);
   }
 
   /**
@@ -136,7 +162,7 @@ export class AccessService {
    * Everything a scope picker can offer. Small, stable reference data -- the
    * panel fetches it once and filters client-side.
    */
-  async getScopeOptions() {
+  async getScopeOptions(actingUser?: IJwtStaffPayload) {
     const [campuses, segments, classes, sections, departments, staffCategories, segmentBearing] =
       await Promise.all([
         this.prisma.campuses.findMany({
@@ -167,20 +193,34 @@ export class AccessService {
         this.segmentBearingDepartmentIds(),
       ]);
 
+    // A non-super-admin can only grant scope inside their own, so offering the
+    // rest of the school only lists campuses, classes and departments they have
+    // no business with (TAFSD-373). Each restricted dimension is narrowed;
+    // classes and staff categories also follow their parent dimension.
+    const mine = actingUser ? this.scopeService.scopeOf(actingUser) : EMPTY_SCOPE;
+    const within = <T extends { id: number }>(rows: T[], ids: number[]) =>
+      ids.length === 0 ? rows : rows.filter((r) => ids.includes(r.id));
+    const visibleClasses = within(classes, mine.classes).filter(
+      (c) => mine.segments.length === 0 || (c.segment_id != null && mine.segments.includes(c.segment_id)),
+    );
+    const visibleCategories = within(staffCategories, mine.staffCategories).filter(
+      (c) => mine.departments.length === 0 || mine.departments.includes(c.department_id),
+    );
+
     return {
-      campuses: campuses.map((c) => ({ id: c.id, label: c.campus_name, code: c.campus_code })),
-      segments: segments.map((s) => ({ id: s.id, label: s.name, code: s.code })),
-      classes: classes.map((c) => ({
+      campuses: within(campuses, mine.campuses).map((c) => ({ id: c.id, label: c.campus_name, code: c.campus_code })),
+      segments: within(segments, mine.segments).map((s) => ({ id: s.id, label: s.name, code: s.code })),
+      classes: visibleClasses.map((c) => ({
         id: c.id,
         label: c.description,
         code: c.class_code,
         segmentId: c.segment_id,
       })),
-      sections: sections.map((s) => ({ id: s.id, label: s.description })),
+      sections: within(sections, mine.sections).map((s) => ({ id: s.id, label: s.description })),
       // hasSegments: this department's staff carry segments (the teaching
       // department) — the Scope tab only allows segments alongside one.
-      departments: departments.map((d) => ({ id: d.id, label: d.name, hasSegments: segmentBearing.has(d.id) })),
-      staffCategories: staffCategories.map((c) => ({
+      departments: within(departments, mine.departments).map((d) => ({ id: d.id, label: d.name, hasSegments: segmentBearing.has(d.id) })),
+      staffCategories: visibleCategories.map((c) => ({
         id: c.id,
         label: c.name,
         code: c.code,
@@ -522,10 +562,10 @@ export class AccessService {
   async getUserAccess(userId: string, actingUser: IJwtStaffPayload) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, role: true, campus_id: true },
+      select: { id: true, username: true, role: true, campus_id: true, employee_profile: { select: TARGET_PROFILE_SELECT } },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    this.assertCanManageUser(actingUser, user, userId);
 
     const [packs, assigned, grants, rolePerms, actionGrants] = await Promise.all([
       this.prisma.access_packs.findMany({
@@ -620,10 +660,10 @@ export class AccessService {
   ) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, campus_id: true, role: true },
+      select: { id: true, username: true, campus_id: true, role: true, employee_profile: { select: TARGET_PROFILE_SELECT } },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    this.assertCanManageUser(actingUser, user, userId);
     this.assertMayManageUser(actingUser, user);
     if (dto.scope !== undefined) {
       this.assertGrantableScope(actingUser, dto.scope);
