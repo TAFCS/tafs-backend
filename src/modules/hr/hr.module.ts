@@ -1,4 +1,5 @@
 import { EmployeeTimingsService } from './employees/employee-timings.service';
+import { EmployeePayService } from './employees/employee-pay.service';
 import { Module } from '@nestjs/common';
 import { EmployeesController } from './employees/employees.controller';
 import { EmployeesSelfController } from './employees/employees-self.controller';
@@ -81,6 +82,7 @@ import { SalaryIncrementsService } from './salary-increments/salary-increments.s
     EmployeesService,
     EmployeeProgressionService,
     EmployeeTimingsService,
+    EmployeePayService,
     DepartmentsService,
     SegmentsService,
     PoliciesService,

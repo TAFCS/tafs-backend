@@ -1,8 +1,9 @@
 import { EmployeeTimingsService } from './employee-timings.service';
+import { EmployeePayService } from './employee-pay.service';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { Controller, Get, Post, Patch, Put, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateDayTimingsDto, BulkDayTimingDto, TimingsChangeDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateDayTimingsDto, BulkDayTimingDto, TimingsChangeDto, PayChangeDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -28,6 +29,7 @@ export class EmployeesController {
     private readonly employeesService: EmployeesService,
     private readonly salaryIncrements: SalaryIncrementsService,
     private readonly timings: EmployeeTimingsService,
+    private readonly pay: EmployeePayService,
   ) {}
 
   @Get('export')
@@ -172,6 +174,36 @@ export class EmployeesController {
     await this.employeesService.assertCanEdit(id, user);
     const data = await this.timings.changeTimings(id, dto, auditActorLabel(user) || 'system');
     return createApiResponse(data, HttpStatus.OK, data.status === 'SCHEDULED' ? 'Timings change scheduled' : 'Timings updated');
+  }
+
+  // TAFSD-372: monthly pay with an effective-from date.
+  @Put(':id/pay')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async changePay(@Param('id', ParseIntPipe) id: number, @Body() dto: PayChangeDto, @CurrentUser() user: IJwtStaffPayload) {
+    await this.employeesService.assertCanEdit(id, user);
+    const data = await this.pay.changePay(id, dto, auditActorLabel(user) || 'system');
+    return createApiResponse(data, HttpStatus.OK, data.status === 'SCHEDULED' ? 'Pay change scheduled' : 'Pay updated');
+  }
+
+  @Get(':id/pay/scheduled')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async listScheduledPay(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(await this.pay.listScheduled(id), HttpStatus.OK, 'Scheduled pay changes');
+  }
+
+  @Delete(':id/pay/scheduled/:sid')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async cancelScheduledPay(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('sid', ParseIntPipe) sid: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(await this.pay.cancelScheduled(id, sid, auditActorLabel(user) || 'system'), HttpStatus.OK, 'Scheduled pay change cancelled');
   }
 
   @Get(':id/timings/scheduled')
