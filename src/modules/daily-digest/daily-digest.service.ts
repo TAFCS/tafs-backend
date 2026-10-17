@@ -21,8 +21,14 @@ export class DailyDigestService {
       .filter(Boolean);
   }
 
-  async sendDigest(): Promise<void> {
-    const to = this.recipients();
+  /**
+   * Sends the digest. With no options it is tonight's digest to
+   * DAILY_DIGEST_RECIPIENTS. `dayKey` (YYYY-MM-DD, Karachi) re-sends the digest
+   * as it would have read at 11 PM that day, and `to` overrides the
+   * recipients, for samples and re-sends.
+   */
+  async sendDigest(options: { dayKey?: string; to?: string[] } = {}): Promise<void> {
+    const to = options.to ?? this.recipients();
     if (to.length === 0) {
       this.logger.warn(
         'DAILY_DIGEST_RECIPIENTS is not set — skipping daily digest',
@@ -30,9 +36,10 @@ export class DailyDigestService {
       return;
     }
 
-    const todayKey = getTodayKeyKarachi();
+    const todayKey = options.dayKey ?? getTodayKeyKarachi();
     const [year, month, day] = todayKey.split('-').map(Number);
-    const now = new Date();
+    // 11 PM Karachi (UTC+5, no DST) on that day, or right now for tonight's run.
+    const now = options.dayKey ? new Date(Date.UTC(year, month - 1, day, 18, 0, 0)) : new Date();
     const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     // Each figure is read for today and for yesterday, so the email can say
