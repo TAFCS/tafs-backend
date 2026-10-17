@@ -186,6 +186,9 @@ function cycleRosterStatusWhere(periodStart: Date): Prisma.employee_profilesWher
   ];
 }
 
+/** TAFSD-372: first payroll cycle paid day by day at the pay in effect on each day. */
+export const PAY_BY_EFFECTIVE_DATE_FROM = new Date(Date.UTC(2026, 9, 26));
+
 @Injectable()
 export class PayrollService {
   private readonly logger = new Logger(PayrollService.name);
@@ -389,6 +392,7 @@ export class PayrollService {
       valid_from: Date;
       valid_to: Date | null;
       timings?: Prisma.JsonValue | null;
+      monthly_pay?: Prisma.Decimal | null;
     }[],
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
@@ -649,8 +653,34 @@ export class PayrollService {
       ),
     ).length;
 
-    const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
+    // TAFSD-372: the pay in effect on each day of the cycle. A pay change or
+    // salary increment effective mid-cycle pays the old rate before it and the
+    // new rate from it; without one, this is the profile's pay as before.
+    const payPeriods = (progressionPeriods ?? []).map((p) => ({ valid_from: p.valid_from, timings: null, pay: p.monthly_pay ?? null }));
+    const profilePay = new Prisma.Decimal(employee.monthly_pay ?? 0);
+    const payOn = (d: Date) => {
+      const i = coveringPeriodIndex(payPeriods, d);
+      return i < 0 || payPeriods[i].pay == null ? profilePay : new Prisma.Decimal(payPeriods[i].pay!);
+    };
+    const cycleDays: Date[] = [];
+    for (let cd = new Date(periodStart); cd <= periodEnd; cd = new Date(Date.UTC(cd.getUTCFullYear(), cd.getUTCMonth(), cd.getUTCDate() + 1))) {
+      cycleDays.push(cd);
+    }
+    const dayPay = new Map(cycleDays.map((cd) => [cd.toISOString().slice(0, 10), payOn(cd)]));
+    // Decided 17 Oct 2026: pay by effective date starts with the cycle from
+    // 26 Oct 2026. Earlier cycles keep paying the profile pay for the whole
+    // cycle, as edits before then had no effective date.
+    const payVaries =
+      periodStart.getTime() >= PAY_BY_EFFECTIVE_DATE_FROM.getTime() &&
+      [...dayPay.values()].some((v) => !v.equals([...dayPay.values()][0]));
+
+    const monthlyPay = payVaries && totalCalendarDays > 0
+      ? [...dayPay.values()].reduce((sum, v) => sum.plus(v), new Prisma.Decimal(0)).dividedBy(totalCalendarDays)
+      : profilePay;
     const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
+    /** The daily rate on one date: that day's pay over the cycle's days. */
+    const rateOn = (key: string) =>
+      payVaries && totalCalendarDays > 0 ? (dayPay.get(key) ?? profilePay).dividedBy(totalCalendarDays) : dailyRate;
 
     // Prefer the average Mon–Fri window across the cycle, each weekday judged
     // by the timings in effect on it (TAFSD-277); fall back to profile FIXED times.
@@ -681,10 +711,37 @@ export class PayrollService {
     // out-of-tenure proration). Statutory EOBI/income tax and loan/deposit
     // installments are not attendance-based and still apply.
     const zero = new Prisma.Decimal(0);
-    const absenceDeduction = fullPayOverride ? zero : dailyRate.times(absentDays + unpaidLeaveDays);
-    const halfDayDeduction = fullPayOverride ? zero : dailyRate.dividedBy(2).times(halfDays);
-    const lateDeduction = fullPayOverride ? zero : perMinuteRate.times(totalLateMinutes);
-    const breakDeduction = fullPayOverride ? zero : perMinuteRate.times(totalBreakMinutes);
+    // With pay varying across the cycle, each day is deducted at its own rate.
+    const sumDays = (pick: (d: DayBreakdownEntry) => number) =>
+      dailyBreakdown.reduce((sum, d) => {
+        const units = pick(d);
+        return units ? sum.plus(rateOn(d.date).times(units)) : sum;
+      }, new Prisma.Decimal(0));
+    const minuteRateDivisor = scheduledMinutes > 0 ? scheduledMinutes : 0;
+    const absenceDeduction = fullPayOverride
+      ? zero
+      : payVaries
+        ? sumDays((d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0))
+        : dailyRate.times(absentDays + unpaidLeaveDays);
+    const halfDayDeduction = fullPayOverride
+      ? zero
+      : payVaries
+        ? sumDays((d) => (d.classification === 'HALF_DAY' ? 0.5 : 0))
+        : dailyRate.dividedBy(2).times(halfDays);
+    const lateDeduction = fullPayOverride
+      ? zero
+      : payVaries
+        ? minuteRateDivisor
+          ? sumDays((d) => d.late_minutes).dividedBy(minuteRateDivisor)
+          : zero
+        : perMinuteRate.times(totalLateMinutes);
+    const breakDeduction = fullPayOverride
+      ? zero
+      : payVaries
+        ? minuteRateDivisor
+          ? sumDays((d) => d.break_minutes).dividedBy(minuteRateDivisor)
+          : zero
+        : perMinuteRate.times(totalBreakMinutes);
     // Prorates the salary for every day the employee was off the roster — the
     // superset of three cases:
     //   * joined mid-cycle   — days before the join date
@@ -696,7 +753,11 @@ export class PayrollService {
     const inTenureDays = totalWindowDays(tenureWindows);
     const afterLeavingDeduction = fullPayOverride
       ? zero
-      : dailyRate.times(Math.max(0, fullPeriodDays - inTenureDays));
+      : payVaries
+        ? cycleDays
+            .filter((cd) => !isDateInAnyWindow(cd, tenureWindows))
+            .reduce((sum, cd) => sum.plus(rateOn(cd.toISOString().slice(0, 10))), new Prisma.Decimal(0))
+        : dailyRate.times(Math.max(0, fullPeriodDays - inTenureDays));
 
     const [eobiRule, sessiRule, incomeTaxRule] = await Promise.all([
       this.payrollRules.findEffective('EOBI', periodEnd),
@@ -1049,6 +1110,7 @@ export class PayrollService {
           valid_from: true,
           valid_to: true,
           timings: true,
+          monthly_pay: true,
         },
       }),
     ]);
@@ -1070,7 +1132,13 @@ export class PayrollService {
 
     const progressionByEmployee = new Map<
       number,
-      { employment_status: string; valid_from: Date; valid_to: Date | null; timings: Prisma.JsonValue | null }[]
+      {
+        employment_status: string;
+        valid_from: Date;
+        valid_to: Date | null;
+        timings: Prisma.JsonValue | null;
+        monthly_pay: Prisma.Decimal | null;
+      }[]
     >();
     for (const row of allProgressionRows) {
       const bucket = progressionByEmployee.get(row.employee_id);
@@ -1080,6 +1148,8 @@ export class PayrollService {
         valid_to: row.valid_to,
         // TAFSD-277: each day is judged by the timings period covering it.
         timings: row.timings,
+        // TAFSD-372: and paid at the pay in effect on it.
+        monthly_pay: row.monthly_pay,
       };
       if (bucket) bucket.push(entry);
       else progressionByEmployee.set(row.employee_id, [entry]);

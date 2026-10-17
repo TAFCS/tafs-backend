@@ -407,6 +407,23 @@ export class BulkDayTimingDto extends DayTimingDto {
   effective_from?: string;
 }
 
+/** TAFSD-372: monthly pay effective from a date (null clears it). */
+export class PayChangeDto {
+  @ValidateIf((_o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  monthly_pay: number | null;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string | null;
+}
+
 /** TAFSD-369: change timings / working days effective from a date. Omitted fields keep their value. */
 export class TimingsChangeDto {
   @IsOptional()
