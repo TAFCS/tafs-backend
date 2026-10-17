@@ -1,3 +1,4 @@
+import { PeriodTimingsRow, coveringPeriodIndex, scheduleFromSnapshot, timingsOnDate } from '../employees/timings-history.util';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { AttendanceSource, CheckInSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
@@ -383,32 +384,47 @@ export class PayrollService {
     mandatorySaturdayDates?: Set<string>,
     shiftOverridesForEmployee?: Map<string, { start: Date | null; end: Date | null }>,
     fullPayOverride = false,
-    progressionPeriods?: { employment_status: string; valid_from: Date; valid_to: Date | null }[],
+    progressionPeriods?: {
+      employment_status: string;
+      valid_from: Date;
+      valid_to: Date | null;
+      timings?: Prisma.JsonValue | null;
+    }[],
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
 
-    // Cache expected times per weekday — weekly template, identical every week.
-    const expectedByDow = new Map<
-      number,
+    // TAFSD-277: a mid-cycle change to timings, working days or check-in
+    // source only applies from its date. Each day is judged by the timings
+    // period covering it (progression periods carry them, TAFSD-363).
+    const timingPeriods: PeriodTimingsRow[] = (progressionPeriods ?? []).map((p) => ({
+      valid_from: p.valid_from,
+      timings: p.timings ?? null,
+    }));
+    const timingsFor = (d: Date) => timingsOnDate(timingPeriods, d);
+
+    // Expected times are a weekly template within one timings period, so cache
+    // per (period, weekday) rather than resolving every day.
+    const expectedCache = new Map<
+      string,
       { expectedCheckIn: Date | null; expectedCheckOut: Date | null; graceMinutes: number }
     >();
-    for (let dow = 0; dow <= 6; dow++) {
-      const synth = new Date(Date.UTC(2024, 0, 7 + dow)); // Sun-Sat week
-      const resolvedTimes = await this.expectedTimes.resolveExpectedTimes(
-        employee.id,
-        campusId,
-        synth,
-      );
-      expectedByDow.set(dow, {
-        expectedCheckIn: resolvedTimes.expectedCheckIn,
-        expectedCheckOut: resolvedTimes.expectedCheckOut,
-        graceMinutes: resolvedTimes.graceMinutes,
-      });
-    }
+    const expectedFor = async (d: Date) => {
+      const key = `${coveringPeriodIndex(timingPeriods, d)}:${d.getUTCDay()}`;
+      let hit = expectedCache.get(key);
+      if (!hit) {
+        const r = await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d));
+        hit = { expectedCheckIn: r.expectedCheckIn, expectedCheckOut: r.expectedCheckOut, graceMinutes: r.graceMinutes };
+        expectedCache.set(key, hit);
+      }
+      return hit;
+    };
+    const everTimetable =
+      employee.check_in_source === CheckInSource.TIMETABLE ||
+      timingPeriods.some((p) => (p.timings as { check_in_source?: string } | null)?.check_in_source === CheckInSource.TIMETABLE);
 
     const [timetableActiveDays, makeupRescheduleDates, shiftOverrideDates] =
-      employee.check_in_source === CheckInSource.TIMETABLE
+      everTimetable
         ? await Promise.all([
             this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
             this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
@@ -447,6 +463,15 @@ export class PayrollService {
     ) {
       if (!isDateInAnyWindow(d, tenureWindows)) continue;
       const key = d.toISOString().slice(0, 10);
+      // The working-day pattern and check-in source in effect on this date.
+      const daySnapshot = timingsFor(d);
+      const daySchedule = daySnapshot
+        ? scheduleFromSnapshot(daySnapshot)
+        : {
+            days_per_week: employee.days_per_week,
+            employee_work_schedules: employee.employee_work_schedules,
+            check_in_source: employee.check_in_source,
+          };
       const resolved = this.calendarResolver.resolveStaffDayFromRows(
         calendarRows,
         new Date(d),
@@ -454,10 +479,10 @@ export class PayrollService {
         employee.department_id,
         employee.staff_category_id,
         employee.staff_categories?.code ?? null,
-        employee.days_per_week,
-        employee.employee_work_schedules,
+        daySchedule.days_per_week,
+        daySchedule.employee_work_schedules,
         mandatorySaturdayDates,
-        employee.check_in_source,
+        daySchedule.check_in_source,
         timetableActiveDays,
         makeupRescheduleDates,
         shiftOverrideDates,
@@ -465,7 +490,7 @@ export class PayrollService {
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
       const breakMinutes = Math.round(this.sumBreakMinutes(dayScans));
-      const dowDefault = expectedByDow.get(d.getUTCDay()) ?? {
+      const dowDefault = (await expectedFor(d)) ?? {
         expectedCheckIn: employee.reporting_time,
         expectedCheckOut: employee.leaving_time,
         graceMinutes: employee.late_relaxation_minutes ?? 0,
@@ -627,11 +652,19 @@ export class PayrollService {
     const monthlyPay = new Prisma.Decimal(employee.monthly_pay ?? 0);
     const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
 
-    // Prefer Mon–Fri derived window average; fall back to profile FIXED times.
+    // Prefer the average Mon–Fri window across the cycle, each weekday judged
+    // by the timings in effect on it (TAFSD-277); fall back to profile FIXED times.
+    // Without a mid-cycle change this equals the weekly-template average.
     let scheduledMinutes = 0;
     let scheduledDayCount = 0;
-    for (let dow = 1; dow <= 5; dow++) {
-      const e = expectedByDow.get(dow);
+    for (
+      let wd = new Date(periodStart);
+      wd <= periodEnd;
+      wd = new Date(Date.UTC(wd.getUTCFullYear(), wd.getUTCMonth(), wd.getUTCDate() + 1))
+    ) {
+      const dow = wd.getUTCDay();
+      if (dow < 1 || dow > 5) continue;
+      const e = await expectedFor(wd);
       if (e?.expectedCheckIn && e?.expectedCheckOut) {
         scheduledMinutes += this.scheduledMinutesPerDay(e.expectedCheckIn, e.expectedCheckOut);
         scheduledDayCount++;
@@ -1015,6 +1048,7 @@ export class PayrollService {
           employment_status: true,
           valid_from: true,
           valid_to: true,
+          timings: true,
         },
       }),
     ]);
@@ -1036,7 +1070,7 @@ export class PayrollService {
 
     const progressionByEmployee = new Map<
       number,
-      { employment_status: string; valid_from: Date; valid_to: Date | null }[]
+      { employment_status: string; valid_from: Date; valid_to: Date | null; timings: Prisma.JsonValue | null }[]
     >();
     for (const row of allProgressionRows) {
       const bucket = progressionByEmployee.get(row.employee_id);
@@ -1044,6 +1078,8 @@ export class PayrollService {
         employment_status: row.employment_status,
         valid_from: row.valid_from,
         valid_to: row.valid_to,
+        // TAFSD-277: each day is judged by the timings period covering it.
+        timings: row.timings,
       };
       if (bucket) bucket.push(entry);
       else progressionByEmployee.set(row.employee_id, [entry]);

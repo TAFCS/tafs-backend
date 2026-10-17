@@ -1016,11 +1016,6 @@ export class EmployeesService {
         staff_category_id: true,
         segment_id: true,
         monthly_pay: true,
-        // TAFSD-363: the bulk day-timings picker shows each person's current times.
-        check_in_source: true,
-        reporting_time: true,
-        leaving_time: true,
-        employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
         users: { select: { full_name: true } },
         campuses: { select: { id: true, campus_name: true } },
         departments: { select: { id: true, name: true } },
@@ -1038,17 +1033,7 @@ export class EmployeesService {
       },
       orderBy: { full_name: 'asc' },
     });
-    return rows.map(({ monthly_pay, reporting_time, leaving_time, employee_day_timings, ...rest }) => ({
-      ...rest,
-      has_monthly_pay: monthly_pay != null,
-      reporting_time: hhmm(reporting_time),
-      leaving_time: hhmm(leaving_time),
-      day_timings: employee_day_timings.map((d) => ({
-        day_of_week: d.day_of_week,
-        reporting_time: hhmm(d.reporting_time),
-        leaving_time: hhmm(d.leaving_time),
-      })),
-    }));
+    return rows.map(({ monthly_pay, ...rest }) => ({ ...rest, has_monthly_pay: monthly_pay != null }));
   }
 
   async findOne(id: number, caller?: IJwtStaffPayload) {
@@ -2145,6 +2130,33 @@ export class EmployeesService {
   }
 
   // ─── TAFSD-363: per-weekday timings ─────────────────────────────────────────
+
+  /**
+   * Current timings of every employee in the caller's scope, for the bulk
+   * "Day timings" window. Kept off the shared picker, which must never carry
+   * schedule (it serves single-tile users who can't see Schedule & Pay).
+   */
+  async listDayTimings(caller: IJwtStaffPayload) {
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: this.scope.whereForEmployees(caller),
+      select: {
+        id: true,
+        check_in_source: true,
+        reporting_time: true,
+        leaving_time: true,
+        employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
+      },
+    });
+    return rows.map((r) => ({
+      employee_id: r.id,
+      check_in_source: r.check_in_source,
+      reporting_time: hhmm(r.reporting_time),
+      leaving_time: hhmm(r.leaving_time),
+      days: r.employee_day_timings
+        .map((d) => ({ day_of_week: d.day_of_week, reporting_time: hhmm(d.reporting_time), leaving_time: hhmm(d.leaving_time) }))
+        .sort((a, b) => a.day_of_week - b.day_of_week),
+    }));
+  }
 
   async getDayTimings(employeeId: number, caller?: IJwtStaffPayload) {
     await this.assertCanTouch(employeeId, caller);
