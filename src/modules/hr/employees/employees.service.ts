@@ -1556,7 +1556,19 @@ export class EmployeesService {
     // same one is not a change, so only a different user_id needs SUPER_ADMIN.
     const { user_id: sentUserId, ...withoutLink } = dto;
     const linkChanged = sentUserId !== undefined && (sentUserId || null) !== (touch.user_id ?? null);
-    this.assertFieldsEditable(linkChanged ? dto : withoutLink, caller);
+    // Same for the subtype (status.change, TAFSD-381): the form resends it on
+    // every save, so only an actual change needs that action.
+    const checked: Record<string, unknown> = { ...(linkChanged ? dto : withoutLink) };
+    if (checked.employment_subtype !== undefined) {
+      const stored = await this.prisma.employee_profiles.findUnique({
+        where: { id },
+        select: { employment_subtype: true },
+      });
+      if ((checked.employment_subtype ?? null) === (stored?.employment_subtype ?? null)) {
+        delete checked.employment_subtype;
+      }
+    }
+    this.assertFieldsEditable(checked, caller);
     if (linkChanged && sentUserId) await this.assertMayLinkLogin(sentUserId, caller);
     // Also check where it is being moved TO -- otherwise a scoped user could
     // reassign someone to a campus they cannot see and lose them.

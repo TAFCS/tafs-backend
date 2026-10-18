@@ -53,6 +53,10 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
  */
 export const EMPLOYEE_FIELD_ACTION_OVERRIDES: Record<string, string> = {
   employment_status: 'status.change',
+  // Permanent / non-permanent / contractual is part of the employment status
+  // (the status.change action covers "Active, Permanent, ..."), not a free
+  // Employment-tab field. Was unmapped, so any directory viewer could PATCH it.
+  employment_subtype: 'status.change',
   // Creating a login alongside the record. Only the plain EMPLOYEE role (staff
   // app self-service) is open to a delegate; any other role is SUPER_ADMIN only
   // (EmployeesService.preparePortalAccount).
