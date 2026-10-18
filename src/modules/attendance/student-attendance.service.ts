@@ -1042,9 +1042,10 @@ export class StudentAttendanceService {
       select: {
         cc: true,
         full_name: true,
+        campus_id: true,
         class_id: true,
         section_id: true,
-        classes: { select: { description: true } },
+        classes: { select: { description: true, segment_id: true } },
         sections: { select: { description: true } },
       },
     });
@@ -1054,6 +1055,15 @@ export class StudentAttendanceService {
     if (missing.length) {
       throw new BadRequestException(
         `Some students are not enrolled in campus ${dto.campus_id}: ${missing.join(', ')}`,
+      );
+    }
+    // Campus alone let a class- or segment-scoped user mark any class on it.
+    const outOfScope = students.filter(
+      (s) => !this.scope.canSeeStudent(user, { ...s, segment_id: s.classes?.segment_id ?? null }),
+    );
+    if (outOfScope.length) {
+      throw new ForbiddenException(
+        `Outside your access scope (class / section / segment): ${outOfScope.map((s) => s.full_name).join(', ')}`,
       );
     }
 

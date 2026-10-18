@@ -62,4 +62,35 @@ describe('CaslAbilityFactory', () => {
     expect(ability.can(Action.Manage, 'Voucher')).toBe(true);
     expect(ability.can(Action.Manage, 'VoucherRelease')).toBe(false);
   });
+
+  describe('StaffAttendance from employee attendance cycle tile actions', () => {
+    const tile = 'attendance.employee_attendance_cycle';
+
+    it('grants Manage + Read with the mark action, even with only payroll view permission', () => {
+      const ability = factory.createForStaff(
+        staff({ permissions: ['hr.payroll.view'], actions: [`${tile}#view`, `${tile}#mark`] }),
+      );
+      expect(ability.can(Action.Manage, 'StaffAttendance')).toBe(true);
+      expect(ability.can(Action.Read, 'StaffAttendance')).toBe(true);
+    });
+
+    it('grants Read only with the view action', () => {
+      const ability = factory.createForStaff(
+        staff({ permissions: ['hr.payroll.view'], actions: [`${tile}#view`] }),
+      );
+      expect(ability.can(Action.Read, 'StaffAttendance')).toBe(true);
+      expect(ability.can(Action.Manage, 'StaffAttendance')).toBe(false);
+    });
+
+    it('grants nothing when the mark action is denied and view absent', () => {
+      const ability = factory.createForStaff(staff({ permissions: ['hr.payroll.view'], actions: [] }));
+      expect(ability.can(Action.Read, 'StaffAttendance')).toBe(false);
+      expect(ability.can(Action.Manage, 'StaffAttendance')).toBe(false);
+    });
+
+    it('honours the tile wildcard claim', () => {
+      const ability = factory.createForStaff(staff({ actions: [`${tile}#*`] }));
+      expect(ability.can(Action.Manage, 'StaffAttendance')).toBe(true);
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { resolveVoucherAcademicYear } from '../../common/utils/academic-labels';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
@@ -17,23 +18,33 @@ export class BulkVoucherLogicService {
         fee_date_to: string;
         student_ccs?: number[];
         include_statuses?: string[];
+        /**
+         * The caller's ScopeService.whereForStudents fragment. ANDed with the
+         * query filters, never spread into them — both key on campus_id /
+         * class_id, and a spread would let one overwrite the other.
+         */
+        student_scope?: Prisma.studentsWhereInput;
     }) {
         const feeDateFrom = new Date(params.fee_date_from);
         const feeDateTo = new Date(params.fee_date_to);
         const statuses = params.include_statuses || ['NOT_ISSUED'];
 
         // 1. Fetch Students
+        const queryFilter: Prisma.studentsWhereInput = params.student_ccs?.length
+            ? { cc: { in: params.student_ccs } }
+            : {
+                ...(params.campus_ids?.length ? { campus_id: { in: params.campus_ids } } : {}),
+                ...(params.class_ids?.length ? { class_id: { in: params.class_ids } } : {}),
+                ...(params.section_ids?.length ? { section_id: { in: params.section_ids } } : {}),
+            };
+        const studentScope = params.student_scope ?? {};
         const studentRecords = await this.prisma.students.findMany({
             where: {
                 deleted_at: null,
                 status: 'ENROLLED',
-                ...(params.student_ccs?.length
-                    ? { cc: { in: params.student_ccs } }
-                    : {
-                        ...(params.campus_ids?.length ? { campus_id: { in: params.campus_ids } } : {}),
-                        ...(params.class_ids?.length ? { class_id: { in: params.class_ids } } : {}),
-                        ...(params.section_ids?.length ? { section_id: { in: params.section_ids } } : {}),
-                    }),
+                ...(Object.keys(studentScope).length > 0
+                    ? { AND: [queryFilter, studentScope] }
+                    : queryFilter),
             },
             select: {
                 cc: true,

@@ -1,10 +1,13 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
+import { AccessService } from '../access/access.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
@@ -19,11 +22,8 @@ import { StaffRole } from '@prisma/client';
 import { encryptSecret, decryptSecret } from '../../common/utils/reversible-secret.util';
 import { isLegacyTafsEmailUsername } from '../../common/utils/account-credentials.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import {
-  PEOPLE_ACCESS_TILE_ID,
-  USER_FIELD_TAB_MAP,
-  USER_SUPER_ADMIN_ONLY_FIELDS,
-} from './user-field-tabs';
+import { isSuperAdmin } from '../../common/auth/super-admin';
+import { PEOPLE_ACCESS_TILE_ID, USER_FIELD_TAB_MAP } from './user-field-tabs';
 
 @Injectable()
 export class UsersService {
@@ -31,6 +31,8 @@ export class UsersService {
     private prisma: PrismaService,
     private auditLogs: AuditLogsService,
     private scope: ScopeService,
+    @Inject(forwardRef(() => AccessService))
+    private readonly accessService: AccessService,
   ) {}
 
   /**
@@ -90,40 +92,72 @@ export class UsersService {
   }
 
   /**
-   * Authorises an edit field by field against `<tab>.edit`, mirroring
-   * EmployeesService.assertFieldsEditable. `role` is excluded from the
-   * generic map on purpose — see USER_SUPER_ADMIN_ONLY_FIELDS — and checked
-   * directly against the actor's own role instead.
-   *
-   * A caller whose session predates sub-permissions (no `actions`) is left
-   * alone: the coarse CASL check already gated them, and failing closed here
-   * would lock out every open session for 90 days until their token rotates.
-   * The route-level @RequireAction is the boundary that does fail closed.
+   * Authorises PUT /users/:id field by field against `<tab>.edit`, mirroring
+   * EmployeesService.assertFieldsEditable. The target-level rules (not self,
+   * not a SUPER_ADMIN, no role or password above the caller) are separate.
    */
   private assertFieldsEditable(dto: UpdateUserDto, actingUser?: IJwtStaffPayload) {
-    if (USER_SUPER_ADMIN_ONLY_FIELDS.some((f) => (dto as Record<string, unknown>)[f] !== undefined)) {
-      if (!actingUser || actingUser.role !== StaffRole.SUPER_ADMIN) {
-        throw new ForbiddenException('Only a super admin may change a user\'s role.');
-      }
-    }
-
-    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
-    if (actingUser.actions === undefined) return;
-
-    const held = new Set(actingUser.actions);
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    const held = new Set(actingUser.actions ?? []);
     const denied = Object.entries(dto)
-      .filter(([field, v]) => v !== undefined && !USER_SUPER_ADMIN_ONLY_FIELDS.includes(field))
+      .filter(([, v]) => v !== undefined)
       .map(([field]) => field)
       .filter((field) => {
         const tab = USER_FIELD_TAB_MAP[field];
-        if (!tab) return false;
-        return !held.has(`${PEOPLE_ACCESS_TILE_ID}#${tab}.edit`);
+        return tab !== undefined && !held.has(`${PEOPLE_ACCESS_TILE_ID}#${tab}.edit`);
       });
-
     if (denied.length > 0) {
-      throw new ForbiddenException(
-        `You do not have permission to edit: ${denied.join(', ')}.`,
-      );
+      throw new ForbiddenException(`You do not have permission to edit: ${denied.join(', ')}.`);
+    }
+  }
+
+  /**
+   * A per-user capability override (set, or removed when `granted` is null)
+   * may not be on your own account or a SUPER_ADMIN's, and may not leave the
+   * target holding a capability you lack -- removing a deny counts, since it
+   * can hand a capability back.
+   */
+  private async assertOverrideAllowed(
+    actingUser: IJwtStaffPayload | undefined,
+    target: { id: string; role: StaffRole; user_permissions: { granted: boolean; permissions: { key: string } }[] },
+    key: string,
+    granted: boolean | null,
+  ) {
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    this.accessService.assertMayManageUser(actingUser, target);
+    const current = target.user_permissions.map((up) => ({ key: up.permissions.key, granted: up.granted }));
+    const next = current.filter((p) => p.key !== key);
+    if (granted !== null) next.push({ key, granted });
+    const [before, after] = await Promise.all([
+      this.accessService.resolveEffective(target.id, target.role),
+      this.accessService.effectiveWith(target.id, target.role, { userPerms: next }),
+    ]);
+    await this.accessService.assertNoLeak(actingUser, before, after);
+  }
+
+  /**
+   * A role baseline is every user on that role at once: never SUPER_ADMIN's,
+   * never your own role (that would be changing your own access), and you can
+   * only add a capability you hold yourself.
+   */
+  private async assertRoleBaselineChangeAllowed(
+    actingUser: IJwtStaffPayload | undefined,
+    role: StaffRole,
+    key: string,
+    granted: boolean,
+  ) {
+    if (!actingUser || isSuperAdmin(actingUser)) return;
+    if (role === StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a super admin can change what the SUPER_ADMIN role grants.');
+    }
+    if (role === actingUser.role) {
+      throw new ForbiddenException('You cannot change what your own role grants. Ask a super admin.');
+    }
+    if (granted) {
+      const mine = await this.accessService.resolveEffective(actingUser.sub, actingUser.role);
+      if (!mine.capabilityKeys.includes(key)) {
+        throw new ForbiddenException(`You can only give a role permissions you hold yourself. Not yours to give: ${key}.`);
+      }
     }
   }
 
@@ -160,8 +194,32 @@ export class UsersService {
     return !existing;
   }
 
+  /**
+   * Pay is Employee Directory data (schedule_pay.view). People & Access shows
+   * it on the Job tab, but holding People & Access is no reason to see every
+   * salary (TAFSD-373), so it is left out for anyone without that action.
+   */
+  private redactPay<T extends { employee_profile?: { monthly_pay?: unknown; payroll_enabled?: unknown } | null }>(
+    users: T[],
+    actingUser?: IJwtStaffPayload,
+  ): T[] {
+    if (!actingUser || isSuperAdmin(actingUser)) return users;
+    if ((actingUser.actions ?? []).includes('hr.employee_directory#schedule_pay.view')) return users;
+    return users.map((u) => {
+      if (!u.employee_profile) return u;
+      const { monthly_pay: _pay, payroll_enabled: _enabled, ...profile } = u.employee_profile;
+      return { ...u, employee_profile: profile };
+    });
+  }
+
+  /** findUserById for showing to the caller: the same scope 404, minus pay they may not see. */
+  async getUserForViewer(id: string, actingUser?: IJwtStaffPayload) {
+    const [user] = this.redactPay([await this.findUserById(id, actingUser)], actingUser);
+    return user;
+  }
+
   async listUsers(actingUser?: IJwtStaffPayload) {
-    return this.prisma.users.findMany({
+    const users = await this.prisma.users.findMany({
       where: this.whereForUsers(actingUser),
       orderBy: { created_at: 'asc' },
       select: {
@@ -202,6 +260,7 @@ export class UsersService {
         },
       },
     });
+    return this.redactPay(users, actingUser);
   }
 
   async findUserById(id: string, actingUser?: IJwtStaffPayload) {
@@ -255,7 +314,10 @@ export class UsersService {
   }
 
   async revealPassword(id: string, revealedBy: string, actingUser?: IJwtStaffPayload) {
-    await this.findUserById(id, actingUser);
+    const target = await this.findUserById(id, actingUser);
+    // Knowing the password is becoming the account: only for accounts that
+    // hold no more than the caller, never their own or a SUPER_ADMIN's.
+    await this.accessService.assertNotAbove(actingUser, target);
     const user = await this.prisma.users.findUnique({
       where: { id },
       select: { username: true, password_reveal: true },
@@ -279,6 +341,7 @@ export class UsersService {
   }
 
   async createUser(dto: CreateUserDto, createdById: string, actingUser?: IJwtStaffPayload) {
+    await this.accessService.assertMayAssignRole(actingUser, dto.role);
     if (isLegacyTafsEmailUsername(dto.username)) {
       throw new BadRequestException('Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.');
     }
@@ -340,6 +403,13 @@ export class UsersService {
   async updateUser(id: string, dto: UpdateUserDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
     const existing = await this.findUserById(id, actingUser);
     this.assertFieldsEditable(dto, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
+    if (dto.role !== undefined && dto.role !== existing.role) {
+      await this.accessService.assertMayAssignRole(actingUser, dto.role);
+    }
+    if (dto.password) {
+      await this.accessService.assertNotAbove(actingUser, existing);
+    }
     // Assert the TARGET campus is in scope too, or a scoped admin could move
     // a user's campus outside their own reach.
     if (dto.campus_id !== undefined && actingUser) {
@@ -372,6 +442,7 @@ export class UsersService {
         campuses: { select: { campus_name: true } },
       },
     });
+    this.accessService.invalidateLiveSession(id);
 
     const changes: string[] = [];
     if (dto.full_name !== undefined && existing.full_name !== record.full_name) {
@@ -413,12 +484,14 @@ export class UsersService {
     return record;
   }
 
-  async deactivateUser(id: string, changedBy?: string) {
-    const existing = await this.findUserById(id);
+  async deactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    const existing = await this.findUserById(id, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
     const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: false, updated_at: new Date() },
     });
+    this.accessService.invalidateLiveSession(id);
     await this.auditLogs.log({
       entity_type: 'USER',
       entity_id: id,
@@ -433,12 +506,14 @@ export class UsersService {
     return record;
   }
 
-  async reactivateUser(id: string, changedBy?: string) {
-    const existing = await this.findUserById(id);
+  async reactivateUser(id: string, changedBy?: string, actingUser?: IJwtStaffPayload) {
+    const existing = await this.findUserById(id, actingUser);
+    this.accessService.assertMayManageUser(actingUser, existing);
     const record = await this.prisma.users.update({
       where: { id },
       data: { is_active: true, updated_at: new Date() },
     });
+    this.accessService.invalidateLiveSession(id);
     await this.auditLogs.log({
       entity_type: 'USER',
       entity_id: id,
@@ -516,13 +591,20 @@ export class UsersService {
     });
   }
 
-  async setPermission(userId: string, dto: SetPermissionDto, grantedById: string, changedBy?: string) {
+  async setPermission(
+    userId: string,
+    dto: SetPermissionDto,
+    grantedById: string,
+    changedBy?: string,
+    actingUser?: IJwtStaffPayload,
+  ) {
     const permission = await this.prisma.permissions.findUnique({
       where: { key: dto.permission_key },
     });
     if (!permission) throw new NotFoundException(`Permission key "${dto.permission_key}" not found`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.findUserById(userId, actingUser);
+    await this.assertOverrideAllowed(actingUser, user, dto.permission_key, dto.granted);
     const existing = await this.prisma.user_permissions.findUnique({
       where: {
         user_id_permission_id: {
@@ -554,6 +636,7 @@ export class UsersService {
         note: dto.note ?? null,
       },
     });
+    this.accessService.invalidateLiveSession(userId);
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -572,13 +655,19 @@ export class UsersService {
     return result;
   }
 
-  async removePermissionOverride(userId: string, permissionKey: string, changedBy?: string) {
+  async removePermissionOverride(
+    userId: string,
+    permissionKey: string,
+    changedBy?: string,
+    actingUser?: IJwtStaffPayload,
+  ) {
     const permission = await this.prisma.permissions.findUnique({
       where: { key: permissionKey },
     });
     if (!permission) throw new NotFoundException(`Permission key "${permissionKey}" not found`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.findUserById(userId, actingUser);
+    await this.assertOverrideAllowed(actingUser, user, permissionKey, null);
     const existing = await this.prisma.user_permissions.findUnique({
       where: {
         user_id_permission_id: {
@@ -591,6 +680,7 @@ export class UsersService {
     await this.prisma.user_permissions.deleteMany({
       where: { user_id: userId, permission_id: permission.id },
     });
+    this.accessService.invalidateLiveSession(userId);
 
     if (existing) {
       await this.auditLogs.log({
@@ -616,12 +706,13 @@ export class UsersService {
     });
   }
 
-  async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string) {
+  async updateRolePermission(dto: UpdateRolePermissionDto, changedBy?: string, actingUser?: IJwtStaffPayload) {
     const permission = await this.prisma.permissions.findUnique({
       where: { id: dto.permission_id },
       select: { id: true, key: true },
     });
     if (!permission) throw new NotFoundException(`Permission id ${dto.permission_id} not found`);
+    await this.assertRoleBaselineChangeAllowed(actingUser, dto.role, permission.key, dto.granted);
 
     const existing = await this.prisma.role_permissions.findUnique({
       where: {
@@ -646,6 +737,7 @@ export class UsersService {
           permission_id: dto.permission_id,
         },
       });
+      this.accessService.invalidateLiveSession();
 
       if (!existing) {
         await this.auditLogs.log({
@@ -668,6 +760,7 @@ export class UsersService {
           permission_id: dto.permission_id,
         },
       });
+      this.accessService.invalidateLiveSession();
 
       if (existing) {
         await this.auditLogs.log({

@@ -9,9 +9,16 @@ import {
   HttpStatus,
   Req,
   Res,
+  Param,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthService, ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS } from './auth.service';
+import {
+  AuthService,
+  ACCESS_TOKEN_TTL_MS,
+  REFRESH_TOKEN_TTL_MS,
+  IMPERSONATION_TOKEN_TTL_MS,
+} from './auth.service';
 import { ParentChangeRequestsService } from '../parent-change-requests/parent-change-requests.service';
 import { LoginDto, RefreshTokenDto, VerifyCnicDto, RegisterParentDto } from './dto/login.dto';
 import { SendSignupOtpDto, ForgotPasswordDto, ResetPasswordDto } from './dto/otp.dto';
@@ -45,6 +52,19 @@ function setAuthCookies(res: Response, accessToken: string, refreshToken: string
   // tafs_session is a presence-flag cookie read by Next.js middleware for
   // server-side route protection. Also httpOnly so JS cannot forge it.
   res.cookie('tafs_session', '1', { ...base, maxAge: REFRESH_COOKIE_TTL });
+}
+
+/**
+ * Swaps only the access cookie: the admin's tafs_refresh stays, so exiting
+ * (or the 2h token lapsing) refreshes straight back into the admin's session.
+ */
+function setImpersonationCookie(res: Response, accessToken: string) {
+  res.cookie('tafs_access', accessToken, {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? ('none' as const) : ('lax' as const),
+    maxAge: IMPERSONATION_TOKEN_TTL_MS,
+  });
 }
 
 function clearAuthCookies(res: Response) {
@@ -105,8 +125,16 @@ export class AuthController {
     @Req() req: Request,
   ) {
     const accessToken = req.cookies?.tafs_access as string | undefined;
+    // Full user projection (tiles, scope, payroll) without bcrypt / token
+    // rotation — webapp boot prefers this over POST /staff/refresh.
+    const sessionUser = await this.authService.getStaffSessionUser(
+      user.sub,
+      user.impersonatorId
+        ? { id: user.impersonatorId, fullName: user.impersonatorName ?? '' }
+        : null,
+    );
     return createApiResponse(
-      { ...user, accessToken },
+      { ...sessionUser, accessToken },
       HttpStatus.OK,
       'Staff session fetched',
     );
@@ -121,7 +149,39 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     clearAuthCookies(res);
-    return this.authService.logoutStaff(user.sub, dto.fcmToken);
+    // Logging out while impersonating ends the admin's own session; the
+    // impersonated user's sessions are never touched.
+    return this.authService.logoutStaff(user.impersonatorId ?? user.sub, dto.fcmToken);
+  }
+
+  // ─── Impersonation (TAFSD-361, SUPER_ADMIN only) ───────────────────────────
+
+  @Post('staff/impersonate/exit')
+  @HttpCode(HttpStatus.OK)
+  async exitImpersonation(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken, refreshToken, user } =
+      await this.authService.exitImpersonation(
+        req.cookies?.tafs_refresh as string | undefined,
+        req.cookies?.tafs_access as string | undefined,
+      );
+    setAuthCookies(res, accessToken, refreshToken);
+    return createApiResponse({ user }, HttpStatus.OK, 'Impersonation ended');
+  }
+
+  @Post('staff/impersonate/:userId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtStaffGuard)
+  async impersonateStaff(
+    @CurrentUser() actor: IJwtStaffPayload,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken, user } = await this.authService.impersonateStaff(actor, userId);
+    setImpersonationCookie(res, accessToken);
+    return createApiResponse({ user }, HttpStatus.OK, 'Impersonation started');
   }
 
   // ─── Staff mobile (body-based — Flutter dual login) ───────────────────────
@@ -211,6 +271,10 @@ export class AuthController {
     @CurrentUser() user: IJwtStaffPayload,
     @Body() dto: RegisterFcmTokenDto,
   ) {
+    // The admin's browser must not start receiving the impersonated user's pushes.
+    if (user.impersonatorId) {
+      return createApiResponse({}, HttpStatus.OK, 'Skipped while impersonating');
+    }
     await this.fcmService.registerStaffToken(user.sub, dto.fcmToken, dto.deviceType);
     return createApiResponse({}, HttpStatus.OK, 'Staff FCM token registered');
   }

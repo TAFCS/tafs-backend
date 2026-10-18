@@ -106,13 +106,19 @@ export class StorageService {
     }
 
     /**
-     * Upload a buffer to DigitalOcean Spaces and return the public CDN URL.
+     * Upload a buffer or readable stream to DigitalOcean Spaces and return the
+     * public CDN URL. Streams are preferred for large artifacts (backups) so the
+     * Nest process never holds the whole object in memory.
      *
      * @param key    Object key / path inside the bucket, e.g. "vouchers/2026/voucher-42.pdf"
-     * @param body   File buffer
+     * @param body   File buffer or readable stream
      * @param mime   MIME type, defaults to "application/pdf"
      */
-    async upload(key: string, body: Buffer, mime = 'application/pdf'): Promise<string> {
+    async upload(
+        key: string,
+        body: Buffer | NodeJS.ReadableStream,
+        mime = 'application/pdf',
+    ): Promise<string> {
         if (!this.client) {
             this.logger.log(`Mocking upload for ${key} (storage not configured)`);
             return `${this.cdnEndpoint}/${key}`;
@@ -122,7 +128,7 @@ export class StorageService {
                 new PutObjectCommand({
                     Bucket: this.bucket,
                     Key: key,
-                    Body: body,
+                    Body: body as any,
                     ContentType: mime,
                     ACL: 'public-read',
                 }),

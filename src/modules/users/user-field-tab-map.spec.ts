@@ -1,7 +1,4 @@
-import {
-  USER_FIELD_TAB_MAP,
-  USER_SUPER_ADMIN_ONLY_FIELDS,
-} from './user-field-tabs';
+import { USER_FIELD_TAB_MAP } from './user-field-tabs';
 import { PEOPLE_ACCESS_ACTIONS_FOR_TEST } from '../access/tiles.manifest';
 
 /**
@@ -17,21 +14,15 @@ const DTO_FIELDS = [
 /**
  * PUT /users/:id writes fields belonging to both the Identity and Job tabs
  * through one route, so tab-level permissions only mean something if EVERY
- * field is mapped. A field missing from this map (and from
- * USER_SUPER_ADMIN_ONLY_FIELDS) is an unguarded write.
+ * field is mapped. A field missing from this map is an unguarded write.
  */
 describe('USER_FIELD_TAB_MAP', () => {
   it('covers every field the DTO can carry', () => {
-    const known = new Set([
-      ...Object.keys(USER_FIELD_TAB_MAP),
-      ...USER_SUPER_ADMIN_ONLY_FIELDS,
-    ]);
+    const known = new Set(Object.keys(USER_FIELD_TAB_MAP));
     const unmapped = DTO_FIELDS.filter((f) => !known.has(f));
 
     // Failing here means a field was added to UpdateUserDto without deciding
-    // which tab owns it. Add it to USER_FIELD_TAB_MAP (or, if it needs a
-    // stricter check than any action can express, to
-    // USER_SUPER_ADMIN_ONLY_FIELDS).
+    // which tab owns it. Add it to USER_FIELD_TAB_MAP.
     expect(unmapped).toEqual([]);
   });
 
@@ -48,12 +39,5 @@ describe('USER_FIELD_TAB_MAP', () => {
       .filter((actionId) => !declared.has(actionId));
 
     expect(missing).toEqual([]);
-  });
-
-  it('never maps a field to both a tab and the super-admin-only list', () => {
-    const both = USER_SUPER_ADMIN_ONLY_FIELDS.filter(
-      (f) => USER_FIELD_TAB_MAP[f] !== undefined,
-    );
-    expect(both).toEqual([]);
   });
 });

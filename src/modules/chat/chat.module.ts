@@ -7,6 +7,7 @@ import { StorageModule } from '../../common/storage/storage.module';
 import { ChatGateway } from './chat.gateway';
 import { AuthModule } from '../auth/auth.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
+import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { FcmModule } from '../../common/fcm/fcm.module';
     FcmModule,
     forwardRef(() => SupportTicketsModule),
   ],
-  providers: [ChatService, ChatGateway],
+  providers: [ChatService, ChatGateway, JwtStaffOrParentGuard],
   controllers: [ChatController],
   exports: [ChatService, ChatGateway],
 })

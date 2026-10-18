@@ -55,6 +55,8 @@ export class StudentsController {
     'attendance.teaching_groups',
     'attendance.zk_device_logs',
     'communication.notice_board',
+    'student.enrollments',
+    'student.families',
   )
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);
@@ -66,15 +68,19 @@ export class StudentsController {
   }
 
   // Also the roster / preview list behind Academic Actions (bulk promote) and
-  // Section Allocation Rules, so those tiles' holders are not refused by a
-  // directory-only action. The policy check and scope are unchanged.
+  // Section Allocation Rules, the family-member lookup on Families, and the
+  // section roster on Teaching Groups. An allowlist of tiles (holding a tile
+  // means holding its `view`), not "any staff member"; scope is unchanged. The
+  // Read Student policy check is dropped on purpose: a Families or Teaching
+  // Groups user holds none of the student capabilities it demands.
   @Get()
-  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
-  @RequireAnyAction(
-    'student.directory#view',
-    'student.academic_actions#view',
-    'student.section_allocation#view',
-    'school-setup.section_allocation#view',
+  @RequireAnyTile(
+    'student.directory',
+    'student.academic_actions',
+    'student.section_allocation',
+    'school-setup.section_allocation',
+    'student.families',
+    'attendance.teaching_groups',
   )
   async findAll(
     @Query() query: GetStudentsDto,
@@ -125,7 +131,8 @@ export class StudentsController {
   @Post('gr-numbers/suggest-for-promotion')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   @RequireAnyAction('student.directory#promote', 'student.academic_actions#promote')
-  async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto) {
+  async suggestGrNumbersForPromotion(@Body() dto: SuggestGrNumbersDto, @CurrentUser() user: IJwtStaffPayload) {
+    await this.studentsService.assertStudentsVisible(user, dto.student_ccs);
     const assignments = await this.studentsService.suggestGrNumbersForPromotion(
       dto.student_ccs,
       dto.a_level !== false,
@@ -185,6 +192,8 @@ export class StudentsController {
     @Body() dto: AssignStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
+    this.studentsService.assertPlacementInScope(user, dto);
     const updated = await this.studentsService.assignStudent(id, dto, user.username);
     return createApiResponse(
       updated,
@@ -200,6 +209,7 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
     const updated = await this.studentsService.unexpelStudent(id, user.username);
     return createApiResponse(
       updated,
@@ -215,6 +225,7 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
     const updated = await this.studentsService.undoLeftStudent(id, user.username);
     return createApiResponse(
       updated,
@@ -262,7 +273,7 @@ export class StudentsController {
     @Body() dto: PromoteSingleStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const result = await this.studentsService.promoteSingle(dto, user.username);
+    const result = await this.studentsService.promoteSingle(dto, user.username, user);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -277,7 +288,7 @@ export class StudentsController {
     @Body() dto: PromoteBulkStudentsDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const result = await this.studentsService.promoteBulk(dto, user.username);
+    const result = await this.studentsService.promoteBulk(dto, user.username, user);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -288,7 +299,8 @@ export class StudentsController {
   @Get(':id/academic-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   @RequireAction('student.directory#progression.view')
-  async getAcademicHistory(@Param('id', ParseIntPipe) id: number) {
+  async getAcademicHistory(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
     const history = await this.studentsService.getAcademicHistory(id);
     return createApiResponse(
       history,
@@ -300,7 +312,8 @@ export class StudentsController {
   @Get(':id/progression')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   @RequireAction('student.directory#progression.view')
-  async getProgression(@Param('id', ParseIntPipe) id: number) {
+  async getProgression(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
     const periods = await this.studentsService.getProgressionPeriods(id);
     return createApiResponse(
       periods,
@@ -312,7 +325,8 @@ export class StudentsController {
   @Get(':id/house-history')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
   @RequireAction('student.directory#progression.view')
-  async getHouseHistory(@Param('id', ParseIntPipe) id: number) {
+  async getHouseHistory(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.studentsService.assertStudentsVisible(user, [id]);
     const history = await this.studentsService.getHouseHistory(id);
     return createApiResponse(
       history,

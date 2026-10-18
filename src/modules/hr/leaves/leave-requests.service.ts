@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { LeaveRequestStatus, Prisma, StaffRole } from '@prisma/client';
+import { EmploymentSubtype, LeaveRequestStatus, Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -19,6 +19,16 @@ import {
 } from './dto/leave-requests.dto';
 import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
 import { ScopeService } from '../../../common/scope/scope.service';
+import { isPermanentForLeave, monthsUntilPermanent } from '../employees/employment-permanence.util';
+import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
+
+/** What leave policy reads to decide permanence (TAFSD-321). */
+type PermanenceProfile = {
+  is_permanent_employee: boolean;
+  employment_subtype: EmploymentSubtype | null;
+  join_date: Date | null;
+  departments: { name: string } | null;
+};
 
 const LEAVE_INCLUDE = {
   leave_types: { select: { id: true, code: true, name: true, is_paid: true } },
@@ -58,7 +68,9 @@ export class LeaveRequestsService {
         full_name: true,
         campus_id: true,
         is_permanent_employee: true,
+        employment_subtype: true,
         join_date: true,
+        departments: { select: { name: true } },
       },
     });
     if (!profile) {
@@ -121,7 +133,14 @@ export class LeaveRequestsService {
   async getSelfContext(userId: string) {
     const profile = await this.prisma.employee_profiles.findUnique({
       where: { user_id: userId },
-      select: { id: true, is_permanent_employee: true, join_date: true, full_name: true },
+      select: {
+        id: true,
+        is_permanent_employee: true,
+        employment_subtype: true,
+        join_date: true,
+        full_name: true,
+        departments: { select: { name: true } },
+      },
     });
     if (!profile) {
       throw new ForbiddenException('No employee profile is linked to this account');
@@ -223,6 +242,8 @@ export class LeaveRequestsService {
     }
 
     const existing = await this.getById(id, user);
+    // Nobody decides their own leave, and only a super admin decides a super admin's.
+    await assertMayChangeEmployee(this.prisma, user, existing.employee_id, 'leave request');
     if (existing.status !== LeaveRequestStatus.PENDING) {
       throw new BadRequestException('Only pending requests can be reviewed');
     }
@@ -291,6 +312,7 @@ export class LeaveRequestsService {
     }
 
     const existing = await this.getById(id, user);
+    await assertMayChangeEmployee(this.prisma, user, existing.employee_id, 'leave request');
     if (existing.status !== LeaveRequestStatus.APPROVED) {
       throw new BadRequestException('Only approved requests can be revoked');
     }
@@ -326,13 +348,15 @@ export class LeaveRequestsService {
   private validateTypeRules(
     code: string,
     dto: CreateLeaveRequestDto,
-    profile: { is_permanent_employee: boolean; join_date: Date | null },
+    profile: PermanenceProfile,
   ) {
     switch (code) {
       case 'CASUAL':
         if (!this.isPermanentEmployee(profile)) {
           throw new BadRequestException(
-            'Casual leave is only available after 14 months of service',
+            profile.employment_subtype === EmploymentSubtype.CONTRACTUAL
+              ? 'Casual leave is only available to permanent staff'
+              : `Casual leave is only available after ${monthsUntilPermanent(profile.departments?.name)} months of service`,
           );
         }
         break;
@@ -364,17 +388,10 @@ export class LeaveRequestsService {
     }
   }
 
-  private isPermanentEmployee(profile: {
-    is_permanent_employee: boolean;
-    join_date: Date | null;
-  }): boolean {
-    if (profile.is_permanent_employee) return true;
-    if (!profile.join_date) return false;
-    const cutoff = new Date();
-    cutoff.setUTCMonth(cutoff.getUTCMonth() - 14);
-    cutoff.setUTCHours(0, 0, 0, 0);
-    return profile.join_date <= cutoff;
+  private isPermanentEmployee(profile: PermanenceProfile): boolean {
+    return isPermanentForLeave({ ...profile, departmentName: profile.departments?.name });
   }
+
 
   private async assertNoOverlap(
     employeeId: number,

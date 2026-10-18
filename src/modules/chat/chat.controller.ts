@@ -4,6 +4,7 @@ import { ChatGateway } from './chat.gateway';
 import { ChatMessageType } from '@prisma/client';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
+import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
@@ -26,15 +27,18 @@ export class ChatController {
     ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
   )
   @ApiOperation({ summary: 'Get all conversations for admin inbox' })
-  getInbox() {
-    return this.chatService.getAdminInbox();
+  getInbox(@CurrentUser() user: any) {
+    return this.chatService.getAdminInbox(user);
   }
 
   @Get('family/:familyId/students')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Get all students belonging to a family' })
-  getFamilyStudents(@Param('familyId', ParseIntPipe) familyId: number) {
-    return this.chatService.getFamilyStudents(familyId);
+  getFamilyStudents(@Param('familyId', ParseIntPipe) familyId: number, @CurrentUser() user: any) {
+    return this.chatService.getFamilyStudents(familyId, user);
   }
 
   @Get('students')
@@ -50,7 +54,7 @@ export class ChatController {
     ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
   )
   @ApiOperation({ summary: 'Admin fetch chat history with a family' })
-  getAdminChatHistory(
+  async getAdminChatHistory(
     @CurrentUser() user: any,
     @Param('familyId', ParseIntPipe) familyId: number,
     @Query('take') take?: string,
@@ -59,6 +63,7 @@ export class ChatController {
     if (familyId === 0 && !this.canAccessAnnouncements(user)) {
       throw new ForbiddenException('Announcements chat access required');
     }
+    await this.chatService.assertFamilyVisible(user, familyId);
     return this.chatService.getChatHistory(familyId, take ? parseInt(take) : 50, skip ? parseInt(skip) : 0);
   }
 
@@ -75,6 +80,7 @@ export class ChatController {
   }
 
   @Post('media')
+  @UseGuards(JwtStaffOrParentGuard)
   @ApiOperation({ summary: 'Upload an image/voice note and get the CDN URL' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } })) // 10MB
@@ -125,6 +131,7 @@ export class ChatController {
     @CurrentUser() user: any,
     @Body() body: { familyId: number; messageType: ChatMessageType; content: string; mediaMetadata?: Record<string, unknown> },
   ) {
+    await this.chatService.assertFamilyVisible(user, body.familyId);
     const senderName = user?.name || user?.username || 'TAFS Admin';
     const { newMessage, updatedConv, isDuplicate } = await this.chatService.createMessage(body.familyId, {
       senderType: 'ADMIN',
@@ -157,9 +164,13 @@ export class ChatController {
   }
 
   @Post('mark-read/admin/:familyId')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin marks messages for a family as read' })
-  async markAdminRead(@Param('familyId', ParseIntPipe) familyId: number) {
+  async markAdminRead(@Param('familyId', ParseIntPipe) familyId: number, @CurrentUser() user: any) {
+    await this.chatService.assertFamilyVisible(user, familyId);
     await this.chatService.markAsRead(familyId, 'ADMIN');
     this.chatGateway.broadcastMessagesRead(familyId, 'ADMIN');
   }
@@ -175,7 +186,10 @@ export class ChatController {
   }
 
   @Get('admin/messages/:messageId/acknowledgments')
-  @UseGuards(JwtStaffGuard)
+  @UseGuards(JwtStaffGuard, PoliciesGuard)
+  @CheckPolicies((ability) =>
+    ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
+  )
   @ApiOperation({ summary: 'Admin: see which families have acknowledged a message' })
   getAcknowledgments(@Param('messageId') messageId: string) {
     return this.chatService.getAcknowledgments(messageId);

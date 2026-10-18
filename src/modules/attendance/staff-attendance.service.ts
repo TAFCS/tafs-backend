@@ -1,5 +1,6 @@
+import { PeriodTimingsRow, scheduleFromSnapshot, timingsOnDate } from '../hr/employees/timings-history.util';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, zk_attendance_scans } from '@prisma/client';
+import { attendance_staff_daily, AttendanceSource, CheckInSource, Prisma, StaffAttendanceStatus, StaffRole, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -23,6 +24,7 @@ import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { effectiveManualStatus } from './manual-late.util';
 import { ZK_DEVICES } from './zk-device-health.util';
+import { describeCycleTenure, offRollReason } from '../hr/payroll/tenure-window.util';
 
 const STATUS_LABELS: Partial<Record<StaffAttendanceStatus, string>> = {
   PRESENT: 'Present',
@@ -511,7 +513,7 @@ export class StaffAttendanceService {
     const { periodStart, periodEnd } = computePayrollWindow(year, month);
     const campusId = employee.campus_id ?? 0;
 
-    const [scans, records, objections, payrollLine, scheduleCtx, calendarRows, mandatorySaturdayDates] = await Promise.all([
+    const [scans, records, objections, payrollLine, scheduleCtx, calendarRows, mandatorySaturdayDates, progressionPeriods] = await Promise.all([
       this.prisma.zk_attendance_scans.findMany({
         where: {
           employee_id: employee.id,
@@ -543,6 +545,8 @@ export class StaffAttendanceService {
           days_per_week: true,
           employee_work_schedules: { select: { day_of_week: true, is_working: true } },
           check_in_source: true,
+          join_date: true,
+          date_of_leaving: true,
         },
       }),
       campusId
@@ -551,10 +555,29 @@ export class StaffAttendanceService {
       campusId
         ? this.calendarResolver.loadMandatorySaturdayDates(employee.id, periodStart, periodEnd)
         : Promise.resolve(new Set<string>()),
+      this.prisma.employee_progression_periods.findMany({
+        where: {
+          employee_id: employee.id,
+          valid_from: { lte: periodEnd },
+          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+        },
+        select: {
+          employee_id: true,
+          employment_status: true,
+          valid_from: true,
+          valid_to: true,
+          timings: true,
+        },
+      }),
     ]);
 
+    // TAFSD-277: each day uses the working days and check-in source in effect on it.
+    const timingPeriods: PeriodTimingsRow[] = progressionPeriods.map((p) => ({ valid_from: p.valid_from, timings: p.timings }));
+    const everTimetable =
+      scheduleCtx?.check_in_source === CheckInSource.TIMETABLE ||
+      timingPeriods.some((p) => (p.timings as { check_in_source?: string } | null)?.check_in_source === CheckInSource.TIMETABLE);
     const [timetableActiveDays, makeupRescheduleDates, shiftOverrideDates] =
-      scheduleCtx?.check_in_source === CheckInSource.TIMETABLE
+      everTimetable
         ? await Promise.all([
             this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
             this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
@@ -578,9 +601,18 @@ export class StaffAttendanceService {
       else objectionsByDate.set(key, [obj]);
     }
 
+    const cycleTenure = describeCycleTenure({
+      periodStart,
+      periodEnd,
+      joinDate: scheduleCtx?.join_date ?? null,
+      dateOfLeaving: scheduleCtx?.date_of_leaving ?? null,
+      progression: progressionPeriods,
+    });
+
     const days: {
       date: string;
-      status: StaffAttendanceStatus | null;
+      status: StaffAttendanceStatus | string | null;
+      off_roll_reason: string | null;
       check_in_at: string | null;
       check_out_at: string | null;
       expected_check_in: string | null;
@@ -598,7 +630,44 @@ export class StaffAttendanceService {
       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))
     ) {
       const key = d.toISOString().slice(0, 10);
+      const offRoll = offRollReason(key, cycleTenure);
       const record = recordMap.get(key) ?? null;
+      const dayScans = scansByDate.get(key) ?? [];
+
+      if (offRoll) {
+        days.push({
+          date: key,
+          status: 'NOT_ON_ROLL',
+          off_roll_reason: offRoll,
+          check_in_at: record?.check_in_at?.toISOString() ?? dayScans[0]?.scan_time.toISOString() ?? null,
+          check_out_at:
+            record?.check_out_at?.toISOString() ??
+            (dayScans.length > 0 && dayScans.length % 2 === 0
+              ? dayScans[dayScans.length - 1].scan_time.toISOString()
+              : null),
+          expected_check_in: null,
+          expected_check_out: null,
+          is_override: false,
+          scans: dayScans.map((s) => ({
+            id: s.id,
+            scan_time: s.scan_time.toISOString(),
+            direction: s.direction,
+          })),
+          is_working_day: false,
+          day_type: 'NOT_ON_ROLL',
+          objections: [],
+        });
+        continue;
+      }
+
+      const daySnapshot = timingsOnDate(timingPeriods, d);
+      const daySchedule = daySnapshot
+        ? scheduleFromSnapshot(daySnapshot)
+        : {
+            days_per_week: scheduleCtx?.days_per_week ?? null,
+            employee_work_schedules: scheduleCtx?.employee_work_schedules ?? [],
+            check_in_source: scheduleCtx?.check_in_source ?? null,
+          };
       const resolved = campusId
         ? this.calendarResolver.resolveStaffDayFromRows(
             calendarRows,
@@ -607,10 +676,10 @@ export class StaffAttendanceService {
             scheduleCtx?.department_id ?? null,
             scheduleCtx?.staff_category_id ?? null,
             scheduleCtx?.staff_categories?.code ?? null,
-            scheduleCtx?.days_per_week ?? null,
-            scheduleCtx?.employee_work_schedules ?? [],
+            daySchedule.days_per_week,
+            daySchedule.employee_work_schedules,
             mandatorySaturdayDates,
-            scheduleCtx?.check_in_source,
+            daySchedule.check_in_source,
             timetableActiveDays,
             makeupRescheduleDates,
             shiftOverrideDates,
@@ -630,10 +699,10 @@ export class StaffAttendanceService {
           ? await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d))
           : { expectedCheckIn: null as Date | null, expectedCheckOut: null as Date | null, source: 'NONE' as const };
 
-      const dayScans = scansByDate.get(key) ?? [];
       days.push({
         date: key,
         status: record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
+        off_roll_reason: null,
         check_in_at: record?.check_in_at?.toISOString() ?? dayScans[0]?.scan_time.toISOString() ?? null,
         check_out_at:
           record?.check_out_at?.toISOString() ??
@@ -684,6 +753,7 @@ export class StaffAttendanceService {
       period: query.period,
       period_start: periodStart.toISOString().slice(0, 10),
       period_end: periodEnd.toISOString().slice(0, 10),
+      tenure: cycleTenure,
       days,
       payroll_snapshot,
     };
@@ -800,7 +870,10 @@ export class StaffAttendanceService {
       ],
     };
     const [atCampus, inScope] = await Promise.all([
-      this.prisma.employee_profiles.findMany({ where: onCampus, select: { id: true } }),
+      this.prisma.employee_profiles.findMany({
+        where: onCampus,
+        select: { id: true, user_id: true, users: { select: { role: true } } },
+      }),
       this.prisma.employee_profiles.findMany({
         where: { ...onCampus, ...this.scope.whereForEmployees(user) },
         select: { id: true },
@@ -817,6 +890,13 @@ export class StaffAttendanceService {
       throw new BadRequestException(
         `Employee IDs not found on this campus: ${notAtCampus.join(', ')}`,
       );
+    }
+    // Nobody overrides their own attendance day; it goes to whoever manages them.
+    if (user.role !== StaffRole.SUPER_ADMIN && atCampus.some((e) => e.user_id === user.sub)) {
+      throw new ForbiddenException('You cannot change your own attendance. Ask someone who manages your attendance.');
+    }
+    if (user.role !== StaffRole.SUPER_ADMIN && atCampus.some((e) => e.users?.role === StaffRole.SUPER_ADMIN)) {
+      throw new ForbiddenException("Only a super admin can change a super admin's attendance.");
     }
     const inScopeIds = new Set(inScope.map((e) => e.id));
     const outOfScope = employeeIds.filter((id) => !inScopeIds.has(id));

@@ -14,7 +14,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -38,17 +38,16 @@ export class AccessController {
   @Get('scope-options')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   @RequireAction('system.people_access#view')
-  async getScopeOptions() {
-    const options = await this.accessService.getScopeOptions();
+  async getScopeOptions(@CurrentUser() user: IJwtStaffPayload) {
+    const options = await this.accessService.getScopeOptions(user);
     return createApiResponse(options, HttpStatus.OK, 'Scope options retrieved successfully');
   }
 
-  // Shared with the separate Access Packs tile (system.access_packs, the
-  // /system/permissions page) -- read-only here, so left undecorated rather
-  // than requiring a system.people_access action for a page that isn't this
-  // one. The packs CRUD routes below belong to that tile entirely and carry its
-  // `manage` action.
+  // Read by both the Access Packs page and People & Access. The writes below
+  // need access_packs#manage, and AccessService.assertPackChangeAllowed keeps a
+  // non-super-admin to adding only what they hold, never on a pack of their own.
   @Get('packs')
+  @RequireAnyTile('system.access_packs', 'system.people_access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async listPacks() {
     const packs = await this.accessService.listPacks();
@@ -59,7 +58,7 @@ export class AccessController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   @RequireAction('system.access_packs#manage')
   async createPack(@Body() dto: CreateAccessPackDto, @CurrentUser() user: IJwtStaffPayload) {
-    const pack = await this.accessService.createPack(dto, user.username || user.sub);
+    const pack = await this.accessService.createPack(dto, user.username || user.sub, user);
     return createApiResponse(pack, HttpStatus.CREATED, 'Access pack created successfully');
   }
 
@@ -71,7 +70,7 @@ export class AccessController {
     @Body() dto: UpdateAccessPackDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const pack = await this.accessService.updatePack(id, dto, user.username || user.sub);
+    const pack = await this.accessService.updatePack(id, dto, user.username || user.sub, user);
     return createApiResponse(pack, HttpStatus.OK, 'Access pack updated successfully');
   }
 
@@ -79,7 +78,7 @@ export class AccessController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   @RequireAction('system.access_packs#manage')
   async deletePack(@Param('id') id: string, @CurrentUser() user: IJwtStaffPayload) {
-    const result = await this.accessService.deletePack(id, user.username || user.sub);
+    const result = await this.accessService.deletePack(id, user.username || user.sub, user);
     return createApiResponse(result, HttpStatus.OK, 'Access pack deleted successfully');
   }
 
@@ -91,9 +90,10 @@ export class AccessController {
     return createApiResponse(access, HttpStatus.OK, 'User access retrieved successfully');
   }
 
-  // Only `view` is required at the route: this PUT writes fields belonging to
-  // both the Access and Scope tabs, so authorisation happens per field in
-  // AccessService.assertUserAccessFieldsEditable.
+  // Only `view` at the route: this PUT writes fields of both the Access and
+  // Scope tabs, so AccessService partitions it (access.edit / scope.edit) and,
+  // for a non-super-admin, refuses self, SUPER_ADMIN targets and anything
+  // given beyond their own access or scope.
   @Put('users/:id/access')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   @RequireAction('system.people_access#view')

@@ -65,6 +65,13 @@ const HOUSE_BALANCER_STUDENT_NOTES = [
 
 const SUPER_ADMIN_ONLY_ENTITY_TYPES = ['PARENT_CHANGE_REQUEST'];
 
+/**
+ * The activity feed counts at most this many matches (TAFSD-326). An exact
+ * count read ~140k rows on every page load (0.4 s idle, up to 12 s under
+ * load); past the cap the total is reported as a lower bound.
+ */
+const AUDIT_COUNT_CAP = 10_000;
+
 /** entity_id on these rows is employee_profiles.id */
 const EMPLOYEE_ENTITY_TYPES = new Set(['STAFF_ATTENDANCE', 'EMPLOYEE']);
 
@@ -185,6 +192,34 @@ export class AuditLogsService {
   }
 
   /**
+   * Log several independent events in one insert. Same fire-and-forget
+   * contract as log(); use it instead of awaiting log() in a loop, which costs
+   * one database round trip per row.
+   */
+  async logMany(entries: AuditLogParams[]): Promise<void> {
+    if (entries.length === 0) return;
+    try {
+      await this.prisma.audit_logs.createMany({
+        data: entries.map((params) => ({
+          entity_type: params.entity_type,
+          entity_id: params.entity_id,
+          action: params.action,
+          section: params.section ?? this.deriveSectionFromEntityType(params.entity_type),
+          field: params.field || null,
+          old_value: params.old_value || null,
+          new_value: params.new_value || null,
+          changed_by: params.changed_by,
+          student_id: params.student_id || null,
+          note: params.note || null,
+          parent_id: params.parent_id ?? null,
+        })),
+      });
+    } catch (err) {
+      console.error('[AuditLog] Failed to write log entries:', err);
+    }
+  }
+
+  /**
    * One user action → one parent row + optional child detail rows.
    * Children inherit changed_by from the parent when omitted.
    */
@@ -195,13 +230,13 @@ export class AuditLogsService {
     const parentId = await this.log(parent);
     if (parentId == null || children.length === 0) return parentId;
 
-    for (const child of children) {
-      await this.log({
+    await this.logMany(
+      children.map((child) => ({
         ...child,
         changed_by: child.changed_by ?? parent.changed_by,
         parent_id: parentId,
-      });
-    }
+      })),
+    );
     return parentId;
   }
 
@@ -518,8 +553,9 @@ export class AuditLogsService {
         take: limit,
         skip: offset,
       }),
-      this.prisma.audit_logs.count({ where: finalWhere }),
+      this.prisma.audit_logs.count({ where: finalWhere, take: AUDIT_COUNT_CAP + 1 }),
     ]);
+    const totalCapped = total > AUDIT_COUNT_CAP;
 
     const parentIds = data.map((d) => d.id);
     const children =
@@ -538,7 +574,8 @@ export class AuditLogsService {
       childrenByParent.set(child.parent_id, list);
     }
 
-    return this.enrichAndReturn(data, childrenByParent, total);
+    const result = await this.enrichAndReturn(data, childrenByParent, totalCapped ? AUDIT_COUNT_CAP : total);
+    return { ...result, total_capped: totalCapped };
   }
 
   private collectActors(

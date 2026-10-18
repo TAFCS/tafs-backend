@@ -22,6 +22,12 @@ export interface IJwtStaffPayload {
    * which resolves to unrestricted — exactly what those sessions already had.
    */
   scope?: UserScope;
+  /**
+   * Set only on an impersonation token (TAFSD-361): the SUPER_ADMIN acting as
+   * `sub`. Everything else in the token describes the impersonated user.
+   */
+  impersonatorId?: string;
+  impersonatorName?: string;
 }
 
 export interface IJwtParentPayload {

@@ -16,7 +16,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -45,6 +45,7 @@ export class UsersController {
   // decorated here, same as any other route this tile shares with another.
   // See the scope/tile-permission handoff and the Vouchers rollout for why.
   @Get('check-username')
+  @RequireAnyTile('hr.employee_directory', 'hr.register_employee')
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   async checkUsername(@Query('username') username: string) {
     const available = await this.usersService.isUsernameAvailable(username || '');
@@ -63,7 +64,7 @@ export class UsersController {
   @CheckPolicies((ability) => ability.can(Action.Read, 'User'))
   @RequireAction('system.people_access#view')
   async findUser(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
-    const user = await this.usersService.findUserById(id, caller);
+    const user = await this.usersService.getUserForViewer(id, caller);
     return createApiResponse(user, HttpStatus.OK, 'User details retrieved successfully');
   }
 
@@ -76,10 +77,10 @@ export class UsersController {
     return createApiResponse(user, HttpStatus.CREATED, 'User created successfully');
   }
 
-  // Only `view` is required at the route: this PUT writes fields across both
-  // the Identity and Job tabs (plus role, which is its own, stricter check),
-  // so authorisation happens per field in UsersService.assertFieldsEditable
-  // against USER_FIELD_TAB_MAP.
+  // Only `view` at the route: this PUT writes fields of both the Identity and
+  // Job tabs, so UsersService authorises it per field (USER_FIELD_TAB_MAP) and,
+  // for a non-super-admin, refuses their own account, a SUPER_ADMIN's, a role
+  // above their own access and a password on an account above them.
   @Put(':id')
   @CheckPolicies((ability) => ability.can(Action.Update, 'User'))
   @RequireAction('system.people_access#view')
@@ -90,7 +91,7 @@ export class UsersController {
 
   @Get(':id/permissions')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
-  @RequireAction('system.people_access#access.edit')
+  @RequireAction('system.people_access#view')
   async getUserPermissions(@Param('id') id: string, @CurrentUser() caller: IJwtStaffPayload) {
     const user = await this.usersService.findUserById(id, caller);
     const permissions = await this.usersService.getUserPermissionState(id, user.role);
@@ -110,6 +111,7 @@ export class UsersController {
       dto,
       grantor.sub,
       grantor.username || grantor.sub,
+      grantor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Permission override set successfully');
   }
@@ -126,16 +128,19 @@ export class UsersController {
       id,
       key,
       editor.username || editor.sub,
+      editor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Permission override removed successfully');
   }
 
   // permissions/all, roles/:role/permissions, and roles/permissions below
   // belong to the separate Access Packs tile (system.access_packs, the
-  // /system/permissions page) — not decorated here. See the scope/
-  // tile-permission handoff on shared-controller tiles.
+  // /system/permissions page). The write needs that tile's `manage`; a
+  // non-super-admin may not touch SUPER_ADMIN's or their own role, and may
+  // only add capabilities they hold (UsersService).
 
   @Get('permissions/all')
+  @RequireAnyTile('system.access_packs')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Permission'))
   async listAllPermissions() {
     const permissions = await this.usersService.listAllPermissions();
@@ -143,6 +148,7 @@ export class UsersController {
   }
 
   @Get('roles/:role/permissions')
+  @RequireAnyTile('system.access_packs')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async getRolePermissions(@Param('role') role: StaffRole) {
     const permissions = await this.usersService.listRolePermissions(role);
@@ -150,6 +156,7 @@ export class UsersController {
   }
 
   @Post('roles/permissions')
+  @RequireAction('system.access_packs#manage')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Permission'))
   async updateRolePermission(
     @Body() dto: UpdateRolePermissionDto,
@@ -158,6 +165,7 @@ export class UsersController {
     const result = await this.usersService.updateRolePermission(
       dto,
       editor.username || editor.sub,
+      editor,
     );
     return createApiResponse(result, HttpStatus.OK, 'Role permission updated successfully');
   }

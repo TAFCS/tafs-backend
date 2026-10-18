@@ -43,7 +43,9 @@
  */
 
 export const SEVERITY_BANDS = [
-  { id: 'EXPIRING', label: 'Expiring', minMonths: 0, maxMonths: 0 },
+  // Shown as "Expired bill" (TAFSD-325): the voucher is already past its
+  // expiry date unpaid; "Expiring" read as if there were still time.
+  { id: 'EXPIRING', label: 'Expired bill', minMonths: 0, maxMonths: 0 },
   { id: 'WATCH', label: 'Watch', minMonths: 1, maxMonths: 1 },
   { id: 'DEFAULTER', label: 'Defaulter', minMonths: 2, maxMonths: 2 },
   { id: 'SEVERE', label: 'Severe', minMonths: 3, maxMonths: 3 },

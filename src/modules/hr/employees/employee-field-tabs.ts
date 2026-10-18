@@ -36,14 +36,15 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
   reporting_time: 'schedule_pay', leaving_time: 'schedule_pay',
   check_in_source: 'schedule_pay', late_relaxation_minutes: 'schedule_pay',
   days_per_week: 'schedule_pay', monthly_pay: 'schedule_pay',
-  payroll_enabled: 'schedule_pay',
+  payroll_enabled: 'schedule_pay', eobi_exempt: 'schedule_pay', sessi_exempt: 'schedule_pay',
   account_number: 'schedule_pay', bank_name: 'schedule_pay',
 
   // ── Class & Sections tab ──
   class_section_assignments: 'classes',
 
-  // ── Portal Account tab ──
-  portal_account: 'portal', user_id: 'portal',
+  // ── Portal Account tab ── (linking an existing login; never your own or a
+  // SUPER_ADMIN's -- EmployeesService.assertMayLinkLogin)
+  user_id: 'portal',
 };
 
 /**
@@ -52,6 +53,22 @@ export const EMPLOYEE_FIELD_TAB_MAP: Record<string, string> = {
  */
 export const EMPLOYEE_FIELD_ACTION_OVERRIDES: Record<string, string> = {
   employment_status: 'status.change',
+  // Permanent / non-permanent / contractual is part of the employment status
+  // (the status.change action covers "Active, Permanent, ..."), not a free
+  // Employment-tab field. Was unmapped, so any directory viewer could PATCH it.
+  employment_subtype: 'status.change',
+  // Creating a login alongside the record. Only the plain EMPLOYEE role (staff
+  // app self-service) is open to a delegate; any other role is SUPER_ADMIN only
+  // (EmployeesService.preparePortalAccount).
+  portal_account: 'create',
 };
+
+/**
+ * Fields that hand the new login access. They belong to People & Access, not
+ * this tile: sending a non-empty list needs `system.people_access#access.edit`,
+ * and a non-super-admin may only give what they hold themselves
+ * (EmployeesService.create -> AccessService.assertNoLeak). TAFSD-365.
+ */
+export const EMPLOYEE_ACCESS_GRANT_FIELDS = ['packIds', 'tileGrants'];
 
 export const EMPLOYEE_DIRECTORY_TILE_ID = 'hr.employee_directory';

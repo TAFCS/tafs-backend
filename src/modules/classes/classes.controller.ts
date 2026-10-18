@@ -7,7 +7,7 @@ import { ScopeService } from '../../common/scope/scope.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { BulkUpdateClassesDto } from './dto/bulk-update-classes.dto';
@@ -67,6 +67,7 @@ export class ClassesController {
   }
 
   @Get(':id/dependencies')
+  @RequireAnyTile('school-setup.classes')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Class'))
   async getDependencies(@Param('id', ParseIntPipe) id: number) {
     return this.classesService.getDependencies(id);

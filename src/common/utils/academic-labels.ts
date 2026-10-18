@@ -160,10 +160,37 @@ export function deriveAcademicYear(dateStr: string, term?: TermContext): string 
 }
 
 /**
+ * Formats a stored academic year for the challan header badge, e.g.
+ * "2025-2026" → "Academic Session 2025–26".
+ *
+ * Accepts the short form already ("2025-26"), the full form ("2025-2026"),
+ * and the comma-separated multi-session label from
+ * resolveVoucherAcademicYearLabel. Uses an en-dash between the years.
+ */
+export function formatAcademicSessionLabel(academicYear: string | null | undefined): string {
+    const raw = (academicYear ?? '').trim();
+    if (!raw || raw === 'N/A') return 'Academic Session N/A';
+
+    const shortened = raw
+        .split(',')
+        .map((part) => {
+            const y = part.trim();
+            const m = y.match(/^(\d{4})\s*[-–]\s*(\d{2}|\d{4})$/);
+            if (!m) return y;
+            const start = m[1];
+            const end = m[2].length === 4 ? m[2].slice(-2) : m[2];
+            return `${start}–${end}`;
+        })
+        .join(', ');
+
+    return `Academic Session ${shortened}`;
+}
+
+/**
  * Resolve the academic year printed on a voucher challan header.
  *
  * Prefer a single shared academic_year from the fee heads being billed so the
- * header matches month labels (e.g. AUG 25 → 2025-2026). When heads span
+ * header matches month labels (e.g. AUGUST 25 → 2025-2026). When heads span
  * multiple sessions or have no year, fall back to fee_date derivation, then an
  * explicit stored/client value.
  */
@@ -284,7 +311,7 @@ const CALENDAR_MONTHS = [
 
 /**
  * Builds the "FOR MONTH(S) OF" label — the one printed on the challan and shown
- * on the parent app's voucher cards, e.g. "AUG 25 - OCT 25, JAN 26".
+ * on the parent app's voucher cards, e.g. "AUGUST 25 - OCTOBER 25, JANUARY 26".
  *
  * Months come from the billed fee rows (student_fees.target_month), never from
  * vouchers.month: that column is header metadata picked in the /fee-challan UI
@@ -338,8 +365,21 @@ export function buildVoucherMonthsLabel(
 }
 
 /**
+ * Full-name month+year for the challan's "FOR MONTH(S) OF" line, e.g. "September 25".
+ * Keeps the short year from getMonthYearLabel so multi-month ranges still fit on one line.
+ */
+function getConsolidatedMonthYearLabel(m: number, academicYear: string, term?: TermContext): string {
+    const monthName = PDF_MONTHS.find((_, i) => PDF_MONTH_TO_NUM[PDF_MONTHS[i]] === m) || '';
+    const parts = (academicYear || '').split('-').map(y => y.trim());
+    const year = calendarYearOf(m, academicYear, term);
+    const yearStr = year != null ? String(year) : (parts[0] || '');
+    return `${monthName} ${yearStr.slice(-2)}`.trim();
+}
+
+/**
  * Collapses a list of month+academicYear items into a human-readable label
- * that consolidates consecutive months into ranges, e.g. "AUG 25 - OCT 25".
+ * that consolidates consecutive months into ranges, e.g. "AUGUST 25 - OCTOBER 25".
+ * Uses full month names (not abbreviations) — the challan header has room for them.
  *
  * Each item may carry its own term; a list spanning a term change is ordered and
  * ranged on calendar time, so a Jun-2026 Cambridge head and a Jul-2026 Secondary
@@ -381,10 +421,18 @@ export function getConsolidatedMonthsLabel(
 
     return ranges
         .map(range => {
-            const first = getMonthYearLabel(range[0].month, range[0].academicYear, termFor(range[0])).toUpperCase();
+            const first = getConsolidatedMonthYearLabel(
+                range[0].month,
+                range[0].academicYear,
+                termFor(range[0]),
+            ).toUpperCase();
             if (range.length === 1) return first;
             const lastItem = range[range.length - 1];
-            const last = getMonthYearLabel(lastItem.month, lastItem.academicYear, termFor(lastItem)).toUpperCase();
+            const last = getConsolidatedMonthYearLabel(
+                lastItem.month,
+                lastItem.academicYear,
+                termFor(lastItem),
+            ).toUpperCase();
             return `${first} - ${last}`;
         })
         .join(', ');

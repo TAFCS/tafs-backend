@@ -1,5 +1,38 @@
 # Handoff — universal scope + tile sub-permissions
 
+> **Audit 2026-10-17 (TAFSD-365) — read this first; it supersedes parts below.**
+>
+> - **Every web tile is done.** All 62 web tiles declare actions, every
+>   controller behind them runs `TileActionGuard`, and every tile has a webapp
+>   `use<Tile>Access` hook in use. Rollout items 3 and 5 are complete.
+> - **People & Access, Access Packs and portal actions are delegable, with
+>   guards.** The SUPER_ADMIN decides who holds them. For anyone else
+>   `AccessService` refuses: their own account/access/scope and any
+>   SUPER_ADMIN account (`assertMayManageUser`); giving any tile, sub-permission
+>   or capability they do not hold (`assertNoLeak`, computed with
+>   `effectiveWith` before and after the change; packs via
+>   `assertPackChangeAllowed`); the SUPER_ADMIN role or any role carrying a
+>   capability they lack (`assertMayAssignRole`); scope wider than theirs,
+>   including an empty = unrestricted dimension, which used to slip through
+>   (`assertGrantableScope`); and setting, resetting or revealing a password or
+>   username on an account holding more than they do (`assertNotAbove`). Role
+>   baselines need `access_packs#manage`, never the SUPER_ADMIN or own role.
+>   `delegated-access-guards.spec.ts` covers all of it.
+> - **Nobody but a SUPER_ADMIN changes their own records, or a SUPER_ADMIN's.**
+>   `assertMayChangeRecordOf` / `assertMayChangeEmployee` on employee writes,
+>   salary increments, loans, security deposits, per-line payroll, leave
+>   review, objection review, attendance overrides and employee photos.
+> - **§2 token trap and §5c.3 stale sessions are gone:** role, actions and scope
+>   are read live per request (TAFSD-307/308). `actions === undefined` no longer
+>   happens for a validated staff request.
+> - **§4 item 4 is functionally done:** the 12 `assertCampusAccess` copies all
+>   delegate to `ScopeService.assertCampus`. Deleting the wrappers is cosmetic.
+> - **§8 resolved:** the admin-panel scope question (writes are SUPER_ADMIN
+>   only, so moot); `listPacks` returns `tileActions` and the pack editor shows
+>   sub-permissions; the migrations are applied, so the unguarded-write hole is
+>   closed in practice. Still open: item 6 (retire `users.campus_id` /
+>   `allowed_class_ids`), class/section scope for employees, the legacy bridge.
+
 **Status (2026-09-12, end of day):** the foundation is built, **deployed, and
 migrated**, and the first two items of the rollout are done. This file is the
 recipe for the rest, one page at a time.

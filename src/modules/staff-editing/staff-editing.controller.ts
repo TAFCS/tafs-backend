@@ -23,19 +23,25 @@ import { HardDeleteStudentDto } from './dto/hard-delete-student.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
 
+// TileActionGuard is what enforces @RequireAction. Without it every decorator
+// below was inert and any staff login could edit — or hard-delete — any
+// student. Routes with no action of their own fall back to the class default.
 @Controller('staff-editing')
-@UseGuards(JwtStaffGuard)
+@UseGuards(JwtStaffGuard, TileActionGuard)
+@RequireAction('student.directory#view')
 export class StaffEditingController {
   constructor(private readonly staffEditingService: StaffEditingService) {}
 
   // ─── Students ─────────────────────────────────────────────────────────────
 
   @Get('students')
-  async getStudents(@Query() query: GetSheetStudentsDto) {
-    const result = await this.staffEditingService.getStudents(query);
+  async getStudents(@Query() query: GetSheetStudentsDto, @CurrentUser() user: IJwtStaffPayload) {
+    const result = await this.staffEditingService.getStudents(query, user);
     return createApiResponse(
       result,
       HttpStatus.OK,
@@ -44,7 +50,8 @@ export class StaffEditingController {
   }
 
   @Get('students/:id')
-  async getStudent(@Param('id', ParseIntPipe) id: number) {
+  async getStudent(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const student = await this.staffEditingService.getStudent(id);
     return createApiResponse(
       student,
@@ -54,11 +61,13 @@ export class StaffEditingController {
   }
 
   @Patch('students/:id')
+  @RequireAction('student.directory#identity.edit')
   async updateStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const student = await this.staffEditingService.updateStudent(id, dto, user.username);
     return createApiResponse(
       student,
@@ -68,11 +77,13 @@ export class StaffEditingController {
   }
  
   @Delete('students/:id/hard-delete')
+  @RequireAction('student.directory#status.change')
   async hardDeleteStudent(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: HardDeleteStudentDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const result = await this.staffEditingService.hardDeleteStudent(id, user.username, dto.reason);
     return createApiResponse(
       result,
@@ -82,11 +93,13 @@ export class StaffEditingController {
   }
 
   @Patch('students/:id/family-address')
+  @RequireAction('student.directory#identity.edit')
   async updateFamilyAddress(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     const result = await this.staffEditingService.updateFamilyAddress(id, dto, user.username);
     return createApiResponse(
       result,
@@ -100,7 +113,9 @@ export class StaffEditingController {
   @Get('students/:studentId/guardians')
   async getStudentGuardians(
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardians =
       await this.staffEditingService.getStudentGuardians(studentId);
     return createApiResponse(
@@ -111,11 +126,13 @@ export class StaffEditingController {
   }
 
   @Post('students/:studentId/guardians')
+  @RequireAction('student.directory#guardians.edit')
   async addGuardianToStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: CreateGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardian = await this.staffEditingService.addGuardianToStudent(
       studentId,
       dto,
@@ -129,11 +146,13 @@ export class StaffEditingController {
   }
 
   @Post('students/:studentId/guardians/link-existing')
+  @RequireAction('student.directory#guardians.edit')
   async linkExistingGuardian(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Body() dto: LinkExistingGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const guardian = await this.staffEditingService.linkExistingGuardian(
       studentId,
       dto,
@@ -147,12 +166,14 @@ export class StaffEditingController {
   }
 
   @Patch('students/:studentId/guardians/:guardianId')
+  @RequireAction('student.directory#guardians.edit')
   async updateGuardianRelationship(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
     @Body() dto: UpdateGuardianRelationshipDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     const result = await this.staffEditingService.updateGuardianRelationship(
       studentId,
       guardianId,
@@ -168,11 +189,13 @@ export class StaffEditingController {
 
   @Delete('students/:studentId/guardians/:guardianId')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#guardians.edit')
   async removeGuardianFromStudent(
     @Param('studentId', ParseIntPipe) studentId: number,
     @Param('guardianId', ParseIntPipe) guardianId: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, studentId);
     await this.staffEditingService.removeGuardianFromStudent(
       studentId,
       guardianId,
@@ -188,7 +211,8 @@ export class StaffEditingController {
   // ─── Guardians (standalone) ───────────────────────────────────────────────
 
   @Get('guardians/:id')
-  async getGuardian(@Param('id', ParseIntPipe) id: number) {
+  async getGuardian(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const guardian = await this.staffEditingService.getGuardian(id);
     return createApiResponse(
       guardian,
@@ -198,11 +222,13 @@ export class StaffEditingController {
   }
 
   @Patch('guardians/:id')
+  @RequireAction('student.directory#guardians.edit')
   async updateGuardian(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateGuardianDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const guardian = await this.staffEditingService.updateGuardian(id, dto, user.username);
     return createApiResponse(
       guardian,
@@ -212,7 +238,7 @@ export class StaffEditingController {
   }
 
   @Get('guardians/by-nic/:nic')
-  async getGuardianByNic(@Param('nic') nic: string) {
+  async getGuardianByNic(@Param('nic') nic: string, @CurrentUser() user: IJwtStaffPayload) {
     const guardian = await this.staffEditingService.getGuardianByNic(nic);
     return createApiResponse(
       guardian,
@@ -223,10 +249,12 @@ export class StaffEditingController {
 
   @Delete('guardians/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#guardians.edit')
   async deleteGuardian(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertGuardianVisible(user, id);
     const result = await this.staffEditingService.deleteGuardian(id, user.username);
     return createApiResponse(
       result,
@@ -238,87 +266,105 @@ export class StaffEditingController {
   // ─── Sub-table CRUD ──────────────────────────────────────────────────────
 
   @Post('students/:id/admissions')
+  @RequireAction('student.directory#admissions.edit')
   async upsertAdmission(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertAdmission(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('admissions/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#admissions.edit')
   async deleteAdmission(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'admission', id);
     await this.staffEditingService.deleteAdmission(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/activities')
+  @RequireAction('student.directory#academic.edit')
   async upsertActivity(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertActivity(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('activities/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deleteActivity(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'activity', id);
     await this.staffEditingService.deleteActivity(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/languages')
+  @RequireAction('student.directory#academic.edit')
   async upsertLanguage(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertLanguage(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('languages/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deleteLanguage(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'language', id);
     await this.staffEditingService.deleteLanguage(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/schools')
+  @RequireAction('student.directory#academic.edit')
   async upsertPreviousSchool(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertPreviousSchool(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 
   @Delete('schools/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireAction('student.directory#academic.edit')
   async deletePreviousSchool(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertChildVisible(user, 'school', id);
     await this.staffEditingService.deletePreviousSchool(id, user.username);
     return createApiResponse(null, HttpStatus.OK, 'Deleted');
   }
 
   @Post('students/:id/alevel-details')
+  @RequireAction('student.directory#academic.edit')
   async upsertALevelDetails(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: any,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
     return createApiResponse(await this.staffEditingService.upsertALevelDetails(id, dto, user.username), HttpStatus.OK, 'Saved');
   }
 }

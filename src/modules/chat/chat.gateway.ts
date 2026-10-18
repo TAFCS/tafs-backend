@@ -105,11 +105,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // admin_inbox carries every family's live messages — only join it if the
         // staff member actually has chat-view permission (mirrors the REST
         // PoliciesGuard check on GET /chat/inbox), not just "any authenticated staff".
+        //
+        // A staff member with a data scope must not see families outside it:
+        // they join admin_inbox_scoped instead, and emitToAdmins delivers each
+        // family event only to the scoped sockets that can see that family.
+        // Scope is read live here, never trusted from the 90-day token.
         if (this.canViewChats(payload)) {
-          client.join('admin_inbox');
-          console.log(`[ChatGateway] Staff joined admin_inbox: ${client.id}`);
+          const live = await this.chatService.withLiveScope(payload);
+          client.data.tafsPayload = live;
+          const room = this.chatService.isUnrestrictedStaff(live) ? 'admin_inbox' : 'admin_inbox_scoped';
+          client.join(room);
+          console.log(`[ChatGateway] Staff joined ${room}: ${client.id}`);
         }
         client.join(`staff_inbox_${payload.sub}`);
+        // Live ticket-pool events follow queue membership (TAFSD-235), read
+        // here rather than from the token. The role rooms below only serve
+        // tickets routed before queues existed (routed_queue_id null).
+        const memberships = await this.prisma.ticket_queue_members.findMany({
+          where: { user_id: payload.sub },
+          select: { queue_id: true },
+        });
+        for (const m of memberships) client.join(ChatGateway.queueRoom(m.queue_id));
         if (payload.role === 'FINANCE_CLERK') client.join('finance_queue');
         if (payload.role === 'SUPER_ADMIN') client.join('super_admin_approvals');
         if (payload.role === 'GENERAL_RESPONDENT') client.join('general_respondent_inbox');
@@ -142,9 +158,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
 
         if (!wasOnline) {
-          this.server
-            .to('admin_inbox')
-            .emit('userStatusChanged', { familyId, status: 'ONLINE' });
+          void this.emitToAdmins(familyId, 'userStatusChanged', { familyId, status: 'ONLINE' });
         }
         console.log(`[ChatGateway] Parent ${familyId} connected: ${client.id}`);
       }
@@ -173,7 +187,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       if (!isNaN(familyId)) {
         const stillOnline = (this.server.sockets.adapter.rooms.get(`family_app_${familyId}`)?.size ?? 0) > 0;
         if (!stillOnline) {
-          this.server.to('admin_inbox').emit('userStatusChanged', { familyId, status: 'OFFLINE' });
+          void this.emitToAdmins(familyId, 'userStatusChanged', { familyId, status: 'OFFLINE' });
         }
       }
     }
@@ -339,7 +353,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     content: string,
   ) {
     const formattedConv = this.chatService.formatConversation(updatedConv);
-    this.server.to('admin_inbox').emit('receiveMessage', { message: newMessage, conversation: formattedConv });
+    await this.emitToAdmins(familyId, 'receiveMessage', { message: newMessage, conversation: formattedConv });
     this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message: newMessage, conversation: formattedConv });
 
     if (senderType === 'ADMIN') {
@@ -389,11 +403,28 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return !!room && room.size > 0;
   }
 
+  /**
+   * Emits a family's event to every admin allowed to see that family: all of
+   * admin_inbox (unrestricted staff), and each admin_inbox_scoped socket whose
+   * scope covers it. fetchSockets() spans the cluster via the redis adapter.
+   */
+  private async emitToAdmins(familyId: number, event: string, body: unknown) {
+    this.server.to('admin_inbox').emit(event, body);
+    const scoped = await this.server.in('admin_inbox_scoped').fetchSockets();
+    const seen = new Map<string, boolean>();
+    for (const socket of scoped) {
+      const user = socket.data.tafsPayload;
+      if (!user?.sub) continue;
+      if (!seen.has(user.sub)) seen.set(user.sub, await this.chatService.staffCanSeeFamily(user, familyId));
+      if (seen.get(user.sub)) socket.emit(event, body);
+    }
+  }
+
   broadcastMessagesRead(familyId: number, by: 'ADMIN' | 'GUARDIAN') {
     if (by === 'ADMIN') {
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
-      this.server.to('admin_inbox').emit('messagesRead', { familyId, by: 'GUARDIAN' });
+      void this.emitToAdmins(familyId, 'messagesRead', { familyId, by: 'GUARDIAN' });
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
   }
@@ -416,6 +447,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       if (authorizedFamilyId !== familyId) {
         return { error: 'forbidden' };
       }
+    }
+    // Staff only to families inside their scope (same rule as POST /chat/messages/admin).
+    if (payload?.userType === 'STAFF' && !(await this.chatService.staffCanSeeFamily(await this.chatService.withLiveScope(payload), familyId))) {
+      return { error: 'forbidden' };
     }
 
     // Resolve sender name: use provided name, or derive from JWT payload
@@ -461,6 +496,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             : 'GUARDIAN';
 
     const familyId = Number(data.familyId);
+    if (payload?.userType === 'STAFF' && !(await this.chatService.staffCanSeeFamily(await this.chatService.withLiveScope(payload), familyId))) {
+      return { error: 'forbidden' };
+    }
     if (payload?.userType === 'PARENT') {
       const authorizedFamilyId = Number(payload.familyId ?? payload.sub);
       if (authorizedFamilyId !== familyId) {
@@ -494,7 +532,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (role === 'ADMIN') {
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'ADMIN' });
     } else {
-      this.server.to('admin_inbox').emit('messagesRead', { familyId: familyId, by: 'GUARDIAN' });
+      void this.emitToAdmins(familyId, 'messagesRead', { familyId: familyId, by: 'GUARDIAN' });
       // Also notify other devices of the same family
       this.server.to(`family_app_${familyId}`).emit('messagesRead', { by: 'GUARDIAN' });
     }
@@ -569,7 +607,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // Deliver only to the specific family room
     this.server.to(`family_app_${familyId}`).emit('receiveMessage', { message, conversation });
-    this.server.to('admin_inbox').emit('receiveMessage', { message, conversation });
+    await this.emitToAdmins(familyId, 'receiveMessage', { message, conversation });
 
     // Background FCM push
     this.fcmService
@@ -715,7 +753,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       });
 
       // 2. Broadcast deletion
-      this.server.to('admin_inbox').emit('messageDeleted', { messageId: data.messageId, familyId: familyId });
+      void this.emitToAdmins(familyId, 'messageDeleted', { messageId: data.messageId, familyId: familyId });
       this.server.to(`family_app_${familyId}`).emit('messageDeleted', { messageId: data.messageId });
       
       return { success: true };
@@ -882,6 +920,36 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  static queueRoom(queueId: number) {
+    return `ticket_queue_${queueId}`;
+  }
+
+  /**
+   * Rooms that hold a ticket's pool: its queue's members, or for a ticket
+   * routed before queues existed, the old role room.
+   */
+  private ticketPoolRooms(ticket: { routed_queue_id?: number | null; routed_role?: string | null }): string[] {
+    if (ticket.routed_queue_id != null) return [ChatGateway.queueRoom(ticket.routed_queue_id)];
+    if (ticket.routed_role === 'FINANCE_CLERK') return ['finance_queue'];
+    if (ticket.routed_role === 'GENERAL_RESPONDENT') return ['general_respondent_inbox'];
+    return [];
+  }
+
+  private emitToPool(ticket: any, event: string, payload: unknown) {
+    const rooms = this.ticketPoolRooms(ticket);
+    if (rooms.length) this.server.to(rooms).emit(event, payload);
+  }
+
+  /**
+   * After a queue's members change, move already-connected sockets in or out
+   * of its room so a newly added member sees the pool without reconnecting.
+   */
+  async syncQueueRoom(queueId: number, memberIds: string[]) {
+    const room = ChatGateway.queueRoom(queueId);
+    this.server.in(room).socketsLeave(room);
+    if (memberIds.length) this.server.in(memberIds.map((id) => `staff_inbox_${id}`)).socketsJoin(room);
+  }
+
   async broadcastTicketCreated(ticket: any) {
     this.server.to('super_admin_approvals').emit('ticketCreated', { ticket });
     if (ticket.current_assignee_id) {
@@ -889,16 +957,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketCreated', { ticket });
     }
-    if (ticket.routed_role === 'FINANCE_CLERK') {
-      this.server.to('finance_queue').emit('ticketCreated', { ticket });
-    }
-    if (ticket.routed_role === 'GENERAL_RESPONDENT') {
-      this.server.to('general_respondent_inbox').emit('ticketCreated', { ticket });
-    }
+    this.emitToPool(ticket, 'ticketCreated', { ticket });
   }
 
   async broadcastTicketClaimed(ticket: any) {
-    this.server.to('finance_queue').emit('ticketClaimed', { ticket });
+    // Everyone in the pool drops it from "unclaimed".
+    this.emitToPool(ticket, 'ticketClaimed', { ticket });
     if (ticket.current_assignee_id) {
       this.server
         .to(`staff_inbox_${ticket.current_assignee_id}`)
@@ -909,7 +973,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   async broadcastTicketTransferred(ticket: any, fromUserId: string, toUserId: string) {
     this.server.to(`staff_inbox_${fromUserId}`).emit('ticketTransferred', { ticket, toUserId });
     this.server.to(`staff_inbox_${toUserId}`).emit('ticketTransferred', { ticket, fromUserId });
-    this.server.to('finance_queue').emit('ticketTransferred', { ticket });
+    this.emitToPool(ticket, 'ticketTransferred', { ticket });
   }
 
   async broadcastTicketForwarded(ticket: any, fromUserId: string, toUserId: string) {
@@ -1048,9 +1112,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageReceived', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageReceived', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageReceived', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageReceived', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageReceived', payload);
   }
@@ -1087,9 +1149,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageDeleted', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageDeleted', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageDeleted', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageDeleted', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageDeleted', payload);
   }
@@ -1108,9 +1168,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         .to(`staff_inbox_${ticket.current_assignee_id}`)
         .emit('ticketMessageUpdated', payload);
     }
-    if (ticket.routed_role === 'FINANCE_CLERK' && !ticket.current_assignee_id) {
-      this.server.to('finance_queue').emit('ticketMessageUpdated', payload);
-    }
+    if (!ticket.current_assignee_id) this.emitToPool(ticket, 'ticketMessageUpdated', payload);
     this.server.to('super_admin_approvals').emit('ticketMessageUpdated', payload);
     this.emitToTicketRoom(ticket.id, 'ticketMessageUpdated', payload);
   }

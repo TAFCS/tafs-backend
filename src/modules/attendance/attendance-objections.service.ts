@@ -1,3 +1,4 @@
+import { timingsForDate } from '../hr/employees/employee-day-timings.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -22,6 +23,7 @@ import {
   ListAttendanceObjectionsQueryDto,
   ReviewAttendanceObjectionDto,
 } from './dto/attendance-objections.dto';
+import { assertMayChangeEmployee } from '../../common/auth/super-admin';
 
 @Injectable()
 export class AttendanceObjectionsService {
@@ -148,6 +150,7 @@ export class AttendanceObjectionsService {
             employee_code: true,
             leaving_time: true,
             reporting_time: true,
+            employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
           },
         },
         scan: { select: { id: true, scan_time: true, direction: true, device_sn: true, device_pin: true } },
@@ -159,6 +162,12 @@ export class AttendanceObjectionsService {
     }
     // Covers segment/department/category, which the legacy campus-only check never did.
     this.scope.assertEmployee(user, existing.employee);
+    // Accepting rewrites the attendance day, so the same rule as a manual
+    // override applies: nobody decides their own objection.
+    if (user.role !== StaffRole.SUPER_ADMIN && existing.employee.user_id === user.sub) {
+      throw new ForbiddenException('You cannot review your own attendance objection.');
+    }
+    await assertMayChangeEmployee(this.prisma, user, existing.employee.id, 'attendance objection');
 
     const updated = await this.prisma.attendance_objections.update({
       where: { id },
@@ -213,8 +222,14 @@ export class AttendanceObjectionsService {
         // Day-level objection (zero biometric scans recorded for the day):
         // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
         checkInAt = existing.claimed_time;
-        if (existing.employee.leaving_time) {
-          const lt = new Date(existing.employee.leaving_time);
+        // That weekday's leaving time (TAFSD-363: Friday may differ).
+        const leavingTime = timingsForDate(
+          existing.employee,
+          existing.employee.employee_day_timings,
+          new Date(existing.attendance_date),
+        ).leaving_time;
+        if (leavingTime) {
+          const lt = new Date(leavingTime);
           const d = new Date(existing.attendance_date);
           checkOutAt = new Date(
             Date.UTC(

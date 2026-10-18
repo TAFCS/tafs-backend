@@ -6,12 +6,14 @@ import { readUntilMigrated } from '../../utils/pending-migration.util';
 import {
   effectiveScopeOf,
   isFullyUnrestricted,
+  NO_MATCH_ID,
   SCOPE_DIMENSION_LABEL,
   SCOPE_FIELD_BY_DIMENSION,
   scopeAllows,
   scopeFromEntries,
   whereForEmployees,
   whereForStudents,
+  whereForVouchers,
   type UserScope,
 } from './scope.types';
 
@@ -58,6 +60,95 @@ export class ScopeService {
     return scopeFromEntries(entries);
   }
 
+  /**
+   * The scope a session is actually held to: `resolve()` with SEGMENT folded
+   * into CLASS. Use for issuing tokens and checking requests; use `resolve()`
+   * wherever the raw entries are shown or edited (the access admin panel), or
+   * the derived classes would be saved back as explicit class scope.
+   *
+   * Segment scope means "students in classes of these segments", but most
+   * checks are written against class alone (assertClass, classIdsFor, a
+   * class_id filter) and silently skipped segment — a segment-scoped user
+   * reached every class. Narrowing `classes` to the segments' classes makes
+   * every class-based check enforce segment without each one remembering to.
+   */
+  private effectiveScopeCache = new Map<string, { scope: UserScope; expires: number }>();
+
+  /**
+   * The scope a session is actually held to: `resolve()` with SEGMENT folded
+   * into CLASS. Use for issuing tokens and checking requests; use `resolve()`
+   * wherever the raw entries are shown or edited (the access admin panel), or
+   * the derived classes would be saved back as explicit class scope.
+   *
+   * Segment scope means "students in classes of these segments", but most
+   * checks are written against class alone (assertClass, classIdsFor, a
+   * class_id filter) and silently skipped segment — a segment-scoped user
+   * reached every class. Narrowing `classes` to the segments' classes makes
+   * every class-based check enforce segment without each one remembering to.
+   *
+   * A short-lived (30s) in-memory cache absorbs concurrent request bursts
+   * on page loads without repeatedly hammering Postgres.
+   */
+  async resolveEffective(userId: string): Promise<UserScope> {
+    const cached = this.effectiveScopeCache.get(userId);
+    const now = Date.now();
+    if (cached && cached.expires > now) {
+      return cached.scope;
+    }
+    const resolved = await this.withCategoryDepartments(
+      await this.withSegmentClasses(await this.resolve(userId)),
+    );
+    this.effectiveScopeCache.set(userId, { scope: resolved, expires: now + 30_000 });
+    return resolved;
+  }
+
+  invalidateScopeCache(userId?: string) {
+    if (userId) {
+      this.effectiveScopeCache.delete(userId);
+    } else {
+      this.effectiveScopeCache.clear();
+    }
+  }
+
+  /**
+   * Staff-category scope also means "in those categories' departments".
+   * Department and category AND together on the employee row, so with
+   * Departments on All a category-only scope matched on `staff_category_id`
+   * alone -- and an employee whose `department_id` disagrees with their
+   * category's department (rows from before categories were tied to
+   * departments, TAFSD-276) leaked into the view. Narrowing `departments` to
+   * the categories' parents closes that for every employee check at once.
+   */
+  async withCategoryDepartments(scope: UserScope): Promise<UserScope> {
+    if (scope.staffCategories.length === 0) return scope;
+    const rows = await this.prisma.staff_categories.findMany({
+      where: { id: { in: scope.staffCategories } },
+      select: { department_id: true },
+    });
+    const parents = new Set(rows.map((r) => r.department_id));
+    // Dimensions AND together, so an explicit department scope is intersected.
+    const departments = scope.departments.length > 0
+      ? scope.departments.filter((id) => parents.has(id))
+      : [...parents];
+    // Never [] here — that would read as unrestricted.
+    return { ...scope, departments: departments.length > 0 ? departments : [NO_MATCH_ID] };
+  }
+
+  async withSegmentClasses(scope: UserScope): Promise<UserScope> {
+    if (scope.segments.length === 0) return scope;
+    const rows = await this.prisma.classes.findMany({
+      where: { segment_id: { in: scope.segments } },
+      select: { id: true },
+    });
+    const inSegments = new Set(rows.map((r) => r.id));
+    // Dimensions AND together, so an explicit class scope is intersected.
+    const classes = scope.classes.length > 0
+      ? scope.classes.filter((id) => inSegments.has(id))
+      : [...inSegments];
+    // Never [] here — that would read as unrestricted.
+    return { ...scope, classes: classes.length > 0 ? classes : [NO_MATCH_ID] };
+  }
+
   async setScope(userId: string, scope: Partial<UserScope>): Promise<UserScope> {
     const rows: { user_id: string; dimension: ScopeDimension; ref_id: number }[] = [];
     for (const [dimension, field] of Object.entries(SCOPE_FIELD_BY_DIMENSION) as [
@@ -76,6 +167,7 @@ export class ScopeService {
       }
     });
 
+    this.invalidateScopeCache(userId);
     return this.resolve(userId);
   }
 
@@ -259,5 +351,10 @@ export class ScopeService {
   whereForStudents(user: Parameters<ScopeService['assertDimension']>[0]) {
     if (this.isExempt(user)) return {};
     return whereForStudents(this.scopeOf(user));
+  }
+
+  whereForVouchers(user: Parameters<ScopeService['assertDimension']>[0]) {
+    if (this.isExempt(user)) return {};
+    return whereForVouchers(this.scopeOf(user));
   }
 }

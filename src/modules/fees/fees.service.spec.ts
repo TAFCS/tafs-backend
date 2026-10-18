@@ -3,6 +3,7 @@ jest.mock('../vouchers/vouchers.service', () => ({
 }));
 
 import { ForbiddenException } from '@nestjs/common';
+import { ScopeService } from '../../common/scope/scope.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
@@ -48,6 +49,7 @@ describe('FeesService.getFeeSummaryForParent', () => {
         FeesService,
         { provide: PrismaService, useValue: prisma },
         { provide: VouchersService, useValue: vouchersService },
+        { provide: ScopeService, useValue: {} },
       ],
     }).compile();
 

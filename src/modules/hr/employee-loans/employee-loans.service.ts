@@ -22,7 +22,8 @@ import {
   scheduleJson,
   shiftScheduleAfterCollection,
 } from '../installment-schedule.util';
-import { CreateLoanDto, LumpSumRepaymentDto, UpdateInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 const ZERO = new Prisma.Decimal(0);
 const OPEN_STATUSES: LoanStatus[] = [LoanStatus.ACTIVE, LoanStatus.OUTSTANDING];
@@ -137,6 +138,7 @@ export class EmployeeLoansService {
   }
 
   async create(employeeId: number, dto: CreateLoanDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     await this.assertEmployee(employeeId, user);
     const open = await this.prisma.employee_loans.findFirst({
       where: { employee_id: employeeId, status: LoanStatus.ACTIVE },
@@ -212,7 +214,8 @@ export class EmployeeLoansService {
     return this.getForEmployee(employeeId);
   }
 
-  async updateSchedule(employeeId: number, dto: UpdateInstallmentScheduleDto, user: IJwtStaffPayload) {
+  async updateSchedule(employeeId: number, dto: UpdateLoanInstallmentScheduleDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
       const loan = await tx.employee_loans.findFirst({
@@ -250,6 +253,7 @@ export class EmployeeLoansService {
   }
 
   async repayLumpSum(employeeId: number, dto: LumpSumRepaymentDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     const amount = money(dto.amount);
     await this.prisma.$transaction(async (tx) => {
       const loan = await this.requireOpenLoan(employeeId, user, tx);
@@ -291,6 +295,7 @@ export class EmployeeLoansService {
   }
 
   async writeOff(employeeId: number, dto: WriteOffLoanDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     const amount = money(dto.amount);
     const reason = dto.reason.trim();
     if (!reason) {
@@ -337,6 +342,7 @@ export class EmployeeLoansService {
   }
 
   async cancel(employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     await this.prisma.$transaction(async (tx) => {
       const loan = await this.requireOpenLoan(employeeId, user, tx);
       const hasActivity =
@@ -363,6 +369,7 @@ export class EmployeeLoansService {
   }
 
   async markOutstanding(employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
     await this.prisma.$transaction(async (tx) => {
       await this.assertEmployee(employeeId, user, tx);
       const loan = await tx.employee_loans.findFirst({

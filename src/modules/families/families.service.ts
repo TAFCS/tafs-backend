@@ -26,7 +26,7 @@ export class FamiliesService {
   // ── List (paginated + search + scope) ─────────────────────────────────────
 
   async listFamilies(query: QueryFamiliesDto, user?: IJwtStaffPayload) {
-    const { page = 1, limit = 10, search } = query;
+    const { page = 1, limit = 10, search, types } = query;
     const offset = calculateOffset(page, limit);
 
     const studentScope = user ? this.scope.whereForStudents(user) : {};
@@ -42,10 +42,25 @@ export class FamiliesService {
         }
       : {};
 
+    const typeClauseFor = (t: string): any => {
+      if (t === 'not_signed_up') return { OR: [{ email: null }, { password_hash: null }] };
+      if (t === 'signed_up') return { email: { not: null }, password_hash: { not: null } };
+      if (t === 'email_only') return { email: { not: null }, password_hash: null };
+      if (t === 'no_children') return { students: { none: { deleted_at: null } } };
+      return {};
+    };
+    const typeCondition: any =
+      !types || types.length === 0
+        ? {}
+        : types.length === 1
+          ? typeClauseFor(types[0])
+          : { OR: types.map(typeClauseFor) };
+
     const isNumeric = search && /^\d+$/.test(search);
     const where: any = {
       deleted_at: null,
       ...(hasScope ? scopeCondition : {}),
+      ...typeCondition,
       ...(search
         ? {
           OR: [

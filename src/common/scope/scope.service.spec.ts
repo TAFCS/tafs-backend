@@ -1,6 +1,6 @@
 import { StaffRole } from '@prisma/client';
 import { ScopeService } from './scope.service';
-import { EMPTY_SCOPE, type UserScope } from './scope.types';
+import { EMPTY_SCOPE, NO_MATCH_ID, whereForEmployees, type UserScope } from './scope.types';
 
 const service = new ScopeService({} as any);
 
@@ -49,5 +49,50 @@ describe('ScopeService.canSeeStudent', () => {
     expect(() => service.assertStudent(staff({ campuses: [1] }), student({ campus_id: 2 }))).toThrow(
       /campus scope/i,
     );
+  });
+});
+
+describe('ScopeService.withCategoryDepartments', () => {
+  const ACADEMICS = 6;
+  const ADMINISTRATION = 10;
+  const TEACHER = 1; // Academics
+  const IT_STAFF = 9; // Administration
+  const parents: Record<number, number> = { [TEACHER]: ACADEMICS, [IT_STAFF]: ADMINISTRATION };
+  const svc = new ScopeService({
+    staff_categories: {
+      findMany: jest.fn(async ({ where }: { where: { id: { in: number[] } } }) =>
+        where.id.in.map((id) => ({ department_id: parents[id] })),
+      ),
+    },
+  } as any);
+  const scope = (s: Partial<UserScope>): UserScope => ({ ...EMPTY_SCOPE, ...s });
+
+  it('leaves a scope with no category restriction alone', async () => {
+    const s = scope({ departments: [ACADEMICS] });
+    await expect(svc.withCategoryDepartments(s)).resolves.toBe(s);
+  });
+
+  it("narrows Departments = All to the categories' departments", async () => {
+    const out = await svc.withCategoryDepartments(scope({ staffCategories: [TEACHER] }));
+    expect(out.departments).toEqual([ACADEMICS]);
+    expect(whereForEmployees(out)).toEqual({ department_id: { in: [ACADEMICS] }, staff_category_id: { in: [TEACHER] } });
+  });
+
+  it('intersects an explicit department scope', async () => {
+    const out = await svc.withCategoryDepartments(
+      scope({ departments: [ACADEMICS, ADMINISTRATION], staffCategories: [TEACHER] }),
+    );
+    expect(out.departments).toEqual([ACADEMICS]);
+  });
+
+  it('restricts to nothing, never to everything, when they do not overlap', async () => {
+    const out = await svc.withCategoryDepartments(scope({ departments: [ACADEMICS], staffCategories: [IT_STAFF] }));
+    expect(out.departments).toEqual([NO_MATCH_ID]);
+  });
+
+  it('hides a category-matched employee whose department disagrees', async () => {
+    const user = staff(await svc.withCategoryDepartments(scope({ staffCategories: [TEACHER] })));
+    expect(svc.canSeeEmployee(user, { department_id: ACADEMICS, staff_category_id: TEACHER })).toBe(true);
+    expect(svc.canSeeEmployee(user, { department_id: ADMINISTRATION, staff_category_id: TEACHER })).toBe(false);
   });
 });

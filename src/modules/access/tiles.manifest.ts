@@ -75,19 +75,41 @@ export type TileManifestEntry = {
 /**
  * Sub-permissions for the Student Directory.
  *
- * Unlike the Employee Directory these are not tab-shaped: the student record
- * has no multi-tab write. They follow the routes instead -- reading a student
- * is one thing, seeing their money is another, and moving or promoting them is
- * a third.
+ * Tab-shaped, one view/edit pair per tab in StudentDetailPanel — mirrors the
+ * Employee Directory. Granting the tile alone gives only `view` (open the
+ * list); each tab's content is gated on its own `.view` action so an admin
+ * can hand out read-only access to, say, Guardians without exposing Biometric
+ * or Finances. `.edit` implies `.view`, so granting edit is sufficient to
+ * open the tab.
  */
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open directory', description: 'See the student list, search it, and open a record', default: true },
 
+  { id: 'identity.view', label: 'View identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['view'] },
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, CNIC, DOB, contact info, address, medical', implies: ['identity.view'] },
+
+  { id: 'admissions.view', label: 'View admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['view'] },
+  { id: 'admissions.edit', label: 'Edit admissions', description: 'Academic system, discipline, application date, previous classes', implies: ['admissions.view'] },
+
+  { id: 'academic.view', label: 'View academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['view'] },
+  { id: 'academic.edit', label: 'Edit academic profile', description: 'Activities, languages, previous schools, A-Level subject details', implies: ['academic.view'] },
+
+  { id: 'guardians.view', label: 'View guardians', description: 'Parent and guardian records', implies: ['view'] },
+  { id: 'guardians.edit', label: 'Edit guardians', description: 'Add, edit and remove parent and guardian records', implies: ['guardians.view'] },
+
+  { id: 'biometric.view', label: 'View biometric', description: 'Device mappings and PIN linkage', implies: ['view'] },
+  { id: 'biometric.edit', label: 'Edit biometric', description: 'Device mappings and PIN linkage', implies: ['biometric.view'] },
+
+  { id: 'class_grade.view', label: 'View class & grade', description: 'Current campus, class, section and house assignment', implies: ['view'] },
+  { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['class_grade.view'] },
+
+  { id: 'certificates.view', label: 'View certificates & documents', description: 'Certificates studio, leaving certificate, admission order, transfer order', implies: ['view'] },
+
   { id: 'payment_history.view', label: 'View payment history', description: 'What the family has paid', implies: ['view'] },
   { id: 'progression.view', label: 'View academic history', description: 'Progression, academic history and house history', implies: ['view'] },
+  { id: 'logs.view', label: 'View activity logs', description: 'Student activity and change history', implies: ['view'] },
 
-  { id: 'assignment.edit', label: 'Move a student', description: 'Campus, class, section and house assignment', implies: ['view'] },
   { id: 'status.change', label: 'Change status', description: 'Expel, mark left, return, unexpel, undo left', implies: ['view'] },
   { id: 'promote', label: 'Promote', description: 'Single and bulk promotion, and GR suggestions for it', implies: ['view'] },
   { id: 'export', label: 'Export to Excel', implies: ['view'] },
@@ -152,6 +174,9 @@ const EMPLOYEE_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'progression.edit', label: 'Edit progression', implies: ['progression.view'] },
 
   { id: 'portal.view', label: 'View portal account', implies: ['view'] },
+  // Never on your own login or a SUPER_ADMIN's, never a role above your own
+  // access, and credentials only for logins that hold no more than you
+  // (TAFSD-365).
   { id: 'portal.edit', label: 'Edit portal account', description: 'Role, campus and account status', implies: ['portal.view'] },
   { id: 'portal.reveal_password', label: 'Reveal portal password', description: 'Audited on every use', implies: ['portal.view'] },
   { id: 'portal.reset_password', label: 'Reset portal password', implies: ['portal.edit'] },
@@ -341,11 +366,14 @@ const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
 // longer leave a restricted targeting dimension empty (empty = whole school),
 // address specific students outside their scope, or edit/delete/inspect a post
 // (or holiday notice) aimed outside it — 404, never 403.
+// TAFSD-313: a post by anyone but a SUPER_ADMIN is held as PENDING until a
+// superadmin approves it on /notice-board/review; so is a non-superadmin's
+// edit to a post's wording. Review itself is role-gated, not an action.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const NOTICE_BOARD_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View posts and read stats', default: true },
 
-  { id: 'create', label: 'Post a notice (incl. media upload)', implies: ['view'] },
+  { id: 'create', label: 'Post a notice (incl. media upload)', description: 'Posts by anyone but a superadmin wait for superadmin approval before families see them.', implies: ['view'] },
   { id: 'edit', label: 'Edit or pin a notice', implies: ['view'] },
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
@@ -367,28 +395,30 @@ const EMPLOYEE_NOTICES_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
 
-// Tab-shaped, like Employee/Student Directory: PUT /users/:id and
-// PUT /users/:id/access each write fields belonging to more than one tab
-// through one route, so both are field-partitioned (UsersService.updateUser
-// against USER_FIELD_TAB_MAP; AccessService.setUserAccess by DTO key) rather
-// than carrying a single @RequireAction. `role` is a field neither tab-action
-// covers — changing it requires the actor to BE SUPER_ADMIN, not merely hold
-// an action, since the generic CASL mapper turns almost any granted
-// capability into full Manage and role is how SUPER_ADMIN itself is granted.
-// A campus-scoped holder of this tile is also restricted to managing users
-// within, and granting scope no wider than, their own scope — see
-// AccessService.assertCanManageUser/assertGrantableScope and the
-// scope/tile-permission handoff §8, which left this as an open decision.
+// People & Access. Tab-shaped: PUT /users/:id and PUT /users/:id/access each
+// write fields of more than one tab, so both are field-partitioned
+// (UsersService / AccessService) rather than carrying one @RequireAction.
+//
+// Every action here is the SUPER_ADMIN's to hand out, but holding one never
+// lets the holder (TAFSD-365, AccessService.assertMayManageUser /
+// assertNoLeak / assertMayAssignRole):
+//   - change their OWN account, access or scope,
+//   - touch a SUPER_ADMIN's account, or make anyone SUPER_ADMIN,
+//   - give anyone a tile, sub-permission, capability or role they do not hold
+//     themselves, or scope wider than their own,
+//   - reset, reveal or set the password of an account that holds more than
+//     they do (that would be a way to become it).
+// A scoped holder only sees users inside their own campus scope.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open People & Access', description: 'See the account list and open a record', default: true },
 
-  { id: 'identity.edit', label: 'Edit identity', description: 'Name, password, active status', implies: ['view'] },
+  { id: 'identity.edit', label: 'Edit identity', description: 'Name, password, role, active status (never above your own access)', implies: ['view'] },
   { id: 'job.edit', label: 'Edit job assignment', description: 'Legacy campus/class fields', implies: ['view'] },
-  { id: 'reveal_password', label: 'Reveal a stored password', implies: ['view'] },
+  { id: 'reveal_password', label: 'Reveal a stored password', description: 'Only for accounts that hold no more than you', implies: ['view'] },
 
-  { id: 'access.edit', label: 'Edit access', description: 'Packs, tiles, and sub-permission grants', implies: ['view'] },
-  { id: 'scope.edit', label: 'Edit data scope', implies: ['view'] },
+  { id: 'access.edit', label: 'Edit access', description: 'Packs, tiles and sub-permissions -- only ones you hold yourself', implies: ['view'] },
+  { id: 'scope.edit', label: 'Edit data scope', description: 'No wider than your own scope', implies: ['view'] },
 
   { id: 'create', label: 'Create a person', implies: ['view'] },
 ];
@@ -470,6 +500,8 @@ const VOUCHERS_ACTIONS: TileAction[] = [
 
   { id: 'edit', label: 'Edit a voucher', description: 'Issue date, due date, validity, status, late fee, bank account, section', implies: ['view'] },
   { id: 'delete', label: 'Delete a voucher', description: 'Single or bulk', implies: ['view'] },
+  { id: 'download', label: 'Download voucher PDF', description: 'Single PDF, PAID receipt, and bulk ZIP / merged PDF. Generates the PDF if none exists yet', implies: ['view'] },
+  { id: 'regenerate', label: 'Regenerate voucher PDF', description: 'Re-render an existing PDF, and choose whether to hold it or notify the parent', implies: ['download'] },
 ];
 
 // Standalone — no other tile shares any pending-release route. The real fix
@@ -540,18 +572,16 @@ const TRANSFERS_ACTIONS: TileAction[] = [
   { id: 'print', label: 'Print the transfer order', implies: ['view'] },
 ];
 
-// Access Packs. The pack list is also read by People & Access (to assign a
-// pack), so it stays undecorated; create / update / delete belong to this tile
-// alone. Bridged from system.permissions.manage, the capability the routes'
-// Manage Permission policy already required and which no default role but
-// SUPER_ADMIN holds, so nothing changes for anyone today. A pack only describes
-// tiles and actions: nobody gains any of them until a pack is ASSIGNED, which is
-// People & Access's `access.edit`.
+// Access Packs. `manage` creates, edits and deletes packs and edits role
+// baselines (POST /users/roles/permissions). A holder may only put tiles,
+// sub-permissions and capabilities they hold themselves into a pack or role,
+// may not edit a pack assigned to themselves or their own role, and never the
+// SUPER_ADMIN role (TAFSD-365).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ACCESS_PACKS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Access Packs', description: 'See the reusable tile bundles', default: true },
 
-  { id: 'manage', label: 'Create, edit and delete access packs', implies: ['view'] },
+  { id: 'manage', label: 'Create, edit and delete access packs', description: 'And role baselines -- only with what you hold yourself', implies: ['view'] },
 ];
 
 // Database Backups. BackupsController had only JwtStaffGuard: any logged-in

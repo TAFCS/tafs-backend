@@ -254,7 +254,13 @@ export class TeachingGroupsService {
     return { removed: true };
   }
 
-  async listStudentSubjectEnrollments(studentId: number) {
+  async listStudentSubjectEnrollments(studentId: number, user: IJwtStaffPayload) {
+    if (!this.scope.isExempt(user)) {
+      const visible = await this.prisma.students.count({
+        where: { cc: studentId, ...this.scope.whereForStudents(user) },
+      });
+      if (!visible) throw new NotFoundException(`Student #${studentId} not found`);
+    }
     return this.prisma.student_subject_enrollments.findMany({
       where: { student_id: studentId },
       include: {

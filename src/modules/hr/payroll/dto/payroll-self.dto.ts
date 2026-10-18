@@ -18,6 +18,21 @@ export class SetFullPayDto {
   enabled: boolean;
 }
 
+/** TAFSD-383: omitted fields keep their current value. true = not charged this cycle. */
+export class SetStatutoryWaiversDto {
+  @IsOptional()
+  @IsBoolean()
+  eobi?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sessi?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  income_tax?: boolean;
+}
+
 export class DisbursePayrollLineDto {
   @IsOptional()
   @IsString()

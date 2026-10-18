@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
 import { SearchSimpleQueryDto } from './dto/search-simple-query.dto';
+import { findStudentSearchHits } from './student-search-match';
 import { ScopeService } from '../../common/scope/scope.service';
 import { calculateOffset } from '../../utils/pagination.util';
 import { createPaginationMeta } from '../../utils/serializer.util';
@@ -74,6 +75,9 @@ import { ALLOCATION_ERROR_CODES } from '../student-allocation/student-allocation
 import { ProgressionHistoryService, type PrismaTx } from './progression-history.service';
 import { invalidateUnpaidVoucherPdfs } from '../vouchers/invalidate-unpaid-pdfs';
 import { EnrollmentService } from '../enrollments/enrollment.service';
+
+/** Largest value a Postgres INT4 column can hold. */
+const INT4_MAX = 2_147_483_647;
 
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
@@ -249,29 +253,18 @@ export class StudentsService {
   async buildStudentsWhere(
     query: GetStudentsDto,
     user?: IJwtStaffPayload,
+    matchedOn?: Map<number, string>,
   ): Promise<Prisma.studentsWhereInput> {
     const { search, campus_id, class_id, section_id, house_id, status, discipline, has_photo, had_quick_admission } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
 
-    if (search) {
-      const isNumeric = /^\d+$/.test(search);
-      const isShortNumeric = isNumeric && search.length <= 5;
-
-      where.OR = [
-        { full_name: { contains: search, mode: 'insensitive' } },
-        { gr_number: { contains: search, mode: 'insensitive' } },
-        ...(isNumeric ? [{ cc: Number(search) }] : []),
-        // Only search CNIC if it's not a short numeric string (likely intended for CC/GR)
-        ...(!isShortNumeric ? [{
-          student_guardians: {
-            some: {
-              guardians: {
-                cnic: { contains: search, mode: Prisma.QueryMode.insensitive }
-              }
-            }
-          }
-        }] : []),
-      ];
+    if (search?.trim()) {
+      // TAFSD-344: name, GR, CC, B-form, phones, guardian names / CNICs /
+      // phones, family name / number (see student-search-match.ts).
+      const hits = await findStudentSearchHits(this.prisma, search, 5000);
+      for (const h of hits) matchedOn?.set(h.cc, h.matched_on);
+      // In AND, so a later cc filter (the "abnormal" audit) narrows it rather than replacing it.
+      where.AND = [...((where.AND as Prisma.studentsWhereInput[]) ?? []), { cc: { in: hits.map((h) => h.cc) } }];
     }
     if (campus_id?.length)  where.campus_id  = { in: campus_id };
     if (class_id?.length)   where.class_id   = { in: class_id };
@@ -400,6 +393,10 @@ export class StudentsService {
         `;
         const abnormalCcs = abnormalStudents.map(s => s.student_id);
         where.cc = { in: abnormalCcs };
+      } else if (auditType === 'no_app_signup') {
+        where.families = {
+          OR: [{ email: null }, { password_hash: null }],
+        };
       }
     }
 
@@ -562,7 +559,24 @@ export class StudentsService {
     };
   }
 
+  /** Directory list. A search tags each student with why it matched (TAFSD-344). */
   async findAll(query: GetStudentsDto, user?: IJwtStaffPayload) {
+    const matchedOn = new Map<number, string>();
+    const result = await this.findAllPage(query, user, matchedOn);
+    if (!matchedOn.size) return result;
+    return {
+      ...result,
+      items: result.items.map((item: any) =>
+        matchedOn.has(item.cc) ? { ...item, matched_on: matchedOn.get(item.cc) } : item,
+      ),
+    };
+  }
+
+  private async findAllPage(
+    query: GetStudentsDto,
+    user: IJwtStaffPayload | undefined,
+    matchedOn: Map<number, string>,
+  ) {
     const { page = 1, limit = 10, fields } = query;
     const offset = calculateOffset(page, limit);
 
@@ -579,7 +593,7 @@ export class StudentsService {
     const quickOnly =
       normalizedStatuses.length === 1 && includesQuick;
 
-    const where = await this.buildStudentsWhere(query, user);
+    const where = await this.buildStudentsWhere(query, user, matchedOn);
 
     // Remaining unconfirmed rows (collision leftovers / pre-migration) — dual-read
     const uncWhere =
@@ -1867,7 +1881,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user) this.scope.assertCampus(user, student.campus_id);
+    if (user) await this.assertStudentsVisible(user, [id]);
 
     if (!isDepartureStatus(student.status)) {
       throw new BadRequestException(
@@ -2085,7 +2099,7 @@ export class StudentsService {
       throw new NotFoundException(`Student #${id} not found`);
     }
 
-    if (user) this.scope.assertCampus(user, student.campus_id);
+    if (user) await this.assertStudentsVisible(user, [id]);
 
     if ((student.status as any) === newStatus) {
       throw new BadRequestException(`Student is already in ${newStatus} status`);
@@ -2386,7 +2400,30 @@ export class StudentsService {
     needing.forEach((s, i) => grOverrideMap.set(s.cc, grs[i]));
   }
 
-  async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string) {
+  /**
+   * 404 unless every cc is a student in the caller's scope (all dimensions).
+   * For routes keyed by a student id that otherwise never see the caller.
+   */
+  async assertStudentsVisible(user: IJwtStaffPayload, ccs: number[]): Promise<void> {
+    const unique = [...new Set(ccs)];
+    if (unique.length === 0 || this.scope.isExempt(user)) return;
+    const visible = await this.prisma.students.count({
+      where: { cc: { in: unique }, ...this.scope.whereForStudents(user) },
+    });
+    if (visible !== unique.length) throw new NotFoundException('Student not found');
+  }
+
+  /** Asserts each placement field that is set lies inside the caller's scope. */
+  assertPlacementInScope(
+    user: IJwtStaffPayload,
+    placement: { campus_id?: number | null; class_id?: number | null; section_id?: number | null },
+  ): void {
+    if (placement.campus_id != null) this.scope.assertCampus(user, placement.campus_id);
+    if (placement.class_id != null) this.scope.assertClass(user, placement.class_id);
+    if (placement.section_id != null) this.scope.assertSection(user, placement.section_id);
+  }
+
+  async promoteSingle(dto: PromoteSingleStudentDto, changedBy: string, user?: IJwtStaffPayload) {
     const result = await this.promoteBulk({
       from: dto.from,
       to: dto.to,
@@ -2399,7 +2436,7 @@ export class StudentsService {
       student_ids: [dto.student_id],
       reason: dto.reason,
       dry_run: dto.dry_run,
-    }, changedBy);
+    }, changedBy, user);
 
     return {
       ...result,
@@ -2407,7 +2444,7 @@ export class StudentsService {
     };
   }
 
-  async promoteBulk(dto: PromoteBulkStudentsDto, changedBy: string) {
+  async promoteBulk(dto: PromoteBulkStudentsDto, changedBy: string, user?: IJwtStaffPayload) {
     // Validate: exactly one of `to`, `graduate`, `expel`, or `left` must be set
     const isGraduating = !!dto.graduate;
     const isExpelling = !!dto.expel;
@@ -2435,6 +2472,13 @@ export class StudentsService {
       throw new BadRequestException('From and to class must be different for promotion');
     }
 
+    // A scoped user may only promote into a placement inside their own scope.
+    if (user) {
+      if (dto.to_campus_id != null) this.scope.assertCampus(user, dto.to_campus_id);
+      if (toClass) this.scope.assertClass(user, toClass.id);
+      if (dto.to_section_id != null) this.scope.assertSection(user, dto.to_section_id);
+    }
+
     const dryRun = !!dto.dry_run;
     const distinctStudentIds = dto.student_ids?.length
       ? Array.from(new Set(dto.student_ids))
@@ -2445,7 +2489,12 @@ export class StudentsService {
     // When explicit student_ids are provided, we look up exactly those students by cc —
     // no extra filters, because the user explicitly asked for those IDs. Mismatches
     // (wrong class, wrong campus) are handled gracefully in processPromotionForStudent.
-    const where: Prisma.studentsWhereInput = { deleted_at: null };
+    // Out-of-scope students drop out here, so an explicit id outside the
+    // caller's scope gets the same "not found" outcome as a missing one.
+    const where: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      ...(user ? { AND: [this.scope.whereForStudents(user)] } : {}),
+    };
 
     if (!isExplicitIds) {
       if (dto.campus_id !== undefined) {
@@ -3399,6 +3448,7 @@ export class StudentsService {
   }
 
   async searchSimple(query: SearchSimpleQueryDto, user: IJwtStaffPayload) {
+    const SEARCH_SIMPLE_LIMIT = 10;
     const q = (query.q ?? '').trim();
     if (!q) return [];
 
@@ -3430,8 +3480,9 @@ export class StudentsService {
     const isNumeric = /^\d+$/.test(q);
     const results: Prisma.studentsGetPayload<{ select: typeof select }>[] = [];
 
-    // 1. Check for exact CC match if query is numeric
-    if (isNumeric) {
+    // 1. Check for exact CC match if query is numeric. A number past INT4 can't
+    // be a CC, and Prisma throws (500) trying to bind it (TAFSD-326).
+    if (isNumeric && Number(q) <= INT4_MAX) {
       const exactMatch = await this.prisma.students.findFirst({
         where: { ...scopedFilter, cc: Number(q) },
         select,
@@ -3439,28 +3490,22 @@ export class StudentsService {
       if (exactMatch) results.push(exactMatch);
     }
 
-    // 2. Fetch partial matches for names and GR numbers
-    const where: Prisma.studentsWhereInput = {
-      ...scopedFilter,
-      OR: [
-        { full_name: { contains: q, mode: 'insensitive' } },
-        { gr_number: { contains: q, mode: 'insensitive' } },
-      ],
-    };
+    // 2. Everything else the text could mean (TAFSD-344): name, GR, B-form,
+    // phones, guardians, family. Ranked by how direct the match is, then
+    // narrowed by the caller's scope.
+    const hits = (await findStudentSearchHits(this.prisma, q, 300)).filter(
+      (h) => !results.some((r) => r.cc === h.cc),
+    );
+    const visible = hits.length
+      ? await this.prisma.students.findMany({ where: { ...scopedFilter, cc: { in: hits.map((h) => h.cc) } }, select })
+      : [];
+    const byCc = new Map(visible.map((r) => [r.cc, r]));
+    const others = hits
+      .filter((h) => byCc.has(h.cc))
+      .slice(0, SEARCH_SIMPLE_LIMIT - results.length)
+      .map((h) => ({ ...byCc.get(h.cc)!, matched_on: h.matched_on }));
 
-    // Exclude exact match if already added
-    if (results.length > 0) {
-      where.NOT = { cc: results[0].cc };
-    }
-
-    const others = await this.prisma.students.findMany({
-      where,
-      take: 5 - results.length,
-      select,
-      orderBy: { full_name: 'asc' },
-    });
-
-    return [...results, ...others];
+    return [...results.map((r) => ({ ...r, matched_on: 'C.C.' })), ...others];
   }
 
   async getPaymentHistory(studentId: number, academicYear: string, user?: IJwtStaffPayload) {

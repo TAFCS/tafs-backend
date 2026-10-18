@@ -1,6 +1,9 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
+import { EmployeeTimingsService } from './employee-timings.service';
+import { EmployeePayService } from './employee-pay.service';
+import { auditActorLabel } from '../../../common/utils/audit-actor.util';
+import { Controller, Get, Post, Patch, Put, Delete, Body, Param, ParseIntPipe, Query, UseGuards, HttpStatus, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
+import { EmployeesService, CreateEmployeeDto, UpdateEmployeeDto, UpdateEmployeeStatusDto, UpdateEmployeeLeavingDateDto, UpdateWorkScheduleDto, UpdateDayTimingsDto, BulkDayTimingDto, TimingsChangeDto, PayChangeDto, UpdateEmployeeAccountDto, ResetEmployeePasswordDto, ChangeEmployeeUsernameDto, ExportEmployeesDto, PreviousEmployerDto } from './employees.service';
 import { JwtStaffGuard } from '../../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
@@ -22,7 +25,12 @@ import { UpdateEmployeeIncrementCycleDto } from '../salary-increments/dto/salary
 // sub-permission layer, and both must pass.
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class EmployeesController {
-  constructor(private readonly employeesService: EmployeesService, private readonly salaryIncrements: SalaryIncrementsService) {}
+  constructor(
+    private readonly employeesService: EmployeesService,
+    private readonly salaryIncrements: SalaryIncrementsService,
+    private readonly timings: EmployeeTimingsService,
+    private readonly pay: EmployeePayService,
+  ) {}
 
   @Get('export')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
@@ -70,21 +78,159 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Next employee code generated');
   }
 
-  // The employee search box is shared by the Employee Directory, Payroll, the
-  // Academic Calendar and ZK Device Logs. Open to a holder of ANY of those
-  // tiles (an allowlist, not "any staff member"); results stay limited to the
-  // caller's scope. The Read Employee policy check is dropped on purpose: a user
-  // delegated only one of those tiles does not hold it.
+  // The employee search box is shared by every page that picks an employee.
+  // Open to a holder of ANY of those tiles (an allowlist, not "any staff
+  // member"); results stay limited to the caller's scope. The Read Employee
+  // policy check is dropped on purpose: a user delegated only one of those
+  // tiles does not hold it. Add a tile here when a new page gains an employee
+  // search.
   @Get('search-simple')
   @RequireAnyTile(
     'hr.employee_directory',
     'hr.payroll',
+    'hr.employee_loans',
+    'hr.security_deposits',
     'attendance.academic_calendar',
     'attendance.zk_device_logs',
+    'attendance.saturday_schedules',
+    'attendance.shift_overrides',
+    'attendance.timetables',
+    'attendance.teaching_groups',
   )
   async searchSimple(@Query('q') q: string, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.employeesService.searchSimple(q || '', user);
     return createApiResponse(data, HttpStatus.OK, 'Search results retrieved successfully');
+  }
+
+  // Lean employee list for the pages that load everyone into a dropdown or a
+  // roster (Departments, Payroll test run, the calendar, schedules, timetable
+  // slot editor, teaching groups). GET /hr/employees returns the full record
+  // (CNIC, pay, phone, schedule), which these tiles must not get just because
+  // they need a name to pick. Identity and org fields only, scope-limited.
+  @Get('picker')
+  @RequireAnyTile(
+    'hr.employee_directory',
+    'hr.departments',
+    'hr.payroll',
+    'attendance.academic_calendar',
+    'attendance.saturday_schedules',
+    'attendance.shift_overrides',
+    'attendance.timetables',
+    'attendance.teaching_groups',
+    // People & Access's Job tab picks a reporting manager (TAFSD-373); it used
+    // to load the full employee list, CNIC and pay included, for the names.
+    'system.people_access',
+  )
+  async listPicker(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.listPicker(user);
+    return createApiResponse(data, HttpStatus.OK, 'Employees retrieved successfully');
+  }
+
+  @Get('day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async listDayTimings(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.listDayTimings(user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings retrieved successfully');
+  }
+
+  @Post('day-timings/bulk')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async bulkSetDayTiming(@Body() dto: BulkDayTimingDto, @CurrentUser() user: IJwtStaffPayload) {
+    // TAFSD-369: through the effective-from path, one employee at a time.
+    const ids = [...new Set(dto.employee_ids)];
+    for (const id of ids) await this.employeesService.assertCanEdit(id, user);
+    const changedBy = auditActorLabel(user) || 'system';
+    let updated = 0;
+    let scheduled = 0;
+    const failed: { employee_id: number; error: string }[] = [];
+    const warnings: string[] = [];
+    for (const id of ids) {
+      try {
+        const r = await this.timings.setOneDay(
+          id,
+          { day_of_week: dto.day_of_week, reporting_time: dto.reporting_time ?? null, leaving_time: dto.leaving_time ?? null },
+          dto.effective_from,
+          changedBy,
+        );
+        if (r.status === 'APPLIED') updated++;
+        if (r.status === 'SCHEDULED') scheduled++;
+        warnings.push(...r.warnings);
+      } catch (err) {
+        failed.push({ employee_id: id, error: (err as Error).message });
+      }
+    }
+    const data = { updated, scheduled, failed, warnings: [...new Set(warnings)] };
+    return createApiResponse(data, HttpStatus.OK, `Day timings: ${updated} updated, ${scheduled} scheduled, ${failed.length} failed`);
+  }
+
+  // TAFSD-369: timings / working days with an effective-from date.
+  @Put(':id/timings')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async changeTimings(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: TimingsChangeDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.employeesService.assertCanEdit(id, user);
+    const data = await this.timings.changeTimings(id, dto, auditActorLabel(user) || 'system');
+    return createApiResponse(data, HttpStatus.OK, data.status === 'SCHEDULED' ? 'Timings change scheduled' : 'Timings updated');
+  }
+
+  // TAFSD-372: monthly pay with an effective-from date.
+  @Put(':id/pay')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async changePay(@Param('id', ParseIntPipe) id: number, @Body() dto: PayChangeDto, @CurrentUser() user: IJwtStaffPayload) {
+    await this.employeesService.assertCanEdit(id, user);
+    const data = await this.pay.changePay(id, dto, auditActorLabel(user) || 'system');
+    return createApiResponse(data, HttpStatus.OK, data.status === 'SCHEDULED' ? 'Pay change scheduled' : 'Pay updated');
+  }
+
+  @Get(':id/pay/scheduled')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async listScheduledPay(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(await this.pay.listScheduled(id), HttpStatus.OK, 'Scheduled pay changes');
+  }
+
+  @Delete(':id/pay/scheduled/:sid')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async cancelScheduledPay(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('sid', ParseIntPipe) sid: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(await this.pay.cancelScheduled(id, sid, auditActorLabel(user) || 'system'), HttpStatus.OK, 'Scheduled pay change cancelled');
+  }
+
+  @Get(':id/timings/scheduled')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async listScheduledTimings(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(await this.timings.listScheduled(id), HttpStatus.OK, 'Scheduled timings changes');
+  }
+
+  @Delete(':id/timings/scheduled/:sid')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async cancelScheduledTimings(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('sid', ParseIntPipe) sid: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.employeesService.assertCanEdit(id, user);
+    return createApiResponse(
+      await this.timings.cancelScheduled(id, sid, auditActorLabel(user) || 'system'),
+      HttpStatus.OK,
+      'Scheduled timings change cancelled',
+    );
   }
 
   @Get(':id/work-schedule')
@@ -118,6 +264,27 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Employee work schedule cleared successfully');
   }
 
+  // TAFSD-363: per-weekday timings (Friday).
+  @Get(':id/day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.view')
+  async getDayTimings(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.employeesService.getDayTimings(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings retrieved successfully');
+  }
+
+  @Put(':id/day-timings')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_directory#schedule_pay.edit')
+  async updateDayTimings(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateDayTimingsDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeesService.updateDayTimings(id, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Employee day timings updated successfully');
+  }
+
   @Patch(':id/status')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
   @RequireAction('hr.employee_directory#status.change')
@@ -142,6 +309,9 @@ export class EmployeesController {
     return createApiResponse(data, HttpStatus.OK, 'Date of leaving updated successfully');
   }
 
+  // Portal-account writes. Beyond the action, a non-super-admin is refused on
+  // their own login or a SUPER_ADMIN's, a role above their own access, and
+  // credentials of a login that holds more than they do (TAFSD-365).
   @Patch(':id/account')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
   @RequireAction('hr.employee_directory#portal.edit')
@@ -221,7 +391,7 @@ export class EmployeesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.upsertPreviousEmployer(id, dto, changedBy);
+    const data = await this.employeesService.upsertPreviousEmployer(id, dto, changedBy, user);
     return createApiResponse(data, HttpStatus.OK, 'Previous employer saved successfully');
   }
 
@@ -233,7 +403,7 @@ export class EmployeesController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     const changedBy = user?.username || user?.sub || 'system';
-    const data = await this.employeesService.deletePreviousEmployer(id, changedBy);
+    const data = await this.employeesService.deletePreviousEmployer(id, changedBy, user);
     return createApiResponse(data, HttpStatus.OK, 'Previous employer deleted successfully');
   }
 

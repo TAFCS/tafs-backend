@@ -15,7 +15,7 @@ import type { Request } from 'express';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAnyAction } from '../../decorators/require-action.decorator';
+import { RequireAnyAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
@@ -40,6 +40,7 @@ export class HouseBalancerController {
   constructor(private readonly houseBalancerService: HouseBalancerService) {}
 
   @Get('history')
+  @RequireAnyTile('student.house_balancer', 'school-setup.house_balancer')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
   async listHistory(@Query() query: HouseBalancerHistoryQueryDto, @CurrentUser() user: IJwtStaffPayload) {
@@ -53,6 +54,7 @@ export class HouseBalancerController {
   }
 
   @Get('history/:id')
+  @RequireAnyTile('student.house_balancer', 'school-setup.house_balancer')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
   async getHistory(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {

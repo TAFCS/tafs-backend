@@ -16,11 +16,12 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { CurrentUser } from '../../decorators/current-user.decorator';
 import { TeachingGroupsService } from './teaching-groups.service';
 import {
   BulkEnrollDto,
@@ -41,6 +42,7 @@ export class TeachingGroupsController {
   constructor(private readonly service: TeachingGroupsService) {}
 
   @Get()
+  @RequireAnyTile('attendance.teaching_groups', 'attendance.timetables', 'attendance.alevel_roll_call')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async list(
     @Query() query: ListTeachingGroupsQueryDto,
@@ -90,6 +92,7 @@ export class TeachingGroupsController {
   }
 
   @Get(':id/roster')
+  @RequireAnyTile('attendance.teaching_groups')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async getRoster(
     @Param('id', ParseIntPipe) id: number,
@@ -124,11 +127,13 @@ export class TeachingGroupsController {
   }
 
   @Get('students/:studentId/subject-enrollments')
+  @RequireAnyTile('attendance.teaching_groups')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Timetable'))
   async listStudentSubjectEnrollments(
     @Param('studentId', ParseIntPipe) studentId: number,
+    @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.service.listStudentSubjectEnrollments(studentId);
+    const data = await this.service.listStudentSubjectEnrollments(studentId, user);
     return createApiResponse(data, HttpStatus.OK, 'Student subject enrollments retrieved');
   }
 }

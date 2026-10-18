@@ -59,7 +59,7 @@ async function main() {
   // ── 0. Snapshot: does a real run already exist for this campus/period? ──
   const { periodStart, periodEnd } = computePayrollWindow(YEAR, MONTH);
   const existingReal = await prisma.payroll_runs.findUnique({
-    where: { campus_id_period_start_period_end_is_test: { campus_id: CAMPUS_ID, period_start: periodStart, period_end: periodEnd, is_test: false } },
+    where: { campus_id_period_start_period_end_is_test_kind: { campus_id: CAMPUS_ID, period_start: periodStart, period_end: periodEnd, is_test: false, kind: "REGULAR" } },
   });
   let createdRealRunForVerification = false;
 

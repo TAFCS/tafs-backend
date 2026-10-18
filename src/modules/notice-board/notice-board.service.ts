@@ -1,5 +1,13 @@
-import { ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
-import { student_status } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
+import { NoticePostStatus, StaffRole, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
@@ -10,6 +18,27 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import * as path from 'path';
+
+const POST_LIST_INCLUDE = {
+  users: { select: { full_name: true } },
+  reviewer: { select: { full_name: true } },
+  _count: { select: { post_reads: true } },
+} as const;
+
+type PostListRow = {
+  student_ccs: number[];
+  campus_ids: number[];
+  class_ids: number[];
+  section_ids: number[];
+  student_statuses: student_status[];
+  academic_years: string[];
+};
+
+const REVIEW_STATUSES: NoticePostStatus[] = [
+  NoticePostStatus.PENDING,
+  NoticePostStatus.APPROVED,
+  NoticePostStatus.REJECTED,
+];
 
 @Injectable()
 export class NoticeBoardService {
@@ -131,6 +160,7 @@ export class NoticeBoardService {
     const posts = await this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        status: NoticePostStatus.APPROVED,
         notification_only: false,
         OR: [
           ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
@@ -167,33 +197,187 @@ export class NoticeBoardService {
 
   // ── Admin-facing ─────────────────────────────────────────────────────────
 
+  // The feed shows live posts plus the caller's own pending / rejected ones
+  // (badged in the UI). Other people's pending posts live on the review page
+  // only — superadmins included.
   async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload) {
-    const fetched = await this.prisma.notice_board_posts.findMany({
+    // A scoped caller sees posts that reached at least one of their students,
+    // plus their own. Most posts reach one campus or one family, so batches are
+    // read until a full page is visible (bounded, so a narrow scope can't scan
+    // the whole table).
+    const reach = await this._scopeReach(user);
+    const PAGE = 30;
+    const BATCH = reach ? 150 : PAGE;
+    const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
+    for (let skip = 0; fetchedPosts.length < PAGE && skip < BATCH * 8; skip += BATCH) {
+      const batch = await this._postBatch(cursor, user, skip, BATCH);
+      fetchedPosts.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
+      if (batch.length < BATCH) break;
+    }
+    const posts: ((typeof fetchedPosts)[number] & { viewer_can_manage: boolean })[] = [];
+    for (const p of fetchedPosts.slice(0, PAGE)) {
+      posts.push({ ...p, viewer_can_manage: !reach || (await this._canManagePost(user, p)) });
+    }
+
+    const withTargets = await this._withTargetsAndReach(posts);
+    // A post seen through overlap must not list targeted students outside the caller's scope.
+    const postsWithReach = reach
+      ? withTargets.map((p) => ({ ...p, targeted_students: p.targeted_students.filter((t) => reach.seesStudent(t!.cc)) }))
+      : withTargets;
+
+    const allHolidays = await this.prisma.academic_calendar_days.findMany({
+      where: {
+        applies_to: 'STUDENT',
+        day_type: { in: ['HOLIDAY', 'WORKDAY'] },
+      },
+      orderBy: { date: 'desc' },
+      take: 30,
+    });
+    // Same rule as posts: a scoped caller sees holiday notices that reached at
+    // least one of their students.
+    const holidays: (typeof allHolidays[number] & { viewer_can_manage: boolean })[] = [];
+    for (const h of allHolidays) {
+      const audience = { posted_by: h.created_by, ...this._holidayAudience(h), student_ccs: [] };
+      if (reach && !reach.reaches(audience)) continue;
+      holidays.push({ ...h, viewer_can_manage: !reach || (await this._canManagePost(user, audience)) });
+    }
+
+    const userIds = holidays.map((h) => h.created_by).filter((cb): cb is string => !!cb);
+    const creators = userIds.length
+      ? await this.prisma.users.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, full_name: true },
+        })
+      : [];
+    const creatorMap = new Map(creators.map((u) => [u.id, u.full_name]));
+    const holidayReadCounts = await this._holidayReadCounts(holidays);
+    const holidayReachCache = new Map<string, number>();
+    const uniqueHolidayScopes = new Map<string, (typeof holidays)[number]>();
+    for (const h of holidays) {
+      const key = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
+      if (!uniqueHolidayScopes.has(key)) uniqueHolidayScopes.set(key, h);
+    }
+    await Promise.all(
+      [...uniqueHolidayScopes.entries()].map(async ([key, h]) => {
+        holidayReachCache.set(key, await this._countAudienceFamilies(this._holidayAudience(h)));
+      }),
+    );
+
+    const holidayPosts = holidays.map((h) => {
+      const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
+      const defaultDesc = h.day_type === 'WORKDAY' ? 'School Open' : 'Holiday';
+      const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || defaultDesc);
+      const creatorName = h.created_by ? creatorMap.get(h.created_by) : null;
+      const title = h.day_type === 'WORKDAY' ? 'School Open' : 'School Closed';
+      const reachKey = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
+      return {
+        id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
+        posted_by: h.created_by || 'System',
+        title,
+        body: `${cleanDesc} (on ${new Date(h.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })})`,
+        campus_ids: [h.campus_id],
+        class_ids: h.class_id ? [h.class_id] : [],
+        section_ids: h.section_id ? [h.section_id] : [],
+        student_ccs: [],
+        student_statuses: [],
+        academic_years: [],
+        media_urls: [],
+        media_types: [],
+        is_pinned: isPinned,
+        notification_only: false,
+        status: NoticePostStatus.APPROVED,
+        posted_at: h.date,
+        expires_at: null,
+        deleted_at: null,
+        users: { full_name: creatorName || h.created_by || 'System' },
+        _count: { post_reads: holidayReadCounts.get(h.id) ?? 0 },
+        total_reached: holidayReachCache.get(reachKey) ?? 0,
+        viewer_can_manage: h.viewer_can_manage,
+      };
+    });
+
+    const merged = [...postsWithReach, ...holidayPosts];
+    merged.sort((a, b) => {
+      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+      return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
+    });
+
+    return merged;
+  }
+
+  private _postBatch(cursor: number | undefined, user: IJwtStaffPayload, skip: number, take: number) {
+    return this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
         ...(cursor ? { id: { lt: cursor } } : {}),
       },
       orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
-      include: {
-        users: { select: { full_name: true } },
-        _count: { select: { post_reads: true } },
-      },
-      take: 30,
+      include: POST_LIST_INCLUDE,
+      skip,
+      take,
     });
+  }
 
-    // A scoped caller only sees posts whose audience is inside their scope.
-    // Filtered after the page is fetched, so a page may come back short — the
-    // cursor (last visible id) still moves forward correctly.
-    const posts: typeof fetched = [];
-    for (const p of fetched) {
-      try {
-        await this.assertCanManagePost(user, p);
-        posts.push(p);
-      } catch {
-        /* outside this caller's scope — omitted */
-      }
+  /**
+   * TAFSD-315: which posts belong on a scoped caller's board — those that
+   * reached at least one student in their scope (an all-campus notice their
+   * parents got too), plus their own. null means the caller sees everything
+   * (superadmin, or no scope set). Editing, deleting and read stats still
+   * need the whole audience in scope (assertCanManagePost).
+   */
+  private async _scopeReach(user: IJwtStaffPayload) {
+    if (this.scope.isExempt(user)) return null;
+    const inScope = this.scope.whereForStudents(user);
+    if (Object.keys(inScope).length === 0) return null;
+
+    const students = await this.prisma.students.findMany({
+      where: { deleted_at: null, ...inScope },
+      select: { cc: true, campus_id: true, class_id: true, section_id: true },
+    });
+    const ccs = new Set(students.map((st) => st.cc));
+    const placements = [
+      ...new Map(students.map((st) => [`${st.campus_id}:${st.class_id}:${st.section_id}`, st])).values(),
+    ];
+    const hits = (list: number[], id: number | null) => list.length === 0 || (id != null && list.includes(id));
+
+    return {
+      seesStudent: (cc: number) => ccs.has(cc),
+      reaches: (post: {
+        posted_by: string | null;
+        campus_ids: unknown;
+        class_ids: unknown;
+        section_ids: unknown;
+        student_ccs: unknown;
+      }) => {
+        if (post.posted_by === user.sub) return true;
+        // Student targeting is exclusive, as in _resolveAudienceFamilyIds.
+        const targeted = (post.student_ccs as number[]) ?? [];
+        if (targeted.length) return targeted.some((cc) => ccs.has(cc));
+        const campusIds = (post.campus_ids as number[]) ?? [];
+        const classIds = (post.class_ids as number[]) ?? [];
+        const sectionIds = (post.section_ids as number[]) ?? [];
+        return placements.some(
+          (pl) => hits(campusIds, pl.campus_id) && hits(classIds, pl.class_id) && hits(sectionIds, pl.section_id),
+        );
+      },
+    };
+  }
+
+  private async _canManagePost(
+    user: IJwtStaffPayload,
+    post: { campus_ids: unknown; class_ids: unknown; section_ids: unknown; student_ccs: unknown },
+  ): Promise<boolean> {
+    try {
+      await this.assertCanManagePost(user, post);
+      return true;
+    } catch {
+      return false;
     }
+  }
 
+  /** Adds targeted_students and total_reached to each post, for the admin views. */
+  private async _withTargetsAndReach<T extends PostListRow>(posts: T[]) {
     const allStudentCcs = [...new Set(posts.flatMap((p) => p.student_ccs || []))];
     const students = allStudentCcs.length
       ? await this.prisma.students.findMany({
@@ -241,95 +425,17 @@ export class NoticeBoardService {
       }),
     );
 
-    const allHolidays = await this.prisma.academic_calendar_days.findMany({
-      where: {
-        applies_to: 'STUDENT',
-        day_type: { in: ['HOLIDAY', 'WORKDAY'] },
-      },
-      orderBy: { date: 'desc' },
-      take: 30,
-    });
-    // Same rule as posts: a scoped caller only sees holiday notices whose own
-    // campus/class/section is inside their scope.
-    const holidays = this.scope.isExempt(user)
-      ? allHolidays
-      : allHolidays.filter((h) => {
-          try {
-            this.scope.assertCampus(user, h.campus_id);
-            if (h.class_id != null) this.scope.assertClass(user, h.class_id);
-            if (h.section_id != null) this.scope.assertSection(user, h.section_id);
-            return true;
-          } catch {
-            return false;
-          }
-        });
-
-    const userIds = holidays.map((h) => h.created_by).filter((cb): cb is string => !!cb);
-    const creators = userIds.length
-      ? await this.prisma.users.findMany({
-          where: { id: { in: userIds } },
-          select: { id: true, full_name: true },
-        })
-      : [];
-    const creatorMap = new Map(creators.map((u) => [u.id, u.full_name]));
-    const holidayReadCounts = await this._holidayReadCounts(holidays);
-    const holidayReachCache = new Map<string, number>();
-    const uniqueHolidayScopes = new Map<string, (typeof holidays)[number]>();
-    for (const h of holidays) {
-      const key = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
-      if (!uniqueHolidayScopes.has(key)) uniqueHolidayScopes.set(key, h);
-    }
-    await Promise.all(
-      [...uniqueHolidayScopes.entries()].map(async ([key, h]) => {
-        holidayReachCache.set(key, await this._countAudienceFamilies(this._holidayAudience(h)));
-      }),
-    );
-
-    const holidayPosts = holidays.map((h) => {
-      const isPinned = h.description?.startsWith('[PINNED] ') ?? false;
-      const defaultDesc = h.day_type === 'WORKDAY' ? 'School Open' : 'Holiday';
-      const cleanDesc = isPinned ? h.description!.replace('[PINNED] ', '') : (h.description || defaultDesc);
-      const creatorName = h.created_by ? creatorMap.get(h.created_by) : null;
-      const title = h.day_type === 'WORKDAY' ? 'School Open' : 'School Closed';
-      const reachKey = `${h.campus_id}:${h.class_id ?? ''}:${h.section_id ?? ''}`;
-      return {
-        id: `holiday-${h.id}` as any, // Cast to any to satisfy type signature of notice board posts
-        posted_by: h.created_by || 'System',
-        title,
-        body: `${cleanDesc} (on ${new Date(h.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })})`,
-        campus_ids: [h.campus_id],
-        class_ids: h.class_id ? [h.class_id] : [],
-        section_ids: h.section_id ? [h.section_id] : [],
-        student_ccs: [],
-        student_statuses: [],
-        academic_years: [],
-        media_urls: [],
-        media_types: [],
-        is_pinned: isPinned,
-        notification_only: false,
-        posted_at: h.date,
-        expires_at: null,
-        deleted_at: null,
-        users: { full_name: creatorName || h.created_by || 'System' },
-        _count: { post_reads: holidayReadCounts.get(h.id) ?? 0 },
-        total_reached: holidayReachCache.get(reachKey) ?? 0,
-      };
-    });
-
-    const merged = [...postsWithReach, ...holidayPosts];
-    merged.sort((a, b) => {
-      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-      return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
-    });
-
-    return merged;
+    return postsWithReach;
   }
 
   // `user` is omitted by in-process callers that post a system notice on
   // someone's behalf (e.g. ParentChangeRequestsService) — only the admin HTTP
-  // route threads a caller through, so only it is scope-checked here.
+  // route threads a caller through, so only it is scope-checked here, and
+  // only it can land in review: a post by anyone but a SUPER_ADMIN is held as
+  // PENDING, with no push, until a superadmin approves it (approvePost).
   async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string, user?: IJwtStaffPayload) {
     if (user) await this.assertTargetingInScope(user, dto);
+    const needsReview = !!user && !this.isSuperAdmin(user);
     // Student targeting is exclusive in the feed — strip campus/class/section so
     // the stored post can't look school-/campus-scoped while only listing kids.
     const studentCcs = dto.student_ccs ?? [];
@@ -355,15 +461,13 @@ export class NoticeBoardService {
         is_pinned: dto.is_pinned ?? false,
         notification_only: dto.notification_only ?? false,
         expires_at: dto.expires_at ? new Date(dto.expires_at) : null,
+        status: needsReview ? NoticePostStatus.PENDING : NoticePostStatus.APPROVED,
       },
-      include: {
-        users: { select: { full_name: true } },
-        _count: { select: { post_reads: true } },
-      },
+      include: POST_LIST_INCLUDE,
     });
 
     const noteParts = [
-      `Posted "${dto.title?.trim() || 'untitled'}"`,
+      `${needsReview ? 'Submitted for approval' : 'Posted'} "${dto.title?.trim() || 'untitled'}"`,
       this._audienceSummary(post),
       `Body: ${this._snippet(dto.body)}`,
     ];
@@ -381,9 +485,11 @@ export class NoticeBoardService {
     });
 
     // Fire-and-forget push notifications to all scoped families
-    this._sendPostNotifications(post).catch((err) =>
-      console.error('Notice board FCM dispatch failed:', err.message),
-    );
+    if (!needsReview) {
+      this._sendPostNotifications(post).catch((err) =>
+        console.error('Notice board FCM dispatch failed:', err.message),
+      );
+    }
 
     return {
       ...post,
@@ -592,9 +698,24 @@ export class NoticeBoardService {
     if (!post) throw new NotFoundException('Post not found');
     await this.assertCanManagePost(user, post);
 
+    // New wording from a non-superadmin is a new submission: it goes back to
+    // PENDING (an approved post leaves families' feeds until re-approved, a
+    // rejected one is resubmitted). Pin / expiry changes alone don't.
+    const contentChanged =
+      (dto.title !== undefined && dto.title !== post.title) ||
+      (dto.body !== undefined && dto.body !== post.body);
+    const backToReview =
+      contentChanged && !this.isSuperAdmin(user) && post.status !== NoticePostStatus.PENDING;
+
     const updated = await this.prisma.notice_board_posts.update({
       where: { id: numericId },
       data: {
+        ...(backToReview && {
+          status: NoticePostStatus.PENDING,
+          reviewed_by: null,
+          reviewed_at: null,
+          review_reason: null,
+        }),
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.body !== undefined && { body: dto.body }),
         ...(dto.is_pinned !== undefined && { is_pinned: dto.is_pinned }),
@@ -621,6 +742,7 @@ export class NoticeBoardService {
         changes.push(`expires_at "${oldExp ?? '—'}" → "${newExp ?? '—'}"`);
       }
     }
+    if (backToReview) changes.push(`status ${post.status} → PENDING (resubmitted for approval)`);
 
     if (changes.length > 0) {
       await this.auditLogs.log({
@@ -776,6 +898,141 @@ export class NoticeBoardService {
       total_read: post._count.post_reads,
       targeted_reads: targetedReads.length ? targetedReads : undefined,
     };
+  }
+
+  // ── Review (SUPER_ADMIN only) ────────────────────────────────────────────
+
+  private isSuperAdmin(user: IJwtStaffPayload): boolean {
+    return user.role === StaffRole.SUPER_ADMIN;
+  }
+
+  private assertReviewer(user: IJwtStaffPayload): void {
+    if (!this.isSuperAdmin(user)) {
+      throw new ForbiddenException('Only a superadmin can review notice board posts.');
+    }
+  }
+
+  async getReviewQueue(
+    status: string | undefined,
+    cursor: number | undefined,
+    user: IJwtStaffPayload,
+    q?: string,
+  ) {
+    this.assertReviewer(user);
+    const wanted = (status ?? NoticePostStatus.PENDING).toUpperCase() as NoticePostStatus;
+    if (!REVIEW_STATUSES.includes(wanted)) {
+      throw new BadRequestException(`status must be one of ${REVIEW_STATUSES.join(', ')}`);
+    }
+    // Pending is a queue (oldest first). The decided lists are history: only
+    // posts that went through review, newest decision first.
+    const posts = await this.prisma.notice_board_posts.findMany({
+      where: {
+        deleted_at: null,
+        status: wanted,
+        ...(wanted === NoticePostStatus.PENDING ? {} : { reviewed_at: { not: null } }),
+        ...(q?.trim()
+          ? {
+              OR: [
+                { title: { contains: q.trim(), mode: 'insensitive' as const } },
+                { body: { contains: q.trim(), mode: 'insensitive' as const } },
+                { users: { full_name: { contains: q.trim(), mode: 'insensitive' as const } } },
+              ],
+            }
+          : {}),
+      },
+      orderBy:
+        wanted === NoticePostStatus.PENDING
+          ? [{ id: 'asc' }]
+          : [{ reviewed_at: 'desc' }, { id: 'desc' }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: POST_LIST_INCLUDE,
+      take: 30,
+    });
+    return this._withTargetsAndReach(posts);
+  }
+
+  async getPendingCount(user: IJwtStaffPayload) {
+    this.assertReviewer(user);
+    const pending = await this.prisma.notice_board_posts.count({
+      where: { deleted_at: null, status: NoticePostStatus.PENDING },
+    });
+    return { pending };
+  }
+
+  async approvePost(id: number, user: IJwtStaffPayload, changedBy: string | undefined) {
+    this.assertReviewer(user);
+    const post = await this._decide(id, user, NoticePostStatus.APPROVED, null);
+
+    // Goes live now: dated at approval so it lands at the top of the feed,
+    // and families are notified only at this point.
+    this._sendPostNotifications(post).catch((err) =>
+      console.error('Notice board FCM dispatch failed:', err.message),
+    );
+    this._notifyAuthor(post, 'Notice approved', `"${post.title?.trim() || this._snippet(post.body, 60)}" is now live.`);
+
+    await this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(id),
+      action: 'APPROVED',
+      section: 'communication',
+      new_value: post.title ?? this._snippet(post.body, 80),
+      note: `Approved notice #${id} by ${post.users?.full_name ?? post.posted_by} | ${this._audienceSummary(post)}`,
+      changed_by: changedBy ?? user.sub,
+    });
+    return { ...post, total_reached: await this._countAudienceFamilies(post) };
+  }
+
+  async rejectPost(id: number, reason: string, user: IJwtStaffPayload, changedBy: string | undefined) {
+    this.assertReviewer(user);
+    const trimmed = reason?.trim();
+    if (!trimmed) throw new BadRequestException('A reason is required to reject a post.');
+    const post = await this._decide(id, user, NoticePostStatus.REJECTED, trimmed);
+
+    this._notifyAuthor(post, 'Notice not approved', `"${post.title?.trim() || this._snippet(post.body, 60)}": ${trimmed}`);
+
+    await this.auditLogs.log({
+      entity_type: 'NOTICE',
+      entity_id: String(id),
+      action: 'REJECTED',
+      section: 'communication',
+      new_value: trimmed,
+      note: `Rejected notice #${id} by ${post.users?.full_name ?? post.posted_by}. Reason: ${trimmed}`,
+      changed_by: changedBy ?? user.sub,
+    });
+    return post;
+  }
+
+  /** PENDING → decision, atomically, so two reviewers can't both act on one post. */
+  private async _decide(id: number, user: IJwtStaffPayload, status: NoticePostStatus, reason: string | null) {
+    const now = new Date();
+    const { count } = await this.prisma.notice_board_posts.updateMany({
+      where: { id, deleted_at: null, status: NoticePostStatus.PENDING },
+      data: {
+        status,
+        reviewed_by: user.sub,
+        reviewed_at: now,
+        review_reason: reason,
+        ...(status === NoticePostStatus.APPROVED && { posted_at: now }),
+      },
+    });
+    if (count === 0) {
+      const exists = await this.prisma.notice_board_posts.findFirst({
+        where: { id, deleted_at: null },
+        select: { status: true },
+      });
+      if (!exists) throw new NotFoundException('Post not found');
+      throw new ConflictException(`This post is already ${exists.status.toLowerCase()}.`);
+    }
+    return this.prisma.notice_board_posts.findUniqueOrThrow({
+      where: { id },
+      include: POST_LIST_INCLUDE,
+    });
+  }
+
+  private _notifyAuthor(post: { id: number; posted_by: string }, title: string, body: string) {
+    this.fcm
+      .sendToUsers([post.posted_by], title, body, { type: 'notice_board_review', post_id: String(post.id) })
+      .catch((err) => console.error('Notice review push failed:', err.message));
   }
 
   // ── Media upload ─────────────────────────────────────────────────────────
@@ -946,6 +1203,26 @@ export class NoticeBoardService {
     return counts;
   }
 
+  private audienceCountCache = new Map<string, { value: number; expires: number }>();
+
+  private _audienceKey(post: {
+    campus_ids: unknown;
+    class_ids: unknown;
+    section_ids: unknown;
+    student_ccs: unknown;
+    student_statuses: unknown;
+    academic_years: unknown;
+  }): string {
+    const ccs = ((post.student_ccs as number[]) ?? []).slice().sort().join(',');
+    if (ccs) return `ccs:${ccs}`;
+    const cmp = ((post.campus_ids as number[]) ?? []).slice().sort().join(',');
+    const cls = ((post.class_ids as number[]) ?? []).slice().sort().join(',');
+    const sec = ((post.section_ids as number[]) ?? []).slice().sort().join(',');
+    const st = ((post.student_statuses as string[]) ?? []).slice().sort().join(',');
+    const ay = ((post.academic_years as string[]) ?? []).slice().sort().join(',');
+    return `${cmp}|${cls}|${sec}|${st}|${ay}`;
+  }
+
   private async _countAudienceFamilies(post: {
     campus_ids: unknown;
     class_ids: unknown;
@@ -954,6 +1231,13 @@ export class NoticeBoardService {
     student_statuses: unknown;
     academic_years: unknown;
   }): Promise<number> {
+    const cacheKey = this._audienceKey(post);
+    const hit = this.audienceCountCache.get(cacheKey);
+    const now = Date.now();
+    if (hit && hit.expires > now) {
+      return hit.value;
+    }
+
     const studentCcs = (post.student_ccs as number[]) ?? [];
     if (studentCcs.length) {
       const students = await this.prisma.students.findMany({
@@ -964,11 +1248,13 @@ export class NoticeBoardService {
         },
         select: { family_id: true },
       });
-      return new Set(
+      const count = new Set(
         students
           .map((s) => s.family_id)
           .filter((id): id is number => id != null),
       ).size;
+      this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+      return count;
     }
 
     const campusIds = (post.campus_ids as number[]) ?? [];
@@ -977,7 +1263,7 @@ export class NoticeBoardService {
     const studentStatuses = (post.student_statuses as student_status[]) ?? [];
     const academicYears = (post.academic_years as string[]) ?? [];
 
-    return this.prisma.families.count({
+    const count = await this.prisma.families.count({
       where: {
         deleted_at: null,
         students: {
@@ -994,5 +1280,7 @@ export class NoticeBoardService {
         },
       },
     });
+    this.audienceCountCache.set(cacheKey, { value: count, expires: now + 60_000 });
+    return count;
   }
 }

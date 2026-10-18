@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 // Triggering reload to connect to Redis service
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { monitorEventLoopDelay } from 'perf_hooks';
 import * as express from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
@@ -11,8 +12,42 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 
+/**
+ * Log event-loop stalls. Do NOT process.exit — under deploy/traffic spikes a
+ * 2s lag streak was restart-looping the box so healthz never stayed up.
+ */
+function startEventLoopWatchdog() {
+  const histogram = monitorEventLoopDelay({ resolution: 20 });
+  histogram.enable();
+  setInterval(() => {
+    const maxMs = histogram.max / 1e6;
+    const p99Ms = histogram.percentile(99) / 1e6;
+    histogram.reset();
+    if (maxMs > 2000) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[event-loop] blocked max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms`,
+      );
+    }
+  }, 5000).unref();
+}
+
+function bootLog(step: string) {
+  // eslint-disable-next-line no-console
+  console.log(`[boot] ${step}`);
+}
+
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  bootLog('NestFactory.create (Prisma connect + onModuleInit)…');
+  // Production: keep Nest logs but drop per-route "Mapped {…}" spam. That flood
+  // hits Railway's rate limit and the real crash line is "Messages dropped".
+  const app = await NestFactory.create(AppModule, {
+    logger:
+      process.env.NODE_ENV === 'production'
+        ? ['error', 'warn']
+        : ['error', 'warn', 'log', 'debug', 'verbose'],
+  });
+  bootLog('NestFactory.create done');
 
   const redisUrl = process.env.REDIS_URL?.trim();
   const isProduction = process.env.NODE_ENV === 'production';
@@ -25,6 +60,7 @@ async function bootstrap() {
   }
 
   if (redisUrl) {
+    bootLog('connecting Redis…');
     try {
       await redisIoAdapter.connectToRedis(redisUrl);
       app.useWebSocketAdapter(redisIoAdapter);
@@ -44,8 +80,9 @@ async function bootstrap() {
     );
   }
 
-  // Parse ZKTeco device bodies as raw text before NestJS touches them
-  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '8mb' }));
+  // Parse ZKTeco device bodies as raw text before NestJS touches them.
+  // 2mb is enough for a busy day's ATTLOG; 8mb concurrent backfills OOMed prod.
+  app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '2mb' }));
 
   app.setGlobalPrefix('api/v1');
 
@@ -69,12 +106,20 @@ async function bootstrap() {
   // eslint-disable-next-line no-console
   console.log('Allowed Origins Parsed:', corsOrigins);
 
-  // 2. Request Logger (Debug)
+  // 2. Request Logger (Debug) + slow-request probe (pool exhaustion shows up as piling 2s+ waits)
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS' || req.url.includes('auth')) {
       // eslint-disable-next-line no-console
       console.log(`[HTTP] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
     }
+    const started = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - started;
+      if (ms >= 2000) {
+        // eslint-disable-next-line no-console
+        console.warn(`[slow-request] ${req.method} ${req.originalUrl || req.url} ${ms}ms status=${res.statusCode}`);
+      }
+    });
     next();
   });
 
@@ -140,30 +185,51 @@ async function bootstrap() {
     morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
   );
 
-  const config = new DocumentBuilder()
-    .setTitle('TAFS API')
-    .setDescription('TAFS Backend API documentation')
-    .setVersion('1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        in: 'header',
-      },
-      'access-token',
-    )
-    .build();
+  const port = Number(process.env.PORT ?? 8080);
+  // Railway routes to 0.0.0.0 — binding only localhost would look like a total outage.
+  // Listen BEFORE Swagger so healthchecks pass even if document build is heavy.
+  bootLog(`listen(0.0.0.0:${port})…`);
+  await app.listen(port, '0.0.0.0');
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  // Fail hung requests instead of letting Railway/Vercel clients sit until they
+  // abort with 499 and pile up more sockets. getrequest/login must never wait
+  // minutes for a free event-loop turn behind a stuck upstream call.
+  const server = app.getHttpServer();
+  server.requestTimeout = 60_000;
+  server.headersTimeout = 65_000;
+  server.keepAliveTimeout = 60_000;
+  startEventLoopWatchdog();
 
-  const port = process.env.PORT ?? 8080;
-  await app.listen(port);
-
+  bootLog(`ready on :${port}`);
   // eslint-disable-next-line no-console
-  console.log(`🚀 Server running at: http://localhost:${port}/api/v1`);
-  // eslint-disable-next-line no-console
-  console.log(`📖 Swagger docs available at: http://localhost:${port}/api/docs`);
+  console.log(`🚀 Server running at: http://0.0.0.0:${port}/api/v1`);
+
+  // Swagger after listen — skipped in production (CPU/memory + duplicate-DTO noise
+  // was part of the crash loop; use /api/docs on non-prod only).
+  if (!isProduction) {
+    bootLog('building Swagger document…');
+    const config = new DocumentBuilder()
+      .setTitle('TAFS API')
+      .setDescription('TAFS Backend API documentation')
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          in: 'header',
+        },
+        'access-token',
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+    // eslint-disable-next-line no-console
+    console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
+  }
 }
-bootstrap();
+bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error('[boot] FATAL', err);
+  process.exit(1);
+});

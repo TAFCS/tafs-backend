@@ -33,6 +33,22 @@ type FeeAuditEvent = {
     note: string;
 };
 
+/**
+ * Why a fee head's amount can no longer be changed in place, or null when it
+ * is still open (TAFSD-362). A head is committed once it sits on a voucher
+ * (issued, held or paid through one), has money against it, or is waived.
+ */
+export function feeHeadLockReason(row: {
+    status: string | null;
+    amount_paid: Prisma.Decimal | number | null;
+    voucher_heads: unknown[];
+}): 'waived' | 'paid' | 'on a voucher' | null {
+    if (row.status === 'WAIVED') return 'waived';
+    if (row.status === 'PAID' || row.status === 'PARTIALLY_PAID' || Number(row.amount_paid ?? 0) > 0) return 'paid';
+    if (row.voucher_heads.length > 0 || row.status === 'ISSUED') return 'on a voucher';
+    return null;
+}
+
 @Injectable()
 export class StudentFeesService {
     constructor(
@@ -2310,11 +2326,17 @@ export class StudentFeesService {
 
     /**
      * "Universal" scholarship setter: writes one scholarship percentage onto
-     * every existing MTF (fee_type_id=1, non-discount) row for a student in a
-     * given academic year, since a student's scholarship is normally constant
-     * for the whole year. One-time bulk write — does not affect MTF rows
-     * added later in the year (those need the setter re-run, or the
-     * percentage set per-row in bulkSaveStudentFees).
+     * the student's MTF (fee_type_id=1, non-discount) rows for an academic
+     * year, since a student's scholarship is normally constant for the whole
+     * year. One-time bulk write — does not affect MTF rows added later in the
+     * year (those need the setter re-run, or the percentage set per-row in
+     * bulkSaveStudentFees).
+     *
+     * Only rows whose amount is still open change (TAFSD-362). A row on a
+     * voucher, with money against it, or waived is skipped and reported: its
+     * amount is already on paper or in the ledger, and rewriting it here left
+     * student_fees disagreeing with the voucher. To include an issued month,
+     * cancel its voucher first.
      */
     async applyScholarshipToStudent(dto: {
         student_id: number;
@@ -2327,7 +2349,40 @@ export class StudentFeesService {
         const student = await this.prisma.students.findUnique({ where: { cc: dto.student_id } });
         if (!student) throw new NotFoundException(`Student #${dto.student_id} not found`);
 
+        const rows = await this.prisma.student_fees.findMany({
+            where: {
+                student_id: dto.student_id,
+                academic_year: dto.academic_year,
+                fee_type_id: 1,
+                is_discount: false,
+            },
+            include: { voucher_heads: { select: { voucher_id: true }, orderBy: { id: 'desc' }, take: 1 } },
+            orderBy: [{ fee_date: 'asc' }, { target_month: 'asc' }],
+        });
+
+        const eligible = rows.filter((row) => feeHeadLockReason(row) === null);
+        const skipped = rows
+            .filter((row) => feeHeadLockReason(row) !== null)
+            .map((row) => ({
+                id: row.id,
+                period: this.periodLabel(row.target_month, row.academic_year, row.fee_date),
+                status: row.status,
+                reason: feeHeadLockReason(row)!,
+                voucher_id: row.voucher_heads[0]?.voucher_id ?? null,
+            }));
+
+        if (rows.length === 0) {
+            return { updated: 0, rows: [], skipped };
+        }
+        if (eligible.length === 0) {
+            throw new BadRequestException(
+                `Every MTF month for ${dto.academic_year} is already issued, paid or waived, so the scholarship was not applied. ` +
+                `Cancel a month's voucher first to include it.`,
+            );
+        }
+
         // Either an existing preset (must actually exist) or a custom_title (used to create one on the fly).
+        // Resolved after the eligibility check so a refused apply does not leave a stray preset.
         let scholarshipTypeId = dto.scholarship_type_id ?? null;
         if (scholarshipTypeId != null) {
             const preset = await this.prisma.scholarship_presets.findUnique({ where: { id: scholarshipTypeId } });
@@ -2341,24 +2396,11 @@ export class StudentFeesService {
             throw new BadRequestException('Provide either a scholarship_type_id or a custom_title for the scholarship.');
         }
 
-        const rows = await this.prisma.student_fees.findMany({
-            where: {
-                student_id: dto.student_id,
-                academic_year: dto.academic_year,
-                fee_type_id: 1,
-                is_discount: false,
-            },
-        });
-
-        if (rows.length === 0) {
-            return { updated: 0, rows: [] };
-        }
-
         const pct = new Prisma.Decimal(dto.scholarship_percentage);
         const factor = new Prisma.Decimal(1).minus(pct.div(100));
 
         const updated = await this.prisma.$transaction(
-            rows.map((row) => {
+            eligible.map((row) => {
                 // amount_after_discount is the stable base this scholarship is computed
                 // from — it must be persisted (not just read), otherwise a second call
                 // to this setter (e.g. changing the percentage) would fall back to the
@@ -2387,10 +2429,13 @@ export class StudentFeesService {
             section: 'finance',
             changed_by: changedBy,
             student_id: dto.student_id,
-            note: `Scholarship of ${dto.scholarship_percentage}% applied to ${updated.length} MTF row(s) for student #${dto.student_id}, academic year ${dto.academic_year}.`,
+            note: `Scholarship of ${dto.scholarship_percentage}% applied to ${updated.length} MTF row(s) for student #${dto.student_id}, academic year ${dto.academic_year}.` +
+                (skipped.length > 0
+                    ? ` Left unchanged (already issued/paid/waived): ${skipped.map((r) => `${r.period} ${r.reason}`).join(', ')}.`
+                    : ''),
         });
 
-        return { updated: updated.length, rows: updated };
+        return { updated: updated.length, rows: updated, skipped };
     }
 
     /**

@@ -10,16 +10,20 @@ export class BackupsSchedulerService {
 
     /**
      * Automated Database Backup
-     * Runs at 12:00 AM, 12:00 PM, and 4:00 PM Pakistan Time (PKT)
+     * Runs twice a day, Pakistan Time (PKT): 4:00 PM and 12:00 AM.
+     * SQL-only (pg_dump child process). Dual JSON dumps are opt-in via the
+     * admin trigger — loading every table through Prisma OOMed prod.
      */
-    @Cron('0 0,12,16 * * *', {
+    @Cron('0 0,16 * * *', {
         timeZone: 'Asia/Karachi',
     })
     async handleAutomatedBackup() {
-        this.logger.log('[Backup Scheduler] Starting scheduled database backup (PKT)...');
+        this.logger.log('[Backup Scheduler] Starting scheduled SQL backup (PKT)...');
         try {
             const result = await this.backupsService.createBackup();
-            this.logger.log(`[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName} and ${result.json.fileName}`);
+            this.logger.log(
+                `[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName}`,
+            );
         } catch (error) {
             this.logger.error(`[Backup Scheduler] Scheduled backup failed: ${error.message}`);
         }

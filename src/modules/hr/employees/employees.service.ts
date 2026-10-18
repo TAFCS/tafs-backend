@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
+import { hhmm, parseHhmm, timingsSnapshotFrom, WEEKDAY_SHORT } from './employee-day-timings.util';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
+import { assertMayChangeRecordOf } from '../../../common/auth/super-admin';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import {
   IsOptional, IsString, IsNumber, IsInt, IsArray, IsBoolean, IsEnum, IsEmail, IsDateString,
-  ValidateNested, Min, MinLength, MaxLength,
+  ValidateNested, Min, Max, MinLength, MaxLength, Matches, ValidateIf, ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
@@ -29,6 +31,7 @@ import {
   EMPLOYEE_DIRECTORY_TILE_ID,
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
   EMPLOYEE_FIELD_TAB_MAP,
+  EMPLOYEE_ACCESS_GRANT_FIELDS,
 } from './employee-field-tabs';
 import { AccessService } from '../../access/access.service';
 import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
@@ -40,6 +43,13 @@ import { EMPLOYEE_SELF_SERVICE_PACK } from '../../access/tiles.manifest';
  */
 const SEED_ACTOR_ID = '00000000-0000-0000-0000-000000000001';
 import { TileGrantDto } from '../../access/dto/access.dto';
+
+/** Largest value a Postgres INT4 column can hold. */
+const INT4_MAX = 2_147_483_647;
+
+
+/** Roles a non-super-admin may give a login it creates while registering staff. */
+const DELEGABLE_LOGIN_ROLES: StaffRole[] = [StaffRole.EMPLOYEE, StaffRole.TEACHER];
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -201,6 +211,14 @@ export class CreateEmployeeDto {
   @IsOptional() @IsBoolean()
   payroll_enabled?: boolean;
 
+  /** TAFSD-278: legally exempt from EOBI — payroll skips it entirely. */
+  @IsOptional() @IsBoolean()
+  eobi_exempt?: boolean;
+
+  /** TAFSD-278: legally exempt from SESSI — payroll skips it entirely. */
+  @IsOptional() @IsBoolean()
+  sessi_exempt?: boolean;
+
   @IsOptional() @IsInt()
   campus_id?: number;
 
@@ -268,6 +286,23 @@ export class CreateEmployeeDto {
   @ValidateNested({ each: true })
   @Type(() => PreviousEmployerDto)
   previous_employers?: PreviousEmployerDto[];
+
+  /**
+   * TAFSD-377: a custom working-day pattern and per-weekday timings, saved
+   * with the new employee so the ONBOARDED period carries them. Create only;
+   * an existing employee changes these through their own endpoints.
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkScheduleDayDto)
+  work_schedule?: WorkScheduleDayDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  day_timings?: DayTimingDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto { }
@@ -354,6 +389,116 @@ export class WorkScheduleDayDto {
   is_working?: boolean;
 }
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+/** TAFSD-363: one weekday's own timings. A null side uses the normal time. */
+export class DayTimingDto {
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  day_of_week: number;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'reporting_time must be HH:MM' })
+  reporting_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'leaving_time must be HH:MM' })
+  leaving_time?: string | null;
+}
+
+/** Replaces all of the employee's per-weekday timings. An empty list clears them. */
+export class UpdateDayTimingsDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  days: DayTimingDto[];
+}
+
+/** Sets (or, with both times null, clears) one weekday's timings for many employees. */
+export class BulkDayTimingDto extends DayTimingDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  employee_ids: number[];
+
+  /** TAFSD-369: YYYY-MM-DD; defaults to today. A later date schedules the change. */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+}
+
+/** TAFSD-372: monthly pay effective from a date (null clears it). */
+export class PayChangeDto {
+  @ValidateIf((_o, v) => v !== null)
+  @IsNumber()
+  @Min(0)
+  monthly_pay: number | null;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string | null;
+}
+
+/** TAFSD-369: change timings / working days effective from a date. Omitted fields keep their value. */
+export class TimingsChangeDto {
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
+  effective_from?: string;
+
+  @IsOptional()
+  @IsEnum(CheckInSource)
+  check_in_source?: 'FIXED' | 'TIMETABLE';
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'reporting_time must be HH:MM' })
+  reporting_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(HHMM, { message: 'leaving_time must be HH:MM' })
+  leaving_time?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(0)
+  @Max(240)
+  late_relaxation_minutes?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsArray()
+  @IsInt({ each: true })
+  working_days?: number[] | null;
+
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  @Max(7)
+  days_per_week?: number | null;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  day_timings?: DayTimingDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string | null;
+}
+
 export class UpdateWorkScheduleDto {
   @IsArray()
   @ValidateNested({ each: true })
@@ -436,6 +581,12 @@ const includeRelations = {
   employee_previous_employers: {
     orderBy: { id: 'desc' as const },
   },
+  // TAFSD-363: the timings snapshot on progression periods reads these.
+  employee_work_schedules: { select: { day_of_week: true, is_working: true } },
+  employee_day_timings: {
+    select: { day_of_week: true, reporting_time: true, leaving_time: true },
+    orderBy: { day_of_week: 'asc' as const },
+  },
 };
 
 /**
@@ -467,7 +618,10 @@ const listSelect = {
   users: { select: { full_name: true } },
   campuses: { select: { id: true, campus_name: true } },
   departments: { select: { id: true, name: true } },
-  staff_categories: { select: { id: true, name: true, code: true } },
+  // department_id feeds the Directory's Category filter, which only offers the
+  // picked departments' categories (TAFSD-276/368).
+  staff_categories: { select: { id: true, name: true, code: true, department_id: true } },
+  segments: { select: { id: true, name: true } },
   device_user_mappings: { select: { device_sn: true, is_active: true } },
 };
 
@@ -548,6 +702,7 @@ export class EmployeesService {
    * assignment, not an attribute (see common/scope/scope.types.ts).
    */
   private static readonly SCOPE_SELECT = {
+    user_id: true,
     campus_id: true,
     segment_id: true,
     department_id: true,
@@ -595,6 +750,11 @@ export class EmployeesService {
    * Throws NotFound -- never Forbidden -- when out of scope, so the directory
    * cannot be used to enumerate employees at other campuses by probing ids.
    */
+  /** Scope check for callers outside this service (TAFSD-369 timings endpoints). */
+  async assertCanEdit(id: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(id, caller);
+  }
+
   private async assertCanTouch(id: number, caller?: IJwtStaffPayload) {
     const row = await this.prisma.employee_profiles.findUnique({
       where: { id },
@@ -602,6 +762,43 @@ export class EmployeesService {
     });
     if (!row || (caller && !this.scope.canSeeEmployee(caller, row))) {
       throw new NotFoundException(`Employee profile with ID ${id} not found`);
+    }
+    return row;
+  }
+
+  /** Linking a login to a record: never your own login, never a SUPER_ADMIN's. */
+  private async assertMayLinkLogin(userId: string, caller?: IJwtStaffPayload) {
+    if (!caller || caller.role === StaffRole.SUPER_ADMIN) return;
+    const login = await this.prisma.users.findUnique({ where: { id: userId }, select: { id: true, role: true } });
+    if (login) this.accessService.assertMayManageUser(caller, login);
+  }
+
+  private async portalLogin(userId: string) {
+    const login = await this.prisma.users.findUnique({ where: { id: userId }, select: { id: true, role: true } });
+    if (!login) throw new BadRequestException('This employee has no linked portal account.');
+    return login;
+  }
+
+  /** Revealing a password or renaming a login: never one above the caller (TAFSD-365). */
+  private async assertCredentialsReachable(employeeId: number, caller?: IJwtStaffPayload) {
+    const row = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId }, select: { user_id: true } });
+    if (row?.user_id) await this.accessService.assertNotAbove(caller, await this.portalLogin(row.user_id));
+  }
+
+  /**
+   * assertCanTouch for writes: in scope, and not the caller's own record or a
+   * SUPER_ADMIN's (see assertMayChangeRecordOf). Every route that changes an
+   * employee goes through here, so a delegate cannot raise their own pay,
+   * close their own file, or offboard the account that administers them.
+   */
+  private async assertCanChange(id: number, caller?: IJwtStaffPayload) {
+    const row = await this.assertCanTouch(id, caller);
+    if (caller && caller.role !== StaffRole.SUPER_ADMIN) {
+      const link = await this.prisma.employee_profiles.findUnique({
+        where: { id },
+        select: { user_id: true, users: { select: { role: true } } },
+      });
+      assertMayChangeRecordOf(caller, { userId: link?.user_id, userRole: link?.users?.role }, 'employee record');
     }
     return row;
   }
@@ -614,22 +811,36 @@ export class EmployeesService {
    * would lock out every open session for 90 days until their token rotates.
    * The route-level @RequireAction is the boundary that does fail closed.
    */
-  private assertFieldsEditable(dto: object, caller?: IJwtStaffPayload) {
+  private assertFieldsEditable(dto: object, caller?: IJwtStaffPayload, opts?: { registering?: boolean }) {
     if (!caller || caller.role === StaffRole.SUPER_ADMIN) return;
+
+    const sent = Object.entries(dto)
+      .filter(([, v]) => v !== undefined)
+      .map(([field]) => field);
+    // Access grants belong to People & Access. An empty list grants nothing.
+    const grants = sent.filter((f) => {
+      if (!EMPLOYEE_ACCESS_GRANT_FIELDS.includes(f)) return false;
+      const v = (dto as Record<string, unknown>)[f];
+      return !(Array.isArray(v) && v.length === 0);
+    });
+    if (grants.length > 0 && !(caller.actions ?? []).includes('system.people_access#access.edit')) {
+      throw new ForbiddenException(`You do not have permission to give access: ${grants.join(', ')}.`);
+    }
+
+    // The Register Employee tile fills the whole intake form by design; its
+    // `create` action is the grant. Tab partitioning is for the Directory.
+    if (opts?.registering) return;
     if (caller.actions === undefined) return;
 
     const held = new Set(caller.actions);
-    const denied = Object.entries(dto)
-      .filter(([, v]) => v !== undefined)
-      .map(([field]) => field)
-      .filter((field) => {
-        const override = EMPLOYEE_FIELD_ACTION_OVERRIDES[field];
-        const actionId = override ?? (EMPLOYEE_FIELD_TAB_MAP[field]
-          ? `${EMPLOYEE_FIELD_TAB_MAP[field]}.edit`
-          : null);
-        if (!actionId) return false;
-        return !held.has(`${EMPLOYEE_DIRECTORY_TILE_ID}#${actionId}`);
-      });
+    const denied = sent.filter((field) => {
+      const override = EMPLOYEE_FIELD_ACTION_OVERRIDES[field];
+      const actionId = override ?? (EMPLOYEE_FIELD_TAB_MAP[field]
+        ? `${EMPLOYEE_FIELD_TAB_MAP[field]}.edit`
+        : null);
+      if (!actionId) return false;
+      return !held.has(`${EMPLOYEE_DIRECTORY_TILE_ID}#${actionId}`);
+    });
 
     if (denied.length > 0) {
       throw new ForbiddenException(
@@ -637,6 +848,7 @@ export class EmployeesService {
       );
     }
   }
+
 
   /**
    * Confirms the caller may place an employee at this destination, so a scoped
@@ -677,7 +889,31 @@ export class EmployeesService {
         class_id: a.class_id,
         section_id: a.section_id ?? null,
       })),
+      // Only when the row carries the schedule relations; otherwise the open
+      // period's timings carry forward rather than reading as "all cleared".
+      timings:
+        row.employee_work_schedules !== undefined && row.employee_day_timings !== undefined
+          ? timingsSnapshotFrom(row)
+          : undefined,
     };
+  }
+
+  /**
+   * TAFSD-363: after a timings write outside updateEmployee (working days,
+   * per-weekday timings), record it on the progression timeline. A no-op
+   * when nothing tracked actually changed.
+   */
+  private async recordTimingProgression(employeeId: number, changedBy: string | null) {
+    await this.prisma.$transaction(async (tx) => {
+      const row = await tx.employee_profiles.findUnique({ where: { id: employeeId }, include: includeRelations });
+      if (!row) return;
+      await this.employeeProgression.recordProgressionChange(tx, {
+        employeeId,
+        ...this.progressionSnapshotFrom(row),
+        changeType: 'TIMING_CHANGED',
+        changedBy,
+      });
+    });
   }
 
   /** Full employment-history timeline for one employee, newest-relevant fields resolved. */
@@ -917,6 +1153,46 @@ export class EmployeesService {
     });
   }
 
+  /**
+   * Lean, safe-to-share employee list for pickers: no CNIC, pay, phone or
+   * schedule. `has_monthly_pay` stands in for the amount (Payroll's test run
+   * only needs to know whether pay is set).
+   */
+  async listPicker(caller: IJwtStaffPayload) {
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: this.scope.whereForEmployees(caller),
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        job_title: true,
+        photo_url: true,
+        employment_status: true,
+        campus_id: true,
+        department_id: true,
+        staff_category_id: true,
+        segment_id: true,
+        monthly_pay: true,
+        users: { select: { full_name: true } },
+        campuses: { select: { id: true, campus_name: true } },
+        departments: { select: { id: true, name: true } },
+        staff_categories: { select: { id: true, name: true, code: true } },
+        segments: { select: { id: true, code: true, name: true, display_order: true } },
+        employee_class_section_assignments: {
+          select: {
+            id: true,
+            class_id: true,
+            section_id: true,
+            classes: { select: { description: true, class_code: true, segment_id: true } },
+            sections: { select: { description: true } },
+          },
+        },
+      },
+      orderBy: { full_name: 'asc' },
+    });
+    return rows.map(({ monthly_pay, ...rest }) => ({ ...rest, has_monthly_pay: monthly_pay != null }));
+  }
+
   async findOne(id: number, caller?: IJwtStaffPayload) {
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id },
@@ -960,7 +1236,23 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    this.assertFieldsEditable(dto, caller);
+    this.assertFieldsEditable(dto, caller, {
+      registering: !!caller?.actions?.includes('hr.register_employee#create'),
+    });
+    if (dto.user_id) await this.assertMayLinkLogin(dto.user_id, caller);
+    // Checked BEFORE anything is written: refusing the packs/tiles only after
+    // the employee and login were committed would leave a half-made person.
+    if (caller && caller.role !== StaffRole.SUPER_ADMIN && (dto.packIds?.length || dto.tileGrants?.length)) {
+      const role = dto.portal_account?.role ?? StaffRole.EMPLOYEE;
+      const [before, after] = await Promise.all([
+        this.accessService.effectiveWith(null, role),
+        this.accessService.effectiveWith(null, role, {
+          packIds: dto.packIds ?? [],
+          grants: (dto.tileGrants ?? []).map((g) => ({ tileId: g.tileId, allow: g.allow })),
+        }),
+      ]);
+      await this.accessService.assertNoLeak(caller, before, after);
+    }
     this.assertDestinationInScope(caller, {
       campus_id: dto.campus_id ?? null,
       segment_id: dto.segment_id ?? null,
@@ -981,6 +1273,8 @@ export class EmployeesService {
       tileGrants,
       payroll_enabled,
       previous_employers,
+      work_schedule,
+      day_timings,
       ...rest
     } = dto;
 
@@ -995,6 +1289,9 @@ export class EmployeesService {
       ...rest,
       campusPrefix: await this.resolveCampusPrefix(rest.campus_id ?? null),
     });
+    const scheduleDays = work_schedule?.length ? this.normaliseWorkSchedule(work_schedule) : [];
+    const ownDayTimings =
+      day_timings?.length && effectiveCheckInSource === CheckInSource.FIXED ? this.normaliseDayTimings(day_timings) : [];
 
     if (codeFields.employee_code) {
       await this.assertCodeAvailable(codeFields.employee_code);
@@ -1034,7 +1331,8 @@ export class EmployeesService {
             join_date: rest.join_date ? new Date(rest.join_date) : null,
             employment_type: rest.employment_type || null,
             employment_status: status,
-            ...permanenceFields(status, rest.employment_subtype),
+            // TAFSD-376: a new joiner left unclassified starts NON_PERMANENT.
+            ...permanenceFields(status, rest.employment_subtype ?? EmploymentSubtype.NON_PERMANENT),
             department_id: rest.department_id || null,
             reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
@@ -1094,6 +1392,16 @@ export class EmployeesService {
                     employed_to: e.employed_to?.trim() || null,
                     reason_for_leaving: e.reason_for_leaving?.trim() || null,
                   })),
+              }
+              : undefined,
+            employee_work_schedules: scheduleDays.length ? { create: scheduleDays } : undefined,
+            employee_day_timings: ownDayTimings.length
+              ? {
+                create: ownDayTimings.map((d) => ({
+                  day_of_week: d.day_of_week,
+                  reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+                  leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+                })),
               }
               : undefined,
           },
@@ -1189,9 +1497,14 @@ export class EmployeesService {
         'Usernames may no longer use the "@tafs.com" format — use a "name1.name2.name3" style username instead.',
       );
     }
+    // Anyone registering staff may create the two base logins the form picks
+    // on its own: EMPLOYEE (staff app self-service) and TEACHER (adds student
+    // roll call and directory view; web tiles still need an explicit allow).
+    // Any other role must carry nothing the caller lacks, and never
+    // SUPER_ADMIN (AccessService.assertMayAssignRole, TAFSD-365).
     const role = portalAccount.role ?? StaffRole.EMPLOYEE;
-    if (role === StaffRole.SUPER_ADMIN && caller?.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    if (!DELEGABLE_LOGIN_ROLES.includes(role)) {
+      await this.accessService.assertMayAssignRole(caller, role);
     }
 
     const taken = await this.prisma.users.findFirst({
@@ -1238,8 +1551,25 @@ export class EmployeesService {
   }
 
   async update(id: number, dto: UpdateEmployeeDto, changedBy?: string, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
-    this.assertFieldsEditable(dto, caller);
+    const touch = await this.assertCanChange(id, caller);
+    // The Advanced form resends the linked login on every save. Resending the
+    // same one is not a change, so only a different user_id needs SUPER_ADMIN.
+    const { user_id: sentUserId, ...withoutLink } = dto;
+    const linkChanged = sentUserId !== undefined && (sentUserId || null) !== (touch.user_id ?? null);
+    // Same for the subtype (status.change, TAFSD-381): the form resends it on
+    // every save, so only an actual change needs that action.
+    const checked: Record<string, unknown> = { ...(linkChanged ? dto : withoutLink) };
+    if (checked.employment_subtype !== undefined) {
+      const stored = await this.prisma.employee_profiles.findUnique({
+        where: { id },
+        select: { employment_subtype: true },
+      });
+      if ((checked.employment_subtype ?? null) === (stored?.employment_subtype ?? null)) {
+        delete checked.employment_subtype;
+      }
+    }
+    this.assertFieldsEditable(checked, caller);
+    if (linkChanged && sentUserId) await this.assertMayLinkLogin(sentUserId, caller);
     // Also check where it is being moved TO -- otherwise a scoped user could
     // reassign someone to a campus they cannot see and lose them.
     this.assertDestinationInScope(caller, {
@@ -1267,6 +1597,8 @@ export class EmployeesService {
       tileGrants: _tileGrants,
       portal_account,
       previous_employers: _ignoredEmployers,
+      work_schedule: _ignoredSchedule,
+      day_timings: _ignoredDayTimings,
       ...rest
     } = dto;
     if (_ignoredStatus !== undefined) {
@@ -1399,6 +1731,8 @@ export class EmployeesService {
             late_relaxation_minutes: rest.late_relaxation_minutes !== undefined ? rest.late_relaxation_minutes : undefined,
             monthly_pay: rest.monthly_pay !== undefined ? rest.monthly_pay : undefined,
             payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
+            eobi_exempt: rest.eobi_exempt !== undefined ? rest.eobi_exempt : undefined,
+            sessi_exempt: rest.sessi_exempt !== undefined ? rest.sessi_exempt : undefined,
             campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
             days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
             photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
@@ -1474,6 +1808,9 @@ export class EmployeesService {
       { key: 'personal_email', label: 'Email' },
       { key: 'monthly_pay', label: 'Monthly Pay' },
       { key: 'payroll_enabled', label: 'On Payroll' },
+      { key: 'employment_subtype', label: 'Employment Subtype' },
+      { key: 'eobi_exempt', label: 'EOBI Exempt' },
+      { key: 'sessi_exempt', label: 'SESSI Exempt' },
       { key: 'days_per_week', label: 'Working Days / Week' },
       { key: 'check_in_source', label: 'Check-in Source' },
       { key: 'reporting_time', label: 'Expected Check-in' },
@@ -1529,6 +1866,7 @@ export class EmployeesService {
     changedBy?: string,
     opts?: { purge?: boolean; caller?: IJwtStaffPayload },
   ) {
+    await this.assertCanChange(id, opts?.caller);
     const existing = await this.findOne(id, opts?.caller);
 
     if (opts?.purge) {
@@ -1661,7 +1999,8 @@ export class EmployeesService {
       }
     }
 
-    if (isNumeric) {
+    // An id past INT4 can't exist, and Prisma throws (500) binding it (TAFSD-326).
+    if (isNumeric && Number(trimmed) <= INT4_MAX) {
       const exact = await this.prisma.employee_profiles.findFirst({
         where: { id: Number(trimmed), ...scopeWhere },
         select: { id: true, full_name: true, employee_code: true },
@@ -1771,7 +2110,7 @@ export class EmployeesService {
   }
 
   async updateStatus(id: number, dto: UpdateEmployeeStatusDto, caller: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
+    await this.assertCanChange(id, caller);
     if (caller.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can change employee status');
     }
@@ -1892,7 +2231,7 @@ export class EmployeesService {
 
   /** Edits the date of leaving of an employee who is already marked LEFT / TERMINATED. */
   async updateLeavingDate(id: number, dto: UpdateEmployeeLeavingDateDto, caller: IJwtStaffPayload) {
-    await this.assertCanTouch(id, caller);
+    await this.assertCanChange(id, caller);
     if (caller.role !== StaffRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only super admins can change the date of leaving');
     }
@@ -1923,7 +2262,7 @@ export class EmployeesService {
   }
 
   async updateWorkSchedule(employeeId: number, dto: UpdateWorkScheduleDto, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: { full_name: true, days_per_week: true, employee_work_schedules: true },
@@ -1967,13 +2306,14 @@ export class EmployeesService {
         note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
         changed_by: caller?.username || caller?.sub || 'system',
       });
+      await this.recordTimingProgression(employeeId, caller?.username || caller?.sub || 'system');
     }
 
     return this.getWorkSchedule(employeeId);
   }
 
   async clearWorkSchedule(employeeId: number, caller?: IJwtStaffPayload) {
-    await this.assertCanTouch(employeeId, caller);
+    await this.assertCanChange(employeeId, caller);
     const employee = await this.prisma.employee_profiles.findUnique({
       where: { id: employeeId },
       select: { full_name: true, days_per_week: true, employee_work_schedules: true },
@@ -1998,8 +2338,173 @@ export class EmployeesService {
       note: `${employee.full_name ?? `#${employeeId}`} — working days: ${before} → ${after}`,
       changed_by: caller?.username || caller?.sub || 'system',
     });
+    await this.recordTimingProgression(employeeId, caller?.username || caller?.sub || 'system');
 
     return this.getWorkSchedule(employeeId);
+  }
+
+  // ─── TAFSD-363: per-weekday timings ─────────────────────────────────────────
+
+  /**
+   * Current timings of every employee in the caller's scope, for the bulk
+   * "Day timings" window. Kept off the shared picker, which must never carry
+   * schedule (it serves single-tile users who can't see Schedule & Pay).
+   */
+  async listDayTimings(caller: IJwtStaffPayload) {
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: this.scope.whereForEmployees(caller),
+      select: {
+        id: true,
+        check_in_source: true,
+        reporting_time: true,
+        leaving_time: true,
+        employee_day_timings: { select: { day_of_week: true, reporting_time: true, leaving_time: true } },
+      },
+    });
+    return rows.map((r) => ({
+      employee_id: r.id,
+      check_in_source: r.check_in_source,
+      reporting_time: hhmm(r.reporting_time),
+      leaving_time: hhmm(r.leaving_time),
+      days: r.employee_day_timings
+        .map((d) => ({ day_of_week: d.day_of_week, reporting_time: hhmm(d.reporting_time), leaving_time: hhmm(d.leaving_time) }))
+        .sort((a, b) => a.day_of_week - b.day_of_week),
+    }));
+  }
+
+  async getDayTimings(employeeId: number, caller?: IJwtStaffPayload) {
+    await this.assertCanTouch(employeeId, caller);
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        reporting_time: true,
+        leaving_time: true,
+        employee_day_timings: { orderBy: { day_of_week: 'asc' } },
+      },
+    });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+    return {
+      employee_id: employee.id,
+      reporting_time: hhmm(employee.reporting_time),
+      leaving_time: hhmm(employee.leaving_time),
+      days: employee.employee_day_timings.map((d) => ({
+        day_of_week: d.day_of_week,
+        reporting_time: hhmm(d.reporting_time),
+        leaving_time: hhmm(d.leaving_time),
+      })),
+    };
+  }
+
+  async updateDayTimings(employeeId: number, dto: UpdateDayTimingsDto, caller?: IJwtStaffPayload) {
+    await this.assertCanChange(employeeId, caller);
+    const days = this.normaliseDayTimings(dto.days);
+    const employee = await this.prisma.employee_profiles.findUnique({
+      where: { id: employeeId },
+      select: { full_name: true, employee_day_timings: true },
+    });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    const before = this.describeDayTimings(employee.employee_day_timings);
+    await this.prisma.$transaction([
+      this.prisma.employee_day_timings.deleteMany({ where: { employee_id: employeeId } }),
+      ...days.map((d) =>
+        this.prisma.employee_day_timings.create({
+          data: {
+            employee_id: employeeId,
+            day_of_week: d.day_of_week,
+            reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+            leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+          },
+        }),
+      ),
+    ]);
+    const after = this.describeDayTimings(
+      days.map((d) => ({
+        day_of_week: d.day_of_week,
+        reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+        leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+      })),
+    );
+    if (before !== after) {
+      const changedBy = caller?.username || caller?.sub || 'system';
+      this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(employeeId),
+        action: 'UPDATED',
+        section: 'hr',
+        field: 'Day Timings',
+        old_value: before,
+        new_value: after,
+        note: `${employee.full_name ?? `#${employeeId}`} — day timings: ${before} → ${after}`,
+        changed_by: changedBy,
+      });
+      await this.recordTimingProgression(employeeId, changedBy);
+    }
+    return this.getDayTimings(employeeId, caller);
+  }
+
+  /**
+   * One weekday's timings for many employees at once (Friday hours are
+   * usually school-wide). Both times null clears that day. Each employee is
+   * scope-checked, audited and gets a progression entry.
+   */
+  async bulkSetDayTiming(dto: BulkDayTimingDto, caller?: IJwtStaffPayload) {
+    const ids = [...new Set(dto.employee_ids)];
+    for (const id of ids) await this.assertCanChange(id, caller);
+    const [day] = this.normaliseDayTimings([dto]);
+    let updated = 0;
+    for (const id of ids) {
+      const current = await this.prisma.employee_day_timings.findMany({ where: { employee_id: id } });
+      const others = current
+        .filter((d) => d.day_of_week !== dto.day_of_week)
+        .map((d) => ({ day_of_week: d.day_of_week, reporting_time: hhmm(d.reporting_time), leaving_time: hhmm(d.leaving_time) }));
+      await this.updateDayTimings(id, { days: day ? [...others, day] : others }, caller);
+      updated++;
+    }
+    return { updated };
+  }
+
+  /** TAFSD-377: one row per weekday, 0 (Sunday) to 6 (Saturday). */
+  private normaliseWorkSchedule(days: WorkScheduleDayDto[]) {
+    const seen = new Set<number>();
+    for (const d of days) {
+      if (d.day_of_week < 0 || d.day_of_week > 6) {
+        throw new BadRequestException('day_of_week must be between 0 (Sunday) and 6 (Saturday)');
+      }
+      if (seen.has(d.day_of_week)) throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]} is listed twice`);
+      seen.add(d.day_of_week);
+    }
+    if (!days.some((d) => d.is_working ?? true)) throw new BadRequestException('Pick at least one working day');
+    return days
+      .map((d) => ({ day_of_week: d.day_of_week, is_working: d.is_working ?? true }))
+      .sort((a, b) => a.day_of_week - b.day_of_week);
+  }
+
+  private normaliseDayTimings(days: DayTimingDto[]) {
+    const seen = new Set<number>();
+    const out: { day_of_week: number; reporting_time: string | null; leaving_time: string | null }[] = [];
+    for (const d of days) {
+      if (seen.has(d.day_of_week)) throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]} is listed twice`);
+      seen.add(d.day_of_week);
+      const reporting = d.reporting_time ? d.reporting_time.slice(0, 5) : null;
+      const leaving = d.leaving_time ? d.leaving_time.slice(0, 5) : null;
+      if (reporting && leaving && leaving <= reporting) {
+        throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]}: leaving time must be after reporting time`);
+      }
+      // Both empty means "use the normal timings": no row.
+      if (reporting || leaving) out.push({ day_of_week: d.day_of_week, reporting_time: reporting, leaving_time: leaving });
+    }
+    return out.sort((a, b) => a.day_of_week - b.day_of_week);
+  }
+
+  /** "Fri 07:30–12:00, Sat –13:00", or "none". */
+  private describeDayTimings(rows: { day_of_week: number; reporting_time: Date | null; leaving_time: Date | null }[]) {
+    const parts = [...rows]
+      .filter((r) => r.reporting_time || r.leaving_time)
+      .sort((a, b) => a.day_of_week - b.day_of_week)
+      .map((r) => `${WEEKDAY_SHORT[r.day_of_week]} ${hhmm(r.reporting_time) ?? ''}–${hhmm(r.leaving_time) ?? ''}`);
+    return parts.length ? parts.join(', ') : 'none';
   }
 
   /** Effective working days, the way attendance and payroll resolve them. */
@@ -2017,9 +2522,13 @@ export class EmployeesService {
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
     }
-
-    if (dto.role === StaffRole.SUPER_ADMIN && caller.role !== StaffRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only super admins can assign the SUPER_ADMIN role.');
+    const login = await this.portalLogin(employee.user_id);
+    this.accessService.assertMayManageUser(caller, login);
+    if (dto.role !== undefined && dto.role !== login.role) {
+      await this.accessService.assertMayAssignRole(caller, dto.role);
+    }
+    if (dto.campus_id !== undefined) {
+      this.scope.assertCampus(caller, dto.campus_id ?? null);
     }
 
     const existingUser = await this.prisma.users.findUnique({
@@ -2065,6 +2574,7 @@ export class EmployeesService {
         allowed_class_ids: true,
       },
     });
+    this.accessService.invalidateLiveSession(employee.user_id);
 
     const changes: string[] = [];
     if (dto.email !== undefined && (existingUser?.email ?? null) !== (updated.email ?? null)) {
@@ -2106,10 +2616,12 @@ export class EmployeesService {
     dto: ResetEmployeePasswordDto,
     caller?: IJwtStaffPayload,
   ) {
+    await this.assertCanTouch(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
     }
+    await this.accessService.assertNotAbove(caller, await this.portalLogin(employee.user_id));
     if (!dto.password || dto.password.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters.');
     }
@@ -2135,6 +2647,7 @@ export class EmployeesService {
 
   async revealAccountPassword(employeeId: number, caller?: IJwtStaffPayload) {
     await this.assertCanTouch(employeeId, caller);
+    await this.assertCredentialsReachable(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -2164,6 +2677,7 @@ export class EmployeesService {
 
   async changeAccountUsername(employeeId: number, dto: ChangeEmployeeUsernameDto, caller?: IJwtStaffPayload) {
     await this.assertCanTouch(employeeId, caller);
+    await this.assertCredentialsReachable(employeeId, caller);
     const employee = await this.findOne(employeeId);
     if (!employee.user_id) {
       throw new BadRequestException('This employee has no linked portal account.');
@@ -2212,7 +2726,9 @@ export class EmployeesService {
     employeeId: number,
     dto: PreviousEmployerDto,
     changedBy?: string,
+    caller?: IJwtStaffPayload,
   ) {
+    await this.assertCanChange(employeeId, caller);
     await this.findOne(employeeId);
     const name = dto.employer_name?.trim();
     if (!name) {
@@ -2259,13 +2775,14 @@ export class EmployeesService {
     return row;
   }
 
-  async deletePreviousEmployer(id: number, changedBy?: string) {
+  async deletePreviousEmployer(id: number, changedBy?: string, caller?: IJwtStaffPayload) {
     const existing = await this.prisma.employee_previous_employers.findUnique({
       where: { id },
     });
     if (!existing) {
       throw new NotFoundException(`Previous employer with ID ${id} not found`);
     }
+    await this.assertCanChange(existing.employee_id, caller);
 
     await this.prisma.employee_previous_employers.delete({ where: { id } });
 

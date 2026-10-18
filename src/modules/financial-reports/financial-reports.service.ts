@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
+import * as React from 'react';
+import { renderToBuffer } from '@react-pdf/renderer';
 import {
   FinancialReportSnapshotStatus,
   FinancialReportType,
@@ -22,6 +24,7 @@ import {
 import { createPaginationMeta } from '../../utils/serializer.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import { formatPkPhone, normalizePkPhone } from '../../common/utils/phone.util';
 import {
   bandForMonthsBehind,
   LPS_PER_ARREAR_MONTH,
@@ -33,22 +36,45 @@ import type {
   DefaulterSortField,
   DefaulterView,
   ExportDefaultersQueryDto,
+  DefaulterGroupBy,
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
   FinancialReportQueryDto,
+  DefaulterColumnKey,
   ListDefaultersQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
   ListFeeMatrixQueryDto,
   StudentScopeFilterQueryDto,
 } from './dto/financial-report-query.dto';
+import { DEFAULTER_COLUMN_KEYS } from './dto/financial-report-query.dto';
 import type {
   CreateFeeHeadsSnapshotDto,
   ListFeeHeadsSnapshotsQueryDto,
 } from './dto/financial-report-snapshot.dto';
+import {
+  DEFAULTER_SHEET_LIST_TITLE,
+  campusLine,
+  defaulterFilterLines,
+  defaulterSheetHeading,
+  type DefaulterFilterNames,
+} from './defaulter-sheet-heading';
+import {
+  dayDateLines,
+  periodLine,
+  writeSchoolSheets,
+  type SchoolSheet,
+  type SchoolSheetColumn,
+  type SchoolSheetOptions,
+} from './school-report-sheet';
+import { SchoolReportPDF } from './SchoolReportPDF';
 
 const EXPORT_ROW_CAP = 25_000;
+/** PDF exports of the school-format reports (TAFSD-306) stop here; Excel goes to EXPORT_ROW_CAP. */
+const PDF_EXPORT_ROW_CAP = 2_000;
+/** A full ISO instant ("2026-09-01T05:28:59.016Z") — printed as PKT on the school sheets. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
 /** Safety valve on the matrix's statistics fetch — a filtered set larger than this is truncated, not failed. */
 const STATS_ROW_CAP = 50_000;
 /** Safety valve on the matrix's month-range width (3 years) — an absurdly wide range is capped, not failed. */
@@ -60,11 +86,34 @@ const DEFAULTER_LEVEL_ABBREVIATIONS: Record<string, string> = {
   NURSERY: 'NUR',
   'K.G.': 'KG',
 };
-/** campus_code -> the label in the sheet's "DEFAULTING STUDENT LIST (...)" heading. */
+/** campus_code -> the short campus label in the CSV's Campus column (and the sheet's fallback campus line). */
 const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
   GEJ: 'G-E-J',
   KNF: 'KNF',
   NNZ: 'NNN',
+};
+/** Fee Heads / Deposits export columns that get a TOTAL on the school-format sheet (TAFSD-268). */
+const SCHOOL_SHEET_TOTAL_KEYS = new Set([
+  'amount', 'amount_paid', 'waived', 'waived_amount', 'outstanding', 'billed', 'discount',
+  'total_amount', 'fee_heads', 'late_fee', 'surcharge', 'lps_total',
+  'head_count', 'student_count', 'discount_count',
+]);
+/** Of those, the counts (no thousands format). */
+const SCHOOL_SHEET_COUNT_KEYS = new Set(['head_count', 'student_count', 'discount_count']);
+/** What a student owes in one calendar month, and which fee heads it is made of. */
+type DefaulterOwedMonth = {
+  owed: number;
+  partial: boolean;
+  heads: Array<{ name: string; owed: number; partial: boolean }>;
+};
+/** students.status -> the STATUS column on the defaulters sheet. */
+const DEFAULTER_STATUS_LABELS: Record<string, string> = {
+  ENROLLED: 'Enrolled',
+  LEFT: 'Left',
+  EXPELLED: 'Expelled',
+  GRADUATED: 'Graduated',
+  SOFT_ADMISSION: 'Soft Admission',
+  QUICK_ADMISSION: 'Quick Admission',
 };
 const HEADER_FILL: ExcelJS.Fill = {
   type: 'pattern',
@@ -1092,12 +1141,14 @@ export class FinancialReportsService {
       outstanding: item.outstanding,
     }));
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads',
+      'FEE HEADS REPORT',
       `fee-heads-report-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1197,12 +1248,14 @@ export class FinancialReportsService {
       };
     });
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Student',
+      'FEE HEADS REPORT — BY STUDENT',
       `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1231,12 +1284,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Type',
+      'FEE HEADS REPORT — BY FEE TYPE',
       `fee-heads-by-type-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1267,12 +1322,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Period',
+      'FEE HEADS REPORT — BY PERIOD',
       `fee-heads-by-period-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1303,12 +1360,14 @@ export class FinancialReportsService {
       waived: (item as any).waived ?? 0,
       outstanding: item.outstanding,
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Class',
+      'FEE HEADS REPORT — BY CLASS',
       `fee-heads-by-class-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1336,12 +1395,14 @@ export class FinancialReportsService {
       ...item,
       fee_date: item.fee_date ?? 'No fee date',
     }));
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Fee Heads by Fee Date',
+      'FEE HEADS REPORT — BY FEE DATE',
       `fee-heads-by-fee-date-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.feeHeadsFilterWords(query),
     );
   }
 
@@ -1397,12 +1458,14 @@ export class FinancialReportsService {
       lps_total: item.lps_total,
     }));
 
-    return this.buildExportFile(
+    return this.buildSchoolExportFile(
       'Deposits',
+      'DEPOSITS REPORT',
       `deposits-report-${query.from_date}-to-${query.to_date}`,
       columns,
       data,
-      query.format,
+      query,
+      this.depositsFilterWords(query),
     );
   }
 
@@ -1764,10 +1827,14 @@ export class FinancialReportsService {
     for (const elig of eligibility.values()) {
       const student = studentByCc.get(elig.student_id);
       if (!student) continue;
-      const moneyRow = money.get(elig.student_id) ?? EMPTY_MONEY;
+      const moneyRow = money.get(elig.student_id);
+      // A voucher whose status went stale (left EXPIRED or PARTIALLY_PAID
+      // after every head and surcharge on it was paid) owes nothing: not a
+      // defaulter, rather than a row with a defaulting amount of 0 (TAFSD-336).
+      if (!moneyRow && elig.lps_outstanding <= 0) continue;
       rows.push({
         ...elig,
-        ...moneyRow,
+        ...(moneyRow ?? EMPTY_MONEY),
         severity: bandForMonthsBehind(elig.months_behind, elig.category),
         student,
       });
@@ -1956,8 +2023,26 @@ export class FinancialReportsService {
   }
 
   /**
+   * The defaulter money predicate on `sf`: a head counts when it was dated
+   * before as_of, or when it sits on an EXPIRED voucher. The second covers a
+   * bill issued ahead of its month (November tuition billed in October) that
+   * lapsed unpaid: the family is on the report for it, so its amount must be
+   * too (TAFSD-336 — those rows showed a defaulting amount of 0).
+   */
+  private owedByAsOfSql(asOfDate: string) {
+    return Prisma.sql`(
+      sf.fee_date < ${asOfDate}::date
+      OR EXISTS (
+        SELECT 1 FROM public.voucher_heads vh
+        JOIN public.vouchers v ON v.id = vh.voucher_id
+        WHERE vh.student_fee_id = sf.id AND v.status = 'EXPIRED'
+      )
+    )`;
+  }
+
+  /**
    * Money for a set of already-eligible students: every unpaid, non-discount
-   * head dated before as_of. Independent of months_behind —
+   * head dated before as_of, or on an expired voucher (owedByAsOfSql). Independent of months_behind —
    * loadDefaulterEligibility answers "does this student belong on the report
    * and how many months"; this answers "how much".
    */
@@ -1978,7 +2063,7 @@ export class FinancialReportsService {
       FROM public.student_fees sf
       WHERE sf.student_id IN (${Prisma.join(ids)})
         AND sf.fee_date IS NOT NULL
-        AND sf.fee_date < ${asOfDate}::date
+        AND ${this.owedByAsOfSql(asOfDate)}
         AND sf.is_arrear_surcharge = false
         AND sf.is_discount = false
         AND sf.status <> 'PAID'
@@ -2662,7 +2747,7 @@ export class FinancialReportsService {
           { header: 'Students In Scope', key: 'in_scope', width: 18 },
           { header: 'Defaulters', key: 'defaulters', width: 12 },
           { header: 'Defaulter Rate %', key: 'rate', width: 16 },
-          { header: 'Expiring', key: 'expiring', width: 12 },
+          { header: 'Expired Bills', key: 'expiring', width: 14 },
           { header: 'Watch (1m)', key: 'watch', width: 12 },
           { header: 'Defaulter (2m)', key: 'defaulter', width: 14 },
           { header: 'Severe (3m)', key: 'severe', width: 12 },
@@ -2696,12 +2781,14 @@ export class FinancialReportsService {
       );
     }
 
-    return this.buildDefaultersStudentReport(items, data.as_of_date, query, basename);
+    return this.buildDefaultersStudentReport(items, data.as_of_date, query, basename, user);
   }
 
   /**
-   * The school's own defaulter sheet ("DEFAULTING STUDENT LIST (G-E-J)" /
-   * "4 & 5 MONTHS DEFAULTERS"): one worksheet per campus, students in level
+   * The school's own defaulter sheet ("AT A GLANCE CONSOLIDATED DEFAULTERS'
+   * LIST" under the school name for its class group — see
+   * defaulter-sheet-heading.ts — then campus, session and "4 & 5 MONTHS
+   * DEFAULTERS"): one worksheet per campus, students in level
    * order, one column per owed calendar month, DEFAULTING AMOUNT, REMARKS and
    * a TOTAL row. Black-on-white and print-ready, like the paper original.
    *
@@ -2724,6 +2811,7 @@ export class FinancialReportsService {
     asOfDate: string,
     query: ExportDefaultersQueryDto,
     basename: string,
+    generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
   ): Promise<ExportFile> {
     type Item = Record<string, unknown>;
     const items = allItems;
@@ -2731,10 +2819,18 @@ export class FinancialReportsService {
       items.map((r) => Number(r.cc)),
       asOfDate,
     );
+    const siblingGrs = await this.loadSiblingGrNumbers(items.map((r) => Number(r.cc)));
+    const linkToGr = (r: Item) => (siblingGrs.get(Number(r.cc)) ?? []).join(', ');
+    // TAFSD-340: "FATHER 0312-2244523", one per guardian, primary contact first.
+    const contacts = query.columns?.length && !query.columns.includes('contact')
+      ? new Map<number, string[]>()
+      : await this.loadDefaulterContacts(items.map((r) => Number(r.cc)));
+    const contactFor = (r: Item) => contacts.get(Number(r.cc)) ?? [];
+    const statusFor = (r: Item) => DEFAULTER_STATUS_LABELS[String(r.student_status ?? '')] ?? '';
 
     type SheetRow = {
       item: Item;
-      months: Map<number, { owed: number; partial: boolean }>;
+      months: Map<number, DefaulterOwedMonth>;
       total: number;
     };
     const sheetRows: SheetRow[] = [];
@@ -2764,11 +2860,12 @@ export class FinancialReportsService {
       ]
         .filter(Boolean)
         .join(' ');
-    // The page's month window: strip_months calendar months ending at as_of's
-    // month. Month index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
+    // The month window: months_back (TAFSD-355, picked at export) or else the
+    // page's strip_months, in calendar months ending at as_of's month. Month
+    // index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
     const asOfYm = this.parseYearMonthOfDate(asOfDate);
     const windowHi = asOfYm.year * 12 + (asOfYm.month - 1);
-    const windowLo = windowHi - (Math.min(Math.max(query.strip_months ?? 12, 1), 24) - 1);
+    const windowLo = windowHi - (Math.min(Math.max(query.months_back ?? query.strip_months ?? 12, 1), 24) - 1);
     type SheetCol = { label: string; from: number; to: number };
     const sheetColumns = (rows: SheetRow[]): SheetCol[] => {
       let earlier = false;
@@ -2794,44 +2891,165 @@ export class FinancialReportsService {
     const cellFor = (r: SheetRow, col: SheetCol) => {
       let owed = 0;
       let partial = false;
+      // Per head name, summed across the months this column covers (EARLIER /
+      // LATER span several), in the order the heads were first seen.
+      const heads = new Map<string, { owed: number; partial: boolean }>();
       for (const [idx, m] of r.months) {
         if (idx < col.from || idx > col.to) continue;
         owed += m.owed;
         partial = partial || m.partial;
+        for (const h of m.heads) {
+          const acc = heads.get(h.name) ?? { owed: 0, partial: false };
+          acc.owed = this.roundMoney(acc.owed + h.owed);
+          acc.partial = acc.partial || h.partial;
+          heads.set(h.name, acc);
+        }
       }
-      return owed > 0 ? { owed: this.roundMoney(owed), partial } : null;
+      return owed > 0 ? { owed: this.roundMoney(owed), partial, heads } : null;
+    };
+    // TAFSD-293/335: with the breakdown on, each month column becomes a group
+    // of sub-columns, one per fee head owed in it, then the month's TOTAL.
+    const breakdown = Boolean(query.breakdown_by_head);
+    // Heads in the order first seen, walking months oldest first, so every
+    // month group lists its heads in the same order.
+    const headOrder = (rows: SheetRow[]) => {
+      const order = new Map<string, number>();
+      for (const r of rows) {
+        for (const idx of [...r.months.keys()].sort((a, b) => a - b)) {
+          for (const h of r.months.get(idx)!.heads) if (!order.has(h.name)) order.set(h.name, order.size);
+        }
+      }
+      return order;
+    };
+    /** The heads owed in this column by at least one of the rows. */
+    const headsIn = (rows: SheetRow[], col: SheetCol, order: Map<string, number>) => {
+      const names = new Set<string>();
+      for (const r of rows) for (const name of cellFor(r, col)?.heads.keys() ?? []) names.add(name);
+      return [...names].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
     };
     const remarkFor = (r: SheetRow) =>
-      r.item.category === 'EXPIRING' ? 'Bill lapsed — not yet an arrear' : '';
-    const subtitle = this.defaulterFilterSubtitle(query);
+      r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '';
+    // The months line only when months behind or the arrear month was filtered;
+    // the other filters follow it in words (TAFSD-291).
+    const monthsLine =
+      query.arrear_month || (query.min_months_behind ?? 1) > 1 || query.max_months_behind != null
+        ? this.defaulterFilterSubtitle(query)
+        : null;
+    // A class or segment filter narrows the sheet to part of the school; without
+    // one it is the whole school and gets the plain name.
+    const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
+
+    // TAFSD-337: groups within each campus sheet, in class order (classes.id
+    // runs in level order), then section, then household name. Rows keep the
+    // on-screen sort inside their group.
+    const groupBy: DefaulterGroupBy | undefined = query.group_by;
+    const families = groupBy === 'family' ? await this.loadDefaulterFamilies(items.map((r) => Number(r.cc))) : null;
+    type SheetGroup = { label: string; rows: SheetRow[] };
+    const groupsOf = (rows: SheetRow[]): SheetGroup[] => {
+      if (!groupBy) return [{ label: '', rows }];
+      const byKey = new Map<string, { label: string; sort: Array<number | string>; rows: SheetRow[] }>();
+      for (const r of rows) {
+        const classId = r.item.class_id == null ? Number.MAX_SAFE_INTEGER : Number(r.item.class_id);
+        const className = String(r.item.class_name ?? '').trim() || 'No class';
+        const section = String(r.item.section ?? '').trim();
+        let key: string;
+        let label: string;
+        let sort: Array<number | string>;
+        if (groupBy === 'class') {
+          key = String(classId);
+          label = `CLASS ${className}`.toUpperCase();
+          sort = [classId];
+        } else if (groupBy === 'section') {
+          key = `${classId}:${section}`;
+          label = `${className} ${section || '(no section)'}`.toUpperCase();
+          sort = [classId, section];
+        } else {
+          const fam = families?.get(Number(r.item.cc));
+          key = fam ? `f${fam.id}` : `s${r.item.cc}`;
+          label = fam ? `${fam.household_name} · #${fam.id}`.toUpperCase() : 'NO FAMILY ON FILE';
+          sort = [fam ? fam.household_name.toUpperCase() : '\uffff', fam?.id ?? Number(r.item.cc)];
+        }
+        if (!byKey.has(key)) byKey.set(key, { label, sort, rows: [] });
+        byKey.get(key)!.rows.push(r);
+      }
+      const cmp = (a: Array<number | string>, b: Array<number | string>) => {
+        for (let i = 0; i < a.length; i++) {
+          if (a[i] === b[i]) continue;
+          return typeof a[i] === 'number' && typeof b[i] === 'number'
+            ? (a[i] as number) - (b[i] as number)
+            : String(a[i]).localeCompare(String(b[i]));
+        }
+        return 0;
+      };
+      return [...byKey.values()].sort((a, b) => cmp(a.sort, b.sort)).map(({ label, rows: groupRows }) => ({ label, rows: groupRows }));
+    };
+    const groupLine = groupBy ? [`GROUPED BY ${groupBy.toUpperCase()}`] : [];
+
+    // TAFSD-301: the columns the user picked, in the standard order. None
+    // picked (the param omitted) is the full sheet, as before.
+    const picked = new Set<DefaulterColumnKey>(query.columns?.length ? query.columns : DEFAULTER_COLUMN_KEYS);
+    const show = (key: DefaulterColumnKey) => picked.has(key);
 
     if (query.format === 'csv') {
-      const cols = sheetColumns(sheetRows);
-      const header = ['Campus', 'S#', 'C.C.', 'G.R.#', 'Level', 'Student Name', ...cols.map((c) => c.label), 'Defaulting Amount', 'Remarks'];
+      const order = headOrder(sheetRows);
+      // One CSV column per month, or per month head plus the month TOTAL.
+      const monthCols: Array<{ header: string; value: (r: SheetRow) => number | '' }> = [];
+      for (const col of show('months') ? sheetColumns(sheetRows) : []) {
+        if (!breakdown) {
+          monthCols.push({ header: col.label, value: (r) => cellFor(r, col)?.owed ?? '' });
+          continue;
+        }
+        for (const name of headsIn(sheetRows, col, order)) {
+          monthCols.push({
+            header: `${col.label} ${name.toUpperCase()}`,
+            value: (r) => cellFor(r, col)?.heads.get(name)?.owed ?? '',
+          });
+        }
+        monthCols.push({ header: `${col.label} TOTAL`, value: (r) => cellFor(r, col)?.owed ?? '' });
+      }
+      const fixed: Array<[DefaulterColumnKey, string, (r: SheetRow, i: number) => string | number]> = [
+        ['sno', 'S#', (_r, i) => i + 1],
+        ['cc', 'C.C.', (r) => Number(r.item.cc)],
+        ['gr', 'G.R.#', (r) => String(r.item.gr_number ?? '')],
+        ['link_to_gr', 'Link to GR', (r) => linkToGr(r.item)],
+        ['level', 'Level', (r) => level(r.item)],
+        ['name', 'Student Name', (r) => String(r.item.student_name ?? '')],
+        ['status', 'Status', (r) => statusFor(r.item)],
+        ['contact', 'Contact', (r) => contactFor(r.item).join(', ')],
+      ];
+      const before = fixed.filter(([k]) => show(k));
+      const header = [
+        'Campus',
+        ...(groupBy ? ['Group'] : []),
+        ...before.map(([, h]) => h),
+        ...monthCols.map((c) => c.header),
+        ...(show('amount') ? ['Defaulting Amount'] : []),
+        ...(show('remarks') ? ['Remarks'] : []),
+      ];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
       for (const campus of campuses) {
-        campus.rows.forEach((r, i) => {
-          const cells = [
-            this.defaulterCampusLabel(campus.code, campus.name),
-            i + 1,
-            Number(r.item.cc),
-            String(r.item.gr_number ?? ''),
-            level(r.item),
-            String(r.item.student_name ?? ''),
-            ...cols.map((c) => cellFor(r, c)?.owed ?? ''),
-            r.total,
-            remarkFor(r),
-          ];
-          lines.push(cells.map((v) => this.csvCell(v)).join(','));
-        });
+        for (const group of groupsOf(campus.rows)) {
+          group.rows.forEach((r, i) => {
+            const cells = [
+              this.defaulterCampusLabel(campus.code, campus.name),
+              ...(groupBy ? [group.label] : []),
+              ...before.map(([, , v]) => v(r, i)),
+              ...monthCols.map((c) => c.value(r)),
+              ...(show('amount') ? [r.total] : []),
+              ...(show('remarks') ? [remarkFor(r)] : []),
+            ];
+            lines.push(cells.map((v) => this.csvCell(v)).join(','));
+          });
+        }
       }
       return {
-        buffer: Buffer.from(`﻿${lines.join('\n')}`, 'utf8'),
+        buffer: Buffer.from(`\ufeff${lines.join('\n')}`, 'utf8'),
         filename: `${basename}.csv`,
         contentType: 'text/csv; charset=utf-8',
       };
     }
 
+    const filterNames = await this.loadDefaulterFilterNames(query);
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
 
@@ -2841,6 +3059,10 @@ export class FinancialReportsService {
     const dateLine = `DATE : ${asOf
       .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
       .toUpperCase()}`;
+    // TAFSD-338: when and by whom, under DAY / DATE.
+    const generatedLine = `GENERATED ON ${this.formatPktDateTime(new Date())}${
+      generatedBy ? ` BY ${await this.staffLabel(generatedBy)}` : ''
+    }`;
 
     if (campuses.length === 0) {
       // Still a workbook, so the admin sees "nothing matched" rather than an
@@ -2860,114 +3082,266 @@ export class FinancialReportsService {
 
     for (const campus of campuses) {
       const sheet = workbook.addWorksheet(this.sanitizeSheetName(campus.code || campus.name));
-      const cols = sheetColumns(campus.rows);
-      const labels = cols.map((c) => c.label);
-      const FIRST_MONTH_COL = 6;
-      const amountCol = FIRST_MONTH_COL + cols.length;
-      const remarksCol = amountCol + 1;
-      const lastCol = this.excelColumnLetter(remarksCol);
-
-      // Title block — rows 1-7, header at row 8.
-      sheet.mergeCells(`A1:${lastCol}1`);
-      const title = sheet.getCell('A1');
-      title.value = 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES';
-      title.font = { name: SERIF, bold: true, size: 16 };
-      title.alignment = { horizontal: 'center', vertical: 'middle' };
-      sheet.getRow(1).height = 28;
-
-      sheet.getCell('A3').value = dayLine;
-      sheet.getCell('A4').value = dateLine;
-      for (const ref of ['A3', 'A4']) sheet.getCell(ref).font = { name: 'Arial', bold: true, size: 9 };
-
-      sheet.mergeCells(`A6:${lastCol}6`);
-      const h2 = sheet.getCell('A6');
-      h2.value = `DEFAULTING STUDENT LIST (${this.defaulterCampusLabel(campus.code, campus.name)})`;
-      h2.font = { name: SERIF, bold: true, size: 14 };
-      h2.alignment = { horizontal: 'center', vertical: 'middle' };
-      sheet.getRow(6).height = 22;
-
-      sheet.mergeCells(`A7:${lastCol}7`);
-      const h3 = sheet.getCell('A7');
-      h3.value = subtitle;
-      h3.font = { name: SERIF, bold: true, size: 13 };
-      h3.alignment = { horizontal: 'center', vertical: 'middle' };
-
-      const HEADER_ROW = 8;
-      const headerRow = sheet.getRow(HEADER_ROW);
-      ['S#', 'C.C.', 'G.R. #', 'LEVEL', 'STUDENT NAME', ...labels, 'DEFAULTING AMOUNT', 'REMARKS'].forEach(
-        (h, i) => {
-          const cell = headerRow.getCell(i + 1);
-          cell.value = h;
-          cell.font = { name: SERIF, bold: true, size: i + 1 === amountCol ? 9 : 11 };
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-          cell.border = box;
-        },
-      );
-      headerRow.height = 30;
-
-      sheet.getColumn(1).width = 5;
-      sheet.getColumn(2).width = 8;
-      sheet.getColumn(3).width = 8;
-      sheet.getColumn(4).width = 11;
-      sheet.getColumn(5).width = 30;
-      for (let i = 0; i < cols.length; i++) sheet.getColumn(FIRST_MONTH_COL + i).width = 10;
-      sheet.getColumn(amountCol).width = 15;
-      sheet.getColumn(remarksCol).width = 22;
-
-      let rowIdx = HEADER_ROW + 1;
-      let grandTotal = 0;
-      campus.rows.forEach((r, i) => {
-        const row = sheet.getRow(rowIdx);
-        row.getCell(1).value = i + 1;
-        row.getCell(2).value = Number(r.item.cc);
-        const gr = String(r.item.gr_number ?? '').trim();
-        row.getCell(3).value = /^\d+$/.test(gr) ? Number(gr) : gr;
-        row.getCell(4).value = level(r.item);
-        row.getCell(5).value = String(r.item.student_name ?? '').toUpperCase();
-        cols.forEach((col, c) => {
-          const owed = cellFor(r, col);
-          if (!owed) return;
-          const cell = row.getCell(FIRST_MONTH_COL + c);
-          cell.value = owed.owed;
-          // Part-paid month: the remaining balance, shown "BP 10940" as on
-          // the manual sheets. Still a number, so the row sums.
-          cell.numFmt = owed.partial ? '"BP "0' : '0';
+      // Column specs in the standard order, narrowed to the picked ones
+      // (TAFSD-301). The months expand to one column per month.
+      type Spec = {
+        header: string;
+        width: number;
+        /** Text that may run long: wrap it. */
+        wrap?: boolean;
+        /** Summed into the TOTAL row. */
+        total?: (r: SheetRow) => number;
+        fill: (cell: ExcelJS.Cell, r: SheetRow, i: number) => number | void;
+        amount?: boolean;
+        month?: boolean;
+        /** Breakdown: the month label this head sub-column sits under. */
+        group?: string;
+        /** Breakdown: the month's TOTAL sub-column. */
+        monthTotal?: boolean;
+      };
+      const specs: Spec[] = [];
+      if (show('sno')) specs.push({ header: 'S#', width: 5, fill: (c, _r, i) => void (c.value = i + 1) });
+      if (show('cc')) specs.push({ header: 'C.C.', width: 8, fill: (c, r) => void (c.value = Number(r.item.cc)) });
+      if (show('gr'))
+        specs.push({
+          header: 'G.R. #',
+          width: 8,
+          fill: (c, r) => {
+            const gr = String(r.item.gr_number ?? '').trim();
+            c.value = /^\d+$/.test(gr) ? Number(gr) : gr;
+          },
         });
-        const amount = row.getCell(amountCol);
-        amount.value = r.total;
-        amount.numFmt = '0';
-        amount.font = { name: SERIF, bold: true, size: 12 };
-        grandTotal += r.total;
-        row.getCell(remarksCol).value = remarkFor(r);
-
-        for (let c = 1; c <= remarksCol; c++) {
-          const cell = row.getCell(c);
-          cell.border = box;
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: c === 5 };
-          if (c !== amountCol) cell.font = { name: SERIF, size: 11 };
+      if (show('link_to_gr'))
+        specs.push({ header: 'LINK TO GR', width: 14, wrap: true, fill: (c, r) => void (c.value = linkToGr(r.item)) });
+      if (show('level')) specs.push({ header: 'LEVEL', width: 11, fill: (c, r) => void (c.value = level(r.item)) });
+      if (show('name'))
+        specs.push({
+          header: 'STUDENT NAME',
+          width: 30,
+          wrap: true,
+          fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
+        });
+      if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
+      if (show('contact'))
+        specs.push({
+          header: 'CONTACT',
+          width: 24,
+          wrap: true,
+          fill: (c, r) => {
+            const lines = contactFor(r.item);
+            c.value = lines.join('\n');
+            return lines.length;
+          },
+        });
+      if (show('months')) {
+        const order = headOrder(campus.rows);
+        for (const col of sheetColumns(campus.rows)) {
+          const monthCell = (cell: ExcelJS.Cell, r: SheetRow) => {
+            const owed = cellFor(r, col);
+            if (!owed) return;
+            cell.value = owed.owed;
+            // Part-paid month: the remaining balance, shown "BP 10940" as on
+            // the manual sheets. Still a number, so the row sums.
+            cell.numFmt = owed.partial ? '"BP "0' : '0';
+          };
+          if (!breakdown) {
+            specs.push({ header: col.label, width: 10, month: true, total: (r) => cellFor(r, col)?.owed ?? 0, fill: monthCell });
+            continue;
+          }
+          for (const name of headsIn(campus.rows, col, order)) {
+            specs.push({
+              group: col.label,
+              header: name.toUpperCase(),
+              width: 11,
+              month: true,
+              total: (r) => cellFor(r, col)?.heads.get(name)?.owed ?? 0,
+              fill: (cell, r) => {
+                const head = cellFor(r, col)?.heads.get(name);
+                if (!head) return;
+                cell.value = head.owed;
+                cell.numFmt = head.partial ? '"BP "0' : '0';
+              },
+            });
+          }
+          specs.push({
+            group: col.label,
+            header: 'TOTAL',
+            width: 11,
+            month: true,
+            monthTotal: true,
+            total: (r) => cellFor(r, col)?.owed ?? 0,
+            fill: monthCell,
+          });
         }
-        row.height = 22;
-        rowIdx++;
+      }
+      if (show('amount'))
+        specs.push({
+          header: 'DEFAULTING AMOUNT',
+          width: 15,
+          amount: true,
+          total: (r) => r.total,
+          fill: (c, r) => {
+            c.value = r.total;
+            c.numFmt = '0';
+          },
+        });
+      if (show('remarks')) specs.push({ header: 'REMARKS', width: 22, fill: (c, r) => void (c.value = remarkFor(r)) });
+      const lastCol = Math.max(specs.length, 1);
+
+      // Title block (TAFSD-289): school name by class group, the classes line
+      // when the sheet mixes both schools, list title, campus, session, then
+      // DAY / DATE and the filter subtitle. The header row follows.
+      const heading = defaulterSheetHeading(
+        campus.rows.map((r) => ({
+          class_id: r.item.class_id == null ? null : Number(r.item.class_id),
+          class_name: String(r.item.class_name ?? ''),
+        })),
+        classFiltered,
+        asOfDate,
+      );
+      let line = 1;
+      const banner = (text: string, size: number, height: number) => {
+        if (lastCol > 1) sheet.mergeCells(line, 1, line, lastCol);
+        const cell = sheet.getCell(line, 1);
+        cell.value = text;
+        cell.font = { name: SERIF, bold: true, size };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        sheet.getRow(line).height = height;
+        line++;
+      };
+      // TAFSD-338: header text a size or two up from the body rows.
+      banner(heading.school, 20, 32);
+      if (heading.classesLine) banner(heading.classesLine, 13, 20);
+      banner(DEFAULTER_SHEET_LIST_TITLE, 17, 26);
+      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 15, 22);
+      banner(heading.session, 14, 20);
+
+      line++;
+      for (const text of [dayLine, dateLine, generatedLine]) {
+        const cell = sheet.getCell(line, 1);
+        cell.value = text;
+        cell.font = { name: 'Arial', bold: true, size: 11 };
+        sheet.getRow(line++).height = 16;
+      }
+      line++;
+      const filterLines = defaulterFilterLines(
+        query,
+        filterNames,
+        monthsLine,
+        heading.classesLine != null,
+        undefined,
+        groupLine,
+      );
+      filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 14 : 12, i === 0 && monthsLine ? 22 : 18));
+
+      // Breakdown sheets have two header rows: the month over its head
+      // sub-columns, and the head names under it. Other columns span both.
+      const HEADER_ROW = line;
+      const twoRowHeader = specs.some((spec) => spec.group);
+      const HEADER_LAST = twoRowHeader ? HEADER_ROW + 1 : HEADER_ROW;
+      const styleHeader = (cell: ExcelJS.Cell, text: string, size: number) => {
+        cell.value = text;
+        cell.font = { name: SERIF, bold: true, size };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = box;
+      };
+      specs.forEach((spec, i) => {
+        const col = i + 1;
+        sheet.getColumn(col).width = spec.width;
+        if (!spec.group) {
+          if (twoRowHeader) {
+            sheet.getCell(HEADER_LAST, col).border = box;
+            sheet.mergeCells(HEADER_ROW, col, HEADER_LAST, col);
+          }
+          styleHeader(sheet.getCell(HEADER_ROW, col), spec.header, spec.amount ? 11 : 13);
+          return;
+        }
+        styleHeader(sheet.getCell(HEADER_LAST, col), spec.header, 10);
+        // First sub-column of its month: write the month and merge across the group.
+        if (specs[i - 1]?.group === spec.group) return;
+        let end = i;
+        while (specs[end + 1]?.group === spec.group) end++;
+        for (let c = col; c <= end + 1; c++) sheet.getCell(HEADER_ROW, c).border = box;
+        if (end > i) sheet.mergeCells(HEADER_ROW, col, HEADER_ROW, end + 1);
+        styleHeader(sheet.getCell(HEADER_ROW, col), spec.group, 13);
       });
+      sheet.getRow(HEADER_ROW).height = twoRowHeader ? 24 : 36;
+      if (twoRowHeader) sheet.getRow(HEADER_LAST).height = 34;
 
-      // TOTAL — a labelled box sitting over the last few month columns, the
-      // grand total under DEFAULTING AMOUNT, as on the paper sheet.
-      const totalRow = sheet.getRow(rowIdx);
-      const labelFrom = Math.max(1, amountCol - 3);
-      if (amountCol - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, amountCol - 1);
-      const label = totalRow.getCell(labelFrom);
-      label.value = 'TOTAL';
-      label.font = { name: SERIF, bold: true, size: 12 };
-      label.alignment = { horizontal: 'center', vertical: 'middle' };
-      const grand = totalRow.getCell(amountCol);
-      grand.value = this.roundMoney(grandTotal);
-      grand.numFmt = '0.00';
-      grand.font = { name: SERIF, bold: true, size: 12 };
-      grand.alignment = { horizontal: 'center', vertical: 'middle' };
-      for (let c = labelFrom; c <= amountCol; c++) totalRow.getCell(c).border = box;
-      totalRow.height = 22;
+      let rowIdx = HEADER_LAST + 1;
+      const writeStudent = (r: SheetRow, i: number) => {
+        const row = sheet.getRow(rowIdx);
+        let lineCount = 1;
+        specs.forEach((spec, c) => {
+          const cell = row.getCell(c + 1);
+          const lines = spec.fill(cell, r, i);
+          if (typeof lines === 'number') lineCount = Math.max(lineCount, lines);
+          cell.border = box;
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: Boolean(spec.wrap) };
+          cell.font = spec.amount
+            ? { name: SERIF, bold: true, size: 12 }
+            : { name: SERIF, bold: Boolean(spec.monthTotal), size: spec.group ? 10 : 11 };
+        });
+        // Excel won't grow a row to fit wrapped text it didn't write itself.
+        row.height = Math.max(22, lineCount * 14 + 6);
+        rowIdx++;
+      };
 
-      sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_ROW }];
+      // TOTAL — the grand total under DEFAULTING AMOUNT, as on the paper sheet,
+      // with a labelled box over the few columns before it. Without DEFAULTING
+      // AMOUNT, each month column gets its own total. A breakdown sheet totals
+      // every head and month sub-column as well. Groups get the same row as
+      // their SUBTOTAL.
+      const totalCols = specs
+        .map((spec, i) => ({ spec, col: i + 1 }))
+        .filter(({ spec }) => spec.total && (spec.amount || !show('amount') || breakdown));
+      const writeTotal = (rows: SheetRow[], text: string) => {
+        if (!totalCols.length) return;
+        const totalRow = sheet.getRow(rowIdx);
+        const firstTotal = totalCols[0].col;
+        if (firstTotal > 1) {
+          const labelFrom = Math.max(1, firstTotal - 3);
+          if (firstTotal - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, firstTotal - 1);
+          const label = totalRow.getCell(labelFrom);
+          label.value = text;
+          label.font = { name: SERIF, bold: true, size: 12 };
+          label.alignment = { horizontal: 'center', vertical: 'middle' };
+          for (let c = labelFrom; c < firstTotal; c++) totalRow.getCell(c).border = box;
+        }
+        for (const { spec, col } of totalCols) {
+          const cell = totalRow.getCell(col);
+          cell.value = this.roundMoney(rows.reduce((sum, r) => sum + spec.total!(r), 0));
+          cell.numFmt = spec.amount ? '0.00' : '0';
+          cell.font = { name: SERIF, bold: true, size: 12 };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          cell.border = box;
+        }
+        totalRow.height = 22;
+        rowIdx++;
+      };
+
+      if (!groupBy) {
+        campus.rows.forEach(writeStudent);
+      } else {
+        // TAFSD-337: heading, the group's students (S# restarts), SUBTOTAL,
+        // then an empty row before the next group.
+        for (const group of groupsOf(campus.rows)) {
+          if (lastCol > 1) sheet.mergeCells(rowIdx, 1, rowIdx, lastCol);
+          const heading = sheet.getCell(rowIdx, 1);
+          heading.value = `${group.label} · ${group.rows.length} ${group.rows.length === 1 ? 'STUDENT' : 'STUDENTS'}`;
+          heading.font = { name: SERIF, bold: true, size: 12 };
+          heading.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+          heading.border = box;
+          sheet.getRow(rowIdx).height = 22;
+          rowIdx++;
+          group.rows.forEach(writeStudent);
+          writeTotal(group.rows, 'SUBTOTAL');
+          rowIdx++;
+        }
+      }
+      writeTotal(campus.rows, 'TOTAL');
+
+      sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_LAST }];
       sheet.pageSetup = {
         paperSize: 9, // A4
         orientation: 'landscape',
@@ -2975,7 +3349,7 @@ export class FinancialReportsService {
         fitToWidth: 1,
         fitToHeight: 0,
         horizontalCentered: true,
-        printTitlesRow: `${HEADER_ROW}:${HEADER_ROW}`,
+        printTitlesRow: `${HEADER_ROW}:${HEADER_LAST}`,
         margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
       };
     }
@@ -2990,13 +3364,14 @@ export class FinancialReportsService {
   /**
    * Per student, what is owed per calendar month (key year*12 + month-1) —
    * exactly the heads loadDefaulterMoney sums, so the months add back up to
-   * arrears_outstanding. `partial` marks a month where something was paid.
+   * arrears_outstanding. `partial` marks a month where something was paid;
+   * `heads` splits the month by fee head (TAFSD-293).
    */
   private async loadDefaulterOwedMonths(
     ids: number[],
     asOfDate: string,
-  ): Promise<Map<number, Map<number, { owed: number; partial: boolean }>>> {
-    const result = new Map<number, Map<number, { owed: number; partial: boolean }>>();
+  ): Promise<Map<number, Map<number, DefaulterOwedMonth>>> {
+    const result = new Map<number, Map<number, DefaulterOwedMonth>>();
     if (ids.length === 0) return result;
     const classTerms = await this.loadClassTerms();
 
@@ -3011,6 +3386,7 @@ export class FinancialReportsService {
       student_status: student_status | null;
       class_id: number | null;
       graduated_from_class_id: number | null;
+      head_name: string | null;
     };
     const CHUNK = 5_000;
     for (let i = 0; i < ids.length; i += CHUNK) {
@@ -3020,12 +3396,14 @@ export class FinancialReportsService {
                (COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8
                  AS outstanding,
                COALESCE(sf.amount_paid, 0)::float8 AS amount_paid,
-               s.status AS student_status, s.class_id, s.graduated_from_class_id
+               s.status AS student_status, s.class_id, s.graduated_from_class_id,
+               ft.description AS head_name
         FROM public.student_fees sf
         JOIN public.students s ON s.cc = sf.student_id
+        LEFT JOIN public.fee_types ft ON ft.id = sf.fee_type_id
         WHERE sf.student_id IN (${Prisma.join(chunk)})
           AND sf.fee_date IS NOT NULL
-          AND sf.fee_date < ${asOfDate}::date
+          AND ${this.owedByAsOfSql(asOfDate)}
           AND sf.is_arrear_surcharge = false
           AND sf.is_discount = false
           AND sf.status <> 'PAID'
@@ -3053,13 +3431,153 @@ export class FinancialReportsService {
           { year: h.fee_date.getUTCFullYear(), month: h.fee_date.getUTCMonth() + 1 };
         const key = resolved.year * 12 + (resolved.month - 1);
         const studentId = Number(h.student_id);
-        const months = result.get(studentId) ?? new Map<number, { owed: number; partial: boolean }>();
-        const cell = months.get(key) ?? { owed: 0, partial: false };
-        cell.owed = this.roundMoney(cell.owed + Number(h.outstanding));
-        if (Number(h.amount_paid) > 0) cell.partial = true;
+        const months = result.get(studentId) ?? new Map<number, DefaulterOwedMonth>();
+        const cell = months.get(key) ?? { owed: 0, partial: false, heads: [] };
+        const outstanding = Number(h.outstanding);
+        const paid = Number(h.amount_paid) > 0;
+        cell.owed = this.roundMoney(cell.owed + outstanding);
+        if (paid) cell.partial = true;
+        // Same rows as the month total, so the heads always add back up to it.
+        const name = (h.head_name ?? '').trim() || 'OTHER';
+        const head = cell.heads.find((x) => x.name === name);
+        if (head) {
+          head.owed = this.roundMoney(head.owed + outstanding);
+          head.partial = head.partial || paid;
+        } else cell.heads.push({ name, owed: this.roundMoney(outstanding), partial: paid });
         months.set(key, cell);
         result.set(studentId, months);
       }
+    }
+    return result;
+  }
+
+  /** Names for the ids the export was filtered by, for the sheet's filter lines. */
+  private async loadDefaulterFilterNames(
+    query: Pick<StudentScopeFilterQueryDto, 'campus_id' | 'class_id' | 'section_id' | 'segment_id' | 'graduated_from_class_id'>,
+  ): Promise<DefaulterFilterNames> {
+    const classIds = [...(query.class_id ?? []), ...(query.graduated_from_class_id ?? [])];
+    const [campuses, classes, sections, segments] = await Promise.all([
+      query.campus_id?.length
+        ? this.prisma.campuses.findMany({ where: { id: { in: query.campus_id } }, select: { id: true, campus_name: true } })
+        : [],
+      classIds.length
+        ? this.prisma.classes.findMany({ where: { id: { in: classIds } }, select: { id: true, description: true } })
+        : [],
+      query.section_id?.length
+        ? this.prisma.sections.findMany({ where: { id: { in: query.section_id } }, select: { id: true, description: true } })
+        : [],
+      query.segment_id?.length
+        ? this.prisma.segments.findMany({ where: { id: { in: query.segment_id } }, select: { id: true, name: true } })
+        : [],
+    ]);
+    return {
+      campuses: new Map(campuses.map((c) => [c.id, c.campus_name] as [number, string])),
+      classes: new Map(classes.map((c) => [c.id, c.description] as [number, string])),
+      sections: new Map(sections.map((c) => [c.id, c.description] as [number, string])),
+      segments: new Map(segments.map((c) => [c.id, c.name] as [number, string])),
+    };
+  }
+
+  /**
+   * Per student, the GR numbers of the other students in the same family
+   * (students.family_id), for the sheet's LINK TO GR column. One query per
+   * 5,000 students, not one per student. Deleted students and blank GRs are
+   * skipped; the student's own GR is never listed.
+   */
+  /**
+   * cc -> guardian phone numbers for the CONTACT column (TAFSD-340): each
+   * guardian's primary phone (else WhatsApp), labelled by relationship,
+   * primary contact first, then father, mother and the rest; duplicates
+   * dropped, at most three. Falls back to the family's home phone.
+   */
+  private async loadDefaulterContacts(ids: number[]): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>();
+    const rank = (rel: string, primary: boolean) =>
+      primary ? 0 : rel === 'FATHER' ? 1 : rel === 'MOTHER' ? 2 : 3;
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const students = await this.prisma.students.findMany({
+        where: { cc: { in: ids.slice(i, i + CHUNK) } },
+        select: {
+          cc: true,
+          families: { select: { home_phone: true } },
+          student_guardians: {
+            select: {
+              relationship: true,
+              is_primary_contact: true,
+              guardians: { select: { primary_phone: true, whatsapp_number: true, deleted_at: true } },
+            },
+          },
+        },
+      });
+      for (const st of students) {
+        const seen = new Set<string>();
+        const lines: string[] = [];
+        const guardians = st.student_guardians
+          .filter((sg) => sg.guardians && !sg.guardians.deleted_at)
+          .map((sg) => ({ ...sg, rel: sg.relationship.trim().toUpperCase() }))
+          .sort((a, b) => rank(a.rel, !!a.is_primary_contact) - rank(b.rel, !!b.is_primary_contact));
+        for (const sg of guardians) {
+          const raw = sg.guardians.primary_phone?.trim() || sg.guardians.whatsapp_number?.trim();
+          const key = normalizePkPhone(raw);
+          if (!key || seen.has(key) || lines.length >= 3) continue;
+          seen.add(key);
+          lines.push(`${sg.rel} ${formatPkPhone(raw)}`);
+        }
+        const home = normalizePkPhone(st.families?.home_phone);
+        if (!lines.length && home) lines.push(`HOME ${formatPkPhone(home)}`);
+        if (lines.length) result.set(st.cc, lines);
+      }
+    }
+    return result;
+  }
+
+  /** cc -> the student's family, for grouping the defaulters sheet by family (TAFSD-337). */
+  private async loadDefaulterFamilies(ids: number[]): Promise<Map<number, { id: number; household_name: string }>> {
+    const result = new Map<number, { id: number; household_name: string }>();
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const rows = await this.prisma.students.findMany({
+        where: { cc: { in: ids.slice(i, i + CHUNK) }, family_id: { not: null } },
+        select: { cc: true, families: { select: { id: true, household_name: true } } },
+      });
+      for (const r of rows) {
+        if (r.families) result.set(r.cc, { id: r.families.id, household_name: r.families.household_name.trim() });
+      }
+    }
+    return result;
+  }
+
+  private async loadSiblingGrNumbers(ids: number[]): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>();
+    const CHUNK = 5_000;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const rows = await this.prisma.$queryRaw<Array<{ cc: number; gr_number: string }>>(Prisma.sql`
+        SELECT s.cc, TRIM(sib.gr_number) AS gr_number
+        FROM public.students s
+        JOIN public.students sib
+          ON sib.family_id = s.family_id
+         AND sib.cc <> s.cc
+         AND sib.deleted_at IS NULL
+        WHERE s.cc IN (${Prisma.join(chunk)})
+          AND s.family_id IS NOT NULL
+          AND NULLIF(TRIM(sib.gr_number), '') IS NOT NULL
+          AND TRIM(sib.gr_number) <> COALESCE(TRIM(s.gr_number), '')
+      `);
+      for (const r of rows) {
+        const cc = Number(r.cc);
+        const list = result.get(cc) ?? [];
+        if (!list.includes(r.gr_number)) list.push(r.gr_number);
+        result.set(cc, list);
+      }
+    }
+    for (const list of result.values()) {
+      list.sort((a, b) => {
+        const na = Number(a);
+        const nb = Number(b);
+        return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : a.localeCompare(b);
+      });
     }
     return result;
   }
@@ -4190,6 +4708,166 @@ export class FinancialReportsService {
     return new Map(
       classes.map((c) => [c.id, c.term_start_month ?? 8]),
     );
+  }
+
+  /**
+   * TAFSD-268: Fee Heads / Deposits exports in the school's paper format (see
+   * school-report-sheet.ts), one tab per campus when the rows carry a campus.
+   * CSV stays the plain data table. Same rows and numbers as before — only the
+   * layout changes, so the reconciliation invariants hold as they do on screen.
+   */
+  private async buildSchoolExportFile(
+    sheetName: string,
+    reportTitle: string,
+    basename: string,
+    columns: ExportColumn[],
+    rows: Record<string, string | number>[],
+    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf' },
+    extraFilterLines: string[],
+  ): Promise<ExportFile> {
+    if (query.format === 'csv') return this.buildExportFile(sheetName, basename, columns, rows, 'csv');
+    // A PDF of tens of thousands of rows is hundreds of pages nobody prints —
+    // and a long render. Excel has no such limit.
+    if (query.format === 'pdf' && rows.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} rows (this has ${rows.length.toLocaleString()}). Narrow the filters or export Excel.`,
+      );
+    }
+
+    const names = await this.loadDefaulterFilterNames(query);
+    const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
+    const heading = defaulterSheetHeading(
+      (query.class_id ?? []).map((id) => ({ class_id: id, class_name: names.classes.get(id) ?? String(id) })),
+      classFiltered,
+      query.to_date,
+    );
+    const filterLines = defaulterFilterLines(
+      query,
+      names,
+      null,
+      heading.classesLine != null,
+      [],
+      extraFilterLines,
+    );
+
+    // The school sheets are read by people: a stored instant (deposit_date)
+    // prints as Pakistan time, "01-09-2026 10:28 AM", not raw ISO-in-UTC. The
+    // CSV above keeps the machine-readable value.
+    rows = rows.map((row) => {
+      let out = row;
+      for (const [key, value] of Object.entries(row)) {
+        if (typeof value === 'string' && ISO_INSTANT.test(value)) {
+          if (out === row) out = { ...row };
+          out[key] = this.formatPktDateTime(new Date(value));
+        }
+      }
+      return out;
+    });
+
+    // Split by campus when the rows say which campus they are; the campus is
+    // then the sheet's own line, so its column is dropped.
+    const byCampus = columns.some((c) => c.key === 'campus');
+    const sheetColumns: SchoolSheetColumn[] = columns
+      .filter((c) => !byCampus || c.key !== 'campus')
+      .map((c) => ({
+        ...c,
+        total: SCHOOL_SHEET_TOTAL_KEYS.has(c.key),
+        money: SCHOOL_SHEET_TOTAL_KEYS.has(c.key) && !SCHOOL_SHEET_COUNT_KEYS.has(c.key),
+      }));
+    let sheets: SchoolSheet[];
+    if (byCampus) {
+      const groups = new Map<string, Record<string, string | number>[]>();
+      for (const row of rows) {
+        const campus = String(row.campus ?? '').trim() || 'Unassigned';
+        if (!groups.has(campus)) groups.set(campus, []);
+        groups.get(campus)!.push(row);
+      }
+      sheets = [...groups.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([campus, campusRows]) => ({ tab: campus, campus: campusLine(campus), rows: campusRows }));
+    } else {
+      const campus = query.campus_id?.length
+        ? [...names.campuses.values()].map((n) => campusLine(n)).join(', ')
+        : 'ALL CAMPUSES';
+      sheets = [{ tab: sheetName, campus, rows }];
+    }
+
+    const opts: SchoolSheetOptions = {
+      reportTitle,
+      heading,
+      periodLine: periodLine(query.from_date, query.to_date),
+      filterLines,
+      exportDate: this.todayPkt(),
+      columns: sheetColumns,
+    };
+
+    if (query.format === 'pdf') {
+      const pdf = await renderToBuffer(
+        React.createElement(SchoolReportPDF, {
+          // An empty report still prints its title block, with no table rows.
+          sheets: sheets.length ? sheets : [{ tab: sheetName, campus: 'ALL CAMPUSES', rows: [] }],
+          opts,
+          ...dayDateLines(opts.exportDate),
+        }) as any,
+      );
+      return { buffer: Buffer.from(pdf), filename: `${basename}.pdf`, contentType: 'application/pdf' };
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'The American Foundation School';
+    if (rows.length === 0) {
+      workbook.addWorksheet(sheetName).getCell('A1').value = 'Nothing matches the current filters.';
+    } else {
+      writeSchoolSheets(workbook, sheets, opts);
+    }
+    return {
+      buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
+      filename: `${basename}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+  }
+
+  /** Fee Heads filters beyond the shared student ones, in words. */
+  private feeHeadsFilterWords(query: ListFeeHeadsQueryDto): string[] {
+    return query.status?.length ? [`FEE STATUS: ${query.status.map((s) => s.replace(/_/g, ' ')).join(', ')}`] : [];
+  }
+
+  /** Deposits filters beyond the shared student ones, in words. */
+  private depositsFilterWords(query: ListDepositsQueryDto): string[] {
+    const lines: string[] = [];
+    if (query.payment_method?.length) lines.push(`PAYMENT METHOD: ${query.payment_method.join(', ').toUpperCase()}`);
+    if (query.bank_name?.length) lines.push(`BANK: ${query.bank_name.join(', ').toUpperCase()}`);
+    return lines;
+  }
+
+  /** "Aawaiz Ali (aawaiz)" — full name and username, either alone when the other is missing. */
+  private async staffLabel(user: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>): Promise<string> {
+    const fullName =
+      user.fullName?.trim() ||
+      (await this.prisma.users.findUnique({ where: { id: user.sub }, select: { full_name: true } }))?.full_name?.trim();
+    const username = user.username?.trim();
+    if (fullName && username && fullName.toLowerCase() !== username.toLowerCase()) return `${fullName.toUpperCase()} (${username})`;
+    return (fullName || username || 'UNKNOWN').toUpperCase();
+  }
+
+  /** "01-09-2026 10:28 AM" in Pakistan time. */
+  private formatPktDateTime(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Karachi',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
+  }
+
+  /** Today as YYYY-MM-DD in Pakistan time, whatever the server's timezone. */
+  private todayPkt(): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
   }
 
   private async buildExportFile(

@@ -4,6 +4,7 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
 import { CaslAbilityFactory } from '../auth/casl/casl-ability.factory';
+import { JwtStaffOrParentGuard } from '../../common/guards/jwt-staff-or-parent.guard';
 
 describe('ChatController', () => {
   let controller: ChatController;
@@ -17,7 +18,10 @@ describe('ChatController', () => {
         { provide: Reflector, useValue: new Reflector() },
         { provide: CaslAbilityFactory, useValue: { createForStaff: jest.fn() } },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtStaffOrParentGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<ChatController>(ChatController);
   });

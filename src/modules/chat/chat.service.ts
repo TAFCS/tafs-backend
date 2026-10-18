@@ -1,9 +1,11 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
 import * as path from 'path';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class ChatService {
@@ -11,12 +13,50 @@ export class ChatService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
-  async getAdminInbox() {
+  /**
+   * A family is in a staff member's scope when any of its live students is —
+   * the same rule FamiliesService applies. Null for an unrestricted caller.
+   */
+  private familyScope(user: IJwtStaffPayload) {
+    if (this.scope.isUnrestricted(user)) return null;
+    return { students: { some: { deleted_at: null, ...this.scope.whereForStudents(user) } } };
+  }
+
+  /** The staff payload with its scope read live, as JwtStaffStrategy does for REST. */
+  async withLiveScope<T extends IJwtStaffPayload>(user: T): Promise<T> {
+    return { ...user, scope: await this.scope.resolveEffective(user.sub) };
+  }
+
+  isUnrestrictedStaff(user: IJwtStaffPayload): boolean {
+    return this.scope.isUnrestricted(user);
+  }
+
+  async staffCanSeeFamily(user: IJwtStaffPayload, familyId: number): Promise<boolean> {
+    try {
+      await this.assertFamilyVisible(user, familyId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 404 unless the family is in scope. Family 0 is the announcements channel, gated separately. */
+  async assertFamilyVisible(user: IJwtStaffPayload, familyId: number): Promise<void> {
+    const scoped = this.familyScope(user);
+    if (familyId === 0 || !scoped) return;
+    const visible = await this.prisma.families.count({ where: { id: familyId, ...scoped } });
+    if (!visible) throw new NotFoundException(`Family #${familyId} not found`);
+  }
+
+  async getAdminInbox(user: IJwtStaffPayload) {
+    const scoped = this.familyScope(user);
     const conversations = await this.prisma.chat_conversations.findMany({
       where: {
-        id: { not: '00000000-0000-0000-0000-000000000000' }
+        id: { not: '00000000-0000-0000-0000-000000000000' },
+        ...(scoped ? { families: scoped } : {}),
       },
       orderBy: { last_message_at: 'desc' },
       include: {
@@ -109,9 +149,18 @@ export class ChatService {
     };
   }
 
-  async getFamilyStudents(familyId: number) {
+  async getFamilyStudents(familyId: number, user: IJwtStaffPayload) {
+    await this.assertFamilyVisible(user, familyId);
+    return this.listFamilyStudents(familyId, this.scope.whereForStudents(user));
+  }
+
+  async getParentStudents(familyId: number) {
+    return this.listFamilyStudents(familyId, {});
+  }
+
+  private listFamilyStudents(familyId: number, studentScope: object) {
     return this.prisma.students.findMany({
-      where: { family_id: familyId, deleted_at: null },
+      where: { family_id: familyId, deleted_at: null, ...studentScope },
       select: {
         cc: true,
         full_name: true,
@@ -127,9 +176,6 @@ export class ChatService {
     });
   }
 
-  async getParentStudents(familyId: number) {
-    return this.getFamilyStudents(familyId);
-  }
 
   async getChatHistory(familyId: number, take: number = 50, skip: number = 0) {
     if (familyId === 0) {

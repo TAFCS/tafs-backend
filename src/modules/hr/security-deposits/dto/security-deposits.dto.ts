@@ -54,7 +54,7 @@ export class CreateSecurityDepositDto {
   notes?: string;
 }
 
-export class UpdateInstallmentScheduleDto {
+export class UpdateDepositInstallmentScheduleDto {
   @ApiProperty({ type: [Number], example: [10000, 0, 10000], description: 'Remaining monthly amounts in order. Use 0 to skip a cycle. Must sum to what is still left to collect.' })
   @IsArray()
   @ArrayMinSize(1)

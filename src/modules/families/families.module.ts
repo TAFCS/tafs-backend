@@ -1,7 +1,8 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { FamiliesController } from './families.controller';
 import { FamiliesService } from './families.service';
 import { AuthModule } from '../auth/auth.module';
+import { NormalizeQueryArraysMiddleware } from './normalize-query-arrays.middleware';
 
 @Module({
   imports: [AuthModule],
@@ -9,4 +10,10 @@ import { AuthModule } from '../auth/auth.module';
   providers: [FamiliesService],
   exports: [FamiliesService],
 })
-export class FamiliesModule {}
+export class FamiliesModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(NormalizeQueryArraysMiddleware)
+      .forRoutes({ path: 'families', method: RequestMethod.GET });
+  }
+}

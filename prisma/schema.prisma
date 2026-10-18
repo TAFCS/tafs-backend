@@ -894,7 +894,8 @@ model users {
   employee_shift_overrides_created                                         employee_shift_overrides[]   @relation("ShiftOverrideCreatedBy")
   fcm_device_tokens                                                        fcm_device_tokens[]
   leave_requests_reviewed                                                  leave_requests[]             @relation("LeaveRequestReviewedBy")
-  notice_board_posts                                                       notice_board_posts[]
+  notice_board_posts                                                       notice_board_posts[]         @relation("NoticePostPostedBy")
+  notice_board_posts_reviewed                                              notice_board_posts[]         @relation("NoticePostReviewedBy")
   processed_change_requests                                                parent_change_requests[]
   payroll_run_exclusions_excluded                                          payroll_run_exclusions[]     @relation("PayrollExclusionExcludedBy")
   payroll_run_lines_disbursed                                              payroll_run_lines[]          @relation("PayrollLineDisbursedBy")
@@ -1351,6 +1352,9 @@ model employee_profiles {
   segment_id                         Int?
   secondary_phone                    String?                              @db.VarChar(60)
   payroll_enabled                    Boolean                              @default(true)
+  // TAFSD-278: legally exempt — payroll skips that scheme for this employee.
+  eobi_exempt                        Boolean                              @default(false)
+  sessi_exempt                       Boolean                              @default(false)
   date_of_leaving                    DateTime?                            @db.Date
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
@@ -1373,6 +1377,9 @@ model employee_profiles {
   salary_increments                  salary_increments[]
   employee_shift_overrides           employee_shift_overrides[]
   employee_work_schedules            employee_work_schedules[]
+  employee_day_timings               employee_day_timings[]
+  employee_scheduled_timing_changes  employee_scheduled_timing_changes[]
+  employee_scheduled_pay_changes     employee_scheduled_pay_changes[]
   leave_requests                     leave_requests[]
   payroll_flags                      payroll_flags[]
   payroll_run_exclusions             payroll_run_exclusions[]
@@ -1444,6 +1451,14 @@ model employee_progression_periods {
   change_type          String            @db.VarChar(30)
   changed_by           String?           @db.VarChar(255)
   notes                String?           @db.VarChar(255)
+  /// TAFSD-363: the employee's timings while this period was open —
+  /// { check_in_source, reporting_time, leaving_time, late_relaxation_minutes,
+  ///   days_per_week, working_days, day_timings }. NULL on periods recorded
+  /// before timings were tracked.
+  timings              Json?
+  /// valid_from is when this period takes EFFECT (TAFSD-369); recorded_at is
+  /// when the change was saved. They differ for back-dated changes.
+  recorded_at          DateTime          @default(now()) @db.Timestamp(6)
   valid_from           DateTime          @default(now()) @db.Timestamp(6)
   valid_to             DateTime?         @db.Timestamp(6)
   campuses             campuses?         @relation(fields: [campus_id], references: [id])
@@ -1494,6 +1509,58 @@ model academic_calendar_days {
   @@index([campus_id, date, applies_to])
   @@index([class_id, section_id])
   @@index([staff_category_id])
+}
+
+/// TAFSD-372: a monthly pay change saved now that takes effect on a future
+/// date; applied on the day like employee_scheduled_timing_changes.
+model employee_scheduled_pay_changes {
+  id             Int               @id @default(autoincrement())
+  employee_id    Int
+  effective_from DateTime          @db.Date
+  monthly_pay    Decimal?          @db.Decimal(12, 2)
+  changed_by     String?           @db.VarChar(255)
+  notes          String?           @db.VarChar(255)
+  recorded_at    DateTime          @default(now()) @db.Timestamp(6)
+  employee       employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, effective_from])
+  @@index([effective_from])
+}
+
+/// TAFSD-369: a timings change saved now that takes effect on a future date.
+/// A daily job applies it on effective_from (profile fields + a progression
+/// period starting that day), then deletes the row.
+model employee_scheduled_timing_changes {
+  id             Int               @id @default(autoincrement())
+  employee_id    Int
+  effective_from DateTime          @db.Date
+  /// The full timings snapshot to apply (EmployeeTimingsSnapshot).
+  timings        Json
+  changed_by     String?           @db.VarChar(255)
+  recorded_at    DateTime          @default(now()) @db.Timestamp(6)
+  employee       employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, effective_from])
+  @@index([effective_from])
+}
+
+/// TAFSD-363: timings for one weekday that differ from the employee's normal
+/// reporting_time / leaving_time (Friday, at TAFS). Each side falls back to
+/// the normal time when null, so a row can change just the leaving time.
+/// No row = the normal timings. Independent of employee_work_schedules,
+/// which decides whether the day is worked at all.
+model employee_day_timings {
+  id             Int               @id @default(autoincrement())
+  employee_id    Int
+  /// 0 = Sunday … 6 = Saturday, matching JS getUTCDay().
+  day_of_week    Int               @db.SmallInt
+  reporting_time DateTime?         @db.Time(0)
+  leaving_time   DateTime?         @db.Time(0)
+  created_at     DateTime          @default(now()) @db.Timestamp(6)
+  updated_at     DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  employee       employee_profiles @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([employee_id, day_of_week])
 }
 
 model employee_work_schedules {
@@ -1608,12 +1675,16 @@ model payroll_runs {
   finalized_at           DateTime?                @db.Timestamp(6)
   notes                  String?                  @db.VarChar(500)
   is_test                Boolean                  @default(false)
+  /// TAFSD-271: REGULAR is the campus-wide 26th -> 25th cycle; CUSTOM covers
+  /// hand-picked employees over any date range. An employee is never on two
+  /// non-test runs whose dates overlap.
+  kind                   PayrollRunKind           @default(REGULAR)
   payroll_flags          payroll_flags[]
   payroll_run_exclusions payroll_run_exclusions[]
   payroll_run_lines      payroll_run_lines[]
   campuses               campuses                 @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
-  @@unique([campus_id, period_start, period_end, is_test])
+  @@unique([campus_id, period_start, period_end, is_test, kind])
 }
 
 /// *
@@ -1681,10 +1752,18 @@ model payroll_run_lines {
   income_tax_deduction          Decimal                                  @default(0) @db.Decimal(12, 2)
   eobi_employer_cost            Decimal                                  @default(0) @db.Decimal(12, 2)
   sessi_employer_cost           Decimal                                  @default(0) @db.Decimal(12, 2)
+  // TAFSD-278: the employee's exemptions as they stood when this line was computed.
+  eobi_exempt                   Boolean                                  @default(false)
+  sessi_exempt                  Boolean                                  @default(false)
   security_deposit_deduction    Decimal                                  @default(0) @db.Decimal(12, 2)
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
   after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
   full_pay_override             Boolean                                  @default(false)
+  // TAFSD-383: waived for this line (this cycle) only, on top of the
+  // profile's eobi_exempt / sessi_exempt. Kept across regenerate.
+  eobi_waived                   Boolean                                  @default(false)
+  sessi_waived                  Boolean                                  @default(false)
+  income_tax_waived             Boolean                                  @default(false)
   loan_transactions             employee_loan_transactions[]
   security_deposit_transactions employee_security_deposit_transactions[]
   disbursed_by_user             users?                                   @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1955,7 +2034,9 @@ model zk_push_logs {
   received_at         DateTime              @default(now()) @db.Timestamp(6)
   zk_attendance_scans zk_attendance_scans[]
 
-  @@index([sn])
+  // (sn, received_at): "latest push per device" is one index lookup (TAFSD-326).
+  // Also serves every sn-only lookup, so the old single-column sn index went.
+  @@index([sn, received_at])
   @@index([received_at])
 }
 
@@ -2159,10 +2240,16 @@ model notice_board_posts {
   notification_only Boolean             @default(false)
   student_statuses  student_status[]    @default([])
   academic_years    String[]            @default([])
-  users             users               @relation(fields: [posted_by], references: [id])
+  status            NoticePostStatus    @default(APPROVED)
+  reviewed_by       String?             @db.VarChar(255)
+  reviewed_at       DateTime?           @db.Timestamp(6)
+  review_reason     String?             @db.VarChar(500)
+  users             users               @relation("NoticePostPostedBy", fields: [posted_by], references: [id])
+  reviewer          users?              @relation("NoticePostReviewedBy", fields: [reviewed_by], references: [id])
   post_reads        notice_post_reads[]
 
   @@index([posted_at(sort: Desc)])
+  @@index([status])
   @@index([campus_ids], type: Gin)
   @@index([class_ids], type: Gin)
   @@index([section_ids], type: Gin)
@@ -2727,6 +2814,12 @@ enum StaffAttendanceStatus {
   ANNUAL_LEAVE
 }
 
+enum NoticePostStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LeaveRequestStatus {
   PENDING
   APPROVED
@@ -2736,6 +2829,11 @@ enum LeaveRequestStatus {
 enum PayrollRunStatus {
   DRAFT
   FINALIZED
+}
+
+enum PayrollRunKind {
+  REGULAR
+  CUSTOM
 }
 
 enum OvertimeRateType {
@@ -2831,6 +2929,8 @@ enum EmployeeStatus {
 enum EmploymentSubtype {
   PERMANENT
   NON_PERMANENT
+  // TAFSD-321: on contract — never made permanent by length of service.
+  CONTRACTUAL
 }
 
 enum otp_purpose {

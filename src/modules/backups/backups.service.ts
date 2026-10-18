@@ -3,23 +3,47 @@ import { ConfigService } from '@nestjs/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
-import { existsSync, mkdirSync, createReadStream, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, createReadStream, createWriteStream } from 'fs';
+import { unlink, rm } from 'fs/promises';
+import { finished } from 'stream/promises';
+import type { WriteStream } from 'fs';
 import { StorageService } from '../../common/storage/storage.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { 
-    S3Client, 
-    ListObjectsV2Command, 
-    GetObjectCommand 
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const execPromise = promisify(exec);
+
+/** Yield so HTTP/socket handlers (incl. iclock getrequest) can run mid-backup. */
+function yieldEventLoop(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
+}
+
+function jsonReplacer(_key: string, value: unknown) {
+    if (typeof value === 'bigint') return value.toString();
+    return value;
+}
+
+function writeChunk(stream: WriteStream, chunk: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        try {
+            if (stream.write(chunk)) {
+                resolve();
+            } else {
+                stream.once('drain', () => resolve());
+            }
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
 
 @Injectable()
 export class BackupsService implements OnModuleInit {
     private readonly logger = new Logger(BackupsService.name);
     private readonly tempDir = join(process.cwd(), 'temp-backups');
+    /** Prevent overlapping backups from stacking pool + CPU pressure. */
+    private backupInFlight = false;
 
     constructor(
         private readonly config: ConfigService,
@@ -34,26 +58,45 @@ export class BackupsService implements OnModuleInit {
         }
     }
 
-    async createBackup(changedBy?: string) {
+    /**
+     * @param includeJson  Off by default. JSON walks every table through Prisma
+     *   and has repeatedly OOMed/GC-thrashed the Railway box (silent 499s on
+     *   every route including getrequest). Scheduled backups are SQL-only;
+     *   pass true only for an intentional manual dual dump.
+     */
+    async createBackup(changedBy?: string, includeJson = false) {
+        if (this.backupInFlight) {
+            throw new InternalServerErrorException(
+                'A backup is already running. Wait for it to finish.',
+            );
+        }
+        this.backupInFlight = true;
         const now = new Date();
         const timestamp = this.formatTimestamp(now);
 
-        this.logger.log(`Starting dual-mode database backup (SQL + JSON) - ${timestamp}`);
+        this.logger.log(
+            `Starting database backup (${includeJson ? 'SQL + JSON' : 'SQL only'}) - ${timestamp}`,
+        );
 
-        const [sql, json] = await Promise.all([
-            this.createSqlBackup(timestamp),
-            this.createJsonBackup(timestamp)
-        ]);
+        try {
+            // pg_dump runs in a child process — it does not block the Nest event loop.
+            const sql = await this.createSqlBackup(timestamp);
+            const json = includeJson ? await this.createJsonBackup(timestamp) : null;
 
-        void this.auditLogs.log({
-            entity_type: 'BACKUP',
-            entity_id: sql.storageKey,
-            action: 'CREATED',
-            changed_by: changedBy ?? 'scheduled-job',
-            note: `Backup created: ${sql.fileName} and ${json.fileName}.`,
-        });
+            void this.auditLogs.log({
+                entity_type: 'BACKUP',
+                entity_id: sql.storageKey,
+                action: 'CREATED',
+                changed_by: changedBy ?? 'scheduled-job',
+                note: json
+                    ? `Backup created: ${sql.fileName} and ${json.fileName}.`
+                    : `Backup created: ${sql.fileName} (SQL only).`,
+            });
 
-        return { sql, json };
+            return { sql, json };
+        } finally {
+            this.backupInFlight = false;
+        }
     }
 
     private formatTimestamp(now: Date) {
@@ -90,22 +133,22 @@ export class BackupsService implements OnModuleInit {
     }
 
     private async finalizeBackup(rawPath: string, filePath: string, fileName: string) {
-        const fs = require('fs');
         try {
-            // 1. Compress
             await execPromise(`gzip "${rawPath}"`);
             this.logger.log(`Backup compressed: ${fileName}`);
 
-            // 2. Upload to Storage
-            const fileBuffer = fs.readFileSync(filePath);
             const storageKey = `backups/${fileName}`;
-            const publicUrl = await this.storage.upload(storageKey, fileBuffer, 'application/gzip');
+            // Stream upload — never readFileSync a multi‑MB gzip onto the heap.
+            const publicUrl = await this.storage.upload(
+                storageKey,
+                createReadStream(filePath),
+                'application/gzip',
+            );
 
             this.logger.log(`Backup uploaded successfully: ${publicUrl}`);
 
-            // 3. Cleanup
-            if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            await rm(rawPath, { force: true }).catch(() => undefined);
+            await rm(filePath, { force: true }).catch(() => undefined);
 
             return {
                 fileName,
@@ -113,8 +156,8 @@ export class BackupsService implements OnModuleInit {
                 url: publicUrl,
             };
         } catch (error) {
-            if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            await rm(rawPath, { force: true }).catch(() => undefined);
+            await rm(filePath, { force: true }).catch(() => undefined);
             throw error;
         }
     }
@@ -127,27 +170,24 @@ export class BackupsService implements OnModuleInit {
             throw new InternalServerErrorException('DATABASE_URL not found in environment');
         }
 
-        // Sanitize DATABASE_URL for pg_dump (it doesn't like prisma-specific params like connection_limit)
         let sanitizedUrl = dbUrl;
         try {
             const url = new URL(dbUrl);
             url.searchParams.delete('connection_limit');
             url.searchParams.delete('pool_timeout');
             sanitizedUrl = url.toString();
-        } catch (e) {
+        } catch (e: any) {
             this.logger.warn(`Failed to parse DATABASE_URL for sanitization: ${e.message}`);
         }
 
         this.logger.log(`Starting SQL database backup: ${fileName} (PKT)`);
 
         try {
-            // Use pg_dump directly with the connection string
-            // We use --no-owner and --no-privileges to make it more portable
             await execPromise(`pg_dump "${sanitizedUrl}" --no-owner --no-privileges -f "${rawPath}"`);
             this.logger.log(`SQL data extracted via pg_dump`);
 
             return await this.finalizeBackup(rawPath, filePath, fileName);
-        } catch (error) {
+        } catch (error: any) {
             this.logger.error(`SQL Backup process failed: ${error.message}`);
             throw new InternalServerErrorException(`Database backup failed: ${error.message}`);
         }
@@ -160,51 +200,72 @@ export class BackupsService implements OnModuleInit {
         this.logger.log(`Starting Pure JS database backup: ${fileName} (PKT)`);
 
         try {
-            // 1. Get all table names in the public schema
-            const tables: any[] = await this.prisma.$queryRaw`
+            const tables: Array<{ table_name: string }> = await this.prisma.$queryRaw`
                 SELECT table_name 
                 FROM information_schema.tables 
                 WHERE table_schema = 'public' 
                 AND table_type = 'BASE TABLE'
-                AND table_name NOT LIKE '_prisma_migrations';
+                AND table_name NOT LIKE '_prisma_migrations'
             `;
 
-            const backupData: Record<string, any[]> = {};
+            const stream = createWriteStream(jsonPath, { encoding: 'utf8' });
+            await writeChunk(stream, '{');
 
-            // 2. Fetch data from each table
+            const PAGE = 500;
+            let firstTable = true;
             for (const table of tables) {
                 const tableName = table.table_name;
+                this.logger.debug(`Backing up table: ${tableName}`);
+                if (!firstTable) await writeChunk(stream, ',');
+                firstTable = false;
+                await writeChunk(stream, `\n${JSON.stringify(tableName)}:`);
+                await writeChunk(stream, '[');
+
                 try {
-                    this.logger.debug(`Backing up table: ${tableName}`);
-                    // Explicitly use the public schema
-                    const data: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM "public"."${tableName}"`);
-                    backupData[tableName] = data;
-                } catch (tableError) {
-                    this.logger.warn(`Failed to back up table ${tableName}, skipping. Error: ${tableError.message}`);
-                    backupData[tableName] = []; // Provide an empty array instead of crashing
+                    // Page through the table. A single SELECT * on zk_attendance_scans /
+                    // audit_logs loaded hundreds of MB into V8 and GC-froze the process
+                    // for minutes (getrequest 499s with no error log).
+                    let offset = 0;
+                    let firstRow = true;
+                    for (;;) {
+                        const data: unknown[] = await this.prisma.$queryRawUnsafe(
+                            `SELECT * FROM "public"."${tableName}" LIMIT ${PAGE} OFFSET ${offset}`,
+                        );
+                        if (data.length === 0) break;
+                        for (let i = 0; i < data.length; i++) {
+                            if (!firstRow) await writeChunk(stream, ',');
+                            firstRow = false;
+                            await writeChunk(stream, JSON.stringify(data[i], jsonReplacer));
+                            if (i % 50 === 0) await yieldEventLoop();
+                        }
+                        offset += data.length;
+                        await yieldEventLoop();
+                        if (data.length < PAGE) break;
+                    }
+                } catch (tableError: any) {
+                    this.logger.warn(
+                        `Failed to back up table ${tableName}, writing empty array. Error: ${tableError.message}`,
+                    );
                 }
+
+                await writeChunk(stream, ']');
+                await yieldEventLoop();
             }
 
-            // 3. Serialize to JSON with BigInt support
-            const jsonString = JSON.stringify(backupData, (key, value) => {
-                if (typeof value === 'bigint') {
-                    return value.toString();
-                }
-                return value;
-            }, 2);
+            await writeChunk(stream, '\n}\n');
+            stream.end();
+            await finished(stream);
 
-            // 4. Write to temp file
-            const fs = require('fs');
-            fs.writeFileSync(jsonPath, jsonString);
-            this.logger.log(`JSON data extracted (${Object.keys(backupData).length} tables)`);
+            this.logger.log(`JSON data extracted (${tables.length} tables)`);
 
             const result = await this.finalizeBackup(rawPath, filePath, fileName);
             return {
                 ...result,
-                tablesCount: Object.keys(backupData).length
+                tablesCount: tables.length,
             };
-        } catch (error) {
+        } catch (error: any) {
             this.logger.error(`JSON Backup process failed: ${error.message}`);
+            await unlink(jsonPath).catch(() => undefined);
             throw new InternalServerErrorException(`Database backup failed: ${error.message}`);
         }
     }
@@ -228,15 +289,15 @@ export class BackupsService implements OnModuleInit {
             const contents = response.Contents || [];
 
             return contents
-                .filter(item => item.Key !== 'backups/') // Filter out the directory itself
-                .map(item => ({
+                .filter((item) => item.Key !== 'backups/')
+                .map((item) => ({
                     key: item.Key,
                     fileName: item.Key?.replace('backups/', ''),
                     size: item.Size,
                     lastModified: item.LastModified,
                 }))
                 .sort((a, b) => (b.lastModified?.getTime() || 0) - (a.lastModified?.getTime() || 0));
-        } catch (error) {
+        } catch (error: any) {
             this.logger.error(`Failed to list backups: ${error.message}`);
             throw new InternalServerErrorException('Could not retrieve backup list');
         }
@@ -253,10 +314,12 @@ export class BackupsService implements OnModuleInit {
         const bucket = (this.storage as any).bucket;
 
         const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
-        await client.send(new DeleteObjectCommand({
-            Bucket: bucket,
-            Key: sanitizedKey,
-        }));
+        await client.send(
+            new DeleteObjectCommand({
+                Bucket: bucket,
+                Key: sanitizedKey,
+            }),
+        );
         this.logger.log(`Backup deleted from storage: ${sanitizedKey}`);
 
         void this.auditLogs.log({

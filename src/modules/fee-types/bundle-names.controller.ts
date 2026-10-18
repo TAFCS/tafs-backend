@@ -17,17 +17,20 @@ import type { Request } from 'express';
 import { BundleNamesService } from './bundle-names.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateBundleNameDto, UpdateBundleNameDto } from './dto/bundle-names.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 
 @Controller('fee-types/bundle-names')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class BundleNamesController {
   constructor(private readonly bundleNamesService: BundleNamesService) {}
 
   @Get()
+  @RequireAnyTile('school-setup.fee_types', 'finance.student_overrides')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Fee'))
   async findAll(@Query('activeOnly') activeOnly?: string) {
     const names = await this.bundleNamesService.findAll(activeOnly === 'true');
@@ -35,6 +38,7 @@ export class BundleNamesController {
   }
 
   @Post()
+  @RequireAnyTile('school-setup.fee_types')
   @HttpCode(HttpStatus.CREATED)
   @CheckPolicies((ability) => ability.can(Action.Create, 'Fee'))
   async create(@Body() dto: CreateBundleNameDto, @Req() req: Request) {
@@ -44,6 +48,7 @@ export class BundleNamesController {
   }
 
   @Patch(':id')
+  @RequireAnyTile('school-setup.fee_types')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Update, 'Fee'))
   async update(
@@ -57,6 +62,7 @@ export class BundleNamesController {
   }
 
   @Delete(':id')
+  @RequireAnyTile('school-setup.fee_types')
   @HttpCode(HttpStatus.OK)
   @CheckPolicies((ability) => ability.can(Action.Delete, 'Fee'))
   async delete(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {

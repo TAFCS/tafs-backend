@@ -3,6 +3,7 @@ import { Page, Text, View, Document, StyleSheet, Image, Font, Svg, Rect } from '
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
+import { formatAcademicSessionLabel } from '../../common/utils/academic-labels';
 
 const LOGO_PATH = path.join(process.cwd(), 'src', 'assets', 'logo.png');
 const LOGO_BUFFER = fs.readFileSync(LOGO_PATH);
@@ -61,6 +62,13 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         borderRadius: 2,
         textTransform: 'uppercase',
+    },
+    // Centered under the campus name. Sourced from the voucher's own academic
+    // year (not "today") so reprints keep the session they were issued for.
+    academicSession: {
+        fontSize: 6,
+        color: '#333333',
+        marginTop: 0,
     },
     paidStamp: {
         position: 'absolute',
@@ -537,7 +545,9 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
             <View style={styles.schoolInfo}>
                 <Text style={styles.schoolName}>THE AMERICAN FOUNDATION SCHOOL</Text>
                 <Text style={styles.schoolAddress}>{student.campus || "Main Campus"}</Text>
-                <Text style={styles.schoolAddress}>{details.academicYear}</Text>
+                <Text style={styles.academicSession}>
+                    {formatAcademicSessionLabel(details.academicYear)}
+                </Text>
                 <Text style={styles.schoolAddress}>{details.bank.name.toUpperCase()}</Text>
                 <Text style={styles.schoolAddress}>COLLECTION A/C {details.bank.account}</Text>
             </View>
@@ -598,19 +608,19 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                     <Text style={[styles.value, { textAlign: 'right', color: '#d97706' }]}>{formatDateToDDMMYYYY(details.validityDate)}</Text>
                 </View>
             </View>
-            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            {/* Month and group on separate full-width lines (same as FeeChallanPDF) so
+                full month names never collide with GROUP or wrap/overflow. */}
+            <View style={{ marginTop: 2, borderTopWidth: 0.5, borderTopColor: '#efefef', paddingTop: 2, gap: 1.5 }}>
                 <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
                     <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>FOR MONTH(S) OF:</Text>
-                    <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{details.month}</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{details.month}</Text>
                 </View>
                 {student.group ? (
                     <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
                         <Text style={{ fontSize: 5.5, color: '#333333', fontWeight: 'bold' }}>GROUP:</Text>
-                        <Text style={{ fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }}>{String(student.group).toUpperCase()}</Text>
+                        <Text style={{ flex: 1, fontSize: 7, color: '#1a1a1a', fontWeight: 'bold' }} wrap={false}>{String(student.group).toUpperCase()}</Text>
                     </View>
-                ) : (
-                    <View />
-                )}
+                ) : null}
             </View>
         </View>
 

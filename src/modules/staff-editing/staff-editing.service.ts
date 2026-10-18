@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { GetSheetStudentsDto } from './dto/get-sheet-students.dto';
@@ -24,7 +26,44 @@ export class StaffEditingService {
     private readonly auditLogs: AuditLogsService,
     private readonly allocation: StudentAllocationService,
     private readonly progressionHistory: ProgressionHistoryService,
+    private readonly scope: ScopeService,
   ) { }
+
+  // ─── Scope ───────────────────────────────────────────────────────────────
+  // Every record here hangs off a student, so a caller may touch it only when
+  // that student is in their scope. Missing and out-of-scope both 404.
+
+  async assertStudentVisible(user: IJwtStaffPayload, cc: number): Promise<void> {
+    if (this.scope.isExempt(user)) return;
+    const visible = await this.prisma.students.count({ where: { cc, ...this.scope.whereForStudents(user) } });
+    if (!visible) throw new NotFoundException(`Student #${cc} not found`);
+  }
+
+  /** A guardian is in scope when linked to any in-scope student. */
+  async assertGuardianVisible(user: IJwtStaffPayload, guardianId: number): Promise<void> {
+    if (this.scope.isUnrestricted(user)) return;
+    const linked = await this.prisma.student_guardians.count({
+      where: { guardian_id: guardianId, students: { deleted_at: null, ...this.scope.whereForStudents(user) } },
+    });
+    if (!linked) throw new NotFoundException(`Guardian #${guardianId} not found`);
+  }
+
+  async assertChildVisible(
+    user: IJwtStaffPayload,
+    kind: 'admission' | 'activity' | 'language' | 'school',
+    id: number,
+  ): Promise<void> {
+    const args = { where: { id }, select: { student_id: true } };
+    const row = kind === 'admission' ? await this.prisma.student_admissions.findUnique(args)
+      : kind === 'activity' ? await this.prisma.student_activities.findUnique(args)
+      : kind === 'language' ? await this.prisma.student_languages.findUnique(args)
+      : await this.prisma.student_previous_schools.findUnique(args);
+    if (!row || row.student_id == null) {
+      if (this.scope.isUnrestricted(user)) return; // let the service raise its own 404
+      throw new NotFoundException('Record not found');
+    }
+    await this.assertStudentVisible(user, row.student_id);
+  }
 
   // ─── Date Helpers ─────────────────────────────────────────────────────────
 
@@ -55,7 +94,7 @@ export class StaffEditingService {
 
   // ─── Students ─────────────────────────────────────────────────────────────
 
-  async getStudents(dto: GetSheetStudentsDto) {
+  async getStudents(dto: GetSheetStudentsDto, user: IJwtStaffPayload) {
     const { cursor, limit = 50, search, campus_id, class_id, section_id, filterEmptyFields } = dto;
 
     const baseWhere: Prisma.studentsWhereInput = { deleted_at: null };
@@ -134,9 +173,10 @@ export class StaffEditingService {
     }
 
     // Cursor pagination: WHERE cc > cursor ORDER BY cc ASC
-    const where: Prisma.studentsWhereInput = cursor
-      ? { AND: [baseWhere, { cc: { gt: cursor } }] }
-      : baseWhere;
+    const scopeWhere = this.scope.whereForStudents(user);
+    const where: Prisma.studentsWhereInput = {
+      AND: [baseWhere, scopeWhere, ...(cursor ? [{ cc: { gt: cursor } }] : [])],
+    };
 
     const rows = await this.prisma.students.findMany({
       where,
@@ -1206,6 +1246,33 @@ export class StaffEditingService {
 
     if (cnic !== undefined) {
       data.cnic = (cnic && cnic !== "N/A") ? cnic : null;
+      if (data.cnic) {
+        const conflict = await this.prisma.guardians.findUnique({
+          where: { cnic: data.cnic as string },
+          include: {
+            student_guardians: {
+              include: {
+                students: { select: { cc: true, gr_number: true, full_name: true } },
+              },
+            },
+          },
+        });
+        if (conflict && conflict.id !== id) {
+          if (
+            conflict.student_guardians.length === 0 &&
+            (!conflict.full_name || conflict.full_name === 'UNKNOWN' || conflict.full_name === 'N/A')
+          ) {
+            await this.prisma.guardians.delete({ where: { id: conflict.id } });
+          } else {
+            const linked = conflict.student_guardians
+              .map((sg) => `${sg.students.full_name} (${sg.students.gr_number ?? sg.student_id})`)
+              .join(', ');
+            throw new ConflictException(
+              `CNIC ${data.cnic} is already registered to guardian #${conflict.id} (${conflict.full_name || 'No name'})${linked ? ` linked to ${linked}` : ''}.`,
+            );
+          }
+        }
+      }
     }
 
     if (dto.email && !dto.email_address) {
@@ -1313,6 +1380,7 @@ export class StaffEditingService {
       };
     } catch (e: any) {
       if (e?.code === 'P2025') throw new NotFoundException(`Guardian #${id} not found`);
+      if (e?.code === 'P2002') throw new ConflictException(`CNIC ${data.cnic} is already registered to another guardian`);
       throw e;
     }
   }

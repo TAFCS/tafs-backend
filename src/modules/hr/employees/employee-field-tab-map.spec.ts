@@ -1,6 +1,7 @@
 import {
   EMPLOYEE_FIELD_ACTION_OVERRIDES,
   EMPLOYEE_FIELD_TAB_MAP,
+  EMPLOYEE_ACCESS_GRANT_FIELDS,
 } from './employee-field-tabs';
 import { EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST } from '../../access/tiles.manifest';
 
@@ -13,18 +14,18 @@ import { EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST } from '../../access/tiles.manifest
  */
 const DTO_FIELDS = [
   'portal_account', 'user_id', 'cnic', 'join_date', 'employment_type',
-  'employment_status', 'department_id', 'reporting_manager_id', 'employee_code',
+  'employment_status', 'employment_subtype', 'department_id', 'reporting_manager_id', 'employee_code',
   'employee_code_dep', 'employee_code_number', 'full_name', 'father_name',
   'mother_name', 'date_of_birth', 'address', 'personal_phone',
   'secondary_phone', 'personal_email', 'job_title', 'staff_category_id',
   'segment_id', 'job_description', 'notes', 'reporting_time', 'leaving_time',
   'check_in_source', 'late_relaxation_minutes', 'monthly_pay',
-  'payroll_enabled', 'campus_id', 'days_per_week', 'photo_url',
+  'payroll_enabled', 'eobi_exempt', 'sessi_exempt', 'campus_id', 'days_per_week', 'photo_url',
   'father_photo_url', 'father_cnic', 'mother_photo_url', 'mother_cnic',
   'spouse_name', 'spouse_cnic', 'spouse_photo_url', 'account_number',
   'bank_name', 'emergency_contact_name', 'emergency_contact_phone',
   'emergency_contact_relationship', 'class_section_assignments',
-  'previous_employers',
+  'previous_employers', 'packIds', 'tileGrants',
 ];
 
 /**
@@ -37,6 +38,7 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
     const known = new Set([
       ...Object.keys(EMPLOYEE_FIELD_TAB_MAP),
       ...Object.keys(EMPLOYEE_FIELD_ACTION_OVERRIDES),
+      ...EMPLOYEE_ACCESS_GRANT_FIELDS,
     ]);
     const unmapped = DTO_FIELDS.filter((f) => !known.has(f));
 
@@ -47,7 +49,11 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
 
   it('maps nothing that is not a real DTO field', () => {
     const dto = new Set(DTO_FIELDS);
-    const stale = Object.keys(EMPLOYEE_FIELD_TAB_MAP).filter((f) => !dto.has(f));
+    const stale = [
+      ...Object.keys(EMPLOYEE_FIELD_TAB_MAP),
+      ...Object.keys(EMPLOYEE_FIELD_ACTION_OVERRIDES),
+      ...EMPLOYEE_ACCESS_GRANT_FIELDS,
+    ].filter((f) => !dto.has(f));
     expect(stale).toEqual([]);
   });
 
@@ -66,6 +72,13 @@ describe('EMPLOYEE_FIELD_TAB_MAP', () => {
       (actionId) => !declared.has(actionId),
     );
     expect(missing).toEqual([]);
+  });
+
+  it('keeps the access-grant fields out of the tab and override maps', () => {
+    const leaked = EMPLOYEE_ACCESS_GRANT_FIELDS.filter(
+      (f) => EMPLOYEE_FIELD_TAB_MAP[f] !== undefined || EMPLOYEE_FIELD_ACTION_OVERRIDES[f] !== undefined,
+    );
+    expect(leaked).toEqual([]);
   });
 
   it('never maps a field to both a tab and an override', () => {

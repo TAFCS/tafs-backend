@@ -6,12 +6,13 @@ import {
 } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import { ScopeService } from '../../common/scope/scope.service';
 import { EMPTY_SCOPE, type UserScope } from '../../common/scope/scope.types';
+import { isSuperAdmin } from '../../common/auth/super-admin';
 import {
   actionKey,
   catalogFromManifest,
@@ -22,6 +23,51 @@ import {
 import { readUntilMigrated } from '../../utils/pending-migration.util';
 import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
 
+export type LiveStaffSession = {
+  isActive: boolean;
+  role: StaffRole;
+  capabilityKeys: string[];
+  actionIds: string[];
+};
+
+const LIVE_SESSION_TTL_MS = 30_000;
+
+
+const TARGET_PROFILE_SELECT = {
+  campus_id: true,
+  segment_id: true,
+  department_id: true,
+  staff_category_id: true,
+} as const;
+
+type TargetProfile = {
+  campus_id: number | null;
+  segment_id: number | null;
+  department_id: number | null;
+  staff_category_id: number | null;
+};
+
+type EffectiveAccess = { capabilityKeys: string[]; tileIds: string[]; actionIds: string[] };
+
+export type ProposedAccess = {
+  packIds?: string[];
+  grants?: { tileId: string; allow: boolean }[];
+  actionGrants?: { tileId: string; actionId: string; allow: boolean }[];
+  userPerms?: { key: string; granted: boolean }[];
+};
+
+/** Pack action rows grouped by pack, minus actions retired from the manifest. */
+function groupLiveActions(rows: { pack_id: string; tile_id: string; action_id: string }[]) {
+  const byPack = new Map<string, { tileId: string; actionId: string }[]>();
+  for (const row of rows) {
+    if (!MANIFEST_ACTION_KEYS.has(actionKey(row.tile_id, row.action_id))) continue;
+    const list = byPack.get(row.pack_id) ?? [];
+    list.push({ tileId: row.tile_id, actionId: row.action_id });
+    byPack.set(row.pack_id, list);
+  }
+  return byPack;
+}
+
 @Injectable()
 export class AccessService {
   constructor(
@@ -31,89 +77,30 @@ export class AccessService {
   ) {}
 
   /**
-   * Restricts a campus-scoped admin (holds this tile + a non-empty campus
-   * scope of their own) to managing access for users within that same scope.
-   * An admin unrestricted on campus (including SUPER_ADMIN, whose scope
-   * always resolves empty) is unaffected. This was an explicit open decision
-   * in the scope/tile-permission handoff §8 — resolved here to close the
-   * escalation path it named ("should a campus-scoped admin be able to grant
-   * access outside their own scope? Currently yes.").
-   */
-  // Throws NotFoundException, not Forbidden — a 403 here would confirm a real
-  // user exists outside the caller's scope and turn this route into an
-  // enumerator, exactly the anti-pattern the scope/tile-permission handoff
-  // warns against for :id lookups.
-  private assertCanManageUser(actingUser: IJwtStaffPayload, targetCampusId: number | null, userId: string) {
-    const adminScope = this.scopeService.scopeOf(actingUser);
-    if (adminScope.campuses.length === 0) return;
-    if (targetCampusId == null || !adminScope.campuses.includes(targetCampusId)) {
-      throw new NotFoundException(`User ${userId} not found`);
-    }
-  }
-
-  /**
-   * The other half of the same restriction: a campus-scoped admin may not
-   * grant a target user scope values wider than their own, dimension by
-   * dimension. An admin unrestricted on a given dimension imposes no bound
-   * on that dimension.
-   */
-  private assertGrantableScope(actingUser: IJwtStaffPayload, granted: Partial<UserScope>) {
-    const adminScope = this.scopeService.scopeOf(actingUser);
-    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
-      if (adminScope[field].length === 0) continue;
-      const requested = granted[field] ?? [];
-      const outOfBounds = requested.filter((id) => !adminScope[field].includes(id));
-      if (outOfBounds.length > 0) {
-        throw new ForbiddenException(
-          `You may not grant ${field} outside your own scope: ${outOfBounds.join(', ')}.`,
-        );
-      }
-    }
-  }
-
-  /**
-   * Field-partitions setUserAccess between the Access tab (packIds,
-   * tileGrants, tileActionGrants -> access.edit) and the Scope tab
-   * (scope -> scope.edit).
+   * A scoped holder of People & Access only sees and manages users inside
+   * their FULL scope -- campus, segment, department and staff category -- by
+   * the same rule as the user list (UsersService.canSeeUser): the employee
+   * profile's dimensions when there is one, else the legacy users.campus_id.
+   * This used to check campus only, so a department-scoped viewer could read
+   * the access of people the list hid from them (TAFSD-373).
    *
-   * packIds and tileGrants are NOT optional on SetUserAccessDto — the
-   * webapp's single saveAccess() handler always sends both, on every save
-   * from either tab (see the People & Access page). So "the field is
-   * present" cannot mean "the caller intends to change it" the way it does
-   * for UpdateUserDto; a scope-only editor must be able to resave scope
-   * without incidentally needing access.edit just because packIds/tileGrants
-   * rode along unchanged. Compared against the persisted state instead.
-   *
-   * A caller whose session predates sub-permissions (no `actions`) is left
-   * alone, same rationale as UsersService.assertFieldsEditable.
+   * Throws NotFoundException, not Forbidden: a 403 would confirm a real user
+   * exists outside the caller's scope and turn the route into an enumerator.
    */
-  private assertUserAccessFieldsEditable(
+  private assertCanManageUser(
     actingUser: IJwtStaffPayload,
-    dto: SetUserAccessDto,
-    packIds: string[],
-    grants: { tileId: string; allow: boolean }[],
-    existingPacks: { pack_id: string }[],
-    existingGrants: { tile_id: string; allow: boolean }[],
+    target: { campus_id: number | null; employee_profile: TargetProfile | null },
+    userId: string,
   ) {
-    if (!actingUser || actingUser.role === StaffRole.SUPER_ADMIN) return;
-    if (actingUser.actions === undefined) return;
-
-    const packsChanged =
-      JSON.stringify([...packIds].sort()) !==
-      JSON.stringify(existingPacks.map((p) => p.pack_id).sort());
-    const grantsChanged =
-      JSON.stringify([...grants].map((g) => [g.tileId, g.allow]).sort()) !==
-      JSON.stringify(existingGrants.map((g) => [g.tile_id, g.allow]).sort());
-    const touchesAccess = packsChanged || grantsChanged || dto.tileActionGrants !== undefined;
-    const touchesScope = dto.scope !== undefined;
-
-    const held = new Set(actingUser.actions);
-    if (touchesAccess && !held.has(`${PEOPLE_ACCESS_TILE_ID}#access.edit`)) {
-      throw new ForbiddenException('You do not have permission to edit access grants.');
-    }
-    if (touchesScope && !held.has(`${PEOPLE_ACCESS_TILE_ID}#scope.edit`)) {
-      throw new ForbiddenException('You do not have permission to edit data scope.');
-    }
+    if (this.scopeService.isExempt(actingUser)) return;
+    const p = target.employee_profile;
+    const visible = this.scopeService.canSeeEmployee(actingUser, {
+      campus_id: p ? p.campus_id : target.campus_id,
+      segment_id: p?.segment_id ?? null,
+      department_id: p?.department_id ?? null,
+      staff_category_id: p?.staff_category_id ?? null,
+    });
+    if (!visible) throw new NotFoundException(`User ${userId} not found`);
   }
 
   /**
@@ -149,10 +136,33 @@ export class AccessService {
   }
 
   /**
+   * Staff categories belong to a department. A category whose department is
+   * not among a restricted Departments list can never match anyone (the two
+   * dimensions AND together), so it is refused rather than saved as a scope
+   * that silently selects nothing. Departments on "All" (empty) take any
+   * category.
+   */
+  private async assertStaffCategoriesFitDepartments(scope: Partial<UserScope>) {
+    const categories = scope.staffCategories ?? [];
+    const departments = scope.departments ?? [];
+    if (categories.length === 0 || departments.length === 0) return;
+    const rows = await this.prisma.staff_categories.findMany({
+      where: { id: { in: [...new Set(categories)] } },
+      select: { id: true, name: true, department_id: true },
+    });
+    const outside = rows.filter((r) => !departments.includes(r.department_id));
+    if (outside.length === 0) return;
+    throw new BadRequestException(
+      `${outside.map((r) => r.name).join(', ')} ${outside.length === 1 ? 'is' : 'are'} not in the selected ` +
+        'Departments. Add the department, or remove the category.',
+    );
+  }
+
+  /**
    * Everything a scope picker can offer. Small, stable reference data -- the
    * panel fetches it once and filters client-side.
    */
-  async getScopeOptions() {
+  async getScopeOptions(actingUser?: IJwtStaffPayload) {
     const [campuses, segments, classes, sections, departments, staffCategories, segmentBearing] =
       await Promise.all([
         this.prisma.campuses.findMany({
@@ -183,20 +193,34 @@ export class AccessService {
         this.segmentBearingDepartmentIds(),
       ]);
 
+    // A non-super-admin can only grant scope inside their own, so offering the
+    // rest of the school only lists campuses, classes and departments they have
+    // no business with (TAFSD-373). Each restricted dimension is narrowed;
+    // classes and staff categories also follow their parent dimension.
+    const mine = actingUser ? this.scopeService.scopeOf(actingUser) : EMPTY_SCOPE;
+    const within = <T extends { id: number }>(rows: T[], ids: number[]) =>
+      ids.length === 0 ? rows : rows.filter((r) => ids.includes(r.id));
+    const visibleClasses = within(classes, mine.classes).filter(
+      (c) => mine.segments.length === 0 || (c.segment_id != null && mine.segments.includes(c.segment_id)),
+    );
+    const visibleCategories = within(staffCategories, mine.staffCategories).filter(
+      (c) => mine.departments.length === 0 || mine.departments.includes(c.department_id),
+    );
+
     return {
-      campuses: campuses.map((c) => ({ id: c.id, label: c.campus_name, code: c.campus_code })),
-      segments: segments.map((s) => ({ id: s.id, label: s.name, code: s.code })),
-      classes: classes.map((c) => ({
+      campuses: within(campuses, mine.campuses).map((c) => ({ id: c.id, label: c.campus_name, code: c.campus_code })),
+      segments: within(segments, mine.segments).map((s) => ({ id: s.id, label: s.name, code: s.code })),
+      classes: visibleClasses.map((c) => ({
         id: c.id,
         label: c.description,
         code: c.class_code,
         segmentId: c.segment_id,
       })),
-      sections: sections.map((s) => ({ id: s.id, label: s.description })),
+      sections: within(sections, mine.sections).map((s) => ({ id: s.id, label: s.description })),
       // hasSegments: this department's staff carry segments (the teaching
       // department) — the Scope tab only allows segments alongside one.
-      departments: departments.map((d) => ({ id: d.id, label: d.name, hasSegments: segmentBearing.has(d.id) })),
-      staffCategories: staffCategories.map((c) => ({
+      departments: within(departments, mine.departments).map((d) => ({ id: d.id, label: d.name, hasSegments: segmentBearing.has(d.id) })),
+      staffCategories: visibleCategories.map((c) => ({
         id: c.id,
         label: c.name,
         code: c.code,
@@ -209,29 +233,109 @@ export class AccessService {
     return catalogFromManifest();
   }
 
+  /**
+   * The caller's account state and effective access, read live on every
+   * request (TAFSD-308) instead of trusted from the 90-day token: revoking a
+   * tile, pack, permission or role takes effect on the next API call, with no
+   * re-login. A short in-memory cache absorbs the burst of requests a page load
+   * makes; every write below that changes someone's access drops their entry.
+   * Writes this service does not see (another instance, a raw SQL fix) are
+   * bounded by the TTL.
+   */
+  private liveSessionCache = new Map<string, { session: LiveStaffSession; expires: number }>();
+
+  async resolveLiveSession(userId: string): Promise<LiveStaffSession | null> {
+    const now = Date.now();
+    const cached = this.liveSessionCache.get(userId);
+    if (cached && cached.expires > now) return cached.session;
+
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { is_active: true, role: true },
+    });
+    if (!user) {
+      this.liveSessionCache.delete(userId);
+      return null;
+    }
+    const access = await this.resolveEffective(userId, user.role);
+    const session: LiveStaffSession = {
+      isActive: Boolean(user.is_active),
+      role: user.role,
+      capabilityKeys: access.capabilityKeys,
+      actionIds: access.actionIds,
+    };
+    this.liveSessionCache.set(userId, { session, expires: now + LIVE_SESSION_TTL_MS });
+    return session;
+  }
+
+  /** Drop one user's cached session, or everyone's (role or pack changes). */
+  invalidateLiveSession(userId?: string) {
+    if (userId) this.liveSessionCache.delete(userId);
+    else this.liveSessionCache.clear();
+  }
+
   async resolveEffective(userId: string, role: StaffRole) {
-    const [allPerms, rolePerms, packRows, grants, userPerms, packActions, userActionGrants] =
-      await Promise.all([
-        this.prisma.permissions.findMany({ select: { key: true } }),
-        this.prisma.role_permissions.findMany({
-          where: { role },
-          include: { permissions: { select: { key: true } } },
-        }),
-        this.prisma.user_access_packs.findMany({
-          where: { user_id: userId },
-          include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
-        }),
-        this.prisma.user_tile_grants.findMany({
-          where: { user_id: userId },
-          select: { tile_id: true, allow: true },
-        }),
-        this.prisma.user_permissions.findMany({
-          where: { user_id: userId },
-          include: { permissions: { select: { key: true } } },
-        }),
-        this.readPackActions(userId),
-        this.readUserActionGrants(userId),
-      ]);
+    return this.effectiveWith(userId, role);
+  }
+
+  /**
+   * What a user would hold if `proposed` replaced the matching parts of their
+   * stored access. `userId` null means a login that does not exist yet (no
+   * packs, grants or overrides). Used to check a change before it is written.
+   */
+  async effectiveWith(userId: string | null, role: StaffRole, proposed: ProposedAccess = {}) {
+    const none = <T,>(): Promise<T[]> => Promise.resolve([]);
+    // Two-at-a-time, not Promise.all(7): a dashboard burst of N cold JWT
+    // validates was opening ~N×7 connections and hit DO "too many clients".
+    const allPerms = await this.prisma.permissions.findMany({ select: { key: true } });
+    const rolePerms = await this.prisma.role_permissions.findMany({
+      where: { role },
+      include: { permissions: { select: { key: true } } },
+    });
+    const [packRows, grants] = await Promise.all([
+      proposed.packIds !== undefined
+        ? this.prisma.access_packs
+            .findMany({
+              where: { id: { in: proposed.packIds } },
+              include: { tiles: { select: { tile_id: true } } },
+            })
+            .then((packs) => packs.map((pack) => ({ pack })))
+        : userId
+          ? this.prisma.user_access_packs.findMany({
+              where: { user_id: userId },
+              include: { pack: { include: { tiles: { select: { tile_id: true } } } } },
+            })
+          : none<{ pack: { tiles: { tile_id: string }[] } }>(),
+      proposed.grants !== undefined
+        ? Promise.resolve(proposed.grants.map((g) => ({ tile_id: g.tileId, allow: g.allow })))
+        : userId
+          ? this.prisma.user_tile_grants.findMany({
+              where: { user_id: userId },
+              select: { tile_id: true, allow: true },
+            })
+          : none<{ tile_id: string; allow: boolean }>(),
+    ]);
+    const [userPerms, packActions] = await Promise.all([
+      proposed.userPerms !== undefined
+        ? Promise.resolve(proposed.userPerms.map((p) => ({ permissions: { key: p.key }, granted: p.granted })))
+        : userId
+          ? this.prisma.user_permissions.findMany({
+              where: { user_id: userId },
+              include: { permissions: { select: { key: true } } },
+            })
+          : none<{ permissions: { key: string }; granted: boolean }>(),
+      proposed.packIds !== undefined
+        ? this.readActionsOfPacks(proposed.packIds)
+        : userId
+          ? this.readPackActions(userId)
+          : none<{ tileId: string; actionId: string }>(),
+    ]);
+    const userActionGrants =
+      proposed.actionGrants !== undefined
+        ? proposed.actionGrants
+        : userId
+          ? await this.readUserActionGrants(userId)
+          : [];
 
     return computeEffectiveAccess({
       role,
@@ -245,6 +349,172 @@ export class AccessService {
       packActions,
       userActionGrants,
     });
+  }
+
+  private async readActionsOfPacks(packIds: string[]) {
+    if (packIds.length === 0) return [];
+    return readUntilMigrated(
+      async () => {
+        const rows = await this.prisma.access_pack_tile_actions.findMany({
+          where: { pack_id: { in: packIds } },
+          select: { tile_id: true, action_id: true },
+        });
+        return rows.map((r) => ({ tileId: r.tile_id, actionId: r.action_id }));
+      },
+      [] as { tileId: string; actionId: string }[],
+    );
+  }
+
+  // ─── Guards for anyone who is not a SUPER_ADMIN (TAFSD-365) ──────────────
+  // The SUPER_ADMIN decides who holds which People & Access / Access Packs /
+  // portal sub-permissions. Holding one lets you do that thing to OTHER
+  // people, within what you hold yourself -- never to yourself, never to a
+  // SUPER_ADMIN, and never in a way that hands out more than you have.
+
+  /** Not your own account, and not a SUPER_ADMIN's. */
+  assertMayManageUser(
+    actor: Pick<IJwtStaffPayload, 'role' | 'sub'> | undefined,
+    target: { id: string; role: StaffRole },
+  ) {
+    if (!actor || isSuperAdmin(actor)) return;
+    if (target.id === actor.sub) {
+      throw new ForbiddenException('You cannot change your own account or access. Ask a super admin.');
+    }
+    if (target.role === StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException("Only a super admin can change a super admin's account.");
+    }
+  }
+
+  /** Never SUPER_ADMIN, and never a role whose baseline carries capabilities you lack. */
+  async assertMayAssignRole(actor: IJwtStaffPayload | undefined, role: StaffRole) {
+    if (!actor || isSuperAdmin(actor)) return;
+    if (role === StaffRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a super admin can give someone the SUPER_ADMIN role.');
+    }
+    const [mine, rolePerms] = await Promise.all([
+      this.resolveEffective(actor.sub, actor.role),
+      this.prisma.role_permissions.findMany({
+        where: { role },
+        include: { permissions: { select: { key: true } } },
+      }),
+    ]);
+    const held = new Set(mine.capabilityKeys);
+    const above = rolePerms.map((rp) => rp.permissions.key).filter((k) => !held.has(k));
+    if (above.length > 0) {
+      throw new ForbiddenException(
+        `You cannot give the ${role} role: it carries permissions you do not hold (${above.join(', ')}).`,
+      );
+    }
+  }
+
+  /**
+   * Everything a change GIVES the target (tiles, sub-permissions, capabilities
+   * present after but not before) must already be held by the actor. Taking
+   * access away is never a leak.
+   */
+  async assertNoLeak(
+    actor: IJwtStaffPayload | undefined,
+    before: EffectiveAccess,
+    after: EffectiveAccess,
+  ) {
+    if (!actor || isSuperAdmin(actor)) return;
+    const mine = await this.resolveEffective(actor.sub, actor.role);
+    const gained = (b: string[], a: string[], held: string[]) => {
+      const had = new Set(b);
+      const own = new Set(held);
+      return a.filter((k) => !had.has(k) && !own.has(k));
+    };
+    const tiles = gained(before.tileIds, after.tileIds, mine.tileIds);
+    const actions = gained(before.actionIds, after.actionIds, mine.actionIds);
+    const caps = gained(before.capabilityKeys, after.capabilityKeys, mine.capabilityKeys);
+    const leaked = [...tiles, ...actions, ...caps];
+    if (leaked.length > 0) {
+      throw new ForbiddenException(
+        `You can only give access you hold yourself. Not yours to give: ${leaked.join(', ')}.`,
+      );
+    }
+  }
+
+  /**
+   * For credential actions (set, reset or reveal a password, change a
+   * username): becoming the target must not get you anything you lack, so
+   * their access and scope have to fit inside yours.
+   */
+  async assertNotAbove(actor: IJwtStaffPayload | undefined, target: { id: string; role: StaffRole }) {
+    if (!actor || isSuperAdmin(actor)) return;
+    this.assertMayManageUser(actor, target);
+    const [mine, theirs, theirScope] = await Promise.all([
+      this.resolveEffective(actor.sub, actor.role),
+      this.resolveEffective(target.id, target.role),
+      this.scopeService.resolve(target.id),
+    ]);
+    const missing = (theirsKeys: string[], mineKeys: string[]) => {
+      const own = new Set(mineKeys);
+      return theirsKeys.filter((k) => !own.has(k));
+    };
+    const above = [
+      ...missing(theirs.tileIds, mine.tileIds),
+      ...missing(theirs.actionIds, mine.actionIds),
+      ...missing(theirs.capabilityKeys, mine.capabilityKeys),
+    ];
+    if (above.length > 0) {
+      throw new ForbiddenException(
+        `This account holds access you do not (${above.slice(0, 8).join(', ')}${above.length > 8 ? ', …' : ''}), so you cannot use its password or username.`,
+      );
+    }
+    this.assertGrantableScope(actor, theirScope, 'This account reaches outside your own scope');
+  }
+
+  /**
+   * Scope given (or held) must fit inside the actor's, dimension by dimension.
+   * Where the actor is restricted, an empty dimension means UNRESTRICTED and is
+   * therefore wider than theirs -- refused too (this used to slip through).
+   */
+  assertGrantableScope(actor: IJwtStaffPayload, granted: Partial<UserScope>, prefix = 'You may not grant scope wider than your own') {
+    if (isSuperAdmin(actor)) return;
+    const mine = this.scopeService.scopeOf(actor);
+    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
+      if (mine[field].length === 0) continue;
+      const requested = granted[field] ?? [];
+      if (requested.length === 0) {
+        throw new ForbiddenException(`${prefix}: ${field} would be unrestricted.`);
+      }
+      const outside = requested.filter((id) => !mine[field].includes(id));
+      if (outside.length > 0) {
+        throw new ForbiddenException(`${prefix}: ${field} ${outside.join(', ')}.`);
+      }
+    }
+  }
+
+  /**
+   * Field-partitions setUserAccess between the Access tab (packs, tiles,
+   * sub-permissions -> access.edit) and the Scope tab (scope -> scope.edit).
+   * packIds / tileGrants ride along on every save from either tab, so they
+   * count as touched only when they differ from what is stored.
+   */
+  private assertUserAccessFieldsEditable(
+    actingUser: IJwtStaffPayload,
+    dto: SetUserAccessDto,
+    packIds: string[],
+    grants: { tileId: string; allow: boolean }[],
+    existingPacks: { pack_id: string }[],
+    existingGrants: { tile_id: string; allow: boolean }[],
+  ) {
+    if (isSuperAdmin(actingUser)) return;
+    const packsChanged =
+      JSON.stringify([...packIds].sort()) !==
+      JSON.stringify(existingPacks.map((p) => p.pack_id).sort());
+    const grantsChanged =
+      JSON.stringify([...grants].map((g) => [g.tileId, g.allow]).sort()) !==
+      JSON.stringify(existingGrants.map((g) => [g.tile_id, g.allow]).sort());
+    const touchesAccess = packsChanged || grantsChanged || dto.tileActionGrants !== undefined;
+    const held = new Set(actingUser.actions ?? []);
+    if (touchesAccess && !held.has(`${PEOPLE_ACCESS_TILE_ID}#access.edit`)) {
+      throw new ForbiddenException('You do not have permission to edit access grants.');
+    }
+    if (dto.scope !== undefined && !held.has(`${PEOPLE_ACCESS_TILE_ID}#scope.edit`)) {
+      throw new ForbiddenException('You do not have permission to edit data scope.');
+    }
   }
 
   /**
@@ -292,10 +562,10 @@ export class AccessService {
   async getUserAccess(userId: string, actingUser: IJwtStaffPayload) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, role: true, campus_id: true },
+      select: { id: true, username: true, role: true, campus_id: true, employee_profile: { select: TARGET_PROFILE_SELECT } },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    this.assertCanManageUser(actingUser, user, userId);
 
     const [packs, assigned, grants, rolePerms, actionGrants] = await Promise.all([
       this.prisma.access_packs.findMany({
@@ -339,13 +609,7 @@ export class AccessService {
         }),
       [] as { pack_id: string; tile_id: string; action_id: string }[],
     );
-    const actionsByPack = new Map<string, { tileId: string; actionId: string }[]>();
-    for (const row of packActionRows) {
-      actionsByPack.set(row.pack_id, [
-        ...(actionsByPack.get(row.pack_id) ?? []),
-        { tileId: row.tile_id, actionId: row.action_id },
-      ]);
-    }
+    const actionsByPack = groupLiveActions(packActionRows);
 
     const roleKeySet = new Set(rolePerms.map((rp) => rp.permissions.key));
     const roleTileIds = MANIFEST_EFFECTIVE_TILES
@@ -374,7 +638,9 @@ export class AccessService {
         note: g.note,
         grantedAt: g.granted_at,
       })),
-      actionGrants: actionGrants.map((g) => ({
+      // Retired actions (no longer in the manifest) are left out, so the editor
+      // never resends them and trips assertActionsExist on the next save.
+      actionGrants: actionGrants.filter((g) => MANIFEST_ACTION_KEYS.has(actionKey(g.tile_id, g.action_id))).map((g) => ({
         tileId: g.tile_id,
         actionId: g.action_id,
         allow: g.allow,
@@ -394,13 +660,15 @@ export class AccessService {
   ) {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, campus_id: true },
+      select: { id: true, username: true, campus_id: true, role: true, employee_profile: { select: TARGET_PROFILE_SELECT } },
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    this.assertCanManageUser(actingUser, user.campus_id, userId);
+    this.assertCanManageUser(actingUser, user, userId);
+    this.assertMayManageUser(actingUser, user);
     if (dto.scope !== undefined) {
       this.assertGrantableScope(actingUser, dto.scope);
       await this.assertSegmentsFitDepartments(dto.scope);
+      await this.assertStaffCategoriesFitDepartments(dto.scope);
     }
 
     const packIds = [...new Set(dto.packIds ?? [])];
@@ -439,6 +707,18 @@ export class AccessService {
       [] as { tile_id: string; action_id: string; allow: boolean }[],
     );
 
+    if (!isSuperAdmin(actingUser)) {
+      const [before, after] = await Promise.all([
+        this.resolveEffective(userId, user.role),
+        this.effectiveWith(userId, user.role, {
+          packIds,
+          grants,
+          ...(dto.tileActionGrants !== undefined ? { actionGrants } : {}),
+        }),
+      ]);
+      await this.assertNoLeak(actingUser, before, after);
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.user_access_packs.deleteMany({
         where: { user_id: userId, pack_id: { notIn: packIds } },
@@ -454,25 +734,21 @@ export class AccessService {
         });
       }
 
-      await tx.user_tile_grants.deleteMany({
-        where: { user_id: userId, tile_id: { notIn: grantTileIds } },
-      });
-      for (const grant of grants) {
-        await tx.user_tile_grants.upsert({
-          where: { user_id_tile_id: { user_id: userId, tile_id: grant.tileId } },
-          update: {
-            allow: grant.allow,
-            granted_by: actorId,
-            granted_at: new Date(),
-            note: grant.note ?? null,
-          },
-          create: {
+      // Replace the whole grant set in two statements. An upsert per grant
+      // cost one round trip each, so a user with ~65 grants ran past the
+      // transaction timeout and the save returned 500. Every row was rewritten
+      // with a fresh granted_at anyway, so the stored result is the same.
+      await tx.user_tile_grants.deleteMany({ where: { user_id: userId } });
+      if (grants.length > 0) {
+        await tx.user_tile_grants.createMany({
+          data: grants.map((grant) => ({
             user_id: userId,
             tile_id: grant.tileId,
             allow: grant.allow,
             granted_by: actorId,
             note: grant.note ?? null,
-          },
+          })),
+          skipDuplicates: true,
         });
       }
 
@@ -494,13 +770,17 @@ export class AccessService {
           });
         }
       }
-    });
+    }, { maxWait: 10000, timeout: 20000 });
+    this.invalidateLiveSession(userId);
 
+    // Collected and written in one insert after the change commits; one
+    // awaited log() per changed tile was another round trip each.
+    const auditEntries: AuditLogParams[] = [];
     const beforePacks = existingPacks.map((p) => p.pack_id).sort().join(',');
     const afterPacks = [...packIds].sort().join(',');
     const changedBy = actorLabel ?? actorId;
     if (beforePacks !== afterPacks) {
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: userId,
         action: 'UPDATED',
@@ -520,7 +800,7 @@ export class AccessService {
       const before = beforeGrantMap.get(tileId);
       const after = afterGrantMap.get(tileId);
       if (before === after) continue;
-      await this.auditLogs.log({
+      auditEntries.push({
         entity_type: 'PERMISSION',
         entity_id: `${userId}:${tileId}`,
         action: after === undefined ? 'DELETED' : before === undefined ? 'CREATED' : 'UPDATED',
@@ -549,7 +829,7 @@ export class AccessService {
       const before = summarise(previous);
       const after = summarise(next);
       if (before !== after) {
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: userId,
           action: 'UPDATED',
@@ -572,7 +852,7 @@ export class AccessService {
         const wasAllowed = before.get(k);
         const isAllowed = after.get(k);
         if (wasAllowed === isAllowed) continue;
-        await this.auditLogs.log({
+        auditEntries.push({
           entity_type: 'PERMISSION',
           entity_id: `${userId}:${k}`,
           action: isAllowed === undefined ? 'DELETED' : wasAllowed === undefined ? 'CREATED' : 'UPDATED',
@@ -593,21 +873,96 @@ export class AccessService {
       }
     }
 
+    await this.auditLogs.logMany(auditEntries);
+
     return this.getUserAccess(userId, actingUser);
   }
 
-  async listPacks() {
-    return this.prisma.access_packs.findMany({
-      orderBy: [{ is_system: 'desc' }, { name: 'asc' }],
-      include: { tiles: { select: { tile_id: true } } },
-    });
+  /**
+   * For a non-SUPER_ADMIN holder of access_packs#manage: a pack assigned to
+   * yourself is your own access, so you cannot edit or delete it; and you can
+   * only ADD tiles and sub-permissions you hold yourself (removing is fine).
+   * `packId` null is a new pack.
+   */
+  /**
+   * Packs carry Staff App tabs only. Web tiles are granted per user in People
+   * & Access; computeEffectiveAccess ignores any web tile left in a pack, so
+   * adding one here would only look like access while giving none (TAFSD-374).
+   */
+  private assertStaffAppOnly(tileIds: string[], tileActions: { tileId: string }[]) {
+    const web = new Set(MANIFEST_EFFECTIVE_TILES.filter((t) => t.requiresExplicitAllow).map((t) => t.id));
+    const refused = [...new Set([...tileIds, ...tileActions.map((a) => a.tileId)])].filter((id) => web.has(id));
+    if (refused.length > 0) {
+      throw new BadRequestException(
+        `Access packs carry Staff App tabs only. Give web tiles per person in People & Access: ${refused.join(', ')}.`,
+      );
+    }
   }
 
-  async createPack(dto: CreateAccessPackDto, actorLabel?: string) {
+  private async assertPackChangeAllowed(
+    actor: IJwtStaffPayload | undefined,
+    packId: string | null,
+    tileIds: string[],
+    tileActions: { tileId: string; actionId: string }[],
+  ) {
+    if (!actor || isSuperAdmin(actor)) return;
+    if (packId) {
+      const mineToo = await this.prisma.user_access_packs.count({
+        where: { pack_id: packId, user_id: actor.sub },
+      });
+      if (mineToo > 0) {
+        throw new ForbiddenException('This pack is assigned to you, so only a super admin can change it.');
+      }
+    }
+    const [mine, existingTiles, existingActions] = await Promise.all([
+      this.resolveEffective(actor.sub, actor.role),
+      packId
+        ? this.prisma.access_pack_tiles.findMany({ where: { pack_id: packId }, select: { tile_id: true } })
+        : Promise.resolve([] as { tile_id: string }[]),
+      packId ? this.readActionsOfPacks([packId]) : Promise.resolve([] as { tileId: string; actionId: string }[]),
+    ]);
+    const heldTiles = new Set(mine.tileIds);
+    const heldActions = new Set(mine.actionIds);
+    const hadTiles = new Set(existingTiles.map((t) => t.tile_id));
+    const hadActions = new Set(existingActions.map((a) => actionKey(a.tileId, a.actionId)));
+    const leaked = [
+      ...tileIds.filter((t) => !hadTiles.has(t) && !heldTiles.has(t)),
+      ...tileActions
+        .map((a) => actionKey(a.tileId, a.actionId))
+        .filter((k) => !hadActions.has(k) && !heldActions.has(k)),
+    ];
+    if (leaked.length > 0) {
+      throw new ForbiddenException(
+        `You can only put access you hold yourself into a pack. Not yours to give: ${leaked.join(', ')}.`,
+      );
+    }
+  }
+
+  async listPacks() {
+    const [packs, actionRows] = await Promise.all([
+      this.prisma.access_packs.findMany({
+        orderBy: [{ is_system: 'desc' }, { name: 'asc' }],
+        include: { tiles: { select: { tile_id: true } } },
+      }),
+      readUntilMigrated(
+        () =>
+          this.prisma.access_pack_tile_actions.findMany({
+            select: { pack_id: true, tile_id: true, action_id: true },
+          }),
+        [] as { pack_id: string; tile_id: string; action_id: string }[],
+      ),
+    ]);
+    const actionsByPack = groupLiveActions(actionRows);
+    return packs.map((p) => ({ ...p, tileActions: actionsByPack.get(p.id) ?? [] }));
+  }
+
+  async createPack(dto: CreateAccessPackDto, actorLabel?: string, actingUser?: IJwtStaffPayload) {
     const tileIds = [...new Set(dto.tileIds ?? [])];
     await this.assertTilesExist(tileIds);
     const tileActions = dto.tileActions ?? [];
     this.assertActionsExist(tileActions);
+    this.assertStaffAppOnly(tileIds, tileActions);
+    await this.assertPackChangeAllowed(actingUser, null, tileIds, tileActions);
 
     const pack = await this.prisma.access_packs.create({
       data: {
@@ -634,7 +989,7 @@ export class AccessService {
     return pack;
   }
 
-  async updatePack(id: string, dto: UpdateAccessPackDto, actorLabel?: string) {
+  async updatePack(id: string, dto: UpdateAccessPackDto, actorLabel?: string, actingUser?: IJwtStaffPayload) {
     const existing = await this.prisma.access_packs.findUnique({
       where: { id },
       include: { tiles: { select: { tile_id: true } } },
@@ -646,6 +1001,8 @@ export class AccessService {
 
     const tileActions = dto.tileActions;
     if (tileActions) this.assertActionsExist(tileActions);
+    this.assertStaffAppOnly(tileIds ?? [], tileActions ?? []);
+    await this.assertPackChangeAllowed(actingUser, id, tileIds ?? [], tileActions ?? []);
 
     const pack = await this.prisma.$transaction(async (tx) => {
       if (tileIds) {
@@ -670,6 +1027,8 @@ export class AccessService {
     });
 
     if (tileActions) await this.writePackActions(id, tileActions);
+    // Everyone holding the pack sees the change on their next request.
+    this.invalidateLiveSession();
 
     await this.auditLogs.log({
       entity_type: 'PERMISSION',
@@ -685,7 +1044,8 @@ export class AccessService {
     return pack;
   }
 
-  async deletePack(id: string, actorLabel?: string) {
+  async deletePack(id: string, actorLabel?: string, actingUser?: IJwtStaffPayload) {
+    await this.assertPackChangeAllowed(actingUser, id, [], []);
     const existing = await this.prisma.access_packs.findUnique({
       where: { id },
       select: { id: true, name: true, is_system: true },
@@ -705,6 +1065,7 @@ export class AccessService {
       changed_by: actorLabel ?? 'system',
       note: `Deleted access pack "${existing.name}".`,
     });
+    this.invalidateLiveSession();
     return { deleted: true };
   }
 

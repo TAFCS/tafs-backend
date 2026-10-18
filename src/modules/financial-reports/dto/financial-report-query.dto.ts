@@ -1,4 +1,5 @@
 import {
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -131,15 +132,17 @@ export class ListDepositsQueryDto extends FinancialReportQueryDto {
 }
 
 export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
 }
 
 export class ExportDepositsQueryDto extends ListDepositsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
 }
 
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -414,8 +417,65 @@ export class ListDefaultersQueryDto extends StudentScopeFilterQueryDto {
   arrear_month?: string;
 }
 
+/** The defaulters sheet's columns, in sheet order — what the export's column picker chooses from (TAFSD-301). */
+export const DEFAULTER_COLUMN_KEYS = [
+  'sno',
+  'cc',
+  'gr',
+  'link_to_gr',
+  'level',
+  'name',
+  'status',
+  'contact',
+  'months',
+  'amount',
+  'remarks',
+] as const;
+export type DefaulterColumnKey = (typeof DEFAULTER_COLUMN_KEYS)[number];
+
+export const DEFAULTER_GROUP_BY = ['class', 'section', 'family'] as const;
+export type DefaulterGroupBy = (typeof DEFAULTER_GROUP_BY)[number];
+
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv'])
   format?: 'xlsx' | 'csv';
+
+  /**
+   * TAFSD-337: list the students in groups — by class, section or family —
+   * each with a heading, a subtotal and a blank row before the next.
+   */
+  @IsOptional()
+  @IsIn(DEFAULTER_GROUP_BY)
+  group_by?: DefaulterGroupBy;
+
+  /**
+   * TAFSD-355: how many month columns the sheet carries, ending at the as-of
+   * month. Older owed months fold into EARLIER. Omitted = strip_months, the
+   * page's own window.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  months_back?: number;
+
+  /** TAFSD-293: list each owed fee head and its amount inside the month cells. */
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  breakdown_by_head?: boolean;
+
+  /**
+   * TAFSD-301: the columns to include, from DEFAULTER_COLUMN_KEYS. Always
+   * written in the standard order whatever order they arrive in. Omitted =
+   * every column (the full sheet).
+   */
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(DEFAULTER_COLUMN_KEYS, { each: true })
+  columns?: DefaulterColumnKey[];
 }

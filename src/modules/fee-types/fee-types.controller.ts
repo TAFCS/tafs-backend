@@ -17,7 +17,7 @@ import { FeeTypesService } from './fee-types.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { CreateFeeTypeDto } from './dto/create-fee-type.dto';
@@ -31,6 +31,7 @@ export class FeeTypesController {
   constructor(private readonly feeTypesService: FeeTypesService) {}
 
   @Get()
+  @RequireAnyTile('school-setup.fee_types', 'finance.student_overrides', 'finance.class_fee_schedule')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Fee'))
   async findAll() {
     const feeTypes = await this.feeTypesService.findAll();
@@ -70,6 +71,7 @@ export class FeeTypesController {
   }
 
   @Get(':id/dependencies')
+  @RequireAnyTile('school-setup.fee_types')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Fee'))
   async getDependencies(@Param('id', ParseIntPipe) id: number) {
     return this.feeTypesService.getDependencies(id);

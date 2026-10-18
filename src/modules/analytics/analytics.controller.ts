@@ -3,7 +3,9 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
+import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
+import { RequireAnyTile } from '../../decorators/require-action.decorator';
 import { Action } from '../auth/casl/actions';
 import { AnalyticsService } from './analytics.service';
 import { createApiResponse } from '../../utils/serializer.util';
@@ -11,7 +13,7 @@ import { toNumberArray } from '../../common/transforms/query-array.transform';
 import { ScopeService } from '../../common/scope/scope.service';
 
 @Controller('analytics')
-@UseGuards(JwtStaffGuard, PoliciesGuard)
+@UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class AnalyticsController {
   constructor(
     private readonly analyticsService: AnalyticsService,
@@ -33,6 +35,7 @@ export class AnalyticsController {
   }
 
   @Get('dashboard')
+  @RequireAnyTile('finance.financial_reports')
   @CheckPolicies(
     (ability) =>
       ability.can(Action.Read, 'all') || ability.can(Action.Manage, 'all'),

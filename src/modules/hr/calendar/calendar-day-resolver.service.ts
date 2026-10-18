@@ -1,3 +1,4 @@
+import { PERIOD_TIMINGS_SELECT, scheduleFromSnapshot, timingsOnDate } from '../employees/timings-history.util';
 import { Injectable } from '@nestjs/common';
 import { CheckInSource } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -234,8 +235,12 @@ export class CalendarDayResolverService {
         days_per_week: true,
         employee_work_schedules: { select: { day_of_week: true, is_working: true } },
         check_in_source: true,
+        employee_progression_periods: { select: PERIOD_TIMINGS_SELECT },
       },
     });
+    // TAFSD-277: the working-day pattern in effect on this date, not today's.
+    const snapshot = employee ? timingsOnDate(employee.employee_progression_periods ?? [], date) : null;
+    if (employee && snapshot) Object.assign(employee, scheduleFromSnapshot(snapshot));
 
     const dayOfWeek = date.getUTCDay();
     let scheduleWorking: boolean;

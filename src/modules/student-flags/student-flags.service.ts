@@ -1,23 +1,49 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ScopeService } from '../../common/scope/scope.service';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class StudentFlagsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
+    private readonly scope: ScopeService,
   ) {}
 
+  /** 404 unless the student is in the caller's scope — flags carry no placement of their own. */
+  async assertStudentVisible(user: IJwtStaffPayload, studentId: number): Promise<void> {
+    if (this.scope.isExempt(user)) return;
+    const visible = await this.prisma.students.count({
+      where: { cc: studentId, ...this.scope.whereForStudents(user) },
+    });
+    if (!visible) throw new NotFoundException(`Student #${studentId} not found`);
+  }
+
   async onModuleInit() {
-    await this.setupTrigger();
+    // Never block listen() on DDL. DROP/CREATE TRIGGER needs an ACCESS EXCLUSIVE
+    // lock — under load that waited forever, so Railway never got a bound port
+    // and every route (including healthz) timed out with 0 bytes.
+    void this.setupTrigger();
   }
 
   // ── TRIGGER SETUP ────────────────────────────────────────────────────────
-  // This keeps the DB logic firing even without a live NestJS listener.
+  // Idempotent: skip when the trigger already exists. DDL only on first boot.
   private async setupTrigger() {
     try {
-      await this.prisma.$executeRawUnsafe(`
+      const rows = await this.prisma.$queryRaw<Array<{ exists: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_trigger WHERE tgname = 'trg_student_flag_notify'
+        ) AS "exists"
+      `;
+      if (rows[0]?.exists) return;
+
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '3s'`);
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '5s'`);
+          await tx.$executeRawUnsafe(`
       CREATE OR REPLACE FUNCTION public.notify_student_flag()
       RETURNS trigger AS $$
       BEGIN
@@ -36,16 +62,17 @@ export class StudentFlagsService implements OnModuleInit {
       END;
       $$ LANGUAGE plpgsql;
     `);
-
-      await this.prisma.$executeRawUnsafe(`
+          await tx.$executeRawUnsafe(`
       DROP TRIGGER IF EXISTS trg_student_flag_notify ON public.student_flags;
     `);
-
-      await this.prisma.$executeRawUnsafe(`
+          await tx.$executeRawUnsafe(`
       CREATE TRIGGER trg_student_flag_notify
       AFTER INSERT OR UPDATE ON public.student_flags
       FOR EACH ROW EXECUTE FUNCTION public.notify_student_flag();
     `);
+        },
+        { maxWait: 3000, timeout: 8000 },
+      );
     } catch (err) {
       // Concurrent Nest reloads can race on CREATE OR REPLACE FUNCTION.
       console.error('[StudentFlags] Trigger setup skipped (non-fatal):', err);
@@ -143,9 +170,10 @@ export class StudentFlagsService implements OnModuleInit {
 
   // ── NOTIFICATIONS ────────────────────────────────────────────────────────
 
-  async getPendingNotifications() {
+  async getPendingNotifications(user: IJwtStaffPayload) {
     const students = await this.prisma.students.findMany({
       where: {
+        ...this.scope.whereForStudents(user),
         student_flags: {
           some: {
             work_done: false,
@@ -194,5 +222,19 @@ export class StudentFlagsService implements OnModuleInit {
     });
 
     return notifications;
+  }
+
+  /** Badge count only — avoids shipping the full notification list to the header. */
+  async countPendingNotifications(user: IJwtStaffPayload): Promise<number> {
+    return this.prisma.student_flags.count({
+      where: {
+        work_done: false,
+        OR: [{ reminder_date: { lte: new Date() } }, { reminder_date: null }],
+        students: {
+          deleted_at: null,
+          ...this.scope.whereForStudents(user),
+        },
+      },
+    });
   }
 }

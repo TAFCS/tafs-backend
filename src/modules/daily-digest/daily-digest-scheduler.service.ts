@@ -8,8 +8,8 @@ export class DailyDigestSchedulerService {
 
   constructor(private readonly dailyDigestService: DailyDigestService) {}
 
-  /** Every day at 10:00 PM Pakistan Time — email the admin daily digest. */
-  @Cron('0 22 * * *', { timeZone: 'Asia/Karachi' })
+  /** Every day at 11:00 PM Pakistan Time — email the admin daily digest. */
+  @Cron('0 23 * * *', { timeZone: 'Asia/Karachi' })
   async handleDailyDigest() {
     try {
       await this.dailyDigestService.sendDigest();

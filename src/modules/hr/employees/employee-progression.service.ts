@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { timingsKey, type EmployeeTimingsSnapshot } from './employee-day-timings.util';
 
 export type PrismaTx = Prisma.TransactionClient;
 
@@ -18,6 +19,12 @@ export type EmployeeProgressionSnapshot = {
   monthlyPay: Prisma.Decimal | string | number | null;
   payrollEnabled: boolean;
   classSections: ClassSectionSnapshot[];
+  /**
+   * TAFSD-363: reporting / leaving times, relaxation, working days and
+   * per-weekday timings. Omitted by callers that don't load them (salary
+   * increments, staff editing): the open period's timings carry forward.
+   */
+  timings?: EmployeeTimingsSnapshot;
 };
 
 export type EmployeeProgressionChangeParams = EmployeeProgressionSnapshot & {
@@ -70,7 +77,11 @@ function snapshotsEqual(
     normalizeMoney(a.monthlyPay) === normalizeMoney(b.monthlyPay) &&
     a.payrollEnabled === b.payrollEnabled &&
     normalizeClassSections(a.classSections) ===
-      normalizeClassSections(b.classSections)
+      normalizeClassSections(b.classSections) &&
+    // Only compared when the caller supplied timings (see the type).
+    // A period recorded before timings were tracked (none on it) is filled in
+    // rather than treated as a change.
+    (b.timings === undefined || a.timings === undefined || timingsKey(a.timings) === timingsKey(b.timings))
   );
 }
 
@@ -86,6 +97,7 @@ function openPeriodToSnapshot(open: {
   monthly_pay: Prisma.Decimal | null;
   payroll_enabled: boolean;
   class_sections: Prisma.JsonValue | null;
+  timings?: Prisma.JsonValue | null;
 }): EmployeeProgressionSnapshot {
   return {
     campusId: open.campus_id,
@@ -101,6 +113,7 @@ function openPeriodToSnapshot(open: {
     classSections: Array.isArray(open.class_sections)
       ? (open.class_sections as unknown as ClassSectionSnapshot[])
       : [],
+    timings: (open.timings as unknown as EmployeeTimingsSnapshot | null) ?? undefined,
   };
 }
 
@@ -119,6 +132,12 @@ export class EmployeeProgressionService {
     });
 
     if (open && snapshotsEqual(openPeriodToSnapshot(open), params)) {
+      if (open.timings == null && params.timings) {
+        await tx.employee_progression_periods.update({
+          where: { id: open.id },
+          data: { timings: params.timings as unknown as Prisma.InputJsonValue },
+        });
+      }
       return;
     }
 
@@ -145,6 +164,7 @@ export class EmployeeProgressionService {
         monthly_pay: params.monthlyPay ?? null,
         payroll_enabled: params.payrollEnabled,
         class_sections: params.classSections as unknown as Prisma.InputJsonValue,
+        timings: ((params.timings ?? open?.timings) as unknown as Prisma.InputJsonValue) ?? Prisma.DbNull,
         change_type: params.changeType,
         changed_by: params.changedBy,
         notes: params.notes ?? null,
@@ -180,6 +200,10 @@ export class EmployeeProgressionService {
       prior.reportingManagerId !== next.reportingManagerId ||
       (prior.jobTitle ?? null) !== (next.jobTitle ?? null) ||
       (prior.employmentType ?? null) !== (next.employmentType ?? null);
+    const timingsChanged =
+      next.timings !== undefined &&
+      prior.timings !== undefined &&
+      timingsKey(prior.timings) !== timingsKey(next.timings);
 
     const changedDimensions = [
       payChanged,
@@ -188,6 +212,7 @@ export class EmployeeProgressionService {
       campusChanged,
       classesChanged,
       otherChanged,
+      timingsChanged,
     ].filter(Boolean).length;
 
     if (changedDimensions !== 1) return defaultType;
@@ -199,6 +224,7 @@ export class EmployeeProgressionService {
     if (segmentChanged) return 'SEGMENT_CHANGED';
     if (campusChanged) return 'TRANSFERRED';
     if (classesChanged) return 'CLASS_REASSIGNED';
+    if (timingsChanged) return 'TIMING_CHANGED';
     return defaultType;
   }
 }

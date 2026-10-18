@@ -87,7 +87,7 @@ export interface VoucherPdfData {
     }>;
     surchargeWaived?: boolean;
     totalSurcharge?: number;
-    /** Consolidated month-range label, e.g. "ARREARS (AUG 25 � OCT 25)" */
+    /** Consolidated month-range label, e.g. "ARREARS (AUGUST 25 – OCTOBER 25)" */
     arrearsLabel?: string;
     installmentsHistory?: Array<{ head: string; month: string; amount: number; status: string }>;
     /**

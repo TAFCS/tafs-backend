@@ -31,6 +31,12 @@ export const EMPTY_SCOPE: UserScope = Object.freeze({
   staffCategories: [],
 });
 
+/**
+ * No record has this id. A dimension narrowed to [NO_MATCH_ID] is restricted
+ * to nothing — the only way to say so, since an empty array means unrestricted.
+ */
+export const NO_MATCH_ID = -1;
+
 /** Maps a scope field onto its persisted ScopeDimension enum value. */
 export const SCOPE_FIELD_BY_DIMENSION: Record<ScopeDimension, keyof UserScope> = {
   CAMPUS: 'campuses',
@@ -151,6 +157,22 @@ export function whereForEmployees(scope: UserScope) {
  * SEGMENT is applied through the student's class, which carries `segment_id`.
  */
 export function whereForStudents(scope: UserScope) {
+  return compact({
+    campus_id: maybeIn(scope.campuses),
+    class_id: maybeIn(scope.classes),
+    section_id: maybeIn(scope.sections),
+    classes: scope.segments.length > 0 ? { segment_id: { in: scope.segments } } : undefined,
+  });
+}
+
+/**
+ * Prisma `where` fragment scoping a query over `vouchers`, by the placement
+ * snapshotted on the voucher at issue (never rewritten, so it reflects who was
+ * actually billed). SEGMENT is applied through the voucher's class, exactly as
+ * for students -- hand-rolled campus/class/section checks used to skip it, so a
+ * segment-only scoped user saw every voucher.
+ */
+export function whereForVouchers(scope: UserScope) {
   return compact({
     campus_id: maybeIn(scope.campuses),
     class_id: maybeIn(scope.classes),
