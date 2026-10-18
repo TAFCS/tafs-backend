@@ -42,7 +42,7 @@
 \title{\textbf{TAFS API Documentation} \\[4pt]
 \large Bill Inquiry \& Bill Payment Integration \\ for United Bank Limited (UBL)}
 \author{The American Foundation School (TAFS) \\ TAFS IT and Software Department \\[4pt] Aawaiz Ali}
-\date{19 October 2026}
+\date{Version 1.1 \\ 19 October 2026}
 
 \begin{document}
 \begin{titlepage}
@@ -51,6 +51,19 @@
 \thispagestyle{empty}
 \vspace*{\fill}
 \end{titlepage}
+
+% ---------------------------------------------------------------------------
+\section*{What Changed in Version 1.1}
+\begin{itemize}
+  \item \textbf{New base URL.} The API now lives on TAFS's own domain:
+        \begin{itemize}
+          \item New: \url{https://api.tafs.cloud/api/v1/ubl}
+          \item Previous: \url{https://tafs-backend-production.up.railway.app/api/v1/ubl}
+        \end{itemize}
+        Please point all bill inquiry and bill payment calls at the new address. The Base URL section under Connectivity \& Authentication shows it.
+  \item Nothing else has changed: endpoints, request and response fields, authentication headers, response codes
+        and amount rules are exactly as in version 1.0 (dated 13 October 2026).
+\end{itemize}
 
 % ---------------------------------------------------------------------------
 \section*{Open Questions and TAFS Decisions at a Glance}
