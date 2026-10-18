@@ -253,6 +253,7 @@ export class StudentsService {
   async buildStudentsWhere(
     query: GetStudentsDto,
     user?: IJwtStaffPayload,
+    matchedOn?: Map<number, string>,
   ): Promise<Prisma.studentsWhereInput> {
     const { search, campus_id, class_id, section_id, house_id, status, discipline, has_photo, had_quick_admission } = query;
     const where: Prisma.studentsWhereInput = { deleted_at: null };
@@ -261,6 +262,7 @@ export class StudentsService {
       // TAFSD-344: name, GR, CC, B-form, phones, guardian names / CNICs /
       // phones, family name / number (see student-search-match.ts).
       const hits = await findStudentSearchHits(this.prisma, search, 5000);
+      for (const h of hits) matchedOn?.set(h.cc, h.matched_on);
       // In AND, so a later cc filter (the "abnormal" audit) narrows it rather than replacing it.
       where.AND = [...((where.AND as Prisma.studentsWhereInput[]) ?? []), { cc: { in: hits.map((h) => h.cc) } }];
     }
@@ -557,7 +559,24 @@ export class StudentsService {
     };
   }
 
+  /** Directory list. A search tags each student with why it matched (TAFSD-344). */
   async findAll(query: GetStudentsDto, user?: IJwtStaffPayload) {
+    const matchedOn = new Map<number, string>();
+    const result = await this.findAllPage(query, user, matchedOn);
+    if (!matchedOn.size) return result;
+    return {
+      ...result,
+      items: result.items.map((item: any) =>
+        matchedOn.has(item.cc) ? { ...item, matched_on: matchedOn.get(item.cc) } : item,
+      ),
+    };
+  }
+
+  private async findAllPage(
+    query: GetStudentsDto,
+    user: IJwtStaffPayload | undefined,
+    matchedOn: Map<number, string>,
+  ) {
     const { page = 1, limit = 10, fields } = query;
     const offset = calculateOffset(page, limit);
 
@@ -574,7 +593,7 @@ export class StudentsService {
     const quickOnly =
       normalizedStatuses.length === 1 && includesQuick;
 
-    const where = await this.buildStudentsWhere(query, user);
+    const where = await this.buildStudentsWhere(query, user, matchedOn);
 
     // Remaining unconfirmed rows (collision leftovers / pre-migration) — dual-read
     const uncWhere =
