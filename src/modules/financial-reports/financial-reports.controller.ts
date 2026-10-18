@@ -23,6 +23,7 @@ import { Action } from '../auth/casl/actions';
 import type { AppAbility } from '../auth/casl/casl-ability.factory';
 import { createApiResponse } from '../../utils/serializer.util';
 import { FinancialReportsService } from './financial-reports.service';
+import { DefaulterNotifyService } from './defaulter-notify.service';
 import {
   ExportDefaultersQueryDto,
   ExportDepositsQueryDto,
@@ -33,6 +34,7 @@ import {
   ListFeeHeadsQueryDto,
   ListFeeMatrixQueryDto,
 } from './dto/financial-report-query.dto';
+import { DefaulterNotifyBodyDto, DefaulterNotifyPreviewQueryDto } from './dto/defaulter-notify.dto';
 import {
   CreateFeeHeadsSnapshotDto,
   ListFeeHeadsSnapshotsQueryDto,
@@ -47,7 +49,10 @@ const canFinalizeAnalytics = (ability: AppAbility) =>
 @Controller('financial-reports')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class FinancialReportsController {
-  constructor(private readonly financialReportsService: FinancialReportsService) {}
+  constructor(
+    private readonly financialReportsService: FinancialReportsService,
+    private readonly defaulterNotify: DefaulterNotifyService,
+  ) {}
 
   @Get('filter-options')
   @CheckPolicies(canReadAnalytics)
@@ -190,6 +195,31 @@ export class FinancialReportsController {
   ) {
     const data = await this.financialReportsService.listDefaulters(query, user);
     return createApiResponse(data, HttpStatus.OK, 'Defaulters report retrieved successfully');
+  }
+
+  // TAFSD-384: the notice "Notify through app" would send, then send it.
+  @Get('defaulters/:cc/notice-preview')
+  @CheckPolicies(canReadAnalytics)
+  @RequireAction('finance.financial_reports#defaulters.notify')
+  async previewDefaulterNotice(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Query() query: DefaulterNotifyPreviewQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.defaulterNotify.preview(cc, query.as_of_date, user);
+    return createApiResponse(data, HttpStatus.OK, 'Defaulter notice preview retrieved successfully');
+  }
+
+  @Post('defaulters/:cc/notify')
+  @CheckPolicies(canReadAnalytics)
+  @RequireAction('finance.financial_reports#defaulters.notify')
+  async notifyDefaulter(
+    @Param('cc', ParseIntPipe) cc: number,
+    @Body() dto: DefaulterNotifyBodyDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.defaulterNotify.send(cc, dto.as_of_date, user);
+    return createApiResponse(data, HttpStatus.CREATED, 'Defaulter notified through the app');
   }
 
   @Get('defaulters/export')

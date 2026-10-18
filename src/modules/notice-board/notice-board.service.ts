@@ -433,9 +433,20 @@ export class NoticeBoardService {
   // route threads a caller through, so only it is scope-checked here, and
   // only it can land in review: a post by anyone but a SUPER_ADMIN is held as
   // PENDING, with no push, until a superadmin approves it (approvePost).
-  async createPost(postedBy: string, dto: CreatePostDto, creatorUsername?: string, user?: IJwtStaffPayload) {
+  /**
+   * `skipReview` is for system-worded notices (e.g. TAFSD-384's defaulter
+   * notice, whose copy is fixed on Notification Templates): they post
+   * APPROVED straight away. Targeting scope is still enforced.
+   */
+  async createPost(
+    postedBy: string,
+    dto: CreatePostDto,
+    creatorUsername?: string,
+    user?: IJwtStaffPayload,
+    options: { skipReview?: boolean } = {},
+  ) {
     if (user) await this.assertTargetingInScope(user, dto);
-    const needsReview = !!user && !this.isSuperAdmin(user);
+    const needsReview = !!user && !options.skipReview && !this.isSuperAdmin(user);
     // Student targeting is exclusive in the feed — strip campus/class/section so
     // the stored post can't look school-/campus-scoped while only listing kids.
     const studentCcs = dto.student_ccs ?? [];

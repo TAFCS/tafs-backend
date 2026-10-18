@@ -438,6 +438,8 @@ const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
   { id: 'export', label: 'Export a report to Excel', implies: ['view'] },
   { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['view'] },
   { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['view'] },
+  // TAFSD-384: posts a notice-board notice to one defaulting student's family.
+  { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['view'] },
 ];
 
 // GET /by-class is shared with Student Overrides (default-fee suggestions)
