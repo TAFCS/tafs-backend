@@ -1906,15 +1906,37 @@ export class FinancialReportsService {
     // with the strip and payment-behaviour figures.
     const sorted = this.sortDefaulterRows(rows, query.sort_by, query.sort_dir);
     const pageRows = sorted.slice((page - 1) * limit, page * limit);
-    const items = (await this.buildDefaulterStudentRows(pageRows, columns, classTerms, asOfDate)).map(
-      (item) => ({ ...item, arrear_month_owed: owedInMonth?.get(item.cc) ?? null }),
-    );
+    const pageItems = await this.buildDefaulterStudentRows(pageRows, columns, classTerms, asOfDate);
+    const lastNotified = await this.loadLastDefaulterNotices(pageItems.map((item) => item.cc));
+    const items = pageItems.map((item) => ({
+      ...item,
+      arrear_month_owed: owedInMonth?.get(item.cc) ?? null,
+      // TAFSD-384: the latest "Notify through app" for this student, if any.
+      last_notified: lastNotified.get(item.cc) ?? null,
+    }));
 
     return {
       ...shared,
       items,
       pagination: createPaginationMeta(page, limit, sorted.length),
     };
+  }
+
+  /** TAFSD-384: latest defaulter notice per student, plus how many were sent. */
+  private async loadLastDefaulterNotices(ccs: number[]) {
+    const out = new Map<number, { sent_at: Date; sent_by_name: string | null; count: number }>();
+    if (ccs.length === 0) return out;
+    const rows = await this.prisma.defaulter_notifications.findMany({
+      where: { student_id: { in: ccs } },
+      orderBy: { sent_at: 'desc' },
+      select: { student_id: true, sent_at: true, sent_by_name: true },
+    });
+    for (const r of rows) {
+      const prev = out.get(r.student_id);
+      if (prev) prev.count += 1;
+      else out.set(r.student_id, { sent_at: r.sent_at, sent_by_name: r.sent_by_name, count: 1 });
+    }
+    return out;
   }
 
   /**
