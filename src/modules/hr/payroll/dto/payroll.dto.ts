@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsPositive, IsString, Max, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsPositive, IsString, Max, Min } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { toNumberArray } from '../../../../common/transforms/query-array.transform';
 
@@ -42,6 +42,32 @@ export class GeneratePayrollRunDto {
   @IsInt({ each: true })
   @Type(() => Number)
   employee_ids?: number[];
+}
+
+/**
+ * TAFSD-271: a custom run pays hand-picked employees over any date range
+ * (e.g. 1st -> 30th for O/A part-time teachers). The range is treated as one
+ * salary month: monthly pay is earned in full, and per-day deductions use
+ * monthly pay / days in the range. Employees on several campuses get one run
+ * per campus. Nobody may already be on another real run whose dates overlap.
+ */
+export class GenerateCustomPayrollRunDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(1000)
+  @IsInt({ each: true })
+  @Type(() => Number)
+  employee_ids: number[];
+
+  @IsDateString()
+  period_start: string;
+
+  @IsDateString()
+  period_end: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }
 
 export class ListPayrollRunsQueryDto {

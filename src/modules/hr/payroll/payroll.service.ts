@@ -1,7 +1,7 @@
 import { PeriodTimingsRow, coveringPeriodIndex, scheduleFromSnapshot, timingsOnDate } from '../employees/timings-history.util';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import { AttendanceSource, CheckInSource, Prisma, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
+import { AttendanceSource, CheckInSource, Prisma, PayrollRunKind, PayrollRunStatus, OvertimeRateType, PayrollFlagType, PayrollFlagStatus, StaffAttendanceStatus, attendance_staff_daily, zk_attendance_scans } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
@@ -9,7 +9,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
 import { EmployeeExpectedTimesService } from '../../timetables/employee-expected-times.service';
 import { StorageService } from '../../../common/storage/storage.service';
-import { AttendanceMatrixQueryDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
+import { AttendanceMatrixQueryDto, GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 import { computePayrollWindow } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
@@ -119,7 +119,23 @@ interface ComputedLine {
   net_pay: Prisma.Decimal;
   after_leaving_deduction: Prisma.Decimal;
   full_pay_override: boolean;
+  eobi_waived: boolean;
+  sessi_waived: boolean;
+  income_tax_waived: boolean;
   daily_breakdown: DayBreakdownEntry[];
+}
+
+/** TAFSD-383: statutory items switched off for one line in one cycle. */
+export interface StatutoryWaivers {
+  eobi: boolean;
+  sessi: boolean;
+  income_tax: boolean;
+}
+
+const NO_WAIVERS: StatutoryWaivers = { eobi: false, sessi: false, income_tax: false };
+
+function waiversOf(line: { eobi_waived: boolean; sessi_waived: boolean; income_tax_waived: boolean }): StatutoryWaivers {
+  return { eobi: line.eobi_waived, sessi: line.sessi_waived, income_tax: line.income_tax_waived };
 }
 
 interface DetectedFlag {
@@ -251,6 +267,48 @@ export class PayrollService {
   // Fixed school payroll cycle — see payroll-period.util.ts
   private computePayrollWindow(year: number, month: number) {
     return computePayrollWindow(year, month);
+  }
+
+  /**
+   * TAFSD-271: lines on other real (non-test) runs whose dates overlap
+   * [periodStart, periodEnd] for any of these employees. An employee is paid
+   * for any given day by at most one run, so these block a new line. An
+   * excluded employee has no line, so excluding them frees the dates.
+   */
+  private findOverlappingLines(employeeIds: number[], periodStart: Date, periodEnd: Date, ignoreRunIds: number[] = []) {
+    if (employeeIds.length === 0) return Promise.resolve([]);
+    return this.prisma.payroll_run_lines.findMany({
+      where: {
+        employee_id: { in: employeeIds },
+        ...(ignoreRunIds.length ? { payroll_run_id: { notIn: ignoreRunIds } } : {}),
+        payroll_runs: { is_test: false, period_start: { lte: periodEnd }, period_end: { gte: periodStart } },
+      },
+      select: {
+        employee_id: true,
+        employee_profiles: { select: { full_name: true, employee_code: true } },
+        payroll_runs: { select: { id: true, period_start: true, period_end: true, kind: true, campuses: { select: { campus_name: true } } } },
+      },
+    });
+  }
+
+  private overlapMessage(conflicts: Awaited<ReturnType<PayrollService['findOverlappingLines']>>): string {
+    const shown = conflicts.slice(0, 10).map((c) => {
+      const who = c.employee_profiles.full_name ?? `Employee #${c.employee_id}`;
+      const code = c.employee_profiles.employee_code ? ` (${c.employee_profiles.employee_code})` : '';
+      const r = c.payroll_runs;
+      const kind = r.kind === PayrollRunKind.CUSTOM ? 'custom run' : 'payroll run';
+      return `${who}${code}: ${kind} #${r.id}, ${r.period_start.toISOString().slice(0, 10)} to ${r.period_end.toISOString().slice(0, 10)}, ${r.campuses.campus_name}`;
+    });
+    const more = conflicts.length > 10 ? `; and ${conflicts.length - 10} more` : '';
+    return (
+      `These employees are already on a payroll run with overlapping dates: ${shown.join('; ')}${more}. ` +
+      'Exclude them from that run first, or pick dates that do not overlap.'
+    );
+  }
+
+  private async assertNoOverlap(employeeIds: number[], periodStart: Date, periodEnd: Date, ignoreRunIds: number[]) {
+    const conflicts = await this.findOverlappingLines(employeeIds, periodStart, periodEnd, ignoreRunIds);
+    if (conflicts.length > 0) throw new BadRequestException(this.overlapMessage(conflicts));
   }
 
   // Payroll runs are campus-level entities with no segment/department/
@@ -395,6 +453,7 @@ export class PayrollService {
       timings?: Prisma.JsonValue | null;
       monthly_pay?: Prisma.Decimal | null;
     }[],
+    waivers: StatutoryWaivers = NO_WAIVERS,
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -774,9 +833,9 @@ export class PayrollService {
         eobi: eobiRule ? ((eobiRule.value_json ?? {}) as { employer_percent?: number; employee_percent?: number; wage_base_amount?: number }) : null,
         sessi: sessiRule ? ((sessiRule.value_json ?? {}) as { employer_percent?: number; wage_base_amount?: number }) : null,
       },
-      { eobi: eobiExempt, sessi: sessiExempt },
+      { eobi: eobiExempt || waivers.eobi, sessi: sessiExempt || waivers.sessi },
     );
-    const incomeTaxDeduction = incomeTaxValue.slabs
+    const incomeTaxDeduction = !waivers.income_tax && incomeTaxValue.slabs
       ? calculateMonthlyIncomeTax(monthlyPay.times(12).toNumber(), incomeTaxValue.slabs)
       : new Prisma.Decimal(0);
 
@@ -827,6 +886,9 @@ export class PayrollService {
       net_pay: netPay.toDecimalPlaces(2),
       after_leaving_deduction: afterLeavingDeduction.toDecimalPlaces(2),
       full_pay_override: fullPayOverride,
+      eobi_waived: waivers.eobi,
+      sessi_waived: waivers.sessi,
+      income_tax_waived: waivers.income_tax,
       daily_breakdown: dailyBreakdown,
     };
   }
@@ -1073,6 +1135,7 @@ export class PayrollService {
     periodStart: Date,
     periodEnd: Date,
     fullPayEmployeeIds: ReadonlySet<number> = new Set(),
+    waiversByEmployee: ReadonlyMap<number, StatutoryWaivers> = new Map(),
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
     const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows, allProgressionRows] = await Promise.all([
@@ -1173,6 +1236,7 @@ export class PayrollService {
           shiftOverridesByEmployee.get(employee.id),
           fullPayEmployeeIds.has(employee.id),
           progressionByEmployee.get(employee.id),
+          waiversByEmployee.get(employee.id),
         )),
       })),
     );
@@ -1206,7 +1270,13 @@ export class PayrollService {
    * called with a single-employee roster, and upserts (never delete+recreate)
    * so the line keeps its id.
    */
-  async regenerateLine(runId: number, employeeId: number, user: IJwtStaffPayload, fullPay?: boolean) {
+  async regenerateLine(
+    runId: number,
+    employeeId: number,
+    user: IJwtStaffPayload,
+    fullPay?: boolean,
+    waivers?: Partial<StatutoryWaivers>,
+  ) {
     await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
     if (!run || !this.canSeeRun(user, run.campus_id)) {
@@ -1218,12 +1288,13 @@ export class PayrollService {
 
     const existingLine = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { finalized_at: true, full_pay_override: true },
+      select: { finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
     });
     if (existingLine?.finalized_at) {
       throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
     }
     const fullPayFlag = fullPay ?? existingLine?.full_pay_override ?? false;
+    const lineWaivers: StatutoryWaivers = { ...(existingLine ? waiversOf(existingLine) : NO_WAIVERS), ...waivers };
 
     const excluded = await this.prisma.payroll_run_exclusions.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
@@ -1240,6 +1311,7 @@ export class PayrollService {
     if (!employee) {
       throw new BadRequestException("This employee is not on this run's campus, or has no monthly_pay set.");
     }
+    if (!run.is_test) await this.assertNoOverlap([employeeId], run.period_start, run.period_end, [runId]);
 
     const [{ employee_id, ...lineData }] = await this.computeEmployeeLinesForRange(
       [employee],
@@ -1247,6 +1319,7 @@ export class PayrollService {
       run.period_start,
       run.period_end,
       fullPayFlag ? new Set([employeeId]) : undefined,
+      new Map([[employeeId, lineWaivers]]),
     );
     const detected = this.detectFlagsForLine(lineData);
 
@@ -1293,6 +1366,39 @@ export class PayrollService {
     });
     return result;
   }
+  /**
+   * TAFSD-383: switch EOBI, SESSI and/or income tax off (or back on) for one
+   * employee in this cycle only. The employee's profile exemptions are not
+   * touched. Recomputes the line; a finalized line is locked.
+   */
+  async setStatutoryWaivers(runId: number, employeeId: number, waivers: Partial<StatutoryWaivers>, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
+    const before = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+    });
+    if (!before) throw new NotFoundException('This employee has no line on this payroll run.');
+    const result = await this.regenerateLine(runId, employeeId, user, undefined, waivers);
+
+    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const prev = waiversOf(before);
+    const changes = (Object.keys(labels) as (keyof StatutoryWaivers)[])
+      .filter((k) => waivers[k] !== undefined && waivers[k] !== prev[k])
+      .map((k) => `${labels[k]} ${waivers[k] ? 'waived' : 'applied again'}`);
+    if (changes.length > 0) {
+      void this.auditLogs.log({
+        entity_type: 'PAYROLL_RUN',
+        entity_id: String(runId),
+        action: 'LINE_STATUTORY_WAIVERS',
+        field: 'employee_id',
+        new_value: String(employeeId),
+        changed_by: auditActorLabel(user),
+        note: `${changes.join(', ')} for employee ${employeeId} on this payroll run only.`,
+      });
+    }
+    return result;
+  }
+
 
   /**
    * Finalizes (locks) exactly one employee's line, independent of the rest
@@ -1446,6 +1552,7 @@ export class PayrollService {
       await this.prisma.payroll_run_exclusions.delete({ where: { id: exclusion.id } });
       await this.recomputeRunStatus(runId);
     } else {
+      if (!run.is_test) await this.assertNoOverlap([employeeId], run.period_start, run.period_end, [runId]);
       const [{ employee_id, ...lineData }] = await this.computeEmployeeLinesForRange(
         [employee],
         run.campus_id,
@@ -1488,7 +1595,7 @@ export class PayrollService {
     // just those employees instead of every paid employee on the campus.
     const isTest = !!dto.employee_ids?.length;
 
-    const employees = isTest
+    const candidates = isTest
       ? await this.prisma.employee_profiles.findMany({
           where: { id: { in: dto.employee_ids }, campus_id: dto.campus_id, monthly_pay: { not: null } },
           select: this.employeeLineSelect,
@@ -1502,14 +1609,14 @@ export class PayrollService {
           },
           select: this.employeeLineSelect,
         });
-    if (employees.length === 0) {
+    if (candidates.length === 0) {
       throw new BadRequestException(
         isTest
           ? 'None of the selected employees belong to this campus with a monthly_pay set — nothing to calculate.'
           : 'No employees on this campus have a monthly_pay set yet — nothing to calculate.',
       );
     }
-    if (isTest && employees.length !== dto.employee_ids!.length) {
+    if (isTest && candidates.length !== dto.employee_ids!.length) {
       throw new BadRequestException(
         'One or more selected employees are not on this campus or have no monthly_pay set — a test run can only include valid, payable employees.',
       );
@@ -1517,14 +1624,34 @@ export class PayrollService {
 
     const existing = await this.prisma.payroll_runs.findUnique({
       where: {
-        campus_id_period_start_period_end_is_test: {
+        campus_id_period_start_period_end_is_test_kind: {
           campus_id: dto.campus_id,
           period_start: periodStart,
           period_end: periodEnd,
           is_test: isTest,
+          kind: PayrollRunKind.REGULAR,
         },
       },
     });
+
+    // TAFSD-271: a real run leaves out anyone already paid for these dates by
+    // another run (usually a custom run), so no day is ever paid twice.
+    let employees = candidates;
+    if (!isTest) {
+      const overlapping = await this.findOverlappingLines(
+        candidates.map((e) => e.id),
+        periodStart,
+        periodEnd,
+        existing ? [existing.id] : [],
+      );
+      const covered = new Set(overlapping.map((c) => c.employee_id));
+      employees = candidates.filter((e) => !covered.has(e.id));
+      if (employees.length === 0) {
+        throw new BadRequestException(
+          'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
+        );
+      }
+    }
     // Re-generating for the same period replaces it in place (recomputed from
     // current attendance data) rather than piling up duplicate drafts —
     // expected while real attendance data is still being backfilled. For a
@@ -1552,6 +1679,7 @@ export class PayrollService {
             notes: dto.notes,
             generated_by: user.sub,
             is_test: isTest,
+            kind: PayrollRunKind.REGULAR,
           },
         });
 
@@ -1562,10 +1690,24 @@ export class PayrollService {
       // the whole point of test mode is being able to repeat generate ->
       // finalize -> settle as many times as needed — so both cases wipe (if
       // anything exists) and recompute the entire given roster from scratch.
+      // A test-run regenerate still keeps each line's statutory waivers.
+      const keptWaivers = new Map<number, StatutoryWaivers>();
       if (existing) {
+        const old = await this.prisma.payroll_run_lines.findMany({
+          where: { payroll_run_id: run.id },
+          select: { employee_id: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+        });
+        old.forEach((l) => keptWaivers.set(l.employee_id, waiversOf(l)));
         await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
       }
-      const computedLines = await this.computeEmployeeLinesForRange(employees, dto.campus_id, periodStart, periodEnd);
+      const computedLines = await this.computeEmployeeLinesForRange(
+        employees,
+        dto.campus_id,
+        periodStart,
+        periodEnd,
+        undefined,
+        keptWaivers,
+      );
       await this.prisma.payroll_run_lines.createMany({
         data: computedLines.map((line) => ({ payroll_run_id: run.id, ...line })) as unknown as Prisma.payroll_run_linesCreateManyInput[],
       });
@@ -1575,41 +1717,8 @@ export class PayrollService {
       }
     } else {
       // "Regen All" on a real run: never touch an employee whose line is
-      // already finalized/settled, or who's been deliberately excluded (see
-      // excludeLine) — everyone else (including a newly eligible employee
-      // with no line here yet, e.g. a new hire) is upserted in place. Upsert
-      // keeps an existing line's id, so it never orphans a payroll_settlements
-      // row or reshuffles payroll_flags identity the way delete+recreate did.
-      const [existingLines, exclusions] = await Promise.all([
-        this.prisma.payroll_run_lines.findMany({
-          where: { payroll_run_id: run.id },
-          select: { employee_id: true, finalized_at: true, full_pay_override: true },
-        }),
-        this.prisma.payroll_run_exclusions.findMany({
-          where: { payroll_run_id: run.id },
-          select: { employee_id: true },
-        }),
-      ]);
-      const lockedIds = new Set(existingLines.filter((l) => l.finalized_at).map((l) => l.employee_id));
-      const excludedIds = new Set(exclusions.map((e) => e.employee_id));
-      // Regen keeps each open line's "pay full salary" choice.
-      const fullPayIds = new Set(existingLines.filter((l) => l.full_pay_override).map((l) => l.employee_id));
-      const toCompute = employees.filter((e) => !lockedIds.has(e.id) && !excludedIds.has(e.id));
-      touchedCount = toCompute.length;
-
-      if (toCompute.length > 0) {
-        const computedLines = await this.computeEmployeeLinesForRange(toCompute, dto.campus_id, periodStart, periodEnd, fullPayIds);
-        for (const { employee_id, ...lineData } of computedLines) {
-          await this.prisma.payroll_run_lines.upsert({
-            where: { payroll_run_id_employee_id: { payroll_run_id: run.id, employee_id } },
-            create: { payroll_run_id: run.id, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
-            update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
-          });
-          const detected = this.detectFlagsForLine(lineData);
-          await this.syncPayrollFlagsForEmployee(run.id, employee_id, detected, lineData.daily_rate);
-        }
-      }
-      await this.recomputeRunStatus(run.id);
+      // already finalized/settled, or who's been deliberately excluded.
+      touchedCount = (await this.upsertOpenLines(run.id, dto.campus_id, employees, periodStart, periodEnd)).touched;
     }
 
     void this.auditLogs.log({
@@ -1623,6 +1732,163 @@ export class PayrollService {
     });
 
     return this.getRun(run.id, user);
+  }
+
+  /**
+   * Recomputes lines in place on a real run: never touches an employee whose
+   * line is already finalized/settled, or who's been deliberately excluded
+   * (see excludeLine). Everyone else, including someone with no line here
+   * yet (e.g. a new hire), is upserted. Upsert keeps an existing line's id,
+   * so it never orphans a payroll_settlements row or reshuffles
+   * payroll_flags identity the way delete+recreate did.
+   */
+  private async upsertOpenLines(
+    runId: number,
+    campusId: number,
+    employees: EmployeeLineInput[],
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<{ touched: number; finalized: number; excluded: number }> {
+    const [existingLines, exclusions] = await Promise.all([
+      this.prisma.payroll_run_lines.findMany({
+        where: { payroll_run_id: runId },
+        select: { employee_id: true, finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+      }),
+      this.prisma.payroll_run_exclusions.findMany({
+        where: { payroll_run_id: runId },
+        select: { employee_id: true },
+      }),
+    ]);
+    const lockedIds = new Set(existingLines.filter((l) => l.finalized_at).map((l) => l.employee_id));
+    const excludedIds = new Set(exclusions.map((e) => e.employee_id));
+    // Regen keeps each open line's "pay full salary" choice.
+    const fullPayIds = new Set(existingLines.filter((l) => l.full_pay_override).map((l) => l.employee_id));
+    // ...and its per-cycle EOBI / SESSI / income tax waivers (TAFSD-383).
+    const waiversById = new Map(existingLines.map((l) => [l.employee_id, waiversOf(l)]));
+    const toCompute = employees.filter((e) => !lockedIds.has(e.id) && !excludedIds.has(e.id));
+
+    if (toCompute.length > 0) {
+      const computedLines = await this.computeEmployeeLinesForRange(
+        toCompute,
+        campusId,
+        periodStart,
+        periodEnd,
+        fullPayIds,
+        waiversById,
+      );
+      for (const { employee_id, ...lineData } of computedLines) {
+        await this.prisma.payroll_run_lines.upsert({
+          where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id } },
+          create: { payroll_run_id: runId, employee_id, ...lineData } as unknown as Prisma.payroll_run_linesCreateInput,
+          update: lineData as unknown as Prisma.payroll_run_linesUpdateInput,
+        });
+        const detected = this.detectFlagsForLine(lineData);
+        await this.syncPayrollFlagsForEmployee(runId, employee_id, detected, lineData.daily_rate);
+      }
+    }
+    await this.recomputeRunStatus(runId);
+    return {
+      touched: toCompute.length,
+      finalized: employees.filter((e) => lockedIds.has(e.id)).length,
+      excluded: employees.filter((e) => excludedIds.has(e.id)).length,
+    };
+  }
+
+  /**
+   * TAFSD-271: a custom run pays hand-picked employees over any date range,
+   * treated as one salary month (see GenerateCustomPayrollRunDto). Employees
+   * on several campuses get one run per campus, since a run's calendar
+   * (holidays, Saturdays) is per campus. Re-generating the same campus and
+   * dates adds to or recomputes that run in place, like "Regen All".
+   */
+  async generateCustomRun(dto: GenerateCustomPayrollRunDto, user: IJwtStaffPayload) {
+    const periodStart = new Date(`${dto.period_start.slice(0, 10)}T00:00:00.000Z`);
+    const periodEnd = new Date(`${dto.period_end.slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime()) || periodStart > periodEnd) {
+      throw new BadRequestException('Pick a valid date range: the start date must be on or before the end date.');
+    }
+    const days = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 86_400_000) + 1;
+    if (days > MAX_MATRIX_DAYS) {
+      throw new BadRequestException(`A custom payroll run can cover at most ${MAX_MATRIX_DAYS} days.`);
+    }
+
+    const ids = [...new Set(dto.employee_ids)];
+    const employees = await this.prisma.employee_profiles.findMany({
+      where: {
+        AND: [this.scope.whereForEmployees(user)],
+        id: { in: ids },
+        monthly_pay: { not: null },
+        campus_id: { not: null },
+        OR: cycleRosterStatusWhere(periodStart),
+      },
+      select: { ...this.employeeLineSelect, campus_id: true },
+    });
+    if (employees.length !== ids.length) {
+      const found = new Set(employees.map((e) => e.id));
+      const missing = await this.prisma.employee_profiles.findMany({
+        where: { id: { in: ids.filter((id) => !found.has(id)) } },
+        select: { id: true, full_name: true, employee_code: true },
+        take: 10,
+      });
+      const names = missing.map((m) => `${m.full_name ?? `Employee #${m.id}`}${m.employee_code ? ` (${m.employee_code})` : ''}`);
+      throw new BadRequestException(
+        `These employees can't be paid for these dates: ${names.join(', ')}${ids.length - employees.length > 10 ? ', and more' : ''}. ` +
+          'They may be outside your access, have no campus or monthly pay set, or have left before the start date.',
+      );
+    }
+    for (const e of employees) await assertMayChangeEmployee(this.prisma, user, e.id, 'payroll line');
+
+    const byCampus = new Map<number, typeof employees>();
+    for (const e of employees) {
+      const campusId = e.campus_id!;
+      this.assertCampusAccess(user, campusId);
+      byCampus.set(campusId, [...(byCampus.get(campusId) ?? []), e]);
+    }
+
+    const sameWindowRuns = await this.prisma.payroll_runs.findMany({
+      where: {
+        campus_id: { in: [...byCampus.keys()] },
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_test: false,
+        kind: PayrollRunKind.CUSTOM,
+      },
+    });
+    await this.assertNoOverlap(ids, periodStart, periodEnd, sameWindowRuns.map((r) => r.id));
+
+    const results: { run_id: number; campus_id: number; touched: number; finalized: number; excluded: number }[] = [];
+    for (const [campusId, group] of byCampus) {
+      const existing = sameWindowRuns.find((r) => r.campus_id === campusId);
+      const run = existing
+        ? await this.prisma.payroll_runs.update({
+            where: { id: existing.id },
+            data: { ...(dto.notes ? { notes: dto.notes } : {}), generated_by: user.sub, generated_at: new Date() },
+          })
+        : await this.prisma.payroll_runs.create({
+            data: {
+              campus_id: campusId,
+              period_start: periodStart,
+              period_end: periodEnd,
+              notes: dto.notes,
+              generated_by: user.sub,
+              kind: PayrollRunKind.CUSTOM,
+            },
+          });
+      const counts = await this.upsertOpenLines(run.id, campusId, group, periodStart, periodEnd);
+      results.push({ run_id: run.id, campus_id: campusId, ...counts });
+
+      void this.auditLogs.log({
+        entity_type: 'PAYROLL_RUN',
+        entity_id: String(run.id),
+        action: existing ? 'UPDATED' : 'CREATED',
+        field: 'status',
+        new_value: 'DRAFT_CUSTOM',
+        changed_by: auditActorLabel(user),
+        note: `${existing ? 'Regenerated' : 'Generated'} custom payroll run for campus ${campusId}, ${dto.period_start.slice(0, 10)} to ${dto.period_end.slice(0, 10)} (${counts.touched} of ${group.length} employee(s) touched).`,
+      });
+    }
+
+    return { period_start: dto.period_start.slice(0, 10), period_end: dto.period_end.slice(0, 10), runs: results };
   }
 
   /**

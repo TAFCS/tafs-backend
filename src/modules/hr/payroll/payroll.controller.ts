@@ -11,8 +11,8 @@ import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
-import { GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
+import { DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SetStatutoryWaiversDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -35,6 +35,15 @@ export class PayrollController {
   async generate(@Body() dto: GeneratePayrollRunDto, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.generateRun(dto, user);
     return createApiResponse(data, HttpStatus.CREATED, 'Payroll run generated successfully');
+  }
+
+  // TAFSD-271: hand-picked employees over any date range (one run per campus).
+  @Post('custom')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#generate')
+  async generateCustom(@Body() dto: GenerateCustomPayrollRunDto, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.generateCustomRun(dto, user);
+    return createApiResponse(data, HttpStatus.CREATED, 'Custom payroll run generated successfully');
   }
 
   @Get(':id')
@@ -147,6 +156,19 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.setFullPayOverride(runId, employeeId, dto.enabled, user);
     return createApiResponse(data, HttpStatus.OK, dto.enabled ? 'Employee set to full salary' : 'Full salary override removed');
+  }
+
+  @Post(':runId/lines/:employeeId/statutory-waivers')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
+  async setStatutoryWaivers(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: SetStatutoryWaiversDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.setStatutoryWaivers(runId, employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Statutory deductions updated for this cycle');
   }
 
   @Post(':runId/lines/:employeeId/include')
