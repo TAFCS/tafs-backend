@@ -21,8 +21,9 @@ export class PermanentEmployeeScheduler {
    * truth (TAFSD-275) and is_permanent_employee — read by leave policy — moves
    * with it.
    *
-   * Promote-only: nobody is ever made non-permanent here. CONTRACTUAL staff
-   * are never touched, and LEFT / TERMINATED staff are not touched.
+   * Promote-only: nobody permanent is ever made non-permanent here. Staff
+   * with no subtype who haven't served their period yet become NON_PERMANENT
+   * (TAFSD-376). CONTRACTUAL and LEFT / TERMINATED staff are never touched.
    */
   @Cron('0 1 * * *')
   async markPermanentEmployees(now: Date = new Date()) {
@@ -64,8 +65,18 @@ export class PermanentEmployeeScheduler {
       total += result.count;
     }
 
+    // TAFSD-376: anyone still unclassified hasn't served their period yet
+    // (the promotions above took everyone who has), so they are NON_PERMANENT.
+    const classified = await this.prisma.employee_profiles.updateMany({
+      where: { employment_status: EmployeeStatus.ACTIVE, employment_subtype: null },
+      data: { employment_subtype: EmploymentSubtype.NON_PERMANENT, is_permanent_employee: false },
+    });
+
     if (total > 0) {
       this.logger.log(`Marked ${total} employees as permanent`);
+    }
+    if (classified.count > 0) {
+      this.logger.log(`Marked ${classified.count} unclassified employees as non-permanent`);
     }
     return total;
   }

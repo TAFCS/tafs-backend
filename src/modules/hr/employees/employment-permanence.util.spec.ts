@@ -85,7 +85,8 @@ describe('PermanentEmployeeScheduler (TAFSD-321)', () => {
     const findMany = jest.fn().mockResolvedValue(departments);
     const scheduler = new PermanentEmployeeScheduler({ employee_profiles: { updateMany }, departments: { findMany } } as any);
     const count = await scheduler.markPermanentEmployees(new Date('2026-10-14T10:00:00Z'));
-    return { count, calls: updateMany.mock.calls.map((c) => c[0]) };
+    const calls = updateMany.mock.calls.map((c) => c[0]);
+    return { count, calls: calls.slice(0, -1), classify: calls[calls.length - 1] };
   };
 
   it('one update per period: 12 months for Academics + Support, 14 for Administration and no department', async () => {
@@ -106,5 +107,13 @@ describe('PermanentEmployeeScheduler (TAFSD-321)', () => {
       expect(eligible).toContainEqual({ employment_subtype: 'NON_PERMANENT' });
       expect(JSON.stringify(eligible)).not.toContain('CONTRACTUAL');
     }
+  });
+
+  it('then marks anyone still unclassified NON_PERMANENT (TAFSD-376)', async () => {
+    const { classify } = await run();
+    expect(classify).toEqual({
+      where: { employment_status: 'ACTIVE', employment_subtype: null },
+      data: { employment_subtype: 'NON_PERMANENT', is_permanent_employee: false },
+    });
   });
 });
