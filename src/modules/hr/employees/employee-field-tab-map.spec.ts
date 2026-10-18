@@ -14,7 +14,7 @@ import { EMPLOYEE_DIRECTORY_ACTIONS_FOR_TEST } from '../../access/tiles.manifest
  */
 const DTO_FIELDS = [
   'portal_account', 'user_id', 'cnic', 'join_date', 'employment_type',
-  'employment_status', 'department_id', 'reporting_manager_id', 'employee_code',
+  'employment_status', 'employment_subtype', 'department_id', 'reporting_manager_id', 'employee_code',
   'employee_code_dep', 'employee_code_number', 'full_name', 'father_name',
   'mother_name', 'date_of_birth', 'address', 'personal_phone',
   'secondary_phone', 'personal_email', 'job_title', 'staff_category_id',
