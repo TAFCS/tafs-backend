@@ -286,6 +286,23 @@ export class CreateEmployeeDto {
   @ValidateNested({ each: true })
   @Type(() => PreviousEmployerDto)
   previous_employers?: PreviousEmployerDto[];
+
+  /**
+   * TAFSD-377: a custom working-day pattern and per-weekday timings, saved
+   * with the new employee so the ONBOARDED period carries them. Create only;
+   * an existing employee changes these through their own endpoints.
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkScheduleDayDto)
+  work_schedule?: WorkScheduleDayDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DayTimingDto)
+  day_timings?: DayTimingDto[];
 }
 
 export class UpdateEmployeeDto extends CreateEmployeeDto { }
@@ -1256,6 +1273,8 @@ export class EmployeesService {
       tileGrants,
       payroll_enabled,
       previous_employers,
+      work_schedule,
+      day_timings,
       ...rest
     } = dto;
 
@@ -1270,6 +1289,9 @@ export class EmployeesService {
       ...rest,
       campusPrefix: await this.resolveCampusPrefix(rest.campus_id ?? null),
     });
+    const scheduleDays = work_schedule?.length ? this.normaliseWorkSchedule(work_schedule) : [];
+    const ownDayTimings =
+      day_timings?.length && effectiveCheckInSource === CheckInSource.FIXED ? this.normaliseDayTimings(day_timings) : [];
 
     if (codeFields.employee_code) {
       await this.assertCodeAvailable(codeFields.employee_code);
@@ -1370,6 +1392,16 @@ export class EmployeesService {
                     employed_to: e.employed_to?.trim() || null,
                     reason_for_leaving: e.reason_for_leaving?.trim() || null,
                   })),
+              }
+              : undefined,
+            employee_work_schedules: scheduleDays.length ? { create: scheduleDays } : undefined,
+            employee_day_timings: ownDayTimings.length
+              ? {
+                create: ownDayTimings.map((d) => ({
+                  day_of_week: d.day_of_week,
+                  reporting_time: d.reporting_time ? parseHhmm(d.reporting_time) : null,
+                  leaving_time: d.leaving_time ? parseHhmm(d.leaving_time) : null,
+                })),
               }
               : undefined,
           },
@@ -1553,6 +1585,8 @@ export class EmployeesService {
       tileGrants: _tileGrants,
       portal_account,
       previous_employers: _ignoredEmployers,
+      work_schedule: _ignoredSchedule,
+      day_timings: _ignoredDayTimings,
       ...rest
     } = dto;
     if (_ignoredStatus !== undefined) {
@@ -2417,6 +2451,22 @@ export class EmployeesService {
       updated++;
     }
     return { updated };
+  }
+
+  /** TAFSD-377: one row per weekday, 0 (Sunday) to 6 (Saturday). */
+  private normaliseWorkSchedule(days: WorkScheduleDayDto[]) {
+    const seen = new Set<number>();
+    for (const d of days) {
+      if (d.day_of_week < 0 || d.day_of_week > 6) {
+        throw new BadRequestException('day_of_week must be between 0 (Sunday) and 6 (Saturday)');
+      }
+      if (seen.has(d.day_of_week)) throw new BadRequestException(`${WEEKDAY_SHORT[d.day_of_week]} is listed twice`);
+      seen.add(d.day_of_week);
+    }
+    if (!days.some((d) => d.is_working ?? true)) throw new BadRequestException('Pick at least one working day');
+    return days
+      .map((d) => ({ day_of_week: d.day_of_week, is_working: d.is_working ?? true }))
+      .sort((a, b) => a.day_of_week - b.day_of_week);
   }
 
   private normaliseDayTimings(days: DayTimingDto[]) {
