@@ -1675,12 +1675,16 @@ model payroll_runs {
   finalized_at           DateTime?                @db.Timestamp(6)
   notes                  String?                  @db.VarChar(500)
   is_test                Boolean                  @default(false)
+  /// TAFSD-271: REGULAR is the campus-wide 26th -> 25th cycle; CUSTOM covers
+  /// hand-picked employees over any date range. An employee is never on two
+  /// non-test runs whose dates overlap.
+  kind                   PayrollRunKind           @default(REGULAR)
   payroll_flags          payroll_flags[]
   payroll_run_exclusions payroll_run_exclusions[]
   payroll_run_lines      payroll_run_lines[]
   campuses               campuses                 @relation(fields: [campus_id], references: [id], onDelete: Cascade)
 
-  @@unique([campus_id, period_start, period_end, is_test])
+  @@unique([campus_id, period_start, period_end, is_test, kind])
 }
 
 /// *
@@ -1755,6 +1759,11 @@ model payroll_run_lines {
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
   after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
   full_pay_override             Boolean                                  @default(false)
+  // TAFSD-383: waived for this line (this cycle) only, on top of the
+  // profile's eobi_exempt / sessi_exempt. Kept across regenerate.
+  eobi_waived                   Boolean                                  @default(false)
+  sessi_waived                  Boolean                                  @default(false)
+  income_tax_waived             Boolean                                  @default(false)
   loan_transactions             employee_loan_transactions[]
   security_deposit_transactions employee_security_deposit_transactions[]
   disbursed_by_user             users?                                   @relation("PayrollLineDisbursedBy", fields: [disbursed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -2820,6 +2829,11 @@ enum LeaveRequestStatus {
 enum PayrollRunStatus {
   DRAFT
   FINALIZED
+}
+
+enum PayrollRunKind {
+  REGULAR
+  CUSTOM
 }
 
 enum OvertimeRateType {
