@@ -1309,7 +1309,8 @@ export class EmployeesService {
             join_date: rest.join_date ? new Date(rest.join_date) : null,
             employment_type: rest.employment_type || null,
             employment_status: status,
-            ...permanenceFields(status, rest.employment_subtype),
+            // TAFSD-376: a new joiner left unclassified starts NON_PERMANENT.
+            ...permanenceFields(status, rest.employment_subtype ?? EmploymentSubtype.NON_PERMANENT),
             department_id: rest.department_id || null,
             reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
