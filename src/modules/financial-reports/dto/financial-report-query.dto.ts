@@ -314,7 +314,7 @@ export class StudentScopeFilterQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(200)
+  @Max(5000)
   limit?: number = 50;
 }
 

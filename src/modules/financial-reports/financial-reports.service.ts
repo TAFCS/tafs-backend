@@ -1774,7 +1774,7 @@ export class FinancialReportsService {
     const minMonthsBehind = query.min_months_behind ?? 1;
     const maxMonthsBehind = query.max_months_behind;
     const page = query.page ?? 1;
-    const limit = Math.min(query.limit ?? 50, options.maxLimit ?? 200);
+    const limit = Math.min(query.limit ?? 50, options.maxLimit ?? 5000);
 
     const asOf = this.parseYearMonthOfDate(asOfDate);
     const columns = view === 'students' ? this.stripMonthColumns(asOf, stripMonths) : [];
