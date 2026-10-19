@@ -313,10 +313,11 @@ export interface SlcCertificateData {
 /**
  * An em-dash is what the API hands back for "we have no value". On a printed
  * certificate that reads as a typo, so it prints as an empty blank instead.
+ * All text fields printed on the leaving certificate are strictly uppercase.
  */
 const clean = (value: unknown): string => {
   const s = value == null ? '' : String(value).trim();
-  return s === '—' || s === '-' || s === 'N/A' ? '' : s;
+  return s === '—' || s === '-' || s === 'N/A' ? '' : s.toUpperCase();
 };
 
 const resolveTemplatePath = (file: string): string => {
