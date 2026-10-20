@@ -17,6 +17,7 @@ import {
   money,
   nextScheduledAmount,
   parseInstallmentSchedule,
+  restoreScheduleBeforeCollection,
   scheduleAsNumbers,
   scheduleJson,
 } from '../installment-schedule.util';
@@ -582,6 +583,50 @@ export class SecurityDepositsService {
     // Later cycles' drafts were snapshotted before this one collected (or
     // fell short); refresh them so they show the real next installment.
     await this.recapOpenDraftLines(plan.employee_id, tx);
+  }
+
+  /**
+   * TAFSD-394: undo commitLineDeduction when a payroll line is un-finalized.
+   * Removes the line's DEDUCTION row and takes the amount back off the plan.
+   * Refuses if anything was posted to the plan after it — a later cycle,
+   * refund or forfeit read the balance this deduction left behind.
+   */
+  async reverseLineDeduction(lineId: number, tx: Tx = this.prisma): Promise<void> {
+    const rows = await tx.employee_security_deposit_transactions.findMany({
+      where: { payroll_run_line_id: lineId, type: SecurityDepositTransactionType.DEDUCTION },
+    });
+    for (const row of rows) {
+      const plan = await tx.employee_security_deposits.findUniqueOrThrow({ where: { id: row.deposit_id } });
+      await this.lockEmployeePlans(plan.employee_id, tx);
+      const newer = await tx.employee_security_deposits.count({ where: { employee_id: plan.employee_id, id: { gt: plan.id } } });
+      if (newer > 0) {
+        throw new BadRequestException('This line cannot be un-finalized: a newer security deposit plan was opened for this employee after this installment.');
+      }
+      const later = await tx.employee_security_deposit_transactions.count({ where: { deposit_id: row.deposit_id, id: { gt: row.id } } });
+      if (later > 0) {
+        throw new BadRequestException(
+          'This line cannot be un-finalized: its security deposit installment has later entries on the plan (a later payroll, refund or forfeit). Undo those first.',
+        );
+      }
+      const recovered = Prisma.Decimal.max(ZERO, money(plan.recovered_amount).minus(row.amount));
+      const schedule = restoreScheduleBeforeCollection(
+        scheduleAsNumbers(plan.installment_schedule, money(plan.installment_amount)),
+        money(row.due_amount),
+        money(plan.total_amount).minus(recovered),
+      );
+      await tx.employee_security_deposit_transactions.delete({ where: { id: row.id } });
+      await tx.employee_security_deposits.update({
+        where: { id: plan.id },
+        data: {
+          recovered_amount: recovered,
+          carried_forward_amount: ZERO,
+          status: this.nextStatus(plan.total_amount, recovered, plan.refunded_amount, plan.forfeited_amount),
+          installment_schedule: scheduleJson(schedule),
+          installment_count: schedule.length,
+          installment_amount: money(schedule[0] ?? 0),
+        },
+      });
+    }
   }
 
   private async recapOpenDraftLines(employeeId: number, tx: Tx): Promise<void> {

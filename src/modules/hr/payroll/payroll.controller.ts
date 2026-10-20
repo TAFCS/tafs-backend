@@ -75,6 +75,14 @@ export class PayrollController {
     return createApiResponse(data, HttpStatus.OK, 'Payroll run finalized successfully');
   }
 
+  @Post(':id/unfinalize')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#unfinalize')
+  async unfinalize(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.unfinalizeRun(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll run un-finalized successfully');
+  }
+
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
   @RequireAction('hr.payroll#delete')
@@ -130,6 +138,18 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.finalizeLine(runId, employeeId, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll line finalized successfully');
+  }
+
+  @Post(':runId/lines/:employeeId/unfinalize')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#unfinalize')
+  async unfinalizeLine(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.unfinalizeLine(runId, employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll line un-finalized successfully');
   }
 
   @Post(':runId/lines/:employeeId/exclude')

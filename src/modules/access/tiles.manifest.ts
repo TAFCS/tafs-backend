@@ -267,6 +267,7 @@ const PAYROLL_ACTIONS: TileAction[] = [
   { id: 'generate', label: 'Generate a run', implies: ['view'] },
   { id: 'line_manage', label: 'Regenerate, exclude, include, or settle a line', implies: ['view'] },
   { id: 'finalize', label: 'Finalize a run or a line', implies: ['view'] },
+  { id: 'unfinalize', label: 'Un-finalize a run or a line', description: 'Back to pending, reversing loan and security deposit postings', implies: ['view'] },
   { id: 'disburse', label: 'Disburse salaries', description: 'Single line or the whole run', implies: ['view'] },
   { id: 'flag_review', label: 'Review a payroll flag', implies: ['view'] },
   { id: 'delete', label: 'Delete a run', implies: ['view'] },

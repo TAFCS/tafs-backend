@@ -1475,6 +1475,68 @@ export class PayrollService {
   }
 
   /**
+   * TAFSD-394: un-finalize — the reverse of finalizeLine. Takes back the
+   * line's loan and security deposit postings and returns it to pending, so
+   * it can be regenerated, excluded, or the whole run deleted. A disbursed /
+   * settled line has been paid and stays locked.
+   */
+  async unfinalizeLine(runId: number, employeeId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
+    const line = await this.prisma.payroll_run_lines.findUnique({
+      where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+      select: { id: true, employee_id: true, finalized_at: true, disbursed_at: true },
+    });
+    if (!line) throw new NotFoundException(`Payroll line for employee ${employeeId} not found on run ${runId}`);
+    if (!line.finalized_at) {
+      throw new BadRequestException("This employee's payroll line is not finalized.");
+    }
+    if (line.disbursed_at) {
+      throw new BadRequestException(
+        `This employee's salary was already paid out on ${line.disbursed_at.toISOString().slice(0, 10)}, so the line cannot be un-finalized.`,
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.unfinalizeLineTx(line, tx);
+      await this.recomputeRunStatus(runId, tx);
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_UNFINALIZED',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Un-finalized payroll line for employee ${employeeId}; loan and security deposit postings reversed.`,
+    });
+
+    return this.getRun(runId, user);
+  }
+
+  private async unfinalizeLineTx(line: { id: number; employee_id: number }, tx: Prisma.TransactionClient) {
+    await this.securityDeposits.reverseLineDeduction(line.id, tx);
+    await this.employeeLoans.reverseLineDeduction(line.id, tx);
+    await tx.payroll_run_lines.update({
+      where: { id: line.id },
+      data: { finalized_at: null, finalized_by: null },
+    });
+    // Re-snapshot this line and the employee's other open lines against the
+    // restored plans, as commitLineDeduction's recap does going forward.
+    const open = await tx.payroll_run_lines.findMany({
+      where: { employee_id: line.employee_id, finalized_at: null },
+      select: { payroll_run_id: true },
+    });
+    for (const o of open) {
+      await this.applyDiscretionaryDeductionsToLine(o.payroll_run_id, line.employee_id, tx);
+    }
+  }
+
+  /**
    * Removes one employee from a still-pending payroll cycle — e.g. their
    * attendance wasn't reliably tracked this period, so their numbers
    * shouldn't be computed (or paid) yet. Deletes their line (and any flags,
@@ -2413,6 +2475,57 @@ export class PayrollService {
 
     const updatedRun = await this.getRun(id, user);
     return { ...updatedRun, finalize_summary: { finalized: finalizedNow.length, skipped } };
+  }
+
+  /**
+   * TAFSD-394: "Un-finalize All" — the reverse of finalizeRun. Returns every
+   * finalized, not-yet-paid line to pending (see unfinalizeLine), so the run
+   * reads DRAFT again and can be edited or deleted. A paid line, or one whose
+   * postings can't be taken back, is skipped with a reason.
+   */
+  async unfinalizeRun(id: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
+    const lines = await this.prisma.payroll_run_lines.findMany({
+      where: { payroll_run_id: id, finalized_at: { not: null } },
+      select: { id: true, employee_id: true, disbursed_at: true },
+    });
+    if (lines.length === 0) {
+      throw new BadRequestException('No line on this payroll run is finalized.');
+    }
+
+    const undone: number[] = [];
+    const skipped: { employee_id: number; reason: string }[] = [];
+    for (const line of lines) {
+      if (line.disbursed_at) {
+        skipped.push({ employee_id: line.employee_id, reason: `already paid out on ${line.disbursed_at.toISOString().slice(0, 10)}` });
+        continue;
+      }
+      try {
+        await this.prisma.$transaction((tx) => this.unfinalizeLineTx(line, tx));
+        undone.push(line.employee_id);
+      } catch (err) {
+        if (!(err instanceof BadRequestException)) throw err;
+        skipped.push({ employee_id: line.employee_id, reason: err.message });
+      }
+    }
+
+    await this.recomputeRunStatus(id);
+
+    const campus = await this.prisma.campuses.findUnique({ where: { id: run.campus_id }, select: { campus_name: true } });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'UNFINALIZE_ALL',
+      changed_by: auditActorLabel(user),
+      note: `${campus?.campus_name ?? `Campus #${run.campus_id}`}, period ${periodLabel}: ${undone.length} employee line(s) un-finalized, ${skipped.length} skipped.`,
+    });
+
+    const updatedRun = await this.getRun(id, user);
+    return { ...updatedRun, unfinalize_summary: { unfinalized: undone.length, skipped } };
   }
 
   async deleteRun(id: number, user: IJwtStaffPayload) {
