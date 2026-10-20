@@ -434,7 +434,18 @@ export class BulkVoucherJobsService {
 
         try {
             // Students are processed concurrently; one student's own months are NOT.
-            const STUDENT_BATCH_SIZE = 10;
+            // Each student can hold two connections at once (its transaction plus
+            // a lookup outside it), and two are left for the rest of the app.
+            // Running more students than the pool fits timed out 753 of 1049
+            // items in job #159 (pool of 5, batch of 10).
+            const connectionLimit = Number(this.prisma.connectionLimit) || 5;
+            const STUDENT_BATCH_SIZE = Math.max(
+                1,
+                Math.min(10, Math.floor((connectionLimit - 2) / 2)),
+            );
+            this.logger.log(
+                `[Job #${jobId}] Processing ${STUDENT_BATCH_SIZE} students at a time (connection_limit=${connectionLimit}).`,
+            );
 
 
             const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);

@@ -10,9 +10,15 @@ function getOptimizedDatabaseUrl(): { url: string; connectionLimit: number } | u
   try {
     const url = new URL(raw);
     const existing = url.searchParams.get('connection_limit');
-    // Respect an explicit limit (scripts use 1–3). Only default when unset —
-    // never raise a low value to 10 (that exhausted DO max_connections).
-    if (!existing) {
+    // DB_CONNECTION_LIMIT lets a deploy size the pool without editing the
+    // DATABASE_URL secret. Size it against the PgBouncer pool, not the raw
+    // DB max_connections.
+    const override = Number(process.env.DB_CONNECTION_LIMIT);
+    if (Number.isInteger(override) && override > 0) {
+      url.searchParams.set('connection_limit', String(override));
+    } else if (!existing) {
+      // Respect an explicit limit (scripts use 1–3). Only default when unset —
+      // never raise a low value to 10 (that exhausted DO max_connections).
       url.searchParams.set('connection_limit', String(DEFAULT_CONNECTION_LIMIT));
     }
     const connectionLimit = Number(url.searchParams.get('connection_limit'));
@@ -37,7 +43,8 @@ export class PrismaService
   extends PrismaClient
   implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
-  private readonly connectionLimit: number;
+  /** Size of this client's connection pool; batch jobs size their concurrency from it. */
+  readonly connectionLimit: number;
 
   constructor() {
     const optimized = getOptimizedDatabaseUrl();
