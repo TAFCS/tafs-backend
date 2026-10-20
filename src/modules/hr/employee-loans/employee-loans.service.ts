@@ -20,6 +20,7 @@ import {
   nextScheduledAmount,
   scheduleAsNumbers,
   scheduleJson,
+  restoreScheduleBeforeCollection,
   shiftScheduleAfterCollection,
 } from '../installment-schedule.util';
 import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
@@ -530,6 +531,50 @@ export class EmployeeLoansService {
         installment_amount: shifted.installment_amount,
       },
     });
+  }
+
+  /**
+   * TAFSD-394: undo commitLineDeduction when a payroll line is un-finalized.
+   * Removes the line's DEDUCTION row and puts the amount back on the loan.
+   * Refuses if anything was posted to the loan after it — a later cycle,
+   * lump sum or write-off read the balance this deduction left behind.
+   */
+  async reverseLineDeduction(lineId: number, tx: Tx = this.prisma): Promise<void> {
+    const rows = await tx.employee_loan_transactions.findMany({
+      where: { payroll_run_line_id: lineId, type: LoanTransactionType.DEDUCTION },
+    });
+    for (const row of rows) {
+      const later = await tx.employee_loan_transactions.count({ where: { loan_id: row.loan_id, id: { gt: row.id } } });
+      if (later > 0) {
+        throw new BadRequestException(
+          'This line cannot be un-finalized: its loan installment has later entries on the loan (a later payroll, lump sum or write-off). Undo those first.',
+        );
+      }
+      const loan = await tx.employee_loans.findUniqueOrThrow({ where: { id: row.loan_id } });
+      const newer = await tx.employee_loans.count({ where: { employee_id: loan.employee_id, id: { gt: loan.id } } });
+      if (newer > 0) {
+        throw new BadRequestException('This line cannot be un-finalized: a newer loan was opened for this employee after this installment.');
+      }
+      const recovered = Prisma.Decimal.max(ZERO, money(loan.recovered_amount).minus(row.amount));
+      const restored = { ...loan, recovered_amount: recovered };
+      const schedule = restoreScheduleBeforeCollection(
+        scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
+        money(row.due_amount),
+        this.outstandingBalance(restored),
+      );
+      await tx.employee_loan_transactions.delete({ where: { id: row.id } });
+      await tx.employee_loans.update({
+        where: { id: loan.id },
+        data: {
+          recovered_amount: recovered,
+          carried_forward_amount: ZERO,
+          status: this.nextStatus(loan.total_amount, loan.amount_repaid_opening, recovered, loan.lump_sum_repaid_amount, loan.written_off_amount),
+          installment_schedule: scheduleJson(schedule),
+          installment_count: schedule.length,
+          installment_amount: money(schedule[0] ?? 0),
+        },
+      });
+    }
   }
 
   /**

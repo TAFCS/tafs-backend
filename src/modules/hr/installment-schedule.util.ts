@@ -131,3 +131,33 @@ export function buildCreateSchedule(total: Prisma.Decimal, count: number, explic
   }
   return schedule;
 }
+
+/**
+ * TAFSD-394: the schedule as it stood before a payroll collection, when that
+ * collection is reversed (a payroll line is un-finalized). The pre-collection
+ * split between installment and carry isn't stored, so carry folds into the
+ * first slot: the next cycle owes `due` again, and the schedule adds up to
+ * `remainingBefore`. Use with carried_forward_amount = 0.
+ */
+export function restoreScheduleBeforeCollection(
+  current: number[],
+  due: Prisma.Decimal,
+  remainingBefore: Prisma.Decimal,
+): number[] {
+  const remaining = money(remainingBefore);
+  if (remaining.lte(0)) return [];
+  const first = Prisma.Decimal.min(money(due), remaining);
+  if (first.lte(0)) return [Number(remaining.toFixed(2))];
+  const tailTarget = remaining.minus(first);
+  if (tailTarget.lte(0)) return [Number(first.toFixed(2))];
+  const tail = current.map((n) => money(n));
+  const tailSum = tail.reduce((s, n) => s.plus(n), ZERO);
+  if (tail.length > 0) {
+    const last = tail[tail.length - 1].plus(tailTarget.minus(tailSum));
+    if (last.gte(0)) {
+      tail[tail.length - 1] = last;
+      return [first, ...tail].map((n) => Number(n.toFixed(2)));
+    }
+  }
+  return [Number(first.toFixed(2)), Number(tailTarget.toFixed(2))];
+}
