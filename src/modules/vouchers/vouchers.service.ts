@@ -6501,6 +6501,103 @@ export class VouchersService {
     // ─── Arrears ─────────────────────────────────────────────────────────────
 
     /**
+     * Pure, synchronous version of computeArrears.
+     *
+     * Accepts rows that were already fetched from `student_fees` (including the
+     * `fee_types` relation) and filters/groups them to produce the same shape as
+     * `computeArrears`. Used by the bulk-voucher pipeline which prefetches all
+     * candidate rows in one query instead of one query per student.
+     *
+     * The caller must supply only rows where:
+     *   - student_id === the target student
+     *   - fee_date < targetFeeDate
+     *   - status NOT IN (PAID, DISCOUNT, WAIVED)
+     *   - is_arrear_surcharge = false  AND  is_discount = false
+     *
+     * Those filters mirror the WHERE clause in computeArrears so results are
+     * identical. create() re-derives authoritatively inside its own transaction —
+     * this is only used to build orderedFeeIds / fee_lines for the outer call.
+     */
+    static deriveArrearsFromPrefetchedRows(
+        rows: Array<{
+            id: number;
+            fee_date: Date | null;
+            amount: any;
+            amount_before_discount: any;
+            amount_paid: any;
+            academic_year: string | null;
+            target_month: number | null;
+            fee_types: { description: string } | null;
+        }>,
+        waiveSurcharge: boolean,
+    ) {
+        const out: any[] = [];
+        let totalArrearsCount = new Prisma.Decimal(0);
+        const arrearFeeIds: number[] = [];
+        const distinctGroups = new Map<string, { date: Date; target_month: number; academic_year: string }>();
+
+        for (const fee of rows) {
+            const amount = new Prisma.Decimal(fee.amount ?? fee.amount_before_discount ?? 0);
+            const paid = new Prisma.Decimal(fee.amount_paid ?? 0);
+            const outstanding = amount.sub(paid);
+            if (outstanding.lte(0)) continue;
+
+            totalArrearsCount = totalArrearsCount.add(outstanding);
+            arrearFeeIds.push(fee.id);
+
+            const dateStr = fee.fee_date ? fee.fee_date.toISOString().split('T')[0] : 'undated';
+            const groupKey = `${fee.academic_year}_${fee.target_month}`;
+            if (fee.academic_year && fee.target_month != null && !distinctGroups.has(groupKey)) {
+                distinctGroups.set(groupKey, {
+                    date: fee.fee_date!,
+                    target_month: fee.target_month,
+                    academic_year: fee.academic_year,
+                });
+            }
+
+            out.push({
+                student_fee_id: fee.id,
+                fee_type: fee.fee_types?.description ?? 'Unknown',
+                fee_date: dateStr,
+                amount: amount.toFixed(2),
+                amount_paid: paid.toFixed(2),
+                outstanding: outstanding.toFixed(2),
+                target_month: fee.target_month,
+                academic_year: fee.academic_year,
+                isSurcharge: false,
+            });
+        }
+
+        const surchargeGroups = Array.from(distinctGroups.values());
+        const totalSurchargeValue = new Prisma.Decimal(surchargeGroups.length * 1000);
+
+        if (!waiveSurcharge) {
+            for (const group of surchargeGroups) {
+                out.push({
+                    student_fee_id: -1,
+                    fee_type: 'Late Payment Surcharge',
+                    fee_date: group.date.toISOString().split('T')[0],
+                    amount: '1000.00',
+                    amount_paid: '0.00',
+                    outstanding: '1000.00',
+                    target_month: group.target_month,
+                    academic_year: group.academic_year,
+                    isSurcharge: true,
+                });
+            }
+        }
+
+        return {
+            total_arrears: Number(totalArrearsCount.toFixed(2)),
+            total_surcharge: Number(totalSurchargeValue.toFixed(2)),
+            arrear_fee_ids: arrearFeeIds,
+            surcharge_fee_ids: [] as number[],
+            surcharge_groups: surchargeGroups,
+            rows: out,
+        };
+    }
+
+    /**
      * Compute all unpaid / partially-paid student_fees rows whose fee_date is
      * strictly before targetFeeDate. Returns one virtual surcharge row per distinct
      * arrear month for display. No student_fees rows are written — surcharges are

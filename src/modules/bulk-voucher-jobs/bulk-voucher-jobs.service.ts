@@ -6,8 +6,10 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { BulkJobStatus } from '@prisma/client';
+import { PDFDocument } from 'pdf-lib';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { VoucherNotificationService } from '../vouchers/voucher-notification.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
@@ -18,6 +20,18 @@ import { getMonthlyFeeDates } from './utils/bulk-date.utils';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+
+// ─── Timing helpers ──────────────────────────────────────────────────────────
+
+function nsToMs(ns: bigint): number {
+    return Number(ns / 1_000_000n);
+}
+
+function percentile(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0;
+    const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+    return sorted[idx];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -48,6 +62,7 @@ export class BulkVoucherJobsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly vouchersService: VouchersService,
+        private readonly voucherNotification: VoucherNotificationService,
         private readonly voucherPdfService: VoucherPdfService,
         private readonly storage: StorageService,
         private readonly bulkLogic: BulkVoucherLogicService,
@@ -432,6 +447,17 @@ export class BulkVoucherJobsService {
         let failCountTotal = 0;
         let skipCountTotal = 0;
 
+        // Per-step timing collectors (ms) — filled by processWorkItem.
+        const timings = {
+            arrears: [] as number[],
+            create: [] as number[],
+            total: [] as number[],
+        };
+
+        // Phase B: survivor voucher IDs (one per student) and notification queue.
+        const survivorVoucherIds: number[] = [];
+        const notifQueue: number[] = [];
+
         try {
             // Students are processed concurrently; one student's own months are NOT.
             // Each student can hold two connections at once (its transaction plus
@@ -443,8 +469,14 @@ export class BulkVoucherJobsService {
                 1,
                 Math.min(10, Math.floor((connectionLimit - 2) / 2)),
             );
+            // Phase B PDF concurrency: saturate the Piscina pool (2 threads by
+            // default) without stacking CPU pressure on top of Phase A.
+            const PDF_CONCURRENCY = Math.max(
+                1,
+                Number(process.env.BULK_PDF_CONCURRENCY) || 2,
+            );
             this.logger.log(
-                `[Job #${jobId}] Processing ${STUDENT_BATCH_SIZE} students at a time (connection_limit=${connectionLimit}).`,
+                `[Job #${jobId}] Processing ${STUDENT_BATCH_SIZE} students at a time (connection_limit=${connectionLimit}). PDF_CONCURRENCY=${PDF_CONCURRENCY}.`,
             );
 
 
@@ -495,7 +527,41 @@ export class BulkVoucherJobsService {
                 `[Job #${jobId}] ${workItems.length} items to process, ${skipCountTotal} skipped upfront.`,
             );
 
-            // ── PHASE 3: PER-STUDENT SEQUENTIAL ISSUANCE ─────────────────────────
+            // ── PHASE A PREFETCH: one arrear query for all students ───────────────
+            // Each processWorkItem previously called computeArrears(cc, feeDate)
+            // which hits student_fees once per student per batch. With ~900 students
+            // that is ~900 extra round trips. We fetch all candidate rows in one
+            // query, group by student_id, and derive per-student arrears in-memory.
+            // create() re-derives authoritatively inside its own transaction — this
+            // only feeds orderedFeeIds / fee_lines for the outer call.
+            const allStudentIds = [...new Set(workItems.map((w) => w.cc))];
+            const allArrearRows = allStudentIds.length > 0
+                ? await this.prisma.student_fees.findMany({
+                    where: {
+                        student_id: { in: allStudentIds },
+                        fee_date: { lt: new Date(dto.fee_date_from) },
+                        status: { notIn: ['PAID', 'DISCOUNT', 'WAIVED'] as any[] },
+                        is_arrear_surcharge: false,
+                        is_discount: false,
+                    },
+                    include: { fee_types: true },
+                    orderBy: { fee_date: 'asc' },
+                })
+                : [];
+
+            const arrearsByStudent = new Map<number, typeof allArrearRows>();
+            for (const row of allArrearRows) {
+                if (!arrearsByStudent.has(row.student_id)) arrearsByStudent.set(row.student_id, []);
+                arrearsByStudent.get(row.student_id)!.push(row);
+            }
+            this.logger.log(
+                `[Job #${jobId}] Prefetched ${allArrearRows.length} arrear rows for ${allStudentIds.length} students.`,
+            );
+
+            // ── PHASE A: DB-ONLY ISSUANCE ─────────────────────────────────────────
+            // PDF rendering is deliberately excluded here. Phase A runs at full DB
+            // concurrency (STUDENT_BATCH_SIZE). Phase B renders at PDF_CONCURRENCY.
+            //
             // A student's months MUST be issued one at a time, ascending by fee
             // date, so fee-date supersession collapses each month into the next —
             // exactly as it would if an operator issued them singly. Issuing a
@@ -512,8 +578,6 @@ export class BulkVoucherJobsService {
             // order, so each student's list is already ascending by fee_date.
             const studentGroups = [...itemsByStudent.values()];
 
-            const pdfBuffers: Buffer[] = [];
-
             for (let i = 0; i < studentGroups.length; i += STUDENT_BATCH_SIZE) {
                 const groupChunk = studentGroups.slice(i, i + STUDENT_BATCH_SIZE);
 
@@ -522,14 +586,20 @@ export class BulkVoucherJobsService {
                         const perItem: Array<{
                             workItem: any;
                             outcome: 'SUCCESS' | 'SKIPPED' | 'FAILED';
-                            value?: { buffer: Buffer; url: string; voucher_id: number };
+                            value?: { voucher_id: number };
                             error?: string;
                         }> = [];
 
                         for (const workItem of studentItems) {
                             try {
                                 const value = await this.processWorkItem(
-                                    workItem, dto, createdBy, generatedByName, auditParentId, jobId,
+                                    workItem,
+                                    dto,
+                                    createdBy,
+                                    arrearsByStudent.get(workItem.cc) ?? [],
+                                    auditParentId,
+                                    jobId,
+                                    timings,
                                 );
                                 perItem.push({ workItem, outcome: 'SUCCESS', value });
                             } catch (err) {
@@ -566,13 +636,15 @@ export class BulkVoucherJobsService {
                     for (const r of perItem) {
                         const { workItem } = r;
                         if (r.outcome === 'SUCCESS' && r === survivor) {
-                            pdfBuffers.push(r.value!.buffer);
+                            survivorVoucherIds.push(r.value!.voucher_id);
+                            if (dto.send_notification !== false && !dto.hold_for_release) {
+                                notifQueue.push(r.value!.voucher_id);
+                            }
                             chunkSuccess++;
                             successCount++;
                             jobReport.push({
                                 cc: workItem.cc,
                                 student_name: workItem.student.full_name,
-                                pdf_url: r.value!.url,
                                 voucher_id: r.value!.voucher_id,
                                 status: 'SUCCESS',
                                 ...(successes.length > 1
@@ -626,20 +698,111 @@ export class BulkVoucherJobsService {
                 });
 
                 this.logger.log(
-                    `[Job #${jobId}] Student batch ${Math.floor(i / STUDENT_BATCH_SIZE) + 1}/${Math.ceil(studentGroups.length / STUDENT_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped/folded`,
+                    `[Job #${jobId}] Phase A batch ${Math.floor(i / STUDENT_BATCH_SIZE) + 1}/${Math.ceil(studentGroups.length / STUDENT_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped/folded`,
                 );
             }
 
-            // ── PHASE 4: MERGE & FINALIZE ─────────────────────────────────────────
+            // ── TIMING SUMMARY ────────────────────────────────────────────────────
+            if (timings.total.length > 0) {
+                const sortedArrears = [...timings.arrears].sort((a, b) => a - b);
+                const sortedCreate  = [...timings.create].sort((a, b) => a - b);
+                const sortedTotal   = [...timings.total].sort((a, b) => a - b);
+                this.logger.log(
+                    `[Job #${jobId}] Phase A timing (${timings.total.length} items): ` +
+                    `arrears p50/p95=${percentile(sortedArrears, 0.5)}/${percentile(sortedArrears, 0.95)}ms ` +
+                    `create p50/p95=${percentile(sortedCreate, 0.5)}/${percentile(sortedCreate, 0.95)}ms ` +
+                    `total p50/p95=${percentile(sortedTotal, 0.5)}/${percentile(sortedTotal, 0.95)}ms`,
+                );
+            }
+
+            // ── PHASE B: NOTIFICATIONS ────────────────────────────────────────────
+            // Notifications were suppressed inside create() (send_notification=false)
+            // and are sent here in batches so they do not block Phase A or Phase B
+            // PDF rendering. Errors are non-fatal — the voucher is already committed.
+            if (notifQueue.length > 0) {
+                const NOTIF_BATCH = 20;
+                this.logger.log(`[Job #${jobId}] Sending ${notifQueue.length} notifications in batches of ${NOTIF_BATCH}.`);
+                for (let i = 0; i < notifQueue.length; i += NOTIF_BATCH) {
+                    await Promise.all(
+                        notifQueue.slice(i, i + NOTIF_BATCH).map((voucherId) =>
+                            this.voucherNotification
+                                .sendVoucherIssuedNotification(voucherId)
+                                .catch((e: Error) =>
+                                    this.logger.warn(
+                                        `[Job #${jobId}] Notification failed for voucher ${voucherId}: ${e.message}`,
+                                    ),
+                                ),
+                        ),
+                    );
+                }
+            }
+
+            // ── PHASE B: PDF RENDER + INCREMENTAL MERGE ──────────────────────────
+            // Buffers are appended into one PDFDocument as they arrive — never held
+            // all at once — so peak heap is ~PDF_CONCURRENCY × one voucher PDF, not
+            // N × one voucher PDF as in the old pdfBuffers[] approach.
             let mergedPdfUrl: string | null = null;
-            if (pdfBuffers.length > 0) {
+            if (survivorVoucherIds.length > 0) {
                 try {
-                    this.logger.log(`[Job #${jobId}] Merging ${pdfBuffers.length} PDFs...`);
-                    const mergedBuffer = await this.voucherPdfService.mergePdfs(pdfBuffers);
-                    const mergedKey = `bulk-vouchers/job-${jobId}-${Date.now()}.pdf`;
-                    mergedPdfUrl = await this.storage.upload(mergedKey, mergedBuffer);
+                    this.logger.log(
+                        `[Job #${jobId}] Phase B: rendering and merging ${survivorVoucherIds.length} PDFs (concurrency=${PDF_CONCURRENCY}).`,
+                    );
+                    const mergedPdf = await PDFDocument.create();
+                    const pdfTimings: number[] = [];
+
+                    for (let i = 0; i < survivorVoucherIds.length; i += PDF_CONCURRENCY) {
+                        const slice = survivorVoucherIds.slice(i, i + PDF_CONCURRENCY);
+                        const results = await Promise.all(
+                            slice.map(async (voucherId) => {
+                                const t0 = process.hrtime.bigint();
+                                try {
+                                    const r = await this.vouchersService.generatePdfBuffer(
+                                        voucherId,
+                                        false,
+                                        generatedByName,
+                                    );
+                                    pdfTimings.push(nsToMs(process.hrtime.bigint() - t0));
+                                    // Back-fill pdf_url into the job report for this voucher.
+                                    const entry = jobReport.find(
+                                        (e: any) => e.voucher_id === voucherId && e.status === 'SUCCESS',
+                                    );
+                                    if (entry) entry.pdf_url = r.url;
+                                    return r.buffer;
+                                } catch (pdfErr) {
+                                    this.logger.error(
+                                        `[Job #${jobId}] PDF render failed for voucher ${voucherId}: ${(pdfErr as Error).message}`,
+                                    );
+                                    return null;
+                                }
+                            }),
+                        );
+
+                        for (const buf of results) {
+                            if (!buf) continue;
+                            const doc = await PDFDocument.load(buf);
+                            const pages = await mergedPdf.copyPages(doc, doc.getPageIndices());
+                            pages.forEach((p) => mergedPdf.addPage(p));
+                            // buf released here — not kept for the whole run
+                        }
+                    }
+
+                    if (pdfTimings.length > 0) {
+                        const sortedPdf = [...pdfTimings].sort((a, b) => a - b);
+                        this.logger.log(
+                            `[Job #${jobId}] Phase B PDF timing (${pdfTimings.length} items): ` +
+                            `p50/p95=${percentile(sortedPdf, 0.5)}/${percentile(sortedPdf, 0.95)}ms`,
+                        );
+                    }
+
+                    if (mergedPdf.getPageCount() > 0) {
+                        const mergedKey = `bulk-vouchers/job-${jobId}-${Date.now()}.pdf`;
+                        mergedPdfUrl = await this.storage.upload(
+                            mergedKey,
+                            Buffer.from(await mergedPdf.save()),
+                        );
+                    }
                 } catch (mergeErr) {
-                    this.logger.error(`[Job #${jobId}] PDF Merging failed: ${(mergeErr as Error).message}`);
+                    this.logger.error(`[Job #${jobId}] Phase B merge failed: ${(mergeErr as Error).message}`);
                 }
             }
 
@@ -719,23 +882,48 @@ export class BulkVoucherJobsService {
         }
     }
 
-    // ── Per-item worker ─────────────────────────────────────────────────────
+    // ── Per-item worker (Phase A — DB only) ──────────────────────────────────
+    //
+    // PDF rendering has been moved to Phase B so Phase A can run at full DB
+    // concurrency. Notifications are also deferred — they are sent in bulk after
+    // Phase A by processJob.
 
     private async processWorkItem(
         item: { cc: number; dateStr: string; fees: any[]; student: any; academicYear: string; splitFromPartiallyPaid?: boolean },
         dto: StartBulkJobDto,
         createdBy: string,
-        generatedByName?: string,
+        prefetchedArrearRows: Array<{
+            id: number;
+            fee_date: Date | null;
+            amount: any;
+            amount_before_discount: any;
+            amount_paid: any;
+            academic_year: string | null;
+            target_month: number | null;
+            fee_types: { description: string } | null;
+            student_id: number;
+            is_arrear_surcharge: boolean;
+            is_discount: boolean;
+        }>,
         auditParentId?: number | null,
         jobId?: number,
-    ): Promise<{ buffer: Buffer; url: string; voucher_id: number }> {
+        timings?: { arrears: number[]; create: number[]; total: number[] },
+    ): Promise<{ voucher_id: number }> {
         const { cc, dateStr, fees: feesForThisVoucher, student } = item;
+        const feeDate = new Date(dateStr);
+        const t0 = process.hrtime.bigint();
 
-        const arrearsResult = await this.vouchersService.computeArrears(
-            cc,
-            new Date(dateStr),
+        // Derive arrears in-memory from the prefetched rows instead of hitting DB.
+        // Only rows strictly before this fee_date qualify — mirror computeArrears WHERE.
+        const eligibleRows = prefetchedArrearRows.filter(
+            (r) => r.fee_date !== null && r.fee_date < feeDate,
+        );
+        const arrearsResult = VouchersService.deriveArrearsFromPrefetchedRows(
+            eligibleRows,
             dto.waive_surcharge ?? false,
         );
+        const tArrears = process.hrtime.bigint();
+
         const arrearFeeIds = arrearsResult.arrear_fee_ids ?? [];
         const arrearFeeLines = (arrearsResult.rows ?? [])
             .filter((r) => !r.isSurcharge)
@@ -767,7 +955,9 @@ export class BulkVoucherJobsService {
             // Only stamp a waiver author when a waiver is actually being applied —
             // otherwise a charged bulk voucher looks "waived by <operator>" in audit.
             waived_by: (dto.waive_surcharge ?? false) ? createdBy : undefined,
-            send_notification: dto.send_notification ?? true,
+            // Notification is deferred to Phase B bulk send — suppress the per-item
+            // in-transaction push so it does not serialize on the hot path.
+            send_notification: false,
             requires_release: dto.hold_for_release ?? false,
             academic_year: item.academicYear,
             month: Number(dateStr.slice(5, 7)),
@@ -781,7 +971,24 @@ export class BulkVoucherJobsService {
             fee_lines: [...arrearFeeLines, ...currentFeeLines],
         }, undefined, createdBy, auditParentId, jobId);
 
-        const pdfResult = await this.vouchersService.generatePdfBuffer(voucher.id, false, generatedByName);
-        return { ...pdfResult, voucher_id: voucher.id };
+        const tCreate = process.hrtime.bigint();
+
+        if (timings) {
+            const arrearsMs = nsToMs(tArrears - t0);
+            const createMs  = nsToMs(tCreate - tArrears);
+            const totalMs   = nsToMs(tCreate - t0);
+            timings.arrears.push(arrearsMs);
+            timings.create.push(createMs);
+            timings.total.push(totalMs);
+            // Verbose per-item line: useful for spotting outliers, suppress in prod
+            // by setting LOG_BULK_ITEM_TIMING=false.
+            if (process.env.LOG_BULK_ITEM_TIMING !== 'false') {
+                this.logger.debug(
+                    `[Job #${jobId ?? '?'}] item cc=${cc} date=${dateStr} arrears=${arrearsMs}ms create=${createMs}ms total=${totalMs}ms`,
+                );
+            }
+        }
+
+        return { voucher_id: voucher.id };
     }
 }
