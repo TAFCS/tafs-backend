@@ -108,6 +108,8 @@ export class ClassTimingNotificationService {
     startTime: Date;
     endTime: Date | null;
     effectiveFrom: Date;
+    /** TAFSD-385: last day of temporary timings. */
+    effectiveTo?: Date | null;
   }): Promise<{ title: string; body: string }> {
     const vars: Record<string, string> = {
       class_name: input.className,
@@ -115,6 +117,7 @@ export class ClassTimingNotificationService {
       start_time: formatTimeForParent(input.startTime),
       end_time: input.endTime ? formatTimeForParent(input.endTime) : '—',
       effective_from: formatDatePKT(input.effectiveFrom),
+      effective_to: input.effectiveTo ? formatDatePKT(input.effectiveTo) : '',
     };
 
     const title = await resolveTemplate(
@@ -123,14 +126,24 @@ export class ClassTimingNotificationService {
       'School Timings Updated',
       vars,
     );
-    const body = await resolveTemplate(
+    const temporary = !!input.effectiveTo;
+    let body = await resolveTemplate(
       this.prisma,
       'notif_class_timings_body',
-      input.endTime
-        ? '{class_name} at {campus_name} will run from {start_time} to {end_time}, effective {effective_from}.'
-        : '{class_name} at {campus_name} will start at {start_time}, effective {effective_from}.',
+      temporary
+        ? input.endTime
+          ? '{class_name} at {campus_name} will run from {start_time} to {end_time}, from {effective_from} to {effective_to}. Normal timings resume after that.'
+          : '{class_name} at {campus_name} will start at {start_time}, from {effective_from} to {effective_to}. Normal timings resume after that.'
+        : input.endTime
+          ? '{class_name} at {campus_name} will run from {start_time} to {end_time}, effective {effective_from}.'
+          : '{class_name} at {campus_name} will start at {start_time}, effective {effective_from}.',
       vars,
     );
+    // A school-edited template may not mention the end date; parents still
+    // need to know these timings are temporary.
+    if (temporary && !body.includes(vars.effective_to)) {
+      body = `${body} These timings apply until ${vars.effective_to}; normal timings resume after that.`;
+    }
     return { title, body };
   }
 
@@ -147,6 +160,7 @@ export class ClassTimingNotificationService {
     startTime: Date;
     endTime: Date | null;
     effectiveFrom: Date;
+    effectiveTo?: Date | null;
     createdBy?: string | null;
   }): Promise<ClassTimingNotificationReport> {
     const report = emptyClassTimingReport();
@@ -198,6 +212,7 @@ export class ClassTimingNotificationService {
       startTime: input.startTime,
       endTime: input.endTime,
       effectiveFrom: input.effectiveFrom,
+      effectiveTo: input.effectiveTo ?? null,
     });
 
     // Recorded before the pushes go out, so the row exists even if delivery
@@ -228,6 +243,7 @@ export class ClassTimingNotificationService {
           campus_id: String(input.campusId),
           class_id: String(input.classId),
           effective_from: input.effectiveFrom.toISOString().slice(0, 10),
+          ...(input.effectiveTo ? { effective_to: input.effectiveTo.toISOString().slice(0, 10) } : {}),
           // Start and end only — the intermediate time is internal.
           start_time: formatScheduleTime(input.startTime)!,
           ...(input.endTime ? { end_time: formatScheduleTime(input.endTime)! } : {}),

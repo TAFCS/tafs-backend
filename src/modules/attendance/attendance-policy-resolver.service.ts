@@ -39,8 +39,29 @@ export type ScheduleRow = {
   end_time?: Date | null;
   intermediate_time?: Date | null;
   effective_from: Date;
+  /** TAFSD-385: last day of a temporary timing; null = open-ended. */
+  effective_to?: Date | null;
   class_check_in_schedule_days?: ScheduleDayRow[];
 };
+
+/**
+ * TAFSD-385: a schedule row covers `date` once it has started and, for a
+ * temporary timing, until its last day. When a temporary row ends, the
+ * "newest row in effect" lookup falls through to the row before it, so the
+ * normal timings come back on their own — no job has to undo anything.
+ */
+export function scheduleCoversDate(row: { effective_from: Date; effective_to?: Date | null }, date: Date): boolean {
+  if (row.effective_from > date) return false;
+  if (!row.effective_to) return true;
+  const day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  return row.effective_to.getTime() >= day;
+}
+
+/** Prisma filter: open-ended, or a temporary row whose last day is on/after `date`. */
+export function scheduleNotEndedWhere(date: Date) {
+  const day = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  return { OR: [{ effective_to: null }, { effective_to: { gte: day } }] };
+}
 
 /**
  * Apply the weekday override for `date`, if the pairing has one.
@@ -223,7 +244,7 @@ export class AttendancePolicyResolverService {
   ): StudentCheckInPolicy {
     if (classId != null && campusId != null) {
       const schedule = schedules
-        .filter((s) => s.class_id === classId && s.campus_id === campusId && s.effective_from <= date)
+        .filter((s) => s.class_id === classId && s.campus_id === campusId && scheduleCoversDate(s, date))
         .sort((a, b) => b.effective_from.getTime() - a.effective_from.getTime())[0];
       if (schedule) {
         return applyDayOverride(schedule, date);
@@ -259,6 +280,7 @@ export class AttendancePolicyResolverService {
           class_id: classId,
           campus_id: campusId,
           effective_from: { lte: date },
+          ...scheduleNotEndedWhere(date),
         },
         orderBy: { effective_from: 'desc' },
         include: SCHEDULE_WITH_DAYS_INCLUDE,
