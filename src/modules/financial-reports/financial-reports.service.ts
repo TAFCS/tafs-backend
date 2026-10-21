@@ -135,6 +135,23 @@ type StudentMonthReportOptions = {
   emptyMessage: string;
   emptySheetName: string;
 };
+/** One campus x class x fee date line of the By fee date export (TAFSD-341). */
+type FeeDateClassRow = {
+  campus: string;
+  class_id: number | null;
+  class_name: string;
+  fee_date: string | null;
+  head_count: number;
+  discount_count: number;
+  billed: number;
+  discount: number;
+  amount: number;
+  amount_paid: number;
+  waived: number;
+  outstanding: number;
+  /** Billed per fee head name (before discount). */
+  heads: Map<string, number>;
+};
 /** students.status -> the STATUS column on the defaulters sheet. */
 const DEFAULTER_STATUS_LABELS: Record<string, string> = {
   ENROLLED: 'Enrolled',
@@ -943,12 +960,9 @@ export class FinancialReportsService {
   private async listFeeHeadsByFeeDate(
     query: ListFeeHeadsQueryDto,
     user: IJwtStaffPayload,
-    /** Narrows to part of the scope (the export's one-campus sheets); ANDed, never widens it. */
-    narrowStudents?: Prisma.studentsWhereInput,
   ) {
     const leaf = this.feeHeadsLeafWhere(query);
-    const scoped = this.buildStudentWhere(query, user);
-    const studentWhere: Prisma.studentsWhereInput = narrowStudents ? { AND: [scoped, narrowStudents] } : scoped;
+    const studentWhere = this.buildStudentWhere(query, user);
     const where: Prisma.student_feesWhereInput = {
       ...leaf,
       students: studentWhere,
@@ -1415,55 +1429,201 @@ export class FinancialReportsService {
     const all = { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 };
     const result = await this.listFeeHeadsByFeeDate(all, user);
     this.assertExportCap(result.items.length);
-    // TAFSD-341: one sheet per campus, as on the defaulters sheet. Each campus is
-    // the same rollup narrowed to its students; students with no campus get
-    // their own sheet, so the sheets always add back up to the whole.
-    const leaf = this.feeHeadsLeafWhere(query);
-    const campusGroups = await this.prisma.students.groupBy({
-      by: ['campus_id'],
-      where: { ...this.buildStudentWhere(query, user), student_fees: { some: leaf } },
-    });
-    const campusIds = campusGroups.map((g) => g.campus_id).filter((id): id is number => id != null);
-    const campusNames = new Map(
-      (await this.prisma.campuses.findMany({ where: { id: { in: campusIds } }, select: { id: true, campus_name: true } }))
-        .map((c) => [c.id, c.campus_name]),
-    );
-    const perCampus = await Promise.all(
-      campusGroups.map(async (g) => ({
-        campus: g.campus_id == null ? 'Unassigned' : campusNames.get(g.campus_id) ?? `Campus #${g.campus_id}`,
-        items: (await this.listFeeHeadsByFeeDate(all, user, { campus_id: g.campus_id })).items,
-      })),
-    );
+    const { rows, heads } = await this.loadFeeDateClassRows(query, user);
+
+    // TAFSD-341, in the defaulters format: one sheet per campus; within it the
+    // classes in level order, each a heading, its fee dates, a SUBTOTAL and a
+    // blank row; billed split into one column per fee head under BILLED.
+    const headKey = (name: string) => `head:${name}`;
+    const headColumns = (names: string[]): SchoolSheetColumn[] => [
+      ...names.map((name) => ({ header: name, key: headKey(name), width: 12, group: 'Billed', total: true, money: true })),
+      { header: 'Total', key: 'billed', width: 13, group: 'Billed', total: true, money: true },
+    ];
+    const tail: SchoolSheetColumn[] = [
+      { header: 'Discounts', key: 'discount_count', width: 11, total: true },
+      { header: 'Discount', key: 'discount', width: 13, total: true, money: true },
+      { header: 'Net amount', key: 'amount', width: 14, total: true, money: true },
+      { header: 'Amount paid', key: 'amount_paid', width: 14, total: true, money: true },
+      { header: 'Waived', key: 'waived', width: 12, total: true, money: true },
+      { header: 'Outstanding', key: 'outstanding', width: 14, total: true, money: true },
+    ];
+    const lead: SchoolSheetColumn[] = [
+      { header: 'Fee date', key: 'fee_date', width: 13 },
+      { header: 'Heads', key: 'head_count', width: 9, total: true },
+    ];
+    const flat = (r: FeeDateClassRow) => {
+      const out: Record<string, string | number> = {
+        campus: r.campus,
+        class_name: r.class_name,
+        fee_date: r.fee_date ?? 'No fee date',
+        head_count: r.head_count,
+        billed: r.billed,
+        discount_count: r.discount_count,
+        discount: r.discount,
+        amount: r.amount,
+        amount_paid: r.amount_paid,
+        waived: r.waived,
+        outstanding: r.outstanding,
+      };
+      for (const [name, amount] of r.heads) out[headKey(name)] = amount;
+      return out;
+    };
+
+    const byCampus = new Map<string, FeeDateClassRow[]>();
+    for (const r of rows) {
+      if (!byCampus.has(r.campus)) byCampus.set(r.campus, []);
+      byCampus.get(r.campus)!.push(r);
+    }
+    const sheets: SchoolSheet[] = [...byCampus.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([campus, campusRows]) => {
+        const present = new Set(campusRows.flatMap((r) => [...r.heads.keys()]));
+        const groups = new Map<string, { label: string; rows: Array<Record<string, string | number>> }>();
+        for (const r of campusRows) {
+          const key = `${r.class_id ?? 'none'}`;
+          if (!groups.has(key)) groups.set(key, { label: r.class_id == null ? 'NO CLASS' : `CLASS ${r.class_name}`.toUpperCase(), rows: [] });
+          groups.get(key)!.rows.push(flat(r));
+        }
+        const groupList = [...groups.values()];
+        return {
+          tab: campus,
+          campus: campusLine(campus),
+          columns: [...lead, ...headColumns(heads.filter((h) => present.has(h))), ...tail],
+          groups: groupList,
+          rows: groupList.flatMap((g) => g.rows),
+          rowNoun: ['FEE DATE', 'FEE DATES'] as [string, string],
+        };
+      });
+
+    // CSV (and the column list behind it): one flat line per campus, class and fee date.
     const columns: ExportColumn[] = [
       { header: 'Campus', key: 'campus', width: 24 },
-      { header: 'Fee date', key: 'fee_date', width: 14 },
-      { header: 'Heads', key: 'head_count', width: 10 },
-      { header: 'Billed', key: 'billed', width: 14 },
-      { header: 'Discounts', key: 'discount_count', width: 11 },
-      { header: 'Discount', key: 'discount', width: 14 },
-      { header: 'Net amount', key: 'amount', width: 14 },
-      { header: 'Amount paid', key: 'amount_paid', width: 14 },
-      { header: 'Waived', key: 'waived', width: 14 },
-      { header: 'Outstanding', key: 'outstanding', width: 14 },
-    ];
-    const data = perCampus.flatMap(({ campus, items }) =>
-      items.map((item) => ({
-        campus,
-        ...item,
-        fee_date: item.fee_date ?? 'No fee date',
+      { header: 'Class', key: 'class_name', width: 14 },
+      ...[...lead, ...headColumns(heads), ...tail].map((c) => ({
+        header: c.group ? `${c.group} ${c.header}` : c.header,
+        key: c.key,
+        width: c.width,
       })),
-    );
+    ];
     return this.buildSchoolExportFile(
       'Fee Heads by Fee Date',
       'FEE HEADS REPORT — BY FEE DATE',
       `fee-heads-by-fee-date-${query.from_date}-to-${query.to_date}`,
       columns,
-      data,
+      rows.map(flat),
       query,
       this.feeHeadsFilterWords(query),
       user,
+      sheets,
     );
   }
+
+  /**
+   * The By fee date rollup one level down (TAFSD-341): one row per campus,
+   * class and fee date, with billed split by fee head. Same money rules as
+   * listFeeHeadsByFeeDate — billed is heads before discount, discount its own
+   * negative column, paid is cash only (netPaid), waived netted out of
+   * outstanding — so the rows add back up to that rollup.
+   */
+  private async loadFeeDateClassRows(
+    query: ListFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<{ rows: FeeDateClassRow[]; heads: string[] }> {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const [students, groups, feeTypes] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { ...studentWhere, student_fees: { some: leaf } },
+        select: {
+          cc: true,
+          class_id: true,
+          classes: { select: { description: true } },
+          campuses: { select: { campus_name: true } },
+        },
+      }),
+      this.prisma.student_fees.groupBy({
+        by: ['student_id', 'fee_date', 'fee_type_id', 'is_discount', 'status'],
+        where: { ...leaf, students: studentWhere },
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.prisma.fee_types.findMany({ select: { id: true, description: true, priority_order: true } }),
+    ]);
+    const studentOf = new Map(students.map((st) => [st.cc, st]));
+    const feeTypeName = new Map(feeTypes.map((ft) => [ft.id, ft.description.trim() || 'OTHER']));
+    // Head columns in the fee types' own priority order, then name.
+    const rank = new Map(
+      [...feeTypes]
+        .sort((a, b) => (a.priority_order ?? 1e9) - (b.priority_order ?? 1e9) || a.id - b.id)
+        .map((ft, i) => [ft.description.trim() || 'OTHER', i]),
+    );
+
+    type Acc = FeeDateClassRow & { headsPaid: number; discountConsumed: number };
+    const acc = new Map<string, Acc>();
+    for (const g of groups) {
+      const st = studentOf.get(g.student_id);
+      const campus = st?.campuses?.campus_name?.trim() || 'Unassigned';
+      const classId = st?.class_id ?? null;
+      const feeDate = this.formatDateOnly(g.fee_date);
+      const key = `${campus}|${classId ?? ''}|${feeDate ?? ''}`;
+      let row = acc.get(key);
+      if (!row) {
+        row = {
+          campus,
+          class_id: classId,
+          class_name: st?.classes?.description?.trim() || 'No class',
+          fee_date: feeDate,
+          head_count: 0,
+          discount_count: 0,
+          billed: 0,
+          discount: 0,
+          amount: 0,
+          amount_paid: 0,
+          waived: 0,
+          outstanding: 0,
+          heads: new Map(),
+          headsPaid: 0,
+          discountConsumed: 0,
+        };
+        acc.set(key, row);
+      }
+      const amount = this.toMoney(g._sum.amount);
+      const paid = this.toMoney(g._sum.amount_paid);
+      if (g.is_discount) {
+        row.discount_count += g._count._all;
+        row.discount = this.roundMoney(row.discount - amount);
+        row.discountConsumed += paid;
+        continue;
+      }
+      row.head_count += g._count._all;
+      row.billed = this.roundMoney(row.billed + amount);
+      row.headsPaid += paid;
+      if (g.status === fee_status_enum.WAIVED) {
+        row.waived = this.roundMoney(row.waived + this.waivedPortion(g._sum));
+      }
+      const name = g.fee_type_id == null ? 'OTHER' : feeTypeName.get(g.fee_type_id) ?? 'OTHER';
+      row.heads.set(name, this.roundMoney((row.heads.get(name) ?? 0) + amount));
+    }
+
+    const rows = [...acc.values()].map(({ headsPaid, discountConsumed, ...row }) => {
+      const amount = this.roundMoney(row.billed + row.discount);
+      const amountPaid = this.netPaid(headsPaid, discountConsumed);
+      return { ...row, amount, amount_paid: amountPaid, outstanding: this.roundMoney(amount - amountPaid - row.waived) };
+    });
+    // Campus, then class in level order (classes.id runs in level order, no
+    // class last), then fee date oldest first (none last).
+    rows.sort(
+      (a, b) =>
+        a.campus.localeCompare(b.campus) ||
+        (a.class_id ?? Number.MAX_SAFE_INTEGER) - (b.class_id ?? Number.MAX_SAFE_INTEGER) ||
+        (a.fee_date === b.fee_date ? 0 : a.fee_date === null ? 1 : b.fee_date === null ? -1 : a.fee_date.localeCompare(b.fee_date)),
+    );
+    const heads = [...new Set(rows.flatMap((r) => [...r.heads.keys()]))].sort(
+      (a, b) => (rank.get(a) ?? 1e9) - (rank.get(b) ?? 1e9) || a.localeCompare(b),
+    );
+    return { rows, heads };
+  }
+
 
   async exportDeposits(
     query: ExportDepositsQueryDto,
@@ -4838,6 +4998,8 @@ export class FinancialReportsService {
     query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf' },
     extraFilterLines: string[],
     generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
+    /** Excel / PDF sheets built by the caller (groups, per-campus columns); CSV still uses columns + rows. */
+    prebuiltSheets?: SchoolSheet[],
   ): Promise<ExportFile> {
     if (query.format === 'csv') return this.buildExportFile(sheetName, basename, columns, rows, 'csv');
     // A PDF of tens of thousands of rows is hundreds of pages nobody prints —
@@ -4889,7 +5051,9 @@ export class FinancialReportsService {
         money: SCHOOL_SHEET_TOTAL_KEYS.has(c.key) && !SCHOOL_SHEET_COUNT_KEYS.has(c.key),
       }));
     let sheets: SchoolSheet[];
-    if (byCampus) {
+    if (prebuiltSheets) {
+      sheets = prebuiltSheets;
+    } else if (byCampus) {
       const groups = new Map<string, Record<string, string | number>[]>();
       for (const row of rows) {
         const campus = String(row.campus ?? '').trim() || 'Unassigned';
