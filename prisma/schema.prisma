@@ -217,6 +217,11 @@ model deposit_allocations {
 
   @@index([deposit_id], map: "idx_deposit_allocations_deposit")
   @@index([type], map: "idx_deposit_allocations_type")
+  // TAFSD-398: payment/voucher paths look allocations up by these; without
+  // them every lookup scanned the whole table.
+  @@index([voucher_id], map: "idx_deposit_allocations_voucher")
+  @@index([student_fee_id], map: "idx_deposit_allocations_student_fee")
+  @@index([surcharge_id], map: "idx_deposit_allocations_surcharge")
 }
 
 model deposits {
