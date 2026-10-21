@@ -102,7 +102,30 @@ export class StorageService {
 
     /** Extracts the storage key from a full CDN URL. */
     extractKeyFromUrl(url: string): string {
-        return url.replace(`${this.cdnEndpoint}/`, '');
+        if (!url) return '';
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            return url.replace(/^\/+/, '');
+        }
+        if (this.cdnEndpoint && url.startsWith(`${this.cdnEndpoint}/`)) {
+            return url.slice(`${this.cdnEndpoint}/`.length).split('?')[0];
+        }
+        if (this.uploadEndpoint && url.startsWith(`${this.uploadEndpoint}/`)) {
+            let key = url.slice(`${this.uploadEndpoint}/`.length).split('?')[0];
+            if (this.bucket && key.startsWith(`${this.bucket}/`)) {
+                key = key.slice(`${this.bucket}/`.length);
+            }
+            return key;
+        }
+        try {
+            const parsed = new URL(url);
+            let p = parsed.pathname.replace(/^\/+/, '');
+            if (this.bucket && p.startsWith(`${this.bucket}/`)) {
+                p = p.slice(`${this.bucket}/`.length);
+            }
+            return p;
+        } catch {
+            return url.replace(`${this.cdnEndpoint}/`, '');
+        }
     }
 
     /**

@@ -5015,15 +5015,22 @@ export class VouchersService {
     }
 
     async batchExport(voucherIds: number[], generatedByName: string | undefined, res: Response): Promise<void> {
+        if (!voucherIds || voucherIds.length === 0) {
+            throw new BadRequestException('No vouchers selected or accessible.');
+        }
         const archive = archiver('zip', { store: true });
         const done = new Promise<void>((resolve, reject) => {
             archive.on('end', () => resolve());
             archive.on('error', (err: Error) => reject(err));
             res.on('error', (err: Error) => reject(err));
+            res.on('close', () => {
+                archive.destroy();
+                resolve();
+            });
         });
         archive.pipe(res);
 
-        const FETCH_CONCURRENCY = 10;
+        const FETCH_CONCURRENCY = 25;
         const byId = await this.loadFreezeRows(voucherIds);
         const usedNames = new Set<string>();
         for (let i = 0; i < voucherIds.length; i += FETCH_CONCURRENCY) {
@@ -5040,8 +5047,11 @@ export class VouchersService {
     }
 
     async batchMerge(voucherIds: number[], generatedByName?: string): Promise<Buffer> {
+        if (!voucherIds || voucherIds.length === 0) {
+            throw new BadRequestException('No vouchers selected or accessible.');
+        }
         const mergedPdf = await PDFDocument.create();
-        const FETCH_CONCURRENCY = 10;
+        const FETCH_CONCURRENCY = 25;
         const byId = await this.loadFreezeRows(voucherIds);
 
         for (let i = 0; i < voucherIds.length; i += FETCH_CONCURRENCY) {
@@ -5053,6 +5063,10 @@ export class VouchersService {
                 const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
                 copiedPages.forEach((page: any) => mergedPdf.addPage(page));
             }
+        }
+
+        if (mergedPdf.getPageCount() === 0) {
+            throw new BadRequestException('No voucher PDFs could be retrieved or generated for merge.');
         }
 
         return Buffer.from(await mergedPdf.save());

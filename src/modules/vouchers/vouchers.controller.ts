@@ -655,6 +655,9 @@ export class VouchersController {
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
     @RequireAnyAction('finance.vouchers#download', 'finance.bulk_voucher#view')
     async batchExport(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
+        req.setTimeout?.(300_000);
+        res.setTimeout?.(300_000);
+        req.socket?.setTimeout?.(300_000);
         const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         res.set({
@@ -669,6 +672,9 @@ export class VouchersController {
     @CheckPolicies((ability) => ability.can(Action.Read, 'Voucher') || ability.can(Action.Manage, 'all'))
     @RequireAnyAction('finance.vouchers#download', 'finance.bulk_voucher#view')
     async batchMerge(@Body() dto: { ids: number[] }, @Res() res: Response, @Req() req: any, @CurrentUser() user: IJwtStaffPayload) {
+        req.setTimeout?.(300_000);
+        res.setTimeout?.(300_000);
+        req.socket?.setTimeout?.(300_000);
         const ids = await this.vouchersService.filterVisibleVoucherIds(user, dto.ids ?? []);
         const generatedByName = await this.vouchersService.resolveGeneratedByName(req?.user?.id ?? req?.user?.sub);
         const buffer = await this.vouchersService.batchMerge(ids, generatedByName);
