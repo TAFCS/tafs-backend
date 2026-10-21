@@ -126,6 +126,29 @@ export class NoticeBoardController {
     return this.service.rejectPost(id, dto.reason, user, auditActorLabel(user));
   }
 
+  // TAFSD-404: own pending / rejected notice, with only the create permission.
+  @Patch('admin/notice-board/:id/mine')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
+  @RequireAction('communication.notice_board#create')
+  @ApiOperation({ summary: 'Edit your own notice while it awaits approval' })
+  updateMine(
+    @Param('id') id: string,
+    @Body() dto: UpdatePostDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.updateOwnPost(id, dto, auditActorLabel(user) || 'system', user);
+  }
+
+  @Delete('admin/notice-board/:id/mine')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
+  @RequireAction('communication.notice_board#create')
+  @ApiOperation({ summary: 'Delete your own notice while it awaits approval' })
+  removeMine(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.deleteOwnPost(id, auditActorLabel(user) || 'system', user);
+  }
+
   @Patch('admin/notice-board/:id')
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
