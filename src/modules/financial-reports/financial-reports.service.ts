@@ -1196,6 +1196,72 @@ export class FinancialReportsService {
       outstanding: item.outstanding,
     }));
 
+    // TAFSD-341, in the defaulters format: one sheet per campus; within it the
+    // classes in level order, each a heading, its heads (by section, student,
+    // then fee date), a SUBTOTAL and a blank row. The CSV stays one flat list.
+    const sheetColumns: SchoolSheetColumn[] = [
+      { header: 'C.C.', key: 'cc', width: 9 },
+      { header: 'G.R.#', key: 'gr_number', width: 11 },
+      { header: 'Student Name', key: 'student_name', width: 26 },
+      { header: 'Sec.', key: 'section', width: 7 },
+      { header: 'Fee Type', key: 'fee_type', width: 24 },
+      { header: 'Period', key: 'period_label', width: 12 },
+      { header: 'Fee Date', key: 'fee_date', width: 13 },
+      { header: 'Status', key: 'status', width: 14 },
+      { header: 'Amount', key: 'amount', width: 13, total: true, money: true },
+      { header: 'Paid', key: 'amount_paid', width: 13, total: true, money: true },
+      { header: 'Waived', key: 'waived_amount', width: 12, total: true, money: true },
+      { header: 'Outstanding', key: 'outstanding', width: 14, total: true, money: true },
+    ];
+    const placed = rows.map((row, i) => ({
+      classId: this.effectiveClassId(row.students),
+      data: { ...data[i], status: data[i].status ? String(data[i].status).replace(/_/g, ' ') : '' },
+    }));
+    const byCampus = new Map<string, typeof placed>();
+    for (const p of placed) {
+      const campus = String(p.data.campus ?? '').trim() || 'Unassigned';
+      if (!byCampus.has(campus)) byCampus.set(campus, []);
+      byCampus.get(campus)!.push(p);
+    }
+    const sheets: SchoolSheet[] = [...byCampus.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([campus, campusRows]) => {
+        // Class in level order (classes.id runs in level order, no class last),
+        // then section, name, C.C. and fee date (none last); stable on id.
+        const sorted = [...campusRows].sort(
+          (a, b) =>
+            (a.classId ?? Number.MAX_SAFE_INTEGER) - (b.classId ?? Number.MAX_SAFE_INTEGER) ||
+            String(a.data.section).localeCompare(String(b.data.section)) ||
+            String(a.data.student_name).localeCompare(String(b.data.student_name)) ||
+            Number(a.data.cc) - Number(b.data.cc) ||
+            (a.data.fee_date === b.data.fee_date
+              ? 0
+              : !a.data.fee_date
+                ? 1
+                : !b.data.fee_date
+                  ? -1
+                  : String(a.data.fee_date).localeCompare(String(b.data.fee_date))),
+        );
+        const groups = new Map<string, { label: string; rows: Array<Record<string, string | number>> }>();
+        for (const p of sorted) {
+          const key = `${p.classId ?? 'none'}`;
+          if (!groups.has(key)) {
+            const name = String(p.data.class_name ?? '').trim();
+            groups.set(key, { label: p.classId == null || !name ? 'NO CLASS' : `CLASS ${name}`.toUpperCase(), rows: [] });
+          }
+          groups.get(key)!.rows.push(p.data);
+        }
+        const groupList = [...groups.values()];
+        return {
+          tab: campus,
+          campus: campusLine(campus),
+          columns: sheetColumns,
+          groups: groupList,
+          rows: groupList.flatMap((g) => g.rows),
+          rowNoun: ['FEE HEAD', 'FEE HEADS'] as [string, string],
+        };
+      });
+
     return this.buildSchoolExportFile(
       'Fee Heads',
       'FEE HEADS REPORT',
@@ -1205,6 +1271,7 @@ export class FinancialReportsService {
       query,
       this.feeHeadsFilterWords(query),
       user,
+      sheets,
     );
   }
 
