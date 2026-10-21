@@ -712,9 +712,21 @@ export class NoticeBoardService {
     // New wording from a non-superadmin is a new submission: it goes back to
     // PENDING (an approved post leaves families' feeds until re-approved, a
     // rejected one is resubmitted). Pin / expiry changes alone don't.
+    // TAFSD-405: attachments are replaced as a list, urls and types in step.
+    if ((dto.media_urls === undefined) !== (dto.media_types === undefined)) {
+      throw new BadRequestException('Send media_urls and media_types together');
+    }
+    if (dto.media_urls && dto.media_types && dto.media_urls.length !== dto.media_types.length) {
+      throw new BadRequestException('media_urls and media_types must be the same length');
+    }
+    const oldMedia = (post.media_urls as string[] | null) ?? [];
+    const mediaChanged =
+      dto.media_urls !== undefined && JSON.stringify(dto.media_urls) !== JSON.stringify(oldMedia);
+
     const contentChanged =
       (dto.title !== undefined && dto.title !== post.title) ||
-      (dto.body !== undefined && dto.body !== post.body);
+      (dto.body !== undefined && dto.body !== post.body) ||
+      mediaChanged;
     const backToReview =
       contentChanged && !this.isSuperAdmin(user) && post.status !== NoticePostStatus.PENDING;
 
@@ -729,6 +741,7 @@ export class NoticeBoardService {
         }),
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.body !== undefined && { body: dto.body }),
+        ...(mediaChanged && { media_urls: dto.media_urls, media_types: dto.media_types }),
         ...(dto.is_pinned !== undefined && { is_pinned: dto.is_pinned }),
         ...(dto.expires_at !== undefined && {
           expires_at: dto.expires_at ? new Date(dto.expires_at) : null,
@@ -742,6 +755,12 @@ export class NoticeBoardService {
     }
     if (dto.body !== undefined && post.body !== updated.body) {
       changes.push(`body "${(post.body ?? '').slice(0, 60)}" → "${(updated.body ?? '').slice(0, 60)}"`);
+    }
+    if (mediaChanged) {
+      const next = dto.media_urls ?? [];
+      const added = next.filter((u) => !oldMedia.includes(u)).length;
+      const removed = oldMedia.filter((u) => !next.includes(u)).length;
+      changes.push(`attachments ${oldMedia.length} → ${next.length} (${added} added, ${removed} removed)`);
     }
     if (dto.is_pinned !== undefined && post.is_pinned !== updated.is_pinned) {
       changes.push(`is_pinned ${post.is_pinned} → ${updated.is_pinned}`);
