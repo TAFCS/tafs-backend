@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { AppPlatform } from './dto/app-config.dto';
+import { AppPlatform, AppType } from './dto/app-config.dto';
 
 /**
  * Time of day (PKT, "HH:MM") from which HR may override TODAY's staff attendance
@@ -21,18 +21,39 @@ export class AppConfigService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async getAppStatus(platform: AppPlatform, build: number) {
+  /**
+   * Retrieves the current app status (maintenance mode, force-update requirement,
+   * minimum build number, and platform store URL) for a specific app (staff or parent)
+   * and target platform (Android or iOS).
+   *
+   * Backwards Compatibility:
+   * If the `app` parameter is omitted, it safely defaults to `AppType.PARENT`.
+   * This preserves seamless behavior for legacy parent mobile app builds that omit
+   * the `app` query parameter.
+   */
+  async getAppStatus(
+    platform: AppPlatform,
+    build: number,
+    app: AppType = AppType.PARENT,
+  ) {
+    const appPrefix = app === AppType.STAFF ? 'staff' : 'parent';
+
+    // Query both app-specific keys and fallback to legacy keys if ever needed
+    const keysToQuery = [
+      `${appPrefix}_maintenance_mode`,
+      `${appPrefix}_maintenance_message`,
+      `${appPrefix}_min_${platform}_build`,
+      `${appPrefix}_${platform}_store_url`,
+      'maintenance_mode',
+      'maintenance_message',
+      `min_${platform}_build`,
+      `${platform}_store_url`,
+    ];
+
     const configs = await this.prisma.app_config.findMany({
       where: {
         key: {
-          in: [
-            'maintenance_mode',
-            'maintenance_message',
-            'min_android_build',
-            'min_ios_build',
-            'android_store_url',
-            'ios_store_url',
-          ],
+          in: keysToQuery,
         },
       },
     });
@@ -42,19 +63,38 @@ export class AppConfigService {
       configsMap.set(config.key, config.value);
     }
 
-    const maintenanceMode = configsMap.get('maintenance_mode')?.toLowerCase() === 'true';
-    const maintenanceMessage = configsMap.get('maintenance_message') || 'The app is currently under maintenance. Please try again later.';
+    const rawMaintenanceMode =
+      configsMap.get(`${appPrefix}_maintenance_mode`) ??
+      configsMap.get('maintenance_mode');
+    const maintenanceMode = rawMaintenanceMode?.toLowerCase() === 'true';
 
-    let minBuildNumber = 0;
-    let storeUrl = '';
+    const maintenanceMessage =
+      configsMap.get(`${appPrefix}_maintenance_message`) ??
+      configsMap.get('maintenance_message') ??
+      'The app is currently under maintenance. Please try again later.';
 
-    if (platform === AppPlatform.ANDROID) {
-      minBuildNumber = parseInt(configsMap.get('min_android_build') || '0', 10);
-      storeUrl = configsMap.get('android_store_url') || 'https://play.google.com/store';
-    } else if (platform === AppPlatform.IOS) {
-      minBuildNumber = parseInt(configsMap.get('min_ios_build') || '0', 10);
-      storeUrl = configsMap.get('ios_store_url') || 'https://apps.apple.com/store';
-    }
+    const rawMinBuild =
+      configsMap.get(`${appPrefix}_min_${platform}_build`) ??
+      configsMap.get(`min_${platform}_build`);
+    const minBuildNumber = parseInt(rawMinBuild || '0', 10);
+
+    // Canonical store listings per app & platform (avoiding generic homepage placeholders)
+    const fallbackStoreUrl =
+      platform === AppPlatform.ANDROID
+        ? (app === AppType.STAFF
+            ? 'https://play.google.com/store/apps/details?id=com.tafsstaff.app'
+            : 'https://play.google.com/store/apps/details?id=com.tafs.app')
+        : 'https://apps.apple.com/app/id6572338575';
+
+    const configuredStoreUrl =
+      configsMap.get(`${appPrefix}_${platform}_store_url`) ??
+      configsMap.get(`${platform}_store_url`);
+
+    const storeUrl =
+      configuredStoreUrl &&
+      !['https://play.google.com/store', 'https://apps.apple.com/store'].includes(configuredStoreUrl)
+        ? configuredStoreUrl
+        : fallbackStoreUrl;
 
     const forceUpdate = build < minBuildNumber;
 

@@ -3,7 +3,7 @@ import { AppConfigController } from './app-config.controller';
 import { AppConfigService } from './app-config.service';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { AppPlatform } from './dto/app-config.dto';
+import { AppPlatform, AppType } from './dto/app-config.dto';
 
 describe('AppConfigController', () => {
   let controller: AppConfigController;
@@ -20,10 +20,10 @@ describe('AppConfigController', () => {
         maintenanceMessage: 'ok',
         forceUpdate: false,
         minBuildNumber: 1,
-        storeUrl: 'https://play.google.com/store',
+        storeUrl: 'https://play.google.com/store/apps/details?id=com.tafs.app',
       }),
       getAllConfigs: jest.fn().mockResolvedValue([]),
-      setConfig: jest.fn().mockResolvedValue({ key: 'maintenance_mode', value: 'true' }),
+      setConfig: jest.fn().mockResolvedValue({ key: 'parent_maintenance_mode', value: 'true' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -39,11 +39,25 @@ describe('AppConfigController', () => {
     controller = module.get(AppConfigController);
   });
 
-  it('GET status is public and returns envelope data', async () => {
-    const response = await controller.getStatus({ platform: AppPlatform.ANDROID, build: 9 });
+  it('GET status is public and returns envelope data with app parameter', async () => {
+    const response = await controller.getStatus({
+      platform: AppPlatform.ANDROID,
+      build: 51,
+      app: AppType.STAFF,
+    });
 
-    expect(service.getAppStatus).toHaveBeenCalledWith(AppPlatform.ANDROID, 9);
+    expect(service.getAppStatus).toHaveBeenCalledWith(AppPlatform.ANDROID, 51, AppType.STAFF);
     expect(response.data.forceUpdate).toBe(false);
+    expect(response.status).toBe(200);
+  });
+
+  it('GET status works without optional app parameter', async () => {
+    const response = await controller.getStatus({
+      platform: AppPlatform.ANDROID,
+      build: 47,
+    });
+
+    expect(service.getAppStatus).toHaveBeenCalledWith(AppPlatform.ANDROID, 47, undefined);
     expect(response.status).toBe(200);
   });
 
@@ -56,12 +70,12 @@ describe('AppConfigController', () => {
 
   it('PATCH config calls service.setConfig', async () => {
     const result = await controller.setConfig(
-      'maintenance_mode',
+      'staff_maintenance_mode',
       { value: 'true' },
       { username: 'super' } as any,
     );
 
-    expect(service.setConfig).toHaveBeenCalledWith('maintenance_mode', 'true', 'super');
+    expect(service.setConfig).toHaveBeenCalledWith('staff_maintenance_mode', 'true', 'super');
     expect(result.status).toBe(200);
   });
 });

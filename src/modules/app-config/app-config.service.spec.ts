@@ -2,20 +2,27 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AppConfigService } from './app-config.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { AppPlatform } from './dto/app-config.dto';
+import { AppPlatform, AppType } from './dto/app-config.dto';
 
-describe('AppConfigService (Test Plan Phase 1)', () => {
+describe('AppConfigService', () => {
   let service: AppConfigService;
-  let prisma: { app_config: { findMany: jest.Mock; upsert: jest.Mock } };
+  let prisma: { app_config: { findMany: jest.Mock; findUnique: jest.Mock; upsert: jest.Mock } };
   let auditLogs: { log: jest.Mock };
 
   const defaultConfigs = [
-    { key: 'maintenance_mode', value: 'false' },
-    { key: 'maintenance_message', value: 'The app is currently under maintenance. Please try again later.' },
-    { key: 'min_android_build', value: '1' },
-    { key: 'min_ios_build', value: '1' },
-    { key: 'android_store_url', value: 'https://play.google.com/store' },
-    { key: 'ios_store_url', value: 'https://apps.apple.com/store' },
+    { key: 'parent_maintenance_mode', value: 'false' },
+    { key: 'parent_maintenance_message', value: 'Parent portal maintenance.' },
+    { key: 'parent_min_android_build', value: '45' },
+    { key: 'parent_min_ios_build', value: '1' },
+    { key: 'parent_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafs.app' },
+    { key: 'parent_ios_store_url', value: 'https://apps.apple.com/app/id6572338575' },
+
+    { key: 'staff_maintenance_mode', value: 'false' },
+    { key: 'staff_maintenance_message', value: 'Staff portal maintenance.' },
+    { key: 'staff_min_android_build', value: '50' },
+    { key: 'staff_min_ios_build', value: '1' },
+    { key: 'staff_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafsstaff.app' },
+    { key: 'staff_ios_store_url', value: 'https://apps.apple.com/app/id6572338575' },
   ];
 
   beforeEach(async () => {
@@ -41,104 +48,137 @@ describe('AppConfigService (Test Plan Phase 1)', () => {
     service = module.get(AppConfigService);
   });
 
-  describe('1.1 baseline status', () => {
-    it('returns maintenance off and forceUpdate false for build 9 on android', async () => {
-      const result = await service.getAppStatus(AppPlatform.ANDROID, 9);
+  describe('Baseline status and defaults', () => {
+    it('returns parent app configuration by default when app param is omitted', async () => {
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 47);
 
       expect(result.maintenanceMode).toBe(false);
       expect(result.forceUpdate).toBe(false);
+      expect(result.minBuildNumber).toBe(45);
+      expect(result.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafs.app');
+      expect(result.maintenanceMessage).toBe('Parent portal maintenance.');
+    });
+
+    it('returns staff app configuration when app=staff is provided', async () => {
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+
+      expect(result.maintenanceMode).toBe(false);
+      expect(result.forceUpdate).toBe(false);
+      expect(result.minBuildNumber).toBe(50);
+      expect(result.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafsstaff.app');
+      expect(result.maintenanceMessage).toBe('Staff portal maintenance.');
+    });
+
+    it('returns iOS store URL for staff iOS platform', async () => {
+      const result = await service.getAppStatus(AppPlatform.IOS, 2, AppType.STAFF);
+
+      expect(result.storeUrl).toBe('https://apps.apple.com/app/id6572338575');
       expect(result.minBuildNumber).toBe(1);
-      expect(result.storeUrl).toBe('https://play.google.com/store');
-      expect(result.maintenanceMessage).toContain('maintenance');
-    });
-
-    it('returns ios store URL for ios platform', async () => {
-      const result = await service.getAppStatus(AppPlatform.IOS, 9);
-
-      expect(result.storeUrl).toBe('https://apps.apple.com/store');
-      expect(result.minBuildNumber).toBe(1);
     });
   });
 
-  describe('1.2 force update logic', () => {
-    beforeEach(() => {
-      prisma.app_config.findMany.mockResolvedValue(
-        defaultConfigs.map((c) =>
-          c.key === 'min_android_build' ? { ...c, value: '10' } : c,
-        ),
-      );
+  describe('Independent force update logic between staff and parent', () => {
+    it('forcing a staff update does not affect parent app', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'staff_min_android_build'),
+        { key: 'staff_min_android_build', value: '52' }, // staff requires 52
+      ]);
+
+      // Staff app on build 51 is locked out
+      const staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(staffStatus.forceUpdate).toBe(true);
+      expect(staffStatus.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafsstaff.app');
+
+      // Parent app on build 47 is unaffected (min is 45)
+      const parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(parentStatus.forceUpdate).toBe(false);
+      expect(parentStatus.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafs.app');
     });
 
-    it('forceUpdate true when build 9 < min 10', async () => {
-      const result = await service.getAppStatus(AppPlatform.ANDROID, 9);
-      expect(result.forceUpdate).toBe(true);
-    });
+    it('forcing a parent update does not affect staff app', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'parent_min_android_build'),
+        { key: 'parent_min_android_build', value: '48' }, // parent requires 48
+      ]);
 
-    it('forceUpdate false when build 10 >= min 10', async () => {
-      expect((await service.getAppStatus(AppPlatform.ANDROID, 10)).forceUpdate).toBe(false);
-      expect((await service.getAppStatus(AppPlatform.ANDROID, 11)).forceUpdate).toBe(false);
+      // Parent app on build 47 is locked out
+      const parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(parentStatus.forceUpdate).toBe(true);
+      expect(parentStatus.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafs.app');
+
+      // Staff app on build 51 is unaffected (min is 50)
+      const staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(staffStatus.forceUpdate).toBe(false);
+      expect(staffStatus.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafsstaff.app');
     });
   });
 
-  describe('1.3 maintenance mode', () => {
-    beforeEach(() => {
-      prisma.app_config.findMany.mockResolvedValue(
-        defaultConfigs.map((c) =>
-          c.key === 'maintenance_mode' ? { ...c, value: 'true' } : c,
-        ),
-      );
+  describe('Independent maintenance mode controls', () => {
+    it('staff maintenance mode does not affect parent app', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'staff_maintenance_mode'),
+        { key: 'staff_maintenance_mode', value: 'true' },
+      ]);
+
+      const staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(staffStatus.maintenanceMode).toBe(true);
+      expect(staffStatus.maintenanceMessage).toBe('Staff portal maintenance.');
+
+      const parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(parentStatus.maintenanceMode).toBe(false);
     });
 
-    it('maintenanceMode true when config is true', async () => {
-      const result = await service.getAppStatus(AppPlatform.ANDROID, 9);
+    it('parent maintenance mode does not affect staff app', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'parent_maintenance_mode'),
+        { key: 'parent_maintenance_mode', value: 'true' },
+      ]);
+
+      const parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(parentStatus.maintenanceMode).toBe(true);
+      expect(parentStatus.maintenanceMessage).toBe('Parent portal maintenance.');
+
+      const staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(staffStatus.maintenanceMode).toBe(false);
+    });
+  });
+
+  describe('Legacy key fallback when app-specific keys are absent', () => {
+    it('falls back to legacy min_android_build and maintenance_mode if app-prefixed keys not found', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        { key: 'maintenance_mode', value: 'true' },
+        { key: 'maintenance_message', value: 'Legacy maintenance' },
+        { key: 'min_android_build', value: '60' },
+        { key: 'android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafs.app' },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 50, AppType.PARENT);
+
       expect(result.maintenanceMode).toBe(true);
-    });
-  });
-
-  describe('1.4 custom maintenance message', () => {
-    beforeEach(() => {
-      prisma.app_config.findMany.mockResolvedValue(
-        defaultConfigs.map((c) =>
-          c.key === 'maintenance_message'
-            ? { ...c, value: 'Fee portal upgrade in progress.' }
-            : c,
-        ),
-      );
-    });
-
-    it('returns custom maintenance message from config', async () => {
-      const result = await service.getAppStatus(AppPlatform.ANDROID, 9);
-      expect(result.maintenanceMessage).toBe('Fee portal upgrade in progress.');
-    });
-  });
-
-  describe('3.4 maintenance priority (service returns both flags)', () => {
-    beforeEach(() => {
-      prisma.app_config.findMany.mockResolvedValue(
-        defaultConfigs.map((c) => {
-          if (c.key === 'maintenance_mode') return { ...c, value: 'true' };
-          if (c.key === 'min_android_build') return { ...c, value: '10' };
-          return c;
-        }),
-      );
-    });
-
-    it('returns both maintenanceMode and forceUpdate when both apply', async () => {
-      const result = await service.getAppStatus(AppPlatform.ANDROID, 9);
-      expect(result.maintenanceMode).toBe(true);
+      expect(result.maintenanceMessage).toBe('Legacy maintenance');
       expect(result.forceUpdate).toBe(true);
+      expect(result.minBuildNumber).toBe(60);
+    });
+
+    it('replaces generic placeholder store urls with real listings', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        { key: 'staff_android_store_url', value: 'https://play.google.com/store' },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(result.storeUrl).toBe('https://play.google.com/store/apps/details?id=com.tafsstaff.app');
     });
   });
 
   describe('setConfig', () => {
-    it('upserts config with updated_by', async () => {
-      prisma.app_config.upsert.mockResolvedValue({ key: 'maintenance_mode', value: 'false' });
+    it('upserts config with updated_by and writes audit log', async () => {
+      prisma.app_config.upsert.mockResolvedValue({ key: 'staff_maintenance_mode', value: 'false' });
 
-      await service.setConfig('maintenance_mode', 'false', 'admin');
+      await service.setConfig('staff_maintenance_mode', 'false', 'admin');
 
       expect(prisma.app_config.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { key: 'maintenance_mode' },
+          where: { key: 'staff_maintenance_mode' },
           update: { value: 'false', updated_by: 'admin' },
         }),
       );

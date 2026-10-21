@@ -25,7 +25,7 @@ export class AppConfigController {
 
   @Get('status')
   async getStatus(@Query() query: AppStatusQueryDto) {
-    const data = await this.appConfigService.getAppStatus(query.platform, query.build);
+    const data = await this.appConfigService.getAppStatus(query.platform, query.build, query.app);
     return createApiResponse(data, HttpStatus.OK, 'App status retrieved successfully');
   }
 

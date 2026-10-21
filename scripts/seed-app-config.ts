@@ -3,12 +3,30 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 const initialConfigs = [
-  { key: 'maintenance_mode', value: 'false', description: 'Whether maintenance mode is active' },
-  { key: 'maintenance_message', value: 'The app is currently under maintenance. Please try again later.', description: 'Message shown to users' },
-  { key: 'min_android_build', value: '1', description: 'Minimum Android build number required' },
-  { key: 'min_ios_build', value: '1', description: 'Minimum iOS build number required' },
-  { key: 'android_store_url', value: 'https://play.google.com/store', description: 'Android Play Store deep link URL' },
-  { key: 'ios_store_url', value: 'https://apps.apple.com/store', description: 'iOS App Store deep link URL' },
+  // Parent App Remote Configurations
+  { key: 'parent_maintenance_mode', value: 'false', description: 'Whether maintenance mode is active for parent app' },
+  { key: 'parent_maintenance_message', value: 'The parent app is currently under maintenance. Please try again later.', description: 'Maintenance message shown to parents' },
+  { key: 'parent_min_android_build', value: '9', description: 'Minimum Android build number required for parent app' },
+  { key: 'parent_min_ios_build', value: '2', description: 'Minimum iOS build number required for parent app' },
+  { key: 'parent_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafs.app', description: 'Parent Android Play Store listing URL' },
+  { key: 'parent_ios_store_url', value: 'https://apps.apple.com/app/id6572338575', description: 'Parent iOS App Store listing URL' },
+
+  // Staff App Remote Configurations
+  { key: 'staff_maintenance_mode', value: 'false', description: 'Whether maintenance mode is active for staff app' },
+  { key: 'staff_maintenance_message', value: 'The staff app is currently under maintenance. Please try again later.', description: 'Maintenance message shown to staff' },
+  { key: 'staff_min_android_build', value: '9', description: 'Minimum Android build number required for staff app' },
+  { key: 'staff_min_ios_build', value: '2', description: 'Minimum iOS build number required for staff app' },
+  { key: 'staff_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafsstaff.app', description: 'Staff Android Play Store listing URL' },
+  { key: 'staff_ios_store_url', value: 'https://apps.apple.com/app/id6572338575', description: 'Staff iOS App Store listing URL' },
+
+  // Legacy Global Keys (kept for fallback)
+  { key: 'maintenance_mode', value: 'false', description: 'Legacy: Whether maintenance mode is active' },
+  { key: 'maintenance_message', value: 'The app is currently under maintenance. Please try again later.', description: 'Legacy: Message shown to users' },
+  { key: 'min_android_build', value: '9', description: 'Legacy: Minimum Android build number required' },
+  { key: 'min_ios_build', value: '2', description: 'Legacy: Minimum iOS build number required' },
+  { key: 'android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafs.app', description: 'Legacy: Android Play Store URL' },
+  { key: 'ios_store_url', value: 'https://apps.apple.com/app/id6572338575', description: 'Legacy: iOS App Store URL' },
+
   {
     key: 'slc_last_number',
     value: '250',

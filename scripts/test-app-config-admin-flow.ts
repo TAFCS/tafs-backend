@@ -7,10 +7,11 @@
 import { PrismaClient } from '@prisma/client';
 import { AppConfigService } from '../src/modules/app-config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AppPlatform } from '../src/modules/app-config/dto/app-config.dto';
+import { AppPlatform, AppType } from '../src/modules/app-config/dto/app-config.dto';
 
 const prisma = new PrismaClient();
-const service = new AppConfigService(prisma as unknown as PrismaService);
+const mockAuditLogs = { log: async () => {} } as any;
+const service = new AppConfigService(prisma as unknown as PrismaService, mockAuditLogs);
 
 const results: { name: string; pass: boolean; detail?: string }[] = [];
 
@@ -28,36 +29,57 @@ async function setKey(key: string, value: string) {
 }
 
 async function main() {
-  console.log('\nApp Config Test Plan — Phase 2 Admin Flow\n');
+  console.log('\nApp Config Test Plan — Multi-App Phase 2 Admin Flow\n');
 
-  await setKey('maintenance_mode', 'true');
-  let status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record('2.3 maintenance ON', status.maintenanceMode === true);
+  // 1. Staff maintenance ON should not affect Parent
+  await setKey('staff_maintenance_mode', 'true');
+  await setKey('parent_maintenance_mode', 'false');
+  let staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+  let parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+  record('Staff maintenance ON', staffStatus.maintenanceMode === true);
+  record('Parent maintenance remains OFF', parentStatus.maintenanceMode === false);
 
-  await setKey('maintenance_message', 'Scheduled maintenance until 10 PM.');
-  status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record(
-    '2.4 custom maintenance message',
-    status.maintenanceMessage === 'Scheduled maintenance until 10 PM.',
-  );
+  // 2. Parent maintenance ON should not affect Staff
+  await setKey('staff_maintenance_mode', 'false');
+  await setKey('parent_maintenance_mode', 'true');
+  staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+  parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+  record('Staff maintenance returns OFF', staffStatus.maintenanceMode === false);
+  record('Parent maintenance ON', parentStatus.maintenanceMode === true);
 
-  await setKey('maintenance_mode', 'false');
-  status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record('2.3 maintenance OFF', status.maintenanceMode === false);
+  // Reset maintenance
+  await setKey('parent_maintenance_mode', 'false');
 
-  await setKey('min_android_build', '10');
-  status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record('2.5 min build 10 → forceUpdate', status.forceUpdate === true);
+  // 3. Independent build numbers and force update
+  // Staff on 51, required 52 -> Staff force-update, Parent on 47 unaffected (required 45)
+  await setKey('staff_min_android_build', '52');
+  await setKey('parent_min_android_build', '45');
+  staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+  parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+  record('Staff build 51 < 52 -> Staff forceUpdate = true', staffStatus.forceUpdate === true);
+  record('Parent build 47 >= 45 -> Parent forceUpdate = false', parentStatus.forceUpdate === false);
 
-  await setKey('min_android_build', '9');
-  status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record('2.5 min build 9 → no forceUpdate', status.forceUpdate === false);
+  // Parent on 47, required 48 -> Parent force-update, Staff on 51 unaffected (required 50)
+  await setKey('staff_min_android_build', '50');
+  await setKey('parent_min_android_build', '48');
+  staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+  parentStatus = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+  record('Staff build 51 >= 50 -> Staff forceUpdate = false', staffStatus.forceUpdate === false);
+  record('Parent build 47 < 48 -> Parent forceUpdate = true', parentStatus.forceUpdate === true);
 
-  await setKey('android_store_url', 'https://play.google.com/store/apps/details?id=com.tafs.parent');
-  status = await service.getAppStatus(AppPlatform.ANDROID, 9);
-  record('2.5 store URL', status.storeUrl.includes('com.tafs.parent'));
+  // 4. Store URLs point to the real listings
+  record('Staff store URL has com.tafsstaff.app', staffStatus.storeUrl.includes('com.tafsstaff.app'));
+  record('Parent store URL has com.tafs.app', parentStatus.storeUrl.includes('com.tafs.app'));
 
-  // 2.1 SUPER_ADMIN access covered by Jest controller spec (see npm test app-config)
+  // 5. Default omitted app param resolves to parent
+  const omittedStatus = await service.getAppStatus(AppPlatform.ANDROID, 47);
+  record('Omitted app param resolves to parent', omittedStatus.storeUrl.includes('com.tafs.app') && omittedStatus.forceUpdate === true);
+
+  // Cleanup to safe defaults
+  await setKey('staff_min_android_build', '9');
+  await setKey('parent_min_android_build', '9');
+  await setKey('staff_maintenance_mode', 'false');
+  await setKey('parent_maintenance_mode', 'false');
 
   const passed = results.filter((r) => r.pass).length;
   const failed = results.filter((r) => !r.pass).length;
