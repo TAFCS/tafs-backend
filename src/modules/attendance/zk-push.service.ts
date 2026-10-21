@@ -148,11 +148,22 @@ export class ZkPushService {
     return { logs: page, nextCursor: hasMore ? page[page.length - 1].id : null };
   }
 
-  async getDistinctDevices() {
-    const logs = await this.prisma.zk_push_logs.findMany({
-      select: { sn: true },
-      distinct: ['sn'],
-    });
-    return logs.map((l) => l.sn);
+  /**
+   * Every device serial that has ever pushed. Prisma's `distinct` is done in
+   * memory, so it read every push log row on each call (~121k and growing,
+   * TAFSD-400). This recursive "skip scan" walks the (sn, received_at) index
+   * one device at a time instead: one index probe per device.
+   */
+  async getDistinctDevices(): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<{ sn: string }[]>`
+      WITH RECURSIVE devices AS (
+        (SELECT sn FROM zk_push_logs ORDER BY sn LIMIT 1)
+        UNION ALL
+        SELECT (SELECT z.sn FROM zk_push_logs z WHERE z.sn > d.sn ORDER BY z.sn LIMIT 1)
+        FROM devices d
+        WHERE d.sn IS NOT NULL
+      )
+      SELECT sn FROM devices WHERE sn IS NOT NULL`;
+    return rows.map((r) => r.sn);
   }
 }
