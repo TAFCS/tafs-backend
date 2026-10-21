@@ -46,6 +46,11 @@ export class CreateClassScheduleDto {
   @IsDateString()
   effective_from: string;
 
+  /** TAFSD-385: optional last day of temporary timings; normal timings resume the day after. */
+  @IsOptional()
+  @IsDateString()
+  effective_to?: string | null;
+
   /** Weekday overrides. Omitted means none. */
   @IsOptional()
   @IsArray()
@@ -78,6 +83,11 @@ export class UpdateClassScheduleDto {
   @IsOptional()
   @IsDateString()
   effective_from?: string;
+
+  /** TAFSD-385: null clears it (open-ended again); absent leaves it alone. */
+  @IsOptional()
+  @IsDateString()
+  effective_to?: string | null;
 
   /**
    * Replaces the whole override set when present. An empty array clears every
@@ -309,6 +319,16 @@ export class ClassCheckInScheduleService {
     return date;
   }
 
+  /** TAFSD-385: the last day of temporary timings can't come before the first. */
+  private endDate(value: string | null | undefined, from: Date): Date | null {
+    if (!value) return null;
+    const to = this.startOfDay(value);
+    if (to < from) {
+      throw new BadRequestException('The end date of temporary timings cannot be before their start date');
+    }
+    return to;
+  }
+
   /**
    * Announce the pairing's timings, when the admin asked for it.
    *
@@ -318,7 +338,7 @@ export class ClassCheckInScheduleService {
    */
   private async announceIfRequested(
     notify: boolean | undefined,
-    schedule: { id: number; campus_id: number; class_id: number; expected_check_in: Date; end_time: Date | null; effective_from: Date },
+    schedule: { id: number; campus_id: number; class_id: number; expected_check_in: Date; end_time: Date | null; effective_from: Date; effective_to?: Date | null },
     actor?: string,
   ): Promise<{ report: ClassTimingNotificationReport | null; warning: string | null }> {
     if (!notify) return { report: null, warning: null };
@@ -331,6 +351,7 @@ export class ClassCheckInScheduleService {
         startTime: schedule.expected_check_in,
         endTime: schedule.end_time,
         effectiveFrom: schedule.effective_from,
+        effectiveTo: schedule.effective_to ?? null,
         createdBy: actor ?? null,
       });
 
@@ -368,6 +389,7 @@ export class ClassCheckInScheduleService {
     const end = toTime(dto.end_time);
     const intermediate = toTime(dto.intermediate_time);
     this.assertTimesOrdered(start, intermediate, end);
+    const effectiveTo = this.endDate(dto.effective_to, effectiveFrom);
 
     const record = await this.prisma.class_check_in_schedules.create({
       data: {
@@ -377,6 +399,7 @@ export class ClassCheckInScheduleService {
         end_time: end,
         intermediate_time: intermediate,
         effective_from: effectiveFrom,
+        effective_to: effectiveTo,
         created_by: createdBy ?? null,
       },
       include: SCHEDULE_INCLUDE,
@@ -393,7 +416,8 @@ export class ClassCheckInScheduleService {
       note:
         `Check-in schedule #${record.id} for class ${classLabel} at campus #${dto.campus_id}: ` +
         `start ${fmtTime(start)}, end ${fmtTime(end)}, cut-off ${fmtTime(intermediate)}, ` +
-        `effective ${effectiveFrom.toISOString().slice(0, 10)}.`,
+        `effective ${effectiveFrom.toISOString().slice(0, 10)}` +
+        (effectiveTo ? ` until ${effectiveTo.toISOString().slice(0, 10)} (temporary)` : '') + '.',
     });
 
     if (dto.days?.length) {
@@ -424,6 +448,7 @@ export class ClassCheckInScheduleService {
       end_time?: Date | null;
       intermediate_time?: Date | null;
       effective_from?: Date;
+      effective_to?: Date | null;
     } = {};
 
     if (dto.expected_check_in !== undefined) {
@@ -454,6 +479,12 @@ export class ClassCheckInScheduleService {
       await this.assertNoDuplicate(existing.campus_id, existing.class_id, effectiveFrom, id);
       data.effective_from = effectiveFrom;
     }
+    // Checked against the start the row will have after this save.
+    if (dto.effective_to !== undefined) {
+      data.effective_to = this.endDate(dto.effective_to, data.effective_from ?? existing.effective_from);
+    } else if (data.effective_from && existing.effective_to && existing.effective_to < data.effective_from) {
+      throw new BadRequestException('The end date of temporary timings cannot be before their start date');
+    }
 
     const updated = await this.prisma.class_check_in_schedules.update({
       where: { id },
@@ -475,6 +506,11 @@ export class ClassCheckInScheduleService {
     const newEff = updated.effective_from.toISOString().slice(0, 10);
     if (oldEff !== newEff) {
       changes.push(`effective ${oldEff} → ${newEff}`);
+    }
+    const oldTo = existing.effective_to?.toISOString().slice(0, 10) ?? 'open-ended';
+    const newTo = updated.effective_to?.toISOString().slice(0, 10) ?? 'open-ended';
+    if (oldTo !== newTo) {
+      changes.push(`until ${oldTo} → ${newTo}`);
     }
 
     // Written before the audit log, so a day-override-only edit is still
@@ -537,6 +573,7 @@ export class ClassCheckInScheduleService {
       expectedCheckIn: string;
       endTime?: string | null;
       effectiveFrom: string;
+      effectiveTo?: string | null;
     },
     user?: IJwtStaffPayload,
   ) {
@@ -573,6 +610,7 @@ export class ClassCheckInScheduleService {
       startTime: start,
       endTime: toTime(input.endTime),
       effectiveFrom: this.startOfDay(input.effectiveFrom),
+      effectiveTo: input.effectiveTo ? this.startOfDay(input.effectiveTo) : null,
     });
 
     return { ...message, recipients };

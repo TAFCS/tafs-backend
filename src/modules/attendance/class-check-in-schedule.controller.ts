@@ -65,6 +65,7 @@ export class ClassCheckInScheduleController {
       expected_check_in: string;
       end_time?: string | null;
       effective_from: string;
+      effective_to?: string | null;
     },
     @Req() req: { user: IJwtStaffPayload },
   ) {
@@ -78,6 +79,7 @@ export class ClassCheckInScheduleController {
         expectedCheckIn: dto.expected_check_in,
         endTime: dto.end_time,
         effectiveFrom: dto.effective_from,
+        effectiveTo: dto.effective_to,
       },
       req.user,
     );

@@ -4,7 +4,7 @@ import {
   resolveStudentDayPunches,
   buildStudentSessions,
 } from '../attendance/student-punch-direction.util';
-import { SCHEDULE_WITH_DAYS_INCLUDE } from '../attendance/attendance-policy-resolver.service';
+import { SCHEDULE_WITH_DAYS_INCLUDE, scheduleNotEndedWhere } from '../attendance/attendance-policy-resolver.service';
 import { Prisma, RollRecordStatus, AttendanceSource } from '@prisma/client';
 import { CalendarDayResolverService } from '../hr/calendar/calendar-day-resolver.service';
 import { resolveStudentAttendanceStatus, getTodayKeyKarachi } from '../attendance/student-attendance-status.util';
@@ -343,6 +343,8 @@ export class AppPortalService {
     start_time: string;
     end_time: string | null;
     effective_from: string;
+    /** TAFSD-385: last day of temporary timings; normal timings resume the day after. */
+    effective_to: string | null;
     /** Weekdays that run to different times — Friday, at TAFS. */
     days: { day_of_week: number; start_time: string; end_time: string | null }[];
   } | null> {
@@ -359,12 +361,14 @@ export class AppPortalService {
         campus_id: student.campus_id,
         class_id: student.class_id,
         effective_from: { lte: new Date(asOfMs) },
+        ...scheduleNotEndedWhere(new Date(asOfMs)),
       },
       orderBy: { effective_from: 'desc' },
       select: {
         expected_check_in: true,
         end_time: true,
         effective_from: true,
+        effective_to: true,
         // Only the parent-visible pair. intermediate_time is not selected at
         // all, so it cannot reach the app by accident.
         class_check_in_schedule_days: {
@@ -380,6 +384,7 @@ export class AppPortalService {
       start_time: hhmm(schedule.expected_check_in),
       end_time: schedule.end_time ? hhmm(schedule.end_time) : null,
       effective_from: schedule.effective_from.toISOString().slice(0, 10),
+      effective_to: schedule.effective_to ? schedule.effective_to.toISOString().slice(0, 10) : null,
       days: schedule.class_check_in_schedule_days.map((d) => ({
         day_of_week: d.day_of_week,
         start_time: hhmm(d.expected_check_in),
