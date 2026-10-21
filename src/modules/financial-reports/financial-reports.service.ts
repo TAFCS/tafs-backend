@@ -106,6 +106,35 @@ type DefaulterOwedMonth = {
   partial: boolean;
   heads: Array<{ name: string; owed: number; partial: boolean }>;
 };
+/** One student row on a per-student month sheet: its fields, each month's cell and the row total. */
+type StudentMonthRow = {
+  item: Record<string, unknown>;
+  months: Map<number, DefaulterOwedMonth>;
+  total: number;
+};
+/** What a per-student month sheet (defaulters, fee date report) varies on; the layout is shared. */
+type StudentMonthReportOptions = {
+  query: Pick<
+    ExportDefaultersQueryDto,
+    'format' | 'columns' | 'group_by' | 'breakdown_by_head' | 'campus_id' | 'class_id' | 'section_id' | 'segment_id' | 'graduated_from_class_id'
+  >;
+  basename: string;
+  generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>;
+  /** Drives DAY / DATE and the session line. */
+  asOfDate: string;
+  /** The banner under the school name. */
+  listTitle: string;
+  /** Month columns shown (month index year*12 + month-1); anything outside folds into EARLIER / LATER. */
+  window: { lo: number; hi: number };
+  /** The money columns, in order, each totalled. Shown when the picker has "amount". */
+  amountColumns: Array<{ header: string; csvHeader: string; width: number; value: (r: StudentMonthRow) => number }>;
+  remark: (r: StudentMonthRow) => string;
+  /** A filter line to print larger, first; null when there isn't one. */
+  leadLine: string | null;
+  filterLines: (names: DefaulterFilterNames, omitClasses: boolean, groupLine: string[]) => string[];
+  emptyMessage: string;
+  emptySheetName: string;
+};
 /** students.status -> the STATUS column on the defaulters sheet. */
 const DEFAULTER_STATUS_LABELS: Record<string, string> = {
   ENROLLED: 'Enrolled',
@@ -2835,12 +2864,70 @@ export class FinancialReportsService {
     basename: string,
     generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
   ): Promise<ExportFile> {
-    type Item = Record<string, unknown>;
     const items = allItems;
     const owedByStudent = await this.loadDefaulterOwedMonths(
       items.map((r) => Number(r.cc)),
       asOfDate,
     );
+    const rows: StudentMonthRow[] = [];
+    for (const item of items) {
+      const months = owedByStudent.get(Number(item.cc)) ?? new Map();
+      const total = this.roundMoney([...months.values()].reduce((s, m) => s + m.owed, 0));
+      // Rows keep listDefaulters' order — the sort the admin picked on screen.
+      rows.push({ item, months, total });
+    }
+    // The month window: months_back (TAFSD-355, picked at export) or else the
+    // page's strip_months, in calendar months ending at as_of's month. Month
+    // index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
+    const asOfYm = this.parseYearMonthOfDate(asOfDate);
+    const windowHi = asOfYm.year * 12 + (asOfYm.month - 1);
+    const windowLo = windowHi - (Math.min(Math.max(query.months_back ?? query.strip_months ?? 12, 1), 24) - 1);
+    // The months line only when months behind or the arrear month was filtered;
+    // the other filters follow it in words (TAFSD-291).
+    const monthsLine =
+      query.arrear_month || (query.min_months_behind ?? 1) > 1 || query.max_months_behind != null
+        ? this.defaulterFilterSubtitle(query)
+        : null;
+    return this.buildStudentMonthReport(rows, {
+      query,
+      basename,
+      generatedBy,
+      asOfDate,
+      listTitle: DEFAULTER_SHEET_LIST_TITLE,
+      window: { lo: windowLo, hi: windowHi },
+      amountColumns: [
+        { header: 'DEFAULTING AMOUNT', csvHeader: 'Defaulting Amount', width: 15, value: (r) => r.total },
+      ],
+      remark: (r) =>
+        r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '',
+      leadLine: monthsLine,
+      filterLines: (names, omitClasses, groupLine) =>
+        defaulterFilterLines(query, names, monthsLine, omitClasses, undefined, groupLine),
+      emptyMessage: 'No defaulters match the current filters.',
+      emptySheetName: 'Defaulters',
+    });
+  }
+
+  /**
+   * The school's per-student month sheet, shared by the defaulters export and
+   * the fee date report (TAFSD-341): one worksheet per campus, a title block
+   * (school by class group, list title, campus, session, DAY / DATE, generated
+   * by, filters), then one row per student — the fixed columns, one column per
+   * calendar month (or per fee head under each month with breakdown_by_head),
+   * the report's amount columns and REMARKS — with group headings, SUBTOTALs
+   * and a TOTAL row. Black-on-white and print-ready, like the paper original.
+   *
+   * What a month cell holds is the caller's: owed for defaulters, billed for
+   * the fee date report. `partial` prints it "BP 10940" and stays numeric.
+   */
+  private async buildStudentMonthReport(
+    sheetRows: StudentMonthRow[],
+    opts: StudentMonthReportOptions,
+  ): Promise<ExportFile> {
+    type Item = Record<string, unknown>;
+    type SheetRow = StudentMonthRow;
+    const { query, basename, generatedBy, asOfDate } = opts;
+    const items = sheetRows.map((r) => r.item);
     const siblingGrs = await this.loadSiblingGrNumbers(items.map((r) => Number(r.cc)));
     const linkToGr = (r: Item) => (siblingGrs.get(Number(r.cc)) ?? []).join(', ');
     // TAFSD-340: "FATHER 0312-2244523", one per guardian, primary contact first.
@@ -2849,19 +2936,6 @@ export class FinancialReportsService {
       : await this.loadDefaulterContacts(items.map((r) => Number(r.cc)));
     const contactFor = (r: Item) => contacts.get(Number(r.cc)) ?? [];
     const statusFor = (r: Item) => DEFAULTER_STATUS_LABELS[String(r.student_status ?? '')] ?? '';
-
-    type SheetRow = {
-      item: Item;
-      months: Map<number, DefaulterOwedMonth>;
-      total: number;
-    };
-    const sheetRows: SheetRow[] = [];
-    for (const item of items) {
-      const months = owedByStudent.get(Number(item.cc)) ?? new Map();
-      const total = this.roundMoney([...months.values()].reduce((s, m) => s + m.owed, 0));
-      // Rows keep listDefaulters' order — the sort the admin picked on screen.
-      sheetRows.push({ item, months, total });
-    }
 
     const byCampus = new Map<string, { code: string; name: string; rows: SheetRow[] }>();
     for (const row of sheetRows) {
@@ -2882,12 +2956,8 @@ export class FinancialReportsService {
       ]
         .filter(Boolean)
         .join(' ');
-    // The month window: months_back (TAFSD-355, picked at export) or else the
-    // page's strip_months, in calendar months ending at as_of's month. Month
-    // index = year * 12 + (month - 1), as loadDefaulterOwedMonths keys them.
-    const asOfYm = this.parseYearMonthOfDate(asOfDate);
-    const windowHi = asOfYm.year * 12 + (asOfYm.month - 1);
-    const windowLo = windowHi - (Math.min(Math.max(query.months_back ?? query.strip_months ?? 12, 1), 24) - 1);
+    const windowHi = opts.window.hi;
+    const windowLo = opts.window.lo;
     type SheetCol = { label: string; from: number; to: number };
     const sheetColumns = (rows: SheetRow[]): SheetCol[] => {
       let earlier = false;
@@ -2949,14 +3019,7 @@ export class FinancialReportsService {
       for (const r of rows) for (const name of cellFor(r, col)?.heads.keys() ?? []) names.add(name);
       return [...names].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
     };
-    const remarkFor = (r: SheetRow) =>
-      r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '';
-    // The months line only when months behind or the arrear month was filtered;
-    // the other filters follow it in words (TAFSD-291).
-    const monthsLine =
-      query.arrear_month || (query.min_months_behind ?? 1) > 1 || query.max_months_behind != null
-        ? this.defaulterFilterSubtitle(query)
-        : null;
+    const remarkFor = opts.remark;
     // A class or segment filter narrows the sheet to part of the school; without
     // one it is the whole school and gets the plain name.
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
@@ -2989,7 +3052,7 @@ export class FinancialReportsService {
           const fam = families?.get(Number(r.item.cc));
           key = fam ? `f${fam.id}` : `s${r.item.cc}`;
           label = fam ? `${fam.household_name} · #${fam.id}`.toUpperCase() : 'NO FAMILY ON FILE';
-          sort = [fam ? fam.household_name.toUpperCase() : '\uffff', fam?.id ?? Number(r.item.cc)];
+          sort = [fam ? fam.household_name.toUpperCase() : '￿', fam?.id ?? Number(r.item.cc)];
         }
         if (!byKey.has(key)) byKey.set(key, { label, sort, rows: [] });
         byKey.get(key)!.rows.push(r);
@@ -3011,6 +3074,9 @@ export class FinancialReportsService {
     // picked (the param omitted) is the full sheet, as before.
     const picked = new Set<DefaulterColumnKey>(query.columns?.length ? query.columns : DEFAULTER_COLUMN_KEYS);
     const show = (key: DefaulterColumnKey) => picked.has(key);
+    // The report's money columns ("amount" in the picker): DEFAULTING AMOUNT for
+    // defaulters; AMOUNT, PAID and BALANCE for the fee date report.
+    const amountColumns = show('amount') ? opts.amountColumns : [];
 
     if (query.format === 'csv') {
       const order = headOrder(sheetRows);
@@ -3045,7 +3111,7 @@ export class FinancialReportsService {
         ...(groupBy ? ['Group'] : []),
         ...before.map(([, h]) => h),
         ...monthCols.map((c) => c.header),
-        ...(show('amount') ? ['Defaulting Amount'] : []),
+        ...amountColumns.map((c) => c.csvHeader),
         ...(show('remarks') ? ['Remarks'] : []),
       ];
       const lines = [header.map((h) => this.csvCell(h)).join(',')];
@@ -3057,7 +3123,7 @@ export class FinancialReportsService {
               ...(groupBy ? [group.label] : []),
               ...before.map(([, , v]) => v(r, i)),
               ...monthCols.map((c) => c.value(r)),
-              ...(show('amount') ? [r.total] : []),
+              ...amountColumns.map((c) => c.value(r)),
               ...(show('remarks') ? [remarkFor(r)] : []),
             ];
             lines.push(cells.map((v) => this.csvCell(v)).join(','));
@@ -3065,7 +3131,7 @@ export class FinancialReportsService {
         }
       }
       return {
-        buffer: Buffer.from(`\ufeff${lines.join('\n')}`, 'utf8'),
+        buffer: Buffer.from(`﻿${lines.join('\n')}`, 'utf8'),
         filename: `${basename}.csv`,
         contentType: 'text/csv; charset=utf-8',
       };
@@ -3089,8 +3155,8 @@ export class FinancialReportsService {
     if (campuses.length === 0) {
       // Still a workbook, so the admin sees "nothing matched" rather than an
       // opaque download failure.
-      const sheet = workbook.addWorksheet('Defaulters');
-      sheet.getCell('A1').value = 'No defaulters match the current filters.';
+      const sheet = workbook.addWorksheet(opts.emptySheetName);
+      sheet.getCell('A1').value = opts.emptyMessage;
       return {
         buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
         filename: `${basename}.xlsx`,
@@ -3196,14 +3262,14 @@ export class FinancialReportsService {
           });
         }
       }
-      if (show('amount'))
+      for (const amountCol of amountColumns)
         specs.push({
-          header: 'DEFAULTING AMOUNT',
-          width: 15,
+          header: amountCol.header,
+          width: amountCol.width,
           amount: true,
-          total: (r) => r.total,
+          total: amountCol.value,
           fill: (c, r) => {
-            c.value = r.total;
+            c.value = amountCol.value(r);
             c.numFmt = '0';
           },
         });
@@ -3234,7 +3300,7 @@ export class FinancialReportsService {
       // TAFSD-338: header text a size or two up from the body rows.
       banner(heading.school, 20, 32);
       if (heading.classesLine) banner(heading.classesLine, 13, 20);
-      banner(DEFAULTER_SHEET_LIST_TITLE, 17, 26);
+      banner(opts.listTitle, 17, 26);
       banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 15, 22);
       banner(heading.session, 14, 20);
 
@@ -3246,15 +3312,9 @@ export class FinancialReportsService {
         sheet.getRow(line++).height = 16;
       }
       line++;
-      const filterLines = defaulterFilterLines(
-        query,
-        filterNames,
-        monthsLine,
-        heading.classesLine != null,
-        undefined,
-        groupLine,
-      );
-      filterLines.forEach((text, i) => banner(text, i === 0 && monthsLine ? 14 : 12, i === 0 && monthsLine ? 22 : 18));
+      const leadLine = opts.leadLine;
+      const filterLines = opts.filterLines(filterNames, heading.classesLine != null, groupLine);
+      filterLines.forEach((text, i) => banner(text, i === 0 && leadLine ? 14 : 12, i === 0 && leadLine ? 22 : 18));
 
       // Breakdown sheets have two header rows: the month over its head
       // sub-columns, and the head names under it. Other columns span both.
@@ -3309,14 +3369,14 @@ export class FinancialReportsService {
         rowIdx++;
       };
 
-      // TOTAL — the grand total under DEFAULTING AMOUNT, as on the paper sheet,
-      // with a labelled box over the few columns before it. Without DEFAULTING
-      // AMOUNT, each month column gets its own total. A breakdown sheet totals
-      // every head and month sub-column as well. Groups get the same row as
-      // their SUBTOTAL.
+      // TOTAL — the grand total under the amount columns, as on the paper
+      // sheet, with a labelled box over the few columns before it. Without the
+      // amount columns, each month column gets its own total. A breakdown sheet
+      // totals every head and month sub-column as well. Groups get the same row
+      // as their SUBTOTAL.
       const totalCols = specs
         .map((spec, i) => ({ spec, col: i + 1 }))
-        .filter(({ spec }) => spec.total && (spec.amount || !show('amount') || breakdown));
+        .filter(({ spec }) => spec.total && (spec.amount || !amountColumns.length || breakdown));
       const writeTotal = (rows: SheetRow[], text: string) => {
         if (!totalCols.length) return;
         const totalRow = sheet.getRow(rowIdx);
