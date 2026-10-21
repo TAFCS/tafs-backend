@@ -265,6 +265,9 @@ model families {
   students                 students[]
   support_tickets          support_tickets[]
   voucher_notifications    voucher_notifications[]
+
+  // TAFSD-399: parent login and signup look families up by exact email.
+  @@index([email], map: "idx_families_email")
 }
 
 model family_refresh_tokens {
@@ -348,6 +351,10 @@ model parent_change_requests {
   families       families  @relation(fields: [family_id], references: [id])
   guardians      guardians @relation(fields: [guardian_id], references: [id])
   processor      users?    @relation(fields: [processed_by], references: [id])
+
+  // TAFSD-399: pending queue (status) and a family's own requests.
+  @@index([status, created_at], map: "idx_parent_change_requests_status_created")
+  @@index([family_id], map: "idx_parent_change_requests_family")
 }
 
 model houses {
