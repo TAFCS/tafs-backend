@@ -6,6 +6,9 @@ import type { DefaulterSheetHeading } from './defaulter-sheet-heading';
  * Excel exports, matching the defaulters sheet so the three read as one set:
  * school name, report title, campus, session, DAY / DATE, the filters in words,
  * then a boxed table with S# and a TOTAL row under every summed column.
+ *
+ * TAFSD-341: type sizes, row heights and the GENERATED ON line follow the
+ * defaulters sheet as it stands after TAFSD-338 (buildStudentMonthReport).
  */
 
 export interface SchoolSheetColumn {
@@ -35,6 +38,8 @@ export interface SchoolSheetOptions {
   filterLines: string[];
   /** YYYY-MM-DD, for the DAY / DATE lines. */
   exportDate: string;
+  /** "GENERATED ON 22-10-2026 10:00 PM BY AAWAIZ ALI (aawaiz.ali)", under DAY / DATE (TAFSD-338). */
+  generatedLine?: string;
   columns: SchoolSheetColumn[];
 }
 
@@ -69,33 +74,34 @@ export function writeSchoolSheets(
       sheet.getRow(line).height = height;
       line++;
     };
-    banner(opts.heading.school, 16, 28);
-    if (opts.heading.classesLine) banner(opts.heading.classesLine, 11, 18);
-    banner(opts.reportTitle, 14, 22);
-    banner(sheetData.campus, 13, 20);
-    banner(opts.heading.session, 12, 18);
+    banner(opts.heading.school, 20, 32);
+    if (opts.heading.classesLine) banner(opts.heading.classesLine, 13, 20);
+    banner(opts.reportTitle, 17, 26);
+    banner(sheetData.campus, 15, 22);
+    banner(opts.heading.session, 14, 20);
 
     line++;
-    for (const text of [dayLine, dateLine]) {
-      const cell = sheet.getCell(line++, 1);
+    for (const text of [dayLine, dateLine, ...(opts.generatedLine ? [opts.generatedLine] : [])]) {
+      const cell = sheet.getCell(line, 1);
       cell.value = text;
-      cell.font = { name: 'Arial', bold: true, size: 9 };
+      cell.font = { name: 'Arial', bold: true, size: 11 };
+      sheet.getRow(line++).height = 16;
     }
     line++;
-    banner(opts.periodLine, 13, 20);
-    for (const text of opts.filterLines) banner(text, 11, 16);
+    banner(opts.periodLine, 14, 22);
+    for (const text of opts.filterLines) banner(text, 12, 18);
 
     const HEADER_ROW = line;
     const headerRow = sheet.getRow(HEADER_ROW);
     columns.forEach((col, i) => {
       const cell = headerRow.getCell(i + 1);
       cell.value = col.header.toUpperCase();
-      cell.font = { name: SERIF, bold: true, size: 10 };
+      cell.font = { name: SERIF, bold: true, size: col.money ? 11 : 13 };
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       cell.border = box;
       sheet.getColumn(i + 1).width = col.width;
     });
-    headerRow.height = 30;
+    headerRow.height = 36;
 
     const moneyFmt = new Map(
       columns
@@ -118,10 +124,10 @@ export function writeSchoolSheets(
         if (col.money && typeof value === 'number') cell.numFmt = moneyFmt.get(col.key)!;
         if (col.total && typeof value === 'number') sums.set(col.key, (sums.get(col.key) ?? 0) + value);
         cell.border = box;
-        cell.font = { name: SERIF, size: 10 };
+        cell.font = col.money ? { name: SERIF, bold: true, size: 12 } : { name: SERIF, size: 11 };
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: col.width >= 20 };
       });
-      row.height = 18;
+      row.height = 22;
     });
 
     // TOTAL under every summed column, labelled in the columns before the first.
@@ -143,7 +149,7 @@ export function writeSchoolSheets(
         const cell = totalRow.getCell(idx);
         cell.value = Math.round((sums.get(col.key) ?? 0) * 100) / 100;
         cell.numFmt = col.money ? moneyFmt.get(col.key)! : '0';
-        cell.font = { name: SERIF, bold: true, size: 11 };
+        cell.font = { name: SERIF, bold: true, size: 12 };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = box;
       }

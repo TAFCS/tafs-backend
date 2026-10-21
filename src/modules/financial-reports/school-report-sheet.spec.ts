@@ -18,6 +18,7 @@ describe('school-report-sheet (TAFSD-268)', () => {
         periodLine: 'ON 1 OCTOBER 2026',
         filterLines: ['ALL STUDENTS'],
         exportDate: '2026-10-12',
+        generatedLine: 'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
         columns: [
           { header: 'Name', key: 'name', width: 20 },
           { header: 'Heads', key: 'heads', width: 8, total: true },
@@ -38,5 +39,32 @@ describe('school-report-sheet (TAFSD-268)', () => {
     expect(total.getCell(3).value).toBe(5);
     expect(total.getCell(4).value).toBe(300.5);
     expect(total.getCell(4).numFmt).toBe('#,##0.00');
+  });
+
+  it('matches the defaulters sheet: bigger title, GENERATED ON line under DAY / DATE (TAFSD-341)', async () => {
+    const wb = new ExcelJS.Workbook();
+    writeSchoolSheets(
+      wb,
+      [{ tab: 'GEJ', campus: 'GULISTAN-E-JAUHAR CAMPUS', rows: [{ amount: 100 }] }],
+      {
+        reportTitle: 'FEE HEADS REPORT — BY FEE DATE',
+        heading: { school: 'THE AMERICAN FOUNDATION SCHOOL', classesLine: null, session: 'SESSION 2026–2027' },
+        periodLine: 'ON 1 OCTOBER 2026',
+        filterLines: [],
+        exportDate: '2026-10-12',
+        generatedLine: 'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
+        columns: [{ header: 'Amount', key: 'amount', width: 12, total: true, money: true }],
+      },
+    );
+    const ws = wb.worksheets[0];
+    expect(ws.getCell(1, 1).font.size).toBe(20);
+    expect(ws.getCell(2, 1).font.size).toBe(17);
+    const lines = [...Array(ws.rowCount).keys()].map((i) => ws.getCell(i + 1, 1).value);
+    const day = lines.indexOf('DAY :MONDAY');
+    expect(lines.slice(day, day + 3)).toEqual([
+      'DAY :MONDAY',
+      'DATE : OCTOBER 12, 2026',
+      'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
+    ]);
   });
 });

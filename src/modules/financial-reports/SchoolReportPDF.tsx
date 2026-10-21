@@ -68,6 +68,7 @@ export const SchoolReportPDF: React.FC<SchoolReportPdfProps> = ({ sheets, opts, 
             <Text style={[styles.banner, styles.session]}>{opts.heading.session}</Text>
             <Text style={styles.dayDate}>{dayLine}</Text>
             <Text style={styles.dayDate}>{dateLine}</Text>
+            {opts.generatedLine ? <Text style={styles.dayDate}>{opts.generatedLine}</Text> : null}
             <Text style={[styles.banner, styles.period]}>{opts.periodLine}</Text>
             {opts.filterLines.map((l, i) => (
               <Text key={i} style={[styles.banner, styles.filter]}>{l}</Text>

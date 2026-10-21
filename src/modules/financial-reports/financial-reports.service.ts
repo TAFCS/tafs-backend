@@ -943,9 +943,12 @@ export class FinancialReportsService {
   private async listFeeHeadsByFeeDate(
     query: ListFeeHeadsQueryDto,
     user: IJwtStaffPayload,
+    /** Narrows to part of the scope (the export's one-campus sheets); ANDed, never widens it. */
+    narrowStudents?: Prisma.studentsWhereInput,
   ) {
     const leaf = this.feeHeadsLeafWhere(query);
-    const studentWhere = this.buildStudentWhere(query, user);
+    const scoped = this.buildStudentWhere(query, user);
+    const studentWhere: Prisma.studentsWhereInput = narrowStudents ? { AND: [scoped, narrowStudents] } : scoped;
     const where: Prisma.student_feesWhereInput = {
       ...leaf,
       students: studentWhere,
@@ -1178,6 +1181,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1285,6 +1289,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1321,6 +1326,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1359,6 +1365,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1397,6 +1404,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1404,12 +1412,30 @@ export class FinancialReportsService {
     query: ExportFeeHeadsQueryDto,
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
-    const result = await this.listFeeHeadsByFeeDate(
-      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
-      user,
-    );
+    const all = { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 };
+    const result = await this.listFeeHeadsByFeeDate(all, user);
     this.assertExportCap(result.items.length);
+    // TAFSD-341: one sheet per campus, as on the defaulters sheet. Each campus is
+    // the same rollup narrowed to its students; students with no campus get
+    // their own sheet, so the sheets always add back up to the whole.
+    const leaf = this.feeHeadsLeafWhere(query);
+    const campusGroups = await this.prisma.students.groupBy({
+      by: ['campus_id'],
+      where: { ...this.buildStudentWhere(query, user), student_fees: { some: leaf } },
+    });
+    const campusIds = campusGroups.map((g) => g.campus_id).filter((id): id is number => id != null);
+    const campusNames = new Map(
+      (await this.prisma.campuses.findMany({ where: { id: { in: campusIds } }, select: { id: true, campus_name: true } }))
+        .map((c) => [c.id, c.campus_name]),
+    );
+    const perCampus = await Promise.all(
+      campusGroups.map(async (g) => ({
+        campus: g.campus_id == null ? 'Unassigned' : campusNames.get(g.campus_id) ?? `Campus #${g.campus_id}`,
+        items: (await this.listFeeHeadsByFeeDate(all, user, { campus_id: g.campus_id })).items,
+      })),
+    );
     const columns: ExportColumn[] = [
+      { header: 'Campus', key: 'campus', width: 24 },
       { header: 'Fee date', key: 'fee_date', width: 14 },
       { header: 'Heads', key: 'head_count', width: 10 },
       { header: 'Billed', key: 'billed', width: 14 },
@@ -1420,10 +1446,13 @@ export class FinancialReportsService {
       { header: 'Waived', key: 'waived', width: 14 },
       { header: 'Outstanding', key: 'outstanding', width: 14 },
     ];
-    const data = result.items.map((item) => ({
-      ...item,
-      fee_date: item.fee_date ?? 'No fee date',
-    }));
+    const data = perCampus.flatMap(({ campus, items }) =>
+      items.map((item) => ({
+        campus,
+        ...item,
+        fee_date: item.fee_date ?? 'No fee date',
+      })),
+    );
     return this.buildSchoolExportFile(
       'Fee Heads by Fee Date',
       'FEE HEADS REPORT — BY FEE DATE',
@@ -1432,6 +1461,7 @@ export class FinancialReportsService {
       data,
       query,
       this.feeHeadsFilterWords(query),
+      user,
     );
   }
 
@@ -1495,6 +1525,7 @@ export class FinancialReportsService {
       data,
       query,
       this.depositsFilterWords(query),
+      user,
     );
   }
 
@@ -4806,6 +4837,7 @@ export class FinancialReportsService {
     rows: Record<string, string | number>[],
     query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf' },
     extraFilterLines: string[],
+    generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
   ): Promise<ExportFile> {
     if (query.format === 'csv') return this.buildExportFile(sheetName, basename, columns, rows, 'csv');
     // A PDF of tens of thousands of rows is hundreds of pages nobody prints —
@@ -4880,6 +4912,10 @@ export class FinancialReportsService {
       periodLine: periodLine(query.from_date, query.to_date),
       filterLines,
       exportDate: this.todayPkt(),
+      // TAFSD-338/341: when and by whom, as on the defaulters sheet.
+      generatedLine: `GENERATED ON ${this.formatPktDateTime(new Date())}${
+        generatedBy ? ` BY ${await this.staffLabel(generatedBy)}` : ''
+      }`,
       columns: sheetColumns,
     };
 
