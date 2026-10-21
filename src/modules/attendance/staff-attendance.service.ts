@@ -618,11 +618,21 @@ export class StaffAttendanceService {
       expected_check_in: string | null;
       expected_check_out: string | null;
       is_override: boolean;
+      /** TAFSD-401: an admin overrode this day (attendance_staff_daily.source = MANUAL). */
+      is_manual_override: boolean;
       scans: { id: number; scan_time: string; direction: string | null }[];
+      /** The device punches, always — `scans` is emptied on an overridden day. */
+      raw_scans: { id: number; scan_time: string; direction: string | null }[];
       is_working_day: boolean;
       day_type: string | null;
       objections: { id: number; scan_id: number | null; claimed_time: string; status: string }[];
     }[] = [];
+
+    const toScanDto = (s: (typeof scans)[number]) => ({
+      id: s.id,
+      scan_time: s.scan_time.toISOString(),
+      direction: s.direction,
+    });
 
     for (
       let d = new Date(periodStart);
@@ -648,11 +658,9 @@ export class StaffAttendanceService {
           expected_check_in: null,
           expected_check_out: null,
           is_override: false,
-          scans: dayScans.map((s) => ({
-            id: s.id,
-            scan_time: s.scan_time.toISOString(),
-            direction: s.direction,
-          })),
+          is_manual_override: false,
+          scans: dayScans.map(toScanDto),
+          raw_scans: dayScans.map(toScanDto),
           is_working_day: false,
           day_type: 'NOT_ON_ROLL',
           objections: [],
@@ -699,6 +707,7 @@ export class StaffAttendanceService {
           ? await this.expectedTimes.resolveExpectedTimes(employee.id, campusId, new Date(d))
           : { expectedCheckIn: null as Date | null, expectedCheckOut: null as Date | null, source: 'NONE' as const };
 
+      const manualOverride = record?.source === AttendanceSource.MANUAL;
       days.push({
         date: key,
         status: record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
@@ -712,11 +721,13 @@ export class StaffAttendanceService {
         expected_check_in: expected.expectedCheckIn?.toISOString() ?? null,
         expected_check_out: expected.expectedCheckOut?.toISOString() ?? null,
         is_override: expected.source === 'OVERRIDE',
-        scans: dayScans.map((s) => ({
-          id: s.id,
-          scan_time: s.scan_time.toISOString(),
-          direction: s.direction,
-        })),
+        is_manual_override: manualOverride,
+        // TAFSD-401: the staff app derives a day from raw punches whenever
+        // there are any (an odd count reads "Needs review"). An overridden
+        // day's own times and status are the truth, so hand it no punches;
+        // raw_scans still carries them.
+        scans: manualOverride ? [] : dayScans.map(toScanDto),
+        raw_scans: dayScans.map(toScanDto),
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
         objections: (objectionsByDate.get(key) ?? []).map((o) => ({
