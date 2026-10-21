@@ -769,6 +769,39 @@ export class NoticeBoardService {
     return updated;
   }
 
+  /**
+   * TAFSD-404: the poster may edit or delete their own notice while it is
+   * still PENDING approval (or was REJECTED) — no family has seen it yet —
+   * with only the "post a notice" permission. Approved notices need the
+   * edit / delete permissions as before. Pinning stays an edit permission.
+   */
+  private async assertOwnUnapprovedPost(id: string | number, user: IJwtStaffPayload) {
+    const numericId = typeof id === 'number' ? id : parseInt(String(id), 10);
+    if (!Number.isFinite(numericId)) throw new NotFoundException('Post not found');
+    const post = await this.prisma.notice_board_posts.findFirst({
+      where: { id: numericId, deleted_at: null },
+      select: { id: true, posted_by: true, status: true },
+    });
+    if (!post || post.posted_by !== user.sub) throw new NotFoundException('Post not found');
+    if (post.status === NoticePostStatus.APPROVED) {
+      throw new BadRequestException(
+        'This notice has already been approved. Ask someone with edit or delete access on the notice board to change it.',
+      );
+    }
+    return numericId;
+  }
+
+  async updateOwnPost(id: string | number, dto: UpdatePostDto, changedBy: string | undefined, user: IJwtStaffPayload) {
+    const numericId = await this.assertOwnUnapprovedPost(id, user);
+    const { is_pinned: _pin, ...content } = dto;
+    return this.updatePost(numericId, content, changedBy, user);
+  }
+
+  async deleteOwnPost(id: string | number, deletedBy: string | undefined, user: IJwtStaffPayload) {
+    const numericId = await this.assertOwnUnapprovedPost(id, user);
+    return this.deletePost(numericId, deletedBy, user);
+  }
+
   async deletePost(id: string | number, deletedBy: string | undefined, user: IJwtStaffPayload) {
     if (String(id).startsWith('holiday-')) {
       const holidayId = parseInt(String(id).replace('holiday-', ''), 10);

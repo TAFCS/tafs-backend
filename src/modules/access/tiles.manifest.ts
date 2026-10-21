@@ -374,7 +374,7 @@ const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
 const NOTICE_BOARD_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View posts and read stats', default: true },
 
-  { id: 'create', label: 'Post a notice (incl. media upload)', description: 'Posts by anyone but a superadmin wait for superadmin approval before families see them.', implies: ['view'] },
+  { id: 'create', label: 'Post a notice (incl. media upload)', description: 'Posts by anyone but a superadmin wait for superadmin approval before families see them. The poster can edit or delete their own notice until it is approved.', implies: ['view'] },
   { id: 'edit', label: 'Edit or pin a notice', implies: ['view'] },
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
 ];
