@@ -131,13 +131,6 @@ export class ListDepositsQueryDto extends FinancialReportQueryDto {
   bank_name?: string[];
 }
 
-export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
-  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
-  @IsOptional()
-  @IsIn(['xlsx', 'csv', 'pdf'])
-  format?: 'xlsx' | 'csv' | 'pdf';
-}
-
 export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   /** pdf: the school-format sheet as a PDF (TAFSD-306). */
   @IsOptional()
@@ -472,6 +465,34 @@ export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
    * written in the standard order whatever order they arrive in. Omitted =
    * every column (the full sheet).
    */
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(DEFAULTER_COLUMN_KEYS, { each: true })
+  columns?: DefaulterColumnKey[];
+}
+
+// Declared after DEFAULTER_COLUMN_KEYS / DEFAULTER_GROUP_BY: its decorators read them.
+export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
+  @IsOptional()
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
+
+  /**
+   * TAFSD-341: the per-student sheet options, as on the defaulters export.
+   * By student only; the other views ignore them.
+   */
+  @IsOptional()
+  @IsIn(DEFAULTER_GROUP_BY)
+  group_by?: DefaulterGroupBy;
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  breakdown_by_head?: boolean;
+
   @IsOptional()
   @Transform(toStringArray)
   @IsArray()

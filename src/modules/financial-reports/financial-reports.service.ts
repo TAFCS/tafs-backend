@@ -114,14 +114,23 @@ type StudentMonthRow = {
 };
 /** What a per-student month sheet (defaulters, fee date report) varies on; the layout is shared. */
 type StudentMonthReportOptions = {
-  query: Pick<
-    ExportDefaultersQueryDto,
-    'format' | 'columns' | 'group_by' | 'breakdown_by_head' | 'campus_id' | 'class_id' | 'section_id' | 'segment_id' | 'graduated_from_class_id'
-  >;
+  query: {
+    format?: string;
+    columns?: DefaulterColumnKey[];
+    group_by?: DefaulterGroupBy;
+    breakdown_by_head?: boolean;
+    campus_id?: number[];
+    class_id?: number[];
+    section_id?: number[];
+    segment_id?: number[];
+    graduated_from_class_id?: number[];
+  };
   basename: string;
   generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>;
-  /** Drives DAY / DATE and the session line. */
+  /** Drives DAY / DATE, and the session line unless sessionDate is given. */
   asOfDate: string;
+  /** The date whose academic session heads the sheet; defaults to asOfDate. */
+  sessionDate?: string;
   /** The banner under the school name. */
   listTitle: string;
   /** Month columns shown (month index year*12 + month-1); anything outside folds into EARLIER / LATER. */
@@ -1203,6 +1212,9 @@ export class FinancialReportsService {
     query: ExportFeeHeadsQueryDto,
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
+    // TAFSD-341: Excel and CSV are the defaulters student sheet; the PDF keeps
+    // the flat school table below.
+    if (query.format !== 'pdf') return this.exportFeeHeadsByStudentSheet(query, user);
     const leaf = this.feeHeadsLeafWhere(query);
     const studentWhere = this.buildStudentWhere(query, user);
     const where: Prisma.student_feesWhereInput = {
@@ -1305,6 +1317,170 @@ export class FinancialReportsService {
       this.feeHeadsFilterWords(query),
       user,
     );
+  }
+
+  /**
+   * By student in the defaulters format (TAFSD-341): the defaulters student
+   * sheet — campus sheets, the fixed student columns, optional class / section
+   * / family groups with SUBTOTALs, the column picker — with one column per
+   * fee-date month in the range holding what was billed that month (net of
+   * discount; with breakdown_by_head, one sub-column per fee head and a
+   * DISCOUNT column), then AMOUNT, PAID, WAIVED and OUTSTANDING. Same money
+   * rules as listFeeHeadsByStudent, so the sheet totals equal the screen's.
+   */
+  private async exportFeeHeadsByStudentSheet(
+    query: ExportFeeHeadsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const students = await this.prisma.students.findMany({
+      where: { ...studentWhere, student_fees: { some: leaf } },
+      select: {
+        cc: true,
+        gr_number: true,
+        full_name: true,
+        status: true,
+        class_id: true,
+        graduated_from_class_id: true,
+        campuses: { select: { campus_name: true, campus_code: true } },
+        classes: { select: { description: true } },
+        graduated_from_class: { select: { description: true } },
+        sections: { select: { description: true } },
+      },
+      take: EXPORT_ROW_CAP + 1,
+    });
+    this.assertExportCap(students.length);
+    const [groups, feeTypes] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['student_id', 'fee_date', 'fee_type_id', 'is_discount', 'status'],
+        where: { ...leaf, students: studentWhere },
+        _sum: { amount: true, amount_paid: true },
+        _count: { _all: true },
+      }),
+      this.prisma.fee_types.findMany({ select: { id: true, description: true, priority_order: true } }),
+    ]);
+    const feeTypeName = new Map(feeTypes.map((ft) => [ft.id, ft.description.trim() || 'OTHER']));
+    const rank = new Map(
+      [...feeTypes]
+        .sort((a, b) => (a.priority_order ?? 1e9) - (b.priority_order ?? 1e9) || a.id - b.id)
+        .map((ft, i) => [ft.description.trim() || 'OTHER', i]),
+    );
+    const DISCOUNT_HEAD = 'DISCOUNT';
+    const headRank = (name: string) => (name === DISCOUNT_HEAD ? Number.MAX_SAFE_INTEGER : rank.get(name) ?? 1e9);
+
+    type Money = {
+      billed: number;
+      discount: number;
+      headsPaid: number;
+      discountConsumed: number;
+      waived: number;
+      /** month index -> head name -> net billed */
+      months: Map<number, Map<string, number>>;
+    };
+    const money = new Map<number, Money>();
+    for (const g of groups) {
+      let m = money.get(g.student_id);
+      if (!m) {
+        m = { billed: 0, discount: 0, headsPaid: 0, discountConsumed: 0, waived: 0, months: new Map() };
+        money.set(g.student_id, m);
+      }
+      const amount = this.toMoney(g._sum.amount);
+      const paid = this.toMoney(g._sum.amount_paid);
+      let head: string;
+      // Discount rows store a positive amount that reduces the bill (the rollup
+      // shows it negated), so it enters the month as a negative.
+      let signed = amount;
+      if (g.is_discount) {
+        m.discount = this.roundMoney(m.discount - amount);
+        m.discountConsumed += paid;
+        head = DISCOUNT_HEAD;
+        signed = -amount;
+      } else {
+        m.billed = this.roundMoney(m.billed + amount);
+        m.headsPaid += paid;
+        if (g.status === fee_status_enum.WAIVED) m.waived = this.roundMoney(m.waived + this.waivedPortion(g._sum));
+        head = g.fee_type_id == null ? 'OTHER' : feeTypeName.get(g.fee_type_id) ?? 'OTHER';
+      }
+      const idx = g.fee_date ? g.fee_date.getUTCFullYear() * 12 + g.fee_date.getUTCMonth() : -1;
+      const month = m.months.get(idx) ?? new Map<string, number>();
+      month.set(head, this.roundMoney((month.get(head) ?? 0) + signed));
+      m.months.set(idx, month);
+    }
+
+    const rows: StudentMonthRow[] = students
+      .map((st) => {
+        const m = money.get(st.cc);
+        const amount = this.roundMoney((m?.billed ?? 0) + (m?.discount ?? 0));
+        const paid = this.netPaid(m?.headsPaid ?? 0, m?.discountConsumed ?? 0);
+        const waived = m?.waived ?? 0;
+        const months = new Map<number, DefaulterOwedMonth>();
+        for (const [idx, heads] of m?.months ?? []) {
+          const names = [...heads.keys()].sort((a, b) => headRank(a) - headRank(b) || a.localeCompare(b));
+          months.set(idx, {
+            owed: this.roundMoney([...heads.values()].reduce((sum, v) => sum + v, 0)),
+            partial: false,
+            heads: names.map((name) => ({ name, owed: heads.get(name)!, partial: false })),
+          });
+        }
+        return {
+          item: {
+            cc: st.cc,
+            gr_number: st.gr_number ?? '',
+            student_name: st.full_name ?? '',
+            campus: st.campuses?.campus_name ?? '',
+            campus_code: st.campuses?.campus_code ?? '',
+            class_id: st.status === student_status.GRADUATED ? st.graduated_from_class_id : st.class_id,
+            class_name: this.resolveStudentClassName(st),
+            section: st.sections?.description ?? '',
+            student_status: st.status,
+            amount_paid: paid,
+            waived,
+            outstanding: this.roundMoney(amount - paid - waived),
+          },
+          months,
+          total: amount,
+        };
+      })
+      // As on the paper sheet: class in level order, then section, then name.
+      .sort(
+        (a, b) =>
+          (Number(a.item.class_id ?? Number.MAX_SAFE_INTEGER) - Number(b.item.class_id ?? Number.MAX_SAFE_INTEGER)) ||
+          String(a.item.section).localeCompare(String(b.item.section)) ||
+          String(a.item.student_name).localeCompare(String(b.item.student_name)),
+      );
+
+    const toIdx = (d: string) => Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7)) - 1;
+    const hi = toIdx(query.to_date);
+    const lo = Math.max(toIdx(query.from_date), hi - 23);
+    const period = periodLine(query.from_date, query.to_date);
+    const remark = (r: StudentMonthRow) => {
+      const outstanding = Number(r.item.outstanding);
+      const paid = Number(r.item.amount_paid);
+      if (outstanding <= 0) return paid <= 0 && Number(r.item.waived) > 0 ? 'Waived' : 'Paid';
+      return paid > 0 ? 'Part-paid' : 'Unpaid';
+    };
+    return this.buildStudentMonthReport(rows, {
+      query,
+      basename: `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
+      generatedBy: user,
+      asOfDate: this.todayPkt(),
+      sessionDate: query.to_date,
+      listTitle: 'FEE HEADS REPORT — BY STUDENT',
+      window: { lo, hi },
+      amountColumns: [
+        { header: 'AMOUNT', csvHeader: 'Amount', width: 14, value: (r) => r.total },
+        { header: 'PAID', csvHeader: 'Amount paid', width: 14, value: (r) => Number(r.item.amount_paid) },
+        { header: 'WAIVED', csvHeader: 'Waived', width: 12, value: (r) => Number(r.item.waived) },
+        { header: 'OUTSTANDING', csvHeader: 'Outstanding', width: 15, value: (r) => Number(r.item.outstanding) },
+      ],
+      remark,
+      leadLine: period,
+      filterLines: (names, omitClasses, groupLine) =>
+        defaulterFilterLines(query, names, period, omitClasses, [], [...this.feeHeadsFilterWords(query), ...groupLine]),
+      emptyMessage: 'Nothing matches the current filters.',
+      emptySheetName: 'Fee Heads by Student',
+    });
   }
 
   private async exportFeeHeadsByFeeType(
@@ -3476,7 +3652,7 @@ export class FinancialReportsService {
           class_name: String(r.item.class_name ?? ''),
         })),
         classFiltered,
-        asOfDate,
+        opts.sessionDate ?? asOfDate,
       );
       let line = 1;
       const banner = (text: string, size: number, height: number) => {
