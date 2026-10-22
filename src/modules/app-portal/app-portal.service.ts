@@ -305,10 +305,20 @@ export class AppPortalService {
         expectedCheckIn,
       });
 
+      // Fallback for older mobile app builds (e.g. current iOS App Store builds before
+      // nullable clock_in) where `s['clock_in'] as String` throws a TypeError
+      // when clock_in is null and crashes the entire month with
+      // "Something went wrong. Please try again." Fall back to clock_out so
+      // older apps do not crash on departure-only punch days.
+      const safeSessions = sessions.map((s) => ({
+        clock_in: s.clock_in ?? s.clock_out,
+        clock_out: s.clock_out,
+      }));
+
       days.push({
         date: key,
         status,
-        sessions,
+        sessions: safeSessions,
         holiday_type: resolved.isWorkingDay
           ? null
           : holiday_type ?? (status === RollRecordStatus.EXCUSED ? resolved.dayType ?? 'HOLIDAY' : null),
