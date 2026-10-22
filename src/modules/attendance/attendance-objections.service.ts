@@ -54,9 +54,12 @@ export class AttendanceObjectionsService {
       throw new BadRequestException('Invalid claimed_time');
     }
 
-    if (dto.scan_id) {
+    // TAFSD-413: an overridden day's clock events carry negative ids (no real
+    // scan behind them) — an objection against one is a day objection.
+    const scanId = dto.scan_id && dto.scan_id > 0 ? dto.scan_id : null;
+    if (scanId) {
       const scan = await this.prisma.zk_attendance_scans.findFirst({
-        where: { id: dto.scan_id, employee_id: employee.id },
+        where: { id: scanId, employee_id: employee.id },
       });
       if (!scan) throw new BadRequestException('Scan not found for this employee');
     }
@@ -65,7 +68,7 @@ export class AttendanceObjectionsService {
       data: {
         employee_id: employee.id,
         attendance_date: attendanceDate,
-        scan_id: dto.scan_id ?? null,
+        scan_id: scanId,
         claimed_time: claimedTime,
         reason: dto.reason,
         status: AttendanceObjectionStatus.PENDING,
