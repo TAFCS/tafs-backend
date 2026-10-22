@@ -46,6 +46,11 @@ export interface SchoolSheet {
   groups?: SchoolSheetGroup[];
   /** "FEE DATE" / "FEE DATES": what one row is, for the group headings. */
   rowNoun?: [string, string];
+  /**
+   * Numbers as the defaulters sheet prints them (TAFSD-341): plain whole
+   * numbers in the body, two decimals on TOTAL / SUBTOTAL, no separators.
+   */
+  defaulterNumbers?: boolean;
 }
 
 export interface SchoolSheetOptions {
@@ -148,7 +153,9 @@ export function writeSchoolSheets(
         .filter((c) => c.money)
         .map((c) => [
           c.key,
-          sheetData.rows.some((r) => typeof r[c.key] === 'number' && !Number.isInteger(r[c.key]))
+          sheetData.defaulterNumbers
+            ? '0'
+            : sheetData.rows.some((r) => typeof r[c.key] === 'number' && !Number.isInteger(r[c.key]))
             ? MONEY_FMT_DECIMAL
             : MONEY_FMT,
         ]),
@@ -189,7 +196,7 @@ export function writeSchoolSheets(
         const cell = totalRow.getCell(idx);
         const sum = rows.reduce((acc, r) => acc + (typeof r[col.key] === 'number' ? (r[col.key] as number) : 0), 0);
         cell.value = Math.round(sum * 100) / 100;
-        cell.numFmt = col.money ? moneyFmt.get(col.key)! : '0';
+        cell.numFmt = col.money ? (sheetData.defaulterNumbers ? '0.00' : moneyFmt.get(col.key)!) : '0';
         cell.font = { name: SERIF, bold: true, size: 12 };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = box;
