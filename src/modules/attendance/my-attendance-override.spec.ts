@@ -37,10 +37,14 @@ const first = async (source: AttendanceSource) => {
 };
 
 describe('getMyAttendance on an overridden day', () => {
-  it('sends no punches, keeps them in raw_scans, and flags the override', async () => {
+  it('sends the override times as clock events, keeps punches in raw_scans, and flags the override', async () => {
     const d = await first(AttendanceSource.MANUAL);
     expect(d.is_manual_override).toBe(true);
-    expect(d.scans).toEqual([]);
+    // TAFSD-413: an even in/out pair, not an empty list ("No scans recorded").
+    expect(d.scans).toEqual([
+      { id: -1, scan_time: at(2).toISOString(), direction: 'IN' },
+      { id: -2, scan_time: at(11, 30).toISOString(), direction: 'OUT' },
+    ]);
     expect(d.raw_scans).toHaveLength(1);
     expect(d.check_out_at).toBe(at(11, 30).toISOString());
     expect(d.status).toBe(StaffAttendanceStatus.PRESENT);

@@ -634,6 +634,16 @@ export class StaffAttendanceService {
       direction: s.direction,
     });
 
+    // TAFSD-413: an overridden day's check-in/out as clock events. Negative
+    // ids never match a real scan; an objection against one is saved as a
+    // day objection (see AttendanceObjectionsService.create).
+    const overrideScans = (r: { check_in_at: Date | null; check_out_at: Date | null } | null) => {
+      const out: { id: number; scan_time: string; direction: string | null }[] = [];
+      if (r?.check_in_at) out.push({ id: -1, scan_time: r.check_in_at.toISOString(), direction: 'IN' });
+      if (r?.check_out_at) out.push({ id: -2, scan_time: r.check_out_at.toISOString(), direction: 'OUT' });
+      return out;
+    };
+
     for (
       let d = new Date(periodStart);
       d <= periodEnd;
@@ -724,9 +734,10 @@ export class StaffAttendanceService {
         is_manual_override: manualOverride,
         // TAFSD-401: the staff app derives a day from raw punches whenever
         // there are any (an odd count reads "Needs review"). An overridden
-        // day's own times and status are the truth, so hand it no punches;
-        // raw_scans still carries them.
-        scans: manualOverride ? [] : dayScans.map(toScanDto),
+        // day's own times are the truth, so hand it those as its clock events
+        // (TAFSD-413: an empty list read "No scans recorded"); raw_scans still
+        // carries the device punches.
+        scans: manualOverride ? overrideScans(record) : dayScans.map(toScanDto),
         raw_scans: dayScans.map(toScanDto),
         is_working_day: resolved.isWorkingDay,
         day_type: resolved.dayType,
