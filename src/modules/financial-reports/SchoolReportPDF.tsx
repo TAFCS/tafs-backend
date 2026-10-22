@@ -40,13 +40,18 @@ export interface SchoolReportPdfProps {
 }
 
 export const SchoolReportPDF: React.FC<SchoolReportPdfProps> = ({ sheets, opts, dayLine, dateLine }) => {
-  const columns = [{ header: 'S#', key: '__sno', width: 5 } as SchoolSheetOptions['columns'][number], ...opts.columns];
-  const widthTotal = columns.reduce((s, c) => s + c.width, 0);
-  const pct = (w: number) => `${((w / widthTotal) * 100).toFixed(3)}%`;
 
   return (
     <Document title={opts.reportTitle} author="The American Foundation School">
       {sheets.map((sheet, si) => {
+        // A sheet may carry its own columns (TAFSD-341: head columns per campus).
+        // Grouped sub-columns print flat here, "BILLED TUITION", with no second header row.
+        const columns = [
+          { header: 'S#', key: '__sno', width: 5 } as SchoolSheetOptions['columns'][number],
+          ...(sheet.columns ?? opts.columns).map((c) => (c.group ? { ...c, header: `${c.group} ${c.header}` } : c)),
+        ];
+        const widthTotal = columns.reduce((s, c) => s + c.width, 0);
+        const pct = (w: number) => `${((w / widthTotal) * 100).toFixed(3)}%`;
         const decimals = new Map(
           columns
             .filter((c) => c.money)
@@ -68,6 +73,7 @@ export const SchoolReportPDF: React.FC<SchoolReportPdfProps> = ({ sheets, opts, 
             <Text style={[styles.banner, styles.session]}>{opts.heading.session}</Text>
             <Text style={styles.dayDate}>{dayLine}</Text>
             <Text style={styles.dayDate}>{dateLine}</Text>
+            {opts.generatedLine ? <Text style={styles.dayDate}>{opts.generatedLine}</Text> : null}
             <Text style={[styles.banner, styles.period]}>{opts.periodLine}</Text>
             {opts.filterLines.map((l, i) => (
               <Text key={i} style={[styles.banner, styles.filter]}>{l}</Text>

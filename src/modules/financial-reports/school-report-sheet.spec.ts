@@ -18,6 +18,7 @@ describe('school-report-sheet (TAFSD-268)', () => {
         periodLine: 'ON 1 OCTOBER 2026',
         filterLines: ['ALL STUDENTS'],
         exportDate: '2026-10-12',
+        generatedLine: 'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
         columns: [
           { header: 'Name', key: 'name', width: 20 },
           { header: 'Heads', key: 'heads', width: 8, total: true },
@@ -38,5 +39,75 @@ describe('school-report-sheet (TAFSD-268)', () => {
     expect(total.getCell(3).value).toBe(5);
     expect(total.getCell(4).value).toBe(300.5);
     expect(total.getCell(4).numFmt).toBe('#,##0.00');
+  });
+
+  it('matches the defaulters sheet: bigger title, GENERATED ON line under DAY / DATE (TAFSD-341)', async () => {
+    const wb = new ExcelJS.Workbook();
+    writeSchoolSheets(
+      wb,
+      [{ tab: 'GEJ', campus: 'GULISTAN-E-JAUHAR CAMPUS', rows: [{ amount: 100 }] }],
+      {
+        reportTitle: 'FEE HEADS REPORT — BY FEE DATE',
+        heading: { school: 'THE AMERICAN FOUNDATION SCHOOL', classesLine: null, session: 'SESSION 2026–2027' },
+        periodLine: 'ON 1 OCTOBER 2026',
+        filterLines: [],
+        exportDate: '2026-10-12',
+        generatedLine: 'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
+        columns: [{ header: 'Amount', key: 'amount', width: 12, total: true, money: true }],
+      },
+    );
+    const ws = wb.worksheets[0];
+    expect(ws.getCell(1, 1).font.size).toBe(20);
+    expect(ws.getCell(2, 1).font.size).toBe(17);
+    const lines = [...Array(ws.rowCount).keys()].map((i) => ws.getCell(i + 1, 1).value);
+    const day = lines.indexOf('DAY :MONDAY');
+    expect(lines.slice(day, day + 3)).toEqual([
+      'DAY :MONDAY',
+      'DATE : OCTOBER 12, 2026',
+      'GENERATED ON 12-10-2026 10:00 AM BY AAWAIZ ALI (aawaiz.ali)',
+    ]);
+  });
+
+  it('groups rows with a heading, SUBTOTAL and blank row, and puts a group label over sub-columns (TAFSD-341)', async () => {
+    const wb = new ExcelJS.Workbook();
+    const vii = [{ fee_date: '2026-08-01', t: 100, l: 20, billed: 120 }, { fee_date: '2026-09-01', t: 100, billed: 100 }];
+    const viii = [{ fee_date: '2026-08-01', t: 50, l: 5, billed: 55 }];
+    writeSchoolSheets(
+      wb,
+      [{
+        tab: 'GEJ', campus: 'GULISTAN-E-JAUHAR CAMPUS', rows: [...vii, ...viii], rowNoun: ['FEE DATE', 'FEE DATES'],
+        groups: [{ label: 'CLASS VII', rows: vii }, { label: 'CLASS VIII', rows: viii }],
+      }],
+      {
+        reportTitle: 'FEE HEADS REPORT — BY FEE DATE',
+        heading: { school: 'THE AMERICAN FOUNDATION SCHOOL', classesLine: null, session: 'SESSION 2026–2027' },
+        periodLine: 'ON 1 OCTOBER 2026',
+        filterLines: [],
+        exportDate: '2026-10-12',
+        columns: [
+          { header: 'Fee date', key: 'fee_date', width: 13 },
+          { header: 'Tuition', key: 't', width: 12, group: 'Billed', total: true, money: true },
+          { header: 'Lab', key: 'l', width: 12, group: 'Billed', total: true, money: true },
+          { header: 'Total', key: 'billed', width: 12, group: 'Billed', total: true, money: true },
+        ],
+      },
+    );
+    const ws = wb.worksheets[0];
+    const col = (r: number) => (ws.getRow(r).values as unknown[]).slice(1);
+    const hdr = [...Array(ws.rowCount).keys()].map((i) => i + 1).find((r) => ws.getCell(r, 1).value === 'S#')!;
+    expect(col(hdr).slice(2)).toEqual(['BILLED', 'BILLED', 'BILLED']); // one merged label
+    expect(ws.getCell(hdr, 4).master.address).toBe(ws.getCell(hdr, 3).address);
+    expect(col(hdr + 1)).toEqual(['S#', 'FEE DATE', 'TUITION', 'LAB', 'TOTAL']);
+    expect(ws.getCell(hdr + 2, 1).value).toBe('CLASS VII · 2 FEE DATES');
+    expect(col(hdr + 3)).toEqual([1, '2026-08-01', 100, 20, 120]);
+    expect(col(hdr + 4)).toEqual([2, '2026-09-01', 100, '', 100]);
+    expect(col(hdr + 5).slice(2)).toEqual([200, 20, 220]); // SUBTOTAL
+    expect(ws.getCell(hdr + 5, 1).value).toBe('SUBTOTAL');
+    expect(ws.getCell(hdr + 6, 1).value).toBeNull(); // blank row
+    expect(ws.getCell(hdr + 7, 1).value).toBe('CLASS VIII · 1 FEE DATE');
+    expect(col(hdr + 8)[0]).toBe(1); // S# restarts
+    const total = col(hdr + 11);
+    expect(ws.getCell(hdr + 11, 1).value).toBe('TOTAL');
+    expect(total.slice(2)).toEqual([250, 25, 275]);
   });
 });
