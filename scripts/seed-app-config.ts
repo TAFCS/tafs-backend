@@ -6,16 +6,28 @@ const initialConfigs = [
   // Parent App Remote Configurations
   { key: 'parent_maintenance_mode', value: 'false', description: 'Whether maintenance mode is active for parent app' },
   { key: 'parent_maintenance_message', value: 'The parent app is currently under maintenance. Please try again later.', description: 'Maintenance message shown to parents' },
+  { key: 'parent_maintenance_start', value: '', description: 'Scheduled maintenance start ISO timestamp for parent app' },
+  { key: 'parent_maintenance_end', value: '', description: 'Scheduled maintenance end ISO timestamp for parent app' },
   { key: 'parent_min_android_build', value: '9', description: 'Minimum Android build number required for parent app' },
+  { key: 'parent_latest_android_build', value: '9', description: 'Latest Android build number available for parent app' },
   { key: 'parent_min_ios_build', value: '2', description: 'Minimum iOS build number required for parent app' },
+  { key: 'parent_latest_ios_build', value: '2', description: 'Latest iOS build number available for parent app' },
+  { key: 'parent_force_update_message', value: 'A new version of the app is available with critical improvements and new features. Please update to continue.', description: 'Force update message shown when build is below minimum' },
+  { key: 'parent_update_prompt_message', value: 'A new version of the Parent app is available with improvements and bug fixes. Would you like to update now?', description: 'Dismissible prompt message when build is below latest' },
   { key: 'parent_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafs.app', description: 'Parent Android Play Store listing URL' },
   { key: 'parent_ios_store_url', value: 'https://apps.apple.com/app/id6572338575', description: 'Parent iOS App Store listing URL' },
 
   // Staff App Remote Configurations
   { key: 'staff_maintenance_mode', value: 'false', description: 'Whether maintenance mode is active for staff app' },
   { key: 'staff_maintenance_message', value: 'The staff app is currently under maintenance. Please try again later.', description: 'Maintenance message shown to staff' },
+  { key: 'staff_maintenance_start', value: '', description: 'Scheduled maintenance start ISO timestamp for staff app' },
+  { key: 'staff_maintenance_end', value: '', description: 'Scheduled maintenance end ISO timestamp for staff app' },
   { key: 'staff_min_android_build', value: '9', description: 'Minimum Android build number required for staff app' },
+  { key: 'staff_latest_android_build', value: '9', description: 'Latest Android build number available for staff app' },
   { key: 'staff_min_ios_build', value: '2', description: 'Minimum iOS build number required for staff app' },
+  { key: 'staff_latest_ios_build', value: '2', description: 'Latest iOS build number available for staff app' },
+  { key: 'staff_force_update_message', value: 'A new version of the app is available with critical improvements and new features. Please update to continue.', description: 'Force update message shown when build is below minimum' },
+  { key: 'staff_update_prompt_message', value: 'A new version of the Staff app is available with improvements and bug fixes. Would you like to update now?', description: 'Dismissible prompt message when build is below latest' },
   { key: 'staff_android_store_url', value: 'https://play.google.com/store/apps/details?id=com.tafsstaff.app', description: 'Staff Android Play Store listing URL' },
   { key: 'staff_ios_store_url', value: 'https://apps.apple.com/app/id6572338575', description: 'Staff iOS App Store listing URL' },
 

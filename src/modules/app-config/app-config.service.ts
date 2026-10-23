@@ -21,28 +21,46 @@ export class AppConfigService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
+  private statusCache = new Map<string, { data: any; expiresAt: number }>();
+
   /**
    * Retrieves the current app status (maintenance mode, force-update requirement,
-   * minimum build number, and platform store URL) for a specific app (staff or parent)
-   * and target platform (Android or iOS).
+   * optional update availability, build numbers, and platform store URL) for a
+   * specific app (staff or parent) and target platform (Android or iOS).
+   *
+   * Features:
+   * - 30-second in-memory cache to handle high-frequency app launch requests.
+   * - Scheduled maintenance windows (start/end) so maintenance switches off automatically.
+   * - Optional update prompt when build is between min_build and latest_build.
+   * - Customizable force-update and update-prompt messages with sensible defaults.
    *
    * Backwards Compatibility:
    * If the `app` parameter is omitted, it safely defaults to `AppType.PARENT`.
-   * This preserves seamless behavior for legacy parent mobile app builds that omit
-   * the `app` query parameter.
    */
   async getAppStatus(
     platform: AppPlatform,
     build: number,
     app: AppType = AppType.PARENT,
   ) {
+    const cacheKey = `${app}:${platform}:${build}`;
+    const nowMs = Date.now();
+    const cached = this.statusCache.get(cacheKey);
+    if (cached && cached.expiresAt > nowMs) {
+      return cached.data;
+    }
+
     const appPrefix = app === AppType.STAFF ? 'staff' : 'parent';
 
     // Query both app-specific keys and fallback to legacy keys if ever needed
     const keysToQuery = [
       `${appPrefix}_maintenance_mode`,
       `${appPrefix}_maintenance_message`,
+      `${appPrefix}_maintenance_start`,
+      `${appPrefix}_maintenance_end`,
       `${appPrefix}_min_${platform}_build`,
+      `${appPrefix}_latest_${platform}_build`,
+      `${appPrefix}_force_update_message`,
+      `${appPrefix}_update_prompt_message`,
       `${appPrefix}_${platform}_store_url`,
       'maintenance_mode',
       'maintenance_message',
@@ -66,17 +84,50 @@ export class AppConfigService {
     const rawMaintenanceMode =
       configsMap.get(`${appPrefix}_maintenance_mode`) ??
       configsMap.get('maintenance_mode');
-    const maintenanceMode = rawMaintenanceMode?.toLowerCase() === 'true';
+    let maintenanceMode = rawMaintenanceMode?.toLowerCase() === 'true';
+
+    // Scheduled maintenance: check start and end timestamps/ISO strings
+    const maintenanceStartStr = configsMap.get(`${appPrefix}_maintenance_start`);
+    const maintenanceEndStr = configsMap.get(`${appPrefix}_maintenance_end`);
+
+    if (maintenanceMode) {
+      const nowDate = new Date();
+      if (maintenanceStartStr && maintenanceStartStr.trim()) {
+        const startDate = new Date(maintenanceStartStr.trim());
+        if (!isNaN(startDate.getTime()) && nowDate < startDate) {
+          maintenanceMode = false;
+        }
+      }
+      if (maintenanceEndStr && maintenanceEndStr.trim()) {
+        const endDate = new Date(maintenanceEndStr.trim());
+        if (!isNaN(endDate.getTime()) && nowDate > endDate) {
+          // Maintenance scheduled window has ended; automatically switches off
+          maintenanceMode = false;
+        }
+      }
+    }
 
     const maintenanceMessage =
       configsMap.get(`${appPrefix}_maintenance_message`) ??
       configsMap.get('maintenance_message') ??
       'The app is currently under maintenance. Please try again later.';
 
+    const forceUpdateMessage =
+      configsMap.get(`${appPrefix}_force_update_message`) ??
+      'A new version of the app is available with critical improvements and new features. Please update to continue.';
+
+    const updatePromptMessage =
+      configsMap.get(`${appPrefix}_update_prompt_message`) ??
+      'A new version of the app is available with improvements and bug fixes. Would you like to update now?';
+
     const rawMinBuild =
       configsMap.get(`${appPrefix}_min_${platform}_build`) ??
       configsMap.get(`min_${platform}_build`);
     const minBuildNumber = parseInt(rawMinBuild || '0', 10);
+
+    const rawLatestBuild =
+      configsMap.get(`${appPrefix}_latest_${platform}_build`);
+    const latestBuildNumber = parseInt(rawLatestBuild || `${minBuildNumber}`, 10);
 
     // Canonical store listings per app & platform (avoiding generic homepage placeholders)
     const fallbackStoreUrl =
@@ -97,14 +148,30 @@ export class AppConfigService {
         : fallbackStoreUrl;
 
     const forceUpdate = build < minBuildNumber;
+    const optionalUpdate = !forceUpdate && !maintenanceMode && build < latestBuildNumber;
 
-    return {
+    const result = {
       maintenanceMode,
       maintenanceMessage,
       forceUpdate,
       minBuildNumber,
+      latestBuildNumber,
+      optionalUpdate,
+      forceUpdateMessage,
+      updatePromptMessage,
       storeUrl,
     };
+
+    // Cache status response for 30 seconds
+    if (this.statusCache.size > 2000) {
+      this.statusCache.clear();
+    }
+    this.statusCache.set(cacheKey, {
+      data: result,
+      expiresAt: nowMs + 30 * 1000,
+    });
+
+    return result;
   }
 
   async getAllConfigs() {
@@ -137,6 +204,9 @@ export class AppConfigService {
         updated_at: new Date(),
       },
     });
+
+    // Invalidate status cache on any configuration mutation
+    this.statusCache.clear();
 
     await this.auditLogs.log({
       entity_type: 'APP_CONFIG',

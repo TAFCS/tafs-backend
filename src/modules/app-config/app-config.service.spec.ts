@@ -170,6 +170,94 @@ describe('AppConfigService', () => {
     });
   });
 
+  describe('Latest build and optional update prompt', () => {
+    it('returns optionalUpdate = true when build is between minBuildNumber and latestBuildNumber', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs,
+        { key: 'parent_min_android_build', value: '45' },
+        { key: 'parent_latest_android_build', value: '50' },
+        { key: 'parent_update_prompt_message', value: 'Custom new version available!' },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 48, AppType.PARENT);
+      expect(result.forceUpdate).toBe(false);
+      expect(result.optionalUpdate).toBe(true);
+      expect(result.minBuildNumber).toBe(45);
+      expect(result.latestBuildNumber).toBe(50);
+      expect(result.updatePromptMessage).toBe('Custom new version available!');
+    });
+
+    it('returns optionalUpdate = false when build is at or above latestBuildNumber', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs,
+        { key: 'parent_min_android_build', value: '45' },
+        { key: 'parent_latest_android_build', value: '50' },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 50, AppType.PARENT);
+      expect(result.forceUpdate).toBe(false);
+      expect(result.optionalUpdate).toBe(false);
+    });
+
+    it('returns custom forceUpdateMessage when configured', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs,
+        { key: 'staff_force_update_message', value: 'You must upgrade to v2.0 immediately.' },
+        { key: 'staff_min_android_build', value: '55' },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(result.forceUpdate).toBe(true);
+      expect(result.forceUpdateMessage).toBe('You must upgrade to v2.0 immediately.');
+    });
+  });
+
+  describe('Scheduled maintenance', () => {
+    it('automatically switches maintenance off when maintenance_end has passed', async () => {
+      const pastDate = new Date(Date.now() - 3600 * 1000).toISOString();
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'staff_maintenance_mode'),
+        { key: 'staff_maintenance_mode', value: 'true' },
+        { key: 'staff_maintenance_end', value: pastDate },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(result.maintenanceMode).toBe(false);
+    });
+
+    it('keeps maintenance on when within the scheduled window', async () => {
+      const futureDate = new Date(Date.now() + 3600 * 1000).toISOString();
+      prisma.app_config.findMany.mockResolvedValue([
+        ...defaultConfigs.filter((c) => c.key !== 'staff_maintenance_mode'),
+        { key: 'staff_maintenance_mode', value: 'true' },
+        { key: 'staff_maintenance_end', value: futureDate },
+      ]);
+
+      const result = await service.getAppStatus(AppPlatform.ANDROID, 51, AppType.STAFF);
+      expect(result.maintenanceMode).toBe(true);
+    });
+  });
+
+  describe('Caching behavior', () => {
+    it('serves repeated requests from cache and invalidates on setConfig', async () => {
+      const result1 = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(prisma.app_config.findMany).toHaveBeenCalledTimes(1);
+
+      // Second call hits cache
+      const result2 = await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(result2).toEqual(result1);
+      expect(prisma.app_config.findMany).toHaveBeenCalledTimes(1);
+
+      // Mutating config clears cache
+      prisma.app_config.upsert.mockResolvedValue({ key: 'parent_min_android_build', value: '46' });
+      await service.setConfig('parent_min_android_build', '46', 'admin');
+
+      // Next call queries database again
+      await service.getAppStatus(AppPlatform.ANDROID, 47, AppType.PARENT);
+      expect(prisma.app_config.findMany).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('setConfig', () => {
     it('upserts config with updated_by and writes audit log', async () => {
       prisma.app_config.upsert.mockResolvedValue({ key: 'staff_maintenance_mode', value: 'false' });

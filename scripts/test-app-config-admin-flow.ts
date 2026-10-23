@@ -75,11 +75,35 @@ async function main() {
   const omittedStatus = await service.getAppStatus(AppPlatform.ANDROID, 47);
   record('Omitted app param resolves to parent', omittedStatus.storeUrl.includes('com.tafs.app') && omittedStatus.forceUpdate === true);
 
+  // 6. Latest build setting and optional update prompt
+  await setKey('staff_min_android_build', '50');
+  await setKey('staff_latest_android_build', '55');
+  await setKey('staff_update_prompt_message', 'A new staff build is ready.');
+  // Force cache clear by calling setKey
+  staffStatus = await service.getAppStatus(AppPlatform.ANDROID, 52, AppType.STAFF);
+  record('Staff on 52 with min 50 & latest 55 -> optionalUpdate = true', staffStatus.optionalUpdate === true);
+  record('Staff on 52 -> forceUpdate = false', staffStatus.forceUpdate === false);
+  record('Staff prompt message passed through', staffStatus.updatePromptMessage === 'A new staff build is ready.');
+
+  // Staff on 55 (at latest) -> optionalUpdate = false
+  const staffAtLatest = await service.getAppStatus(AppPlatform.ANDROID, 55, AppType.STAFF);
+  record('Staff on 55 (at latest) -> optionalUpdate = false', staffAtLatest.optionalUpdate === false);
+
+  // 7. Scheduled maintenance with end time in past switches off
+  const pastTime = new Date(Date.now() - 3600 * 1000).toISOString();
+  await setKey('staff_maintenance_mode', 'true');
+  await setKey('staff_maintenance_end', pastTime);
+  const scheduledStatus = await service.getAppStatus(AppPlatform.ANDROID, 55, AppType.STAFF);
+  record('Scheduled maintenance with past end time automatically switches off', scheduledStatus.maintenanceMode === false);
+
   // Cleanup to safe defaults
   await setKey('staff_min_android_build', '9');
   await setKey('parent_min_android_build', '9');
+  await setKey('staff_latest_android_build', '9');
+  await setKey('parent_latest_android_build', '9');
   await setKey('staff_maintenance_mode', 'false');
   await setKey('parent_maintenance_mode', 'false');
+  await setKey('staff_maintenance_end', '');
 
   const passed = results.filter((r) => r.pass).length;
   const failed = results.filter((r) => !r.pass).length;
