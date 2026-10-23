@@ -431,6 +431,16 @@ export class StaffAttendanceService {
     StaffAttendanceStatus.ANNUAL_LEAVE,
   ]);
 
+  // TAFSD-414: the staff app reads only EXCUSED as leave, so an approved
+  // CASUAL/SICK/ANNUAL leave day with no scans showed as Absent (and its
+  // payroll classification as "—"). Every installed app version shows
+  // EXCUSED as "On leave", so the self-service view sends paid leave as that.
+  private static asAppLeave<T extends string | null>(status: T): T {
+    return status && StaffAttendanceService.PAID_LEAVE_STATUSES.has(status as StaffAttendanceStatus)
+      ? (StaffAttendanceStatus.EXCUSED as T)
+      : status;
+  }
+
   // Derives Working time (IN->OUT), Break (OUT->IN gaps), and Overtime
   // (the portion of the final OUT after leaving_time) segments for one day
   // from the persisted scan sequence.
@@ -720,7 +730,9 @@ export class StaffAttendanceService {
       const manualOverride = record?.source === AttendanceSource.MANUAL;
       days.push({
         date: key,
-        status: record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
+        status: StaffAttendanceService.asAppLeave(
+          record?.status ?? (resolved.isWorkingDay ? null : StaffAttendanceStatus.EXCUSED),
+        ),
         off_roll_reason: null,
         check_in_at: record?.check_in_at?.toISOString() ?? dayScans[0]?.scan_time.toISOString() ?? null,
         check_out_at:
@@ -767,7 +779,10 @@ export class StaffAttendanceService {
         disbursement_notes: payrollLine.disbursement_notes,
         daily_rate: Number(payrollLine.daily_rate),
         per_minute_rate: Number(payrollLine.per_minute_rate),
-        daily_breakdown: breakdown,
+        daily_breakdown: breakdown.map((d) => ({
+          ...d,
+          classification: StaffAttendanceService.asAppLeave(d.classification),
+        })),
       };
     }
 
