@@ -155,6 +155,10 @@ type FeeHeadCell = {
   month: number | null;
   fee_type_id: number | null;
   description_prefix: string | null;
+  /** The head's period (what By period rolls up by). */
+  target_month: number;
+  academic_year: string;
+  term_start_month: number | null;
   is_discount: boolean;
   count: number;
   /** Signed: a discount is negative. */
@@ -1613,43 +1617,37 @@ export class FinancialReportsService {
     });
   }
 
+  /**
+   * By period in the defaulters format (TAFSD-341): one sheet per campus, one
+   * row per period (the head's target month) in calendar order, one column per
+   * fee-date month of what was billed net of discount, then AMOUNT / PAID /
+   * WAIVED / OUTSTANDING and a TOTAL. A discount nets into its own period, and
+   * a period holding only discounts still gets a row, as on the screen.
+   */
   private async exportFeeHeadsByPeriod(
     query: ExportFeeHeadsQueryDto,
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
-    const result = await this.listFeeHeadsByPeriod(
-      { ...query, page: 1, limit: EXPORT_ROW_CAP + 1 },
-      user,
-    );
-    this.assertExportCap(result.items.length);
-    const columns: ExportColumn[] = [
-      { header: 'Period', key: 'period_label', width: 14 },
-      { header: 'Academic year', key: 'academic_year', width: 14 },
-      { header: 'Heads', key: 'head_count', width: 10 },
-      { header: 'Amount', key: 'amount', width: 14 },
-      { header: 'Amount paid', key: 'amount_paid', width: 14 },
-      { header: 'Waived', key: 'waived', width: 14 },
-      { header: 'Outstanding', key: 'outstanding', width: 14 },
-    ];
-    const data = result.items.map((item) => ({
-      period_label: item.period_label,
-      academic_year: item.academic_year,
-      head_count: item.head_count,
-      amount: item.amount,
-      amount_paid: item.amount_paid,
-      waived: (item as any).waived ?? 0,
-      outstanding: item.outstanding,
-    }));
-    return this.buildSchoolExportFile(
-      'Fee Heads by Period',
-      'FEE HEADS REPORT — BY PERIOD',
-      `fee-heads-by-period-${query.from_date}-to-${query.to_date}`,
-      columns,
-      data,
-      query,
-      this.feeHeadsFilterWords(query),
-      user,
-    );
+    const [{ cells }, classTerms] = await Promise.all([this.loadFeeHeadCells(query, user), this.loadClassTerms()]);
+    const defaultTerm = classTerms.size ? [...classTerms.values()][0] : 8;
+    return this.writeFeeHeadSummary(query, user, cells, {
+      sheetName: 'Fee Heads by Period',
+      reportTitle: 'FEE HEADS REPORT — BY PERIOD',
+      basename: `fee-heads-by-period-${query.from_date}-to-${query.to_date}`,
+      label: { header: 'PERIOD', width: 12 },
+      rowNoun: ['PERIOD', 'PERIODS'],
+      // A student is billed for several periods: their count doesn't add up.
+      studentsTotal: false,
+      keyOf: (c) => {
+        const term = { termStartMonth: c.term_start_month ?? defaultTerm };
+        const idx = monthAbsoluteIndex(c.target_month, c.academic_year, term);
+        return {
+          key: `${c.target_month}|${c.academic_year}|${c.term_start_month ?? ''}`,
+          label: getMonthYearLabel(c.target_month, c.academic_year, term).toUpperCase(),
+          order: [idx == null ? 1 : 0, idx ?? 0, c.academic_year],
+        };
+      },
+    });
   }
 
   /**
@@ -1701,7 +1699,10 @@ export class FinancialReportsService {
         },
       }),
       this.prisma.student_fees.groupBy({
-        by: ['student_id', 'fee_date', 'fee_type_id', 'description_prefix', 'is_discount', 'status'],
+        by: [
+          'student_id', 'fee_date', 'fee_type_id', 'description_prefix', 'is_discount', 'status',
+          'target_month', 'academic_year', 'term_start_month',
+        ],
         where: { ...leaf, students: studentWhere },
         _sum: { amount: true, amount_paid: true },
         _count: { _all: true },
@@ -1728,6 +1729,9 @@ export class FinancialReportsService {
         month: date ? date.getUTCFullYear() * 12 + date.getUTCMonth() : null,
         fee_type_id: g.fee_type_id,
         description_prefix: g.description_prefix,
+        target_month: g.target_month,
+        academic_year: g.academic_year,
+        term_start_month: g.term_start_month,
         is_discount: g.is_discount,
         count: g._count._all,
         amount: g.is_discount ? -amount : amount,
