@@ -25,6 +25,9 @@ const POST_LIST_INCLUDE = {
   _count: { select: { post_reads: true } },
 } as const;
 
+/** Audit field whose old/new values hold a notice's full title and body as JSON. */
+const NOTICE_WORDING_FIELD = 'Wording';
+
 type PostListRow = {
   student_ccs: number[];
   campus_ids: number[];
@@ -774,6 +777,9 @@ export class NoticeBoardService {
     }
     if (backToReview) changes.push(`status ${post.status} → PENDING (resubmitted for approval)`);
 
+    // TAFSD-416: the full wording before and after, so the author can see
+    // exactly what was changed (the note only carries a snippet).
+    const wordingChanged = post.title !== updated.title || post.body !== updated.body;
     if (changes.length > 0) {
       await this.auditLogs.log({
         entity_type: 'NOTICE',
@@ -781,8 +787,20 @@ export class NoticeBoardService {
         action: 'UPDATED',
         section: 'communication',
         changed_by: changedBy ?? 'system',
+        ...(wordingChanged && {
+          field: NOTICE_WORDING_FIELD,
+          old_value: JSON.stringify({ title: post.title, body: post.body }),
+          new_value: JSON.stringify({ title: updated.title, body: updated.body }),
+        }),
         note: `Notice #${numericId} ("${post.title ?? 'untitled'}") updated: ${changes.join(', ')}.`,
       });
+    }
+    if (contentChanged && post.posted_by !== user.sub) {
+      this._notifyAuthor(
+        updated,
+        'Notice edited',
+        `"${updated.title?.trim() || this._snippet(updated.body, 60)}" was edited by ${changedBy ?? 'an admin'}.`,
+      );
     }
 
     return updated;
@@ -1063,6 +1081,53 @@ export class NoticeBoardService {
       changed_by: changedBy ?? user.sub,
     });
     return post;
+  }
+
+  /**
+   * TAFSD-416: what happened to a notice — submitted, edited (full wording
+   * before and after), approved, rejected with the reason — for its author
+   * as well as whoever can manage it. Authors usually can't open the
+   * activity logs, so it is served here.
+   */
+  async getPostHistory(id: number, user: IJwtStaffPayload) {
+    const post = await this.prisma.notice_board_posts.findFirst({
+      where: { id, deleted_at: null },
+      include: POST_LIST_INCLUDE,
+    });
+    if (!post) throw new NotFoundException('Post not found');
+    if (post.posted_by !== user.sub) await this.assertCanManagePost(user, post);
+
+    const logs = await this.prisma.audit_logs.findMany({
+      where: { entity_type: 'NOTICE', entity_id: String(id) },
+      orderBy: { changed_at: 'asc' },
+      select: { id: true, action: true, field: true, old_value: true, new_value: true, changed_by: true, changed_at: true, note: true },
+    });
+    const wording = (v: string | null) => {
+      try {
+        const o = JSON.parse(v ?? '');
+        return { title: (o.title as string | null) ?? null, body: (o.body as string | null) ?? '' };
+      } catch {
+        return null;
+      }
+    };
+    return {
+      id: post.id,
+      status: post.status,
+      posted_by: post.users?.full_name ?? null,
+      review_reason: post.review_reason,
+      reviewed_by: post.reviewer?.full_name ?? null,
+      reviewed_at: post.reviewed_at,
+      events: logs.map((l) => ({
+        id: l.id,
+        action: l.action,
+        by: l.changed_by,
+        at: l.changed_at,
+        reason: l.action === 'REJECTED' ? l.new_value : null,
+        before: l.field === NOTICE_WORDING_FIELD ? wording(l.old_value) : null,
+        after: l.field === NOTICE_WORDING_FIELD ? wording(l.new_value) : null,
+        note: l.note,
+      })),
+    };
   }
 
   /** PENDING → decision, atomically, so two reviewers can't both act on one post. */
