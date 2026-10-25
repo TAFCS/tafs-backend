@@ -69,6 +69,7 @@ import {
   type SchoolSheetOptions,
 } from './school-report-sheet';
 import { SchoolReportPDF } from './SchoolReportPDF';
+import { defaulterWindowRemarks } from './defaulter-window-remark';
 
 const EXPORT_ROW_CAP = 25_000;
 /** PDF exports of the school-format reports (TAFSD-306) stop here; Excel goes to EXPORT_ROW_CAP. */
@@ -3535,8 +3536,13 @@ export class FinancialReportsService {
       amountColumns: [
         { header: 'DEFAULTING AMOUNT', csvHeader: 'Defaulting Amount', width: 15, value: (r) => r.total },
       ],
+      // TAFSD-418: say what the EARLIER / LATER cells hold, so LATER doesn't
+      // read as future months on a list of missed money.
       remark: (r) =>
-        r.item.category === 'EXPIRING' ? 'Unpaid past expiry date — becomes arrears on next voucher' : '',
+        [
+          ...(r.item.category === 'EXPIRING' ? ['UNPAID PAST EXPIRY DATE — BECOMES ARREARS ON NEXT VOUCHER'] : []),
+          ...defaulterWindowRemarks(r.months.keys(), { lo: windowLo, hi: windowHi }),
+        ].join('; '),
       leadLine: monthsLine,
       filterLines: (names, omitClasses, groupLine) =>
         defaulterFilterLines(query, names, monthsLine, omitClasses, undefined, groupLine),
@@ -3910,7 +3916,7 @@ export class FinancialReportsService {
             c.numFmt = '0';
           },
         });
-      if (show('remarks')) specs.push({ header: 'REMARKS', width: 22, fill: (c, r) => void (c.value = remarkFor(r)) });
+      if (show('remarks')) specs.push({ header: 'REMARKS', width: 34, wrap: true, fill: (c, r) => void (c.value = remarkFor(r)) });
       const lastCol = Math.max(specs.length, 1);
 
       // Title block (TAFSD-289): school name by class group, the classes line
