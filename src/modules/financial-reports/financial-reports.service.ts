@@ -70,6 +70,7 @@ import {
 } from './school-report-sheet';
 import { SchoolReportPDF } from './SchoolReportPDF';
 import { defaulterWindowRemarks } from './defaulter-window-remark';
+import { type SheetPaper, workbookFitsPaper, workbookToPdf } from './sheet-pdf';
 
 const EXPORT_ROW_CAP = 25_000;
 /** PDF exports of the school-format reports (TAFSD-306) stop here; Excel goes to EXPORT_ROW_CAP. */
@@ -3395,6 +3396,16 @@ export class FinancialReportsService {
     const items = data.items as Array<Record<string, unknown>>;
     this.assertExportCap(items.length);
     const basename = `defaulters-${view}-as-of-${data.as_of_date}`;
+    // TAFSD-417: the PDF is a print of the students sheet; the summaries stay Excel / CSV.
+    if (query.format === 'pdf' && view !== 'students') {
+      throw new BadRequestException('PDF is available for the students sheet only. Export Excel or CSV for this view.');
+    }
+    if (query.format === 'pdf' && items.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} students (this has ${items.length.toLocaleString()}). Narrow the filters or export Excel.`,
+      );
+    }
+    const tableFormat = query.format === 'pdf' ? undefined : query.format;
 
     if (view === 'aging') {
       return this.buildExportFile(
@@ -3422,7 +3433,7 @@ export class FinancialReportsService {
           arrears_max: Number(r.arrears_max),
           lps: Number(r.lps_projected),
         })),
-        query.format,
+        tableFormat,
       );
     }
 
@@ -3466,7 +3477,7 @@ export class FinancialReportsService {
             lps: Number(r.lps_projected),
           };
         }),
-        query.format,
+        tableFormat,
       );
     }
 
@@ -3800,11 +3811,7 @@ export class FinancialReportsService {
       // opaque download failure.
       const sheet = workbook.addWorksheet(opts.emptySheetName);
       sheet.getCell('A1').value = opts.emptyMessage;
-      return {
-        buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
-        filename: `${basename}.xlsx`,
-        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      };
+      return this.studentMonthReportFile(workbook, query, basename, opts.listTitle);
     }
 
     const SERIF = 'Times New Roman';
@@ -3916,7 +3923,19 @@ export class FinancialReportsService {
             c.numFmt = '0';
           },
         });
-      if (show('remarks')) specs.push({ header: 'REMARKS', width: 34, wrap: true, fill: (c, r) => void (c.value = remarkFor(r)) });
+      if (show('remarks'))
+        specs.push({
+          header: 'REMARKS',
+          width: 34,
+          wrap: true,
+          fill: (c, r) => {
+            const text = remarkFor(r);
+            c.value = text;
+            // TAFSD-417: grow the row for a long remark (~30 characters a line
+            // at this width), or Excel and the PDF cut it off.
+            return Math.max(1, Math.ceil(text.length / 30));
+          },
+        });
       const lastCol = Math.max(specs.length, 1);
 
       // Title block (TAFSD-289): school name by class group, the classes line
@@ -3941,11 +3960,12 @@ export class FinancialReportsService {
         line++;
       };
       // TAFSD-338: header text a size or two up from the body rows.
-      banner(heading.school, 20, 32);
-      if (heading.classesLine) banner(heading.classesLine, 13, 20);
-      banner(opts.listTitle, 17, 26);
-      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 15, 22);
-      banner(heading.session, 14, 20);
+      // TAFSD-417: and bigger again, so the title reads from across the room.
+      banner(heading.school, 26, 40);
+      if (heading.classesLine) banner(heading.classesLine, 15, 22);
+      banner(opts.listTitle, 22, 32);
+      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 18, 26);
+      banner(heading.session, 16, 22);
 
       line++;
       for (const text of [dayLine, dateLine, generatedLine]) {
@@ -4079,6 +4099,28 @@ export class FinancialReportsService {
       };
     }
 
+    return this.studentMonthReportFile(workbook, query, basename, opts.listTitle);
+  }
+
+  /**
+   * The finished per-student sheet as Excel, or (TAFSD-417) as a landscape PDF
+   * print of that same workbook on the paper asked for. A sheet too wide for
+   * A4 goes on A3 whatever was asked, and the filename says which.
+   */
+  private async studentMonthReportFile(
+    workbook: ExcelJS.Workbook,
+    query: { format?: string; paper?: SheetPaper },
+    basename: string,
+    title: string,
+  ): Promise<ExportFile> {
+    if (query.format === 'pdf') {
+      const paper: SheetPaper = query.paper === 'A3' || !workbookFitsPaper(workbook, 'A4') ? 'A3' : 'A4';
+      return {
+        buffer: await workbookToPdf(workbook, paper, title),
+        filename: `${basename}-${paper}.pdf`,
+        contentType: 'application/pdf',
+      };
+    }
     return {
       buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
       filename: `${basename}.xlsx`,
