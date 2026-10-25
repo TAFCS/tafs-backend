@@ -136,6 +136,11 @@ export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv', 'pdf'])
   format?: 'xlsx' | 'csv' | 'pdf';
+
+  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 }
 
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -488,6 +493,11 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv', 'pdf'])
   format?: 'xlsx' | 'csv' | 'pdf';
+
+  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 
   /**
    * TAFSD-341: the per-student sheet options, as on the defaulters export.

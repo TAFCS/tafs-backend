@@ -1,8 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
-import * as React from 'react';
-import { renderToBuffer } from '@react-pdf/renderer';
 import {
   FinancialReportSnapshotStatus,
   FinancialReportType,
@@ -61,16 +59,15 @@ import {
   type DefaulterFilterNames,
 } from './defaulter-sheet-heading';
 import {
-  dayDateLines,
   periodLine,
   writeSchoolSheets,
   type SchoolSheet,
   type SchoolSheetColumn,
   type SchoolSheetOptions,
 } from './school-report-sheet';
-import { SchoolReportPDF } from './SchoolReportPDF';
 import { defaulterWindowRemarks } from './defaulter-window-remark';
-import { type SheetPaper, workbookFitsPaper, workbookToPdf } from './sheet-pdf';
+import type { SheetPaper } from './sheet-pdf';
+import { fitSheetToText, headerText, schoolWorkbookFile, writeBanner, writeEmptySheet, writeTitleBlock } from './school-sheet-common';
 
 const EXPORT_ROW_CAP = 25_000;
 /** PDF exports of the school-format reports (TAFSD-306) stop here; Excel goes to EXPORT_ROW_CAP. */
@@ -135,6 +132,8 @@ type StudentMonthReportOptions = {
   sessionDate?: string;
   /** The banner under the school name. */
   listTitle: string;
+  /** What to cut when the PDF is too wide even for A3 (TAFSD-425); defaults to the defaulters' options. */
+  tooWideHint?: string;
   /** Month columns shown (month index year*12 + month-1); anything outside folds into EARLIER / LATER. */
   window: { lo: number; hi: number };
   /** The money columns, in order, each totalled. Shown when the picker has "amount". */
@@ -1316,111 +1315,8 @@ export class FinancialReportsService {
     query: ExportFeeHeadsQueryDto,
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
-    // TAFSD-341: Excel and CSV are the defaulters student sheet; the PDF keeps
-    // the flat school table below.
-    if (query.format !== 'pdf') return this.exportFeeHeadsByStudentSheet(query, user);
-    const leaf = this.feeHeadsLeafWhere(query);
-    const studentWhere = this.buildStudentWhere(query, user);
-    const where: Prisma.student_feesWhereInput = {
-      ...leaf,
-      students: studentWhere,
-    };
-    const groups = await this.prisma.student_fees.groupBy({
-      by: ['student_id'],
-      where: { ...where, is_discount: false },
-      _sum: { amount: true, amount_paid: true },
-      _count: { _all: true },
-      orderBy: { student_id: 'asc' },
-      take: EXPORT_ROW_CAP + 1,
-    });
-    this.assertExportCap(groups.length);
-
-    const studentIds = groups.map((g) => g.student_id);
-    const [students, discGroups, waivedGroups] = studentIds.length
-      ? await Promise.all([
-          this.prisma.students.findMany({
-            where: { cc: { in: studentIds } },
-            select: {
-              cc: true,
-              gr_number: true,
-              full_name: true,
-              status: true,
-              class_id: true,
-              graduated_from_class_id: true,
-              campuses: { select: { campus_name: true } },
-              classes: { select: { description: true } },
-              graduated_from_class: { select: { description: true } },
-              sections: { select: { description: true } },
-            },
-          }),
-          this.prisma.student_fees.groupBy({
-            by: ['student_id'],
-            where: { ...where, is_discount: true, student_id: { in: studentIds } },
-            _sum: { amount: true, amount_paid: true },
-            _count: { _all: true },
-          }),
-          this.prisma.student_fees.groupBy({
-            by: ['student_id'],
-            where: { ...where, is_discount: false, status: fee_status_enum.WAIVED, student_id: { in: studentIds } },
-            _sum: { amount: true, amount_paid: true },
-            _count: { _all: true },
-          }),
-        ])
-      : [[], [], []];
-    const studentMap = new Map(students.map((s) => [s.cc, s]));
-    const discountByStudent = new Map(
-      discGroups.map((d) => [
-        d.student_id,
-        { amount: this.toMoney(d._sum.amount), consumed: d._sum.amount_paid, count: d._count._all },
-      ]),
-    );
-    const waivedByStudent = new Map(
-      waivedGroups.map((w) => [w.student_id, this.waivedPortion(w._sum)]),
-    );
-    const columns: ExportColumn[] = [
-      { header: 'CC', key: 'cc', width: 10 },
-      { header: 'GR', key: 'gr_number', width: 12 },
-      { header: 'Name', key: 'student_name', width: 28 },
-      { header: 'Campus', key: 'campus', width: 18 },
-      { header: 'Class', key: 'class_name', width: 16 },
-      { header: 'Section', key: 'section', width: 12 },
-      { header: 'Heads', key: 'head_count', width: 10 },
-      { header: 'Amount', key: 'amount', width: 14 },
-      { header: 'Amount paid', key: 'amount_paid', width: 14 },
-      { header: 'Waived', key: 'waived', width: 14 },
-      { header: 'Outstanding', key: 'outstanding', width: 14 },
-    ];
-    const data = groups.map((group) => {
-      const student = studentMap.get(group.student_id);
-      const discount = discountByStudent.get(group.student_id);
-      const waived = this.roundMoney(waivedByStudent.get(group.student_id) ?? 0);
-      const billed = this.roundMoney(this.toMoney(group._sum.amount) - (discount?.amount ?? 0));
-      const paid = this.netPaid(group._sum.amount_paid, discount?.consumed);
-      return {
-        cc: group.student_id,
-        gr_number: student?.gr_number ?? '',
-        student_name: student?.full_name ?? '',
-        campus: student?.campuses?.campus_name ?? '',
-        class_name: this.resolveStudentClassName(student),
-        section: student?.sections?.description ?? '',
-        head_count: group._count._all + (discount?.count ?? 0),
-        amount: billed,
-        amount_paid: paid,
-        waived,
-        outstanding: this.roundMoney(billed - paid - waived),
-      };
-    });
-
-    return this.buildSchoolExportFile(
-      'Fee Heads by Student',
-      'FEE HEADS REPORT — BY STUDENT',
-      `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
-      columns,
-      data,
-      query,
-      this.feeHeadsFilterWords(query),
-      user,
-    );
+    // TAFSD-341: the defaulters student sheet; TAFSD-425: its PDF is that sheet printed.
+    return this.exportFeeHeadsByStudentSheet(query, user);
   }
 
   /**
@@ -1455,6 +1351,11 @@ export class FinancialReportsService {
       take: EXPORT_ROW_CAP + 1,
     });
     this.assertExportCap(students.length);
+    if (query.format === 'pdf' && students.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} students (this has ${students.length.toLocaleString()}). Narrow the filters or export Excel.`,
+      );
+    }
     const [groups, feeTypes] = await Promise.all([
       this.prisma.student_fees.groupBy({
         by: ['student_id', 'fee_date', 'fee_type_id', 'is_discount', 'status'],
@@ -1571,6 +1472,7 @@ export class FinancialReportsService {
       asOfDate: this.todayPkt(),
       sessionDate: query.to_date,
       listTitle: 'FEE HEADS REPORT — BY STUDENT',
+      tooWideHint: 'Shorten the date range, turn off the fee head breakdown, or untick some columns.',
       window: { lo, hi },
       amountColumns: [
         { header: 'AMOUNT', csvHeader: 'Amount', width: 14, value: (r) => r.total },
@@ -1882,8 +1784,9 @@ export class FinancialReportsService {
     // blank row; billed split into one column per fee head under BILLED.
     const headKey = (name: string) => `head:${name}`;
     const headColumns = (names: string[]): SchoolSheetColumn[] => [
-      ...names.map((name) => ({ header: name, key: headKey(name), width: 12, group: 'Billed', total: true, money: true })),
-      { header: 'Total', key: 'billed', width: 13, group: 'Billed', total: true, money: true },
+      // TAFSD-425: 10 holds "1,698,429" and keeps a busy fee date sheet printable on A3.
+      ...names.map((name) => ({ header: name, key: headKey(name), width: 10, group: 'Billed', total: true, money: true })),
+      { header: 'Total', key: 'billed', width: 12, group: 'Billed', total: true, money: true },
     ];
     const tail: SchoolSheetColumn[] = [
       { header: 'Discounts', key: 'discount_count', width: 11, total: true },
@@ -3809,10 +3712,8 @@ export class FinancialReportsService {
     if (campuses.length === 0) {
       // Still a workbook, so the admin sees "nothing matched" rather than an
       // opaque download failure.
-      const sheet = workbook.addWorksheet(opts.emptySheetName);
-      sheet.getCell('A1').value = opts.emptyMessage;
-      sheet.getColumn(1).width = 60;
-      return this.studentMonthReportFile(workbook, query, basename, opts.listTitle);
+      writeEmptySheet(workbook, opts.emptySheetName, opts.emptyMessage);
+      return this.studentMonthReportFile(workbook, query, basename, opts.listTitle, opts.tooWideHint);
     }
 
     const SERIF = 'Times New Roman';
@@ -3855,12 +3756,7 @@ export class FinancialReportsService {
           header: 'LINK TO GR',
           width: 14,
           wrap: true,
-          fill: (c, r) => {
-            const text = linkToGr(r.item);
-            c.value = text;
-            // TAFSD-417: about 12 characters a line at this width ("3889, 4769, ").
-            return Math.max(1, Math.ceil(text.length / 12));
-          },
+          fill: (c, r) => void (c.value = linkToGr(r.item)),
         });
       if (show('level')) specs.push({ header: 'LEVEL', width: 11, fill: (c, r) => void (c.value = level(r.item)) });
       if (show('name'))
@@ -3868,12 +3764,7 @@ export class FinancialReportsService {
           header: 'STUDENT NAME',
           width: 30,
           wrap: true,
-          fill: (c, r) => {
-            const name = String(r.item.student_name ?? '').toUpperCase();
-            c.value = name;
-            // TAFSD-417: a long name wraps (~26 capitals a line at this width).
-            return Math.max(1, Math.ceil(name.length / 26));
-          },
+          fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
         });
       if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
       if (show('contact'))
@@ -3905,7 +3796,7 @@ export class FinancialReportsService {
           for (const name of headsIn(campus.rows, col, order)) {
             specs.push({
               group: col.label,
-              header: name.toUpperCase(),
+              header: headerText(name),
               width: 11,
               month: true,
               total: (r) => cellFor(r, col)?.heads.get(name)?.owed ?? 0,
@@ -3944,13 +3835,7 @@ export class FinancialReportsService {
           header: 'REMARKS',
           width: 34,
           wrap: true,
-          fill: (c, r) => {
-            const text = remarkFor(r);
-            c.value = text;
-            // TAFSD-417: grow the row for a long remark (~30 characters a line
-            // at this width), or Excel and the PDF cut it off.
-            return Math.max(1, Math.ceil(text.length / 30));
-          },
+          fill: (c, r) => void (c.value = remarkFor(r)),
         });
       const lastCol = Math.max(specs.length, 1);
 
@@ -3965,23 +3850,17 @@ export class FinancialReportsService {
         classFiltered,
         opts.sessionDate ?? asOfDate,
       );
-      let line = 1;
+      // TAFSD-425: the title block every school sheet shares.
+      let line = writeTitleBlock(sheet, lastCol, 1, {
+        school: heading.school,
+        classesLine: heading.classesLine,
+        title: opts.listTitle,
+        campus: campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name),
+        session: heading.session,
+      });
       const banner = (text: string, size: number, height: number) => {
-        if (lastCol > 1) sheet.mergeCells(line, 1, line, lastCol);
-        const cell = sheet.getCell(line, 1);
-        cell.value = text;
-        cell.font = { name: SERIF, bold: true, size };
-        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-        sheet.getRow(line).height = height;
-        line++;
+        line = writeBanner(sheet, lastCol, line, text, size, height);
       };
-      // TAFSD-338: header text a size or two up from the body rows.
-      // TAFSD-417: and bigger again, so the title reads from across the room.
-      banner(heading.school, 26, 40);
-      if (heading.classesLine) banner(heading.classesLine, 15, 22);
-      banner(opts.listTitle, 22, 32);
-      banner(campusLine(campus.name) || this.defaulterCampusLabel(campus.code, campus.name), 18, 26);
-      banner(heading.session, 16, 22);
 
       line++;
       for (const text of [dayLine, dateLine, generatedLine]) {
@@ -4102,6 +3981,8 @@ export class FinancialReportsService {
       }
       writeTotal(campus.rows, 'TOTAL');
 
+      // TAFSD-425: columns and rows grow to fit what's in them, so nothing is cut off.
+      fitSheetToText(sheet, HEADER_ROW, HEADER_LAST);
       sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_LAST }];
       sheet.pageSetup = {
         paperSize: 9, // A4
@@ -4115,39 +3996,18 @@ export class FinancialReportsService {
       };
     }
 
-    return this.studentMonthReportFile(workbook, query, basename, opts.listTitle);
+    return this.studentMonthReportFile(workbook, query, basename, opts.listTitle, opts.tooWideHint);
   }
 
-  /**
-   * The finished per-student sheet as Excel, or (TAFSD-417) as a landscape PDF
-   * print of that same workbook on the paper asked for. A sheet too wide for
-   * A4 goes on A3 whatever was asked, and the filename says which.
-   */
-  private async studentMonthReportFile(
+  /** The finished per-student sheet as Excel or its PDF print (TAFSD-417/425). */
+  private studentMonthReportFile(
     workbook: ExcelJS.Workbook,
     query: { format?: string; paper?: SheetPaper },
     basename: string,
     title: string,
+    tooWideHint = 'Lower "months back", turn off the fee head breakdown, or untick some columns.',
   ): Promise<ExportFile> {
-    if (query.format === 'pdf') {
-      // Shrunk any further it can't be read; the columns have to be cut down.
-      if (!workbookFitsPaper(workbook, 'A3')) {
-        throw new BadRequestException(
-          'Too many columns to print even on A3. Lower "months back", turn off the fee head breakdown, or untick some columns. Excel has no such limit.',
-        );
-      }
-      const paper: SheetPaper = query.paper === 'A3' || !workbookFitsPaper(workbook, 'A4') ? 'A3' : 'A4';
-      return {
-        buffer: await workbookToPdf(workbook, paper, title),
-        filename: `${basename}-${paper}.pdf`,
-        contentType: 'application/pdf',
-      };
-    }
-    return {
-      buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
-      filename: `${basename}.xlsx`,
-      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    };
+    return schoolWorkbookFile(workbook, query, basename, title, tooWideHint);
   }
 
   /**
@@ -5533,7 +5393,7 @@ export class FinancialReportsService {
     basename: string,
     columns: ExportColumn[],
     rows: Record<string, string | number>[],
-    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf' },
+    query: FinancialReportQueryDto & { format?: 'xlsx' | 'csv' | 'pdf'; paper?: SheetPaper },
     extraFilterLines: string[],
     generatedBy?: Pick<IJwtStaffPayload, 'sub' | 'username' | 'fullName'>,
     /** Excel / PDF sheets built by the caller (groups, per-campus columns); CSV still uses columns + rows. */
@@ -5621,30 +5481,15 @@ export class FinancialReportsService {
       columns: sheetColumns,
     };
 
-    if (query.format === 'pdf') {
-      const pdf = await renderToBuffer(
-        React.createElement(SchoolReportPDF, {
-          // An empty report still prints its title block, with no table rows.
-          sheets: sheets.length ? sheets : [{ tab: sheetName, campus: 'ALL CAMPUSES', rows: [] }],
-          opts,
-          ...dayDateLines(opts.exportDate),
-        }) as any,
-      );
-      return { buffer: Buffer.from(pdf), filename: `${basename}.pdf`, contentType: 'application/pdf' };
-    }
-
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
     if (rows.length === 0) {
-      workbook.addWorksheet(sheetName).getCell('A1').value = 'Nothing matches the current filters.';
+      writeEmptySheet(workbook, sheetName, 'Nothing matches the current filters.');
     } else {
       writeSchoolSheets(workbook, sheets, opts);
     }
-    return {
-      buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
-      filename: `${basename}.xlsx`,
-      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    };
+    // TAFSD-425: the PDF is a print of this same workbook, as on the defaulters sheet.
+    return schoolWorkbookFile(workbook, query, basename, reportTitle);
   }
 
   /** Fee Heads filters beyond the shared student ones, in words. */

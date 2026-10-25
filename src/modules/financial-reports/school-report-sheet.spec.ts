@@ -57,8 +57,9 @@ describe('school-report-sheet (TAFSD-268)', () => {
       },
     );
     const ws = wb.worksheets[0];
-    expect(ws.getCell(1, 1).font.size).toBe(20);
-    expect(ws.getCell(2, 1).font.size).toBe(17);
+    // TAFSD-425: the shared title block, at the defaulters sheet's TAFSD-417 sizes.
+    expect(ws.getCell(1, 1).font.size).toBe(26);
+    expect(ws.getCell(2, 1).font.size).toBe(22);
     const lines = [...Array(ws.rowCount).keys()].map((i) => ws.getCell(i + 1, 1).value);
     const day = lines.indexOf('DAY :MONDAY');
     expect(lines.slice(day, day + 3)).toEqual([
