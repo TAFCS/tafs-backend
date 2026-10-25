@@ -243,35 +243,55 @@ export class AccessService {
    * bounded by the TTL.
    */
   private liveSessionCache = new Map<string, { session: LiveStaffSession; expires: number }>();
+  private liveSessionInFlight = new Map<string, Promise<LiveStaffSession | null>>();
 
   async resolveLiveSession(userId: string): Promise<LiveStaffSession | null> {
-    const now = Date.now();
     const cached = this.liveSessionCache.get(userId);
-    if (cached && cached.expires > now) return cached.session;
+    if (cached && cached.expires > Date.now()) return cached.session;
 
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { is_active: true, role: true },
+    // A page load fires many requests at once. Share one lookup between them
+    // rather than each running the full set of access queries (TAFSD-326).
+    const pending = this.liveSessionInFlight.get(userId);
+    if (pending) return pending;
+    // Declared first: the loader compares itself against the in-flight entry.
+    let load!: Promise<LiveStaffSession | null>;
+    load = (async (): Promise<LiveStaffSession | null> => {
+      const user = await this.prisma.users.findUnique({
+        where: { id: userId },
+        select: { is_active: true, role: true },
+      });
+      if (!user) {
+        this.liveSessionCache.delete(userId);
+        return null;
+      }
+      const access = await this.resolveEffective(userId, user.role);
+      const session: LiveStaffSession = {
+        isActive: Boolean(user.is_active),
+        role: user.role,
+        capabilityKeys: access.capabilityKeys,
+        actionIds: access.actionIds,
+      };
+      // Invalidated while loading: answer this request, but don't cache what may be stale.
+      if (this.liveSessionInFlight.get(userId) === load) {
+        this.liveSessionCache.set(userId, { session, expires: Date.now() + LIVE_SESSION_TTL_MS });
+      }
+      return session;
+    })().finally(() => {
+      if (this.liveSessionInFlight.get(userId) === load) this.liveSessionInFlight.delete(userId);
     });
-    if (!user) {
-      this.liveSessionCache.delete(userId);
-      return null;
-    }
-    const access = await this.resolveEffective(userId, user.role);
-    const session: LiveStaffSession = {
-      isActive: Boolean(user.is_active),
-      role: user.role,
-      capabilityKeys: access.capabilityKeys,
-      actionIds: access.actionIds,
-    };
-    this.liveSessionCache.set(userId, { session, expires: now + LIVE_SESSION_TTL_MS });
-    return session;
+    this.liveSessionInFlight.set(userId, load);
+    return load;
   }
 
   /** Drop one user's cached session, or everyone's (role or pack changes). */
   invalidateLiveSession(userId?: string) {
-    if (userId) this.liveSessionCache.delete(userId);
-    else this.liveSessionCache.clear();
+    if (userId) {
+      this.liveSessionCache.delete(userId);
+      this.liveSessionInFlight.delete(userId);
+    } else {
+      this.liveSessionCache.clear();
+      this.liveSessionInFlight.clear();
+    }
   }
 
   async resolveEffective(userId: string, role: StaffRole) {
