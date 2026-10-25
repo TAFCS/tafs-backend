@@ -430,9 +430,18 @@ export const DEFAULTER_GROUP_BY = ['class', 'section', 'family'] as const;
 export type DefaulterGroupBy = (typeof DEFAULTER_GROUP_BY)[number];
 
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
+  /** pdf (TAFSD-417): a landscape print of the Excel sheet. */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
+
+  /**
+   * TAFSD-417: the PDF's paper. A sheet too wide for A4 prints on A3
+   * regardless. Omitted = A4.
+   */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 
   /**
    * TAFSD-337: list the students in groups — by class, section or family —
