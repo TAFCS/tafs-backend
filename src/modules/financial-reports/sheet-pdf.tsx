@@ -1,6 +1,7 @@
 import React from 'react';
 import * as ExcelJS from 'exceljs';
 import { Document, Font, Page, Text, View, renderToBuffer } from '@react-pdf/renderer';
+import { type StandardFont, textWidthPt, wrappedLineCount } from './standard-font-widths';
 
 /**
  * TAFSD-417: a landscape PDF print of an ExcelJS workbook — the defaulters
@@ -83,14 +84,19 @@ export function displayText(cell: ExcelJS.Cell): string {
   return String(v);
 }
 
-const fontFamily = (font: Partial<ExcelJS.Font> | undefined) => {
+const LINE_HEIGHT = 1.15;
+const V_PAD = 1.5;
+const BORDER = 0.6;
+const cellPadding = (cell: ExcelJS.Cell, scale: number) => 2 + (cell.alignment?.indent ?? 0) * 4 * scale;
+
+const fontFamily = (font: Partial<ExcelJS.Font> | undefined): StandardFont => {
   const serif = /times|serif/i.test(font?.name ?? '');
   if (serif) return font?.bold ? 'Times-Bold' : 'Times-Roman';
   return font?.bold ? 'Helvetica-Bold' : 'Helvetica';
 };
 
 type Box = { left: number; top: number; width: number; height: number };
-type DrawCell = Box & { text: string; cell: ExcelJS.Cell };
+type DrawCell = Box & { text: string; cell: ExcelJS.Cell; fontSize: number };
 type PageModel = { cells: DrawCell[]; pageNumber: number; totalPages: number; sheetName: string; scale: number };
 
 /**
@@ -128,9 +134,10 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   const isEmpty = (r: number, c: number) =>
     !covered.has(`${r}:${c}`) && !masterOf.has(`${r}:${c}`) && displayText(ws.getCell(r, c)) === '';
 
-  /** The row's cells at vertical offset `top`; `height` maps a row to its scaled height. */
-  const drawRow = (r: number, top: number, height: (row: number) => number): DrawCell[] => {
-    const out: DrawCell[] = [];
+  type Span = { c: number; right: number; bottom: number; text: string; cell: ExcelJS.Cell; fontSize: number };
+  /** The cells a row draws: each with the last column and row it covers. */
+  const spansOf = (r: number): Span[] => {
+    const out: Span[] = [];
     for (let c = 1; c <= cols; c++) {
       if (covered.has(`${r}:${c}`)) continue;
       const cell = ws.getCell(r, c);
@@ -141,22 +148,51 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
       if (!merge && text && !cell.alignment?.wrapText && (cell.alignment?.horizontal ?? 'left') === 'left') {
         while (right < cols && isEmpty(r, right + 1)) right++;
       }
-      let h = 0;
-      for (let rr = r; rr <= (merge?.bottom ?? r); rr++) h += height(rr);
       if (!text && !cell.border) continue;
-      out.push({ left: x[c - 1], top, width: x[right] - x[c - 1], height: h, text, cell });
+      // A word wider than its box ("EARLIER" over a narrow month column)
+      // can't wrap, so the font shrinks until it fits, as Excel's shrink to fit.
+      const size = (cell.font?.size ?? 11) * scale;
+      const inner = x[right] - x[c - 1] - 2 * cellPadding(cell, scale) - 2 * BORDER;
+      const font = fontFamily(cell.font);
+      const widest = Math.max(0, ...text.split(/\s+/).map((w) => textWidthPt(w, font, size)));
+      const fontSize = widest > inner && inner > 0 ? (size * inner) / widest : size;
+      out.push({ c, right, bottom: merge?.bottom ?? r, text, cell, fontSize });
     }
     return out;
   };
+  const spans = new Map<number, Span[]>();
+  for (let r = 1; r <= lastRow; r++) spans.set(r, spansOf(r));
 
-  const rowH = (r: number) => rowHeightPt(ws, r) * scale;
+  // Row heights: Excel's, scaled, but grown wherever the text needs more
+  // lines than Excel was told (Excel never grows a row for wrapped text it
+  // didn't write itself, and react-pdf would otherwise clip it).
+  const height: number[] = [];
+  for (let r = 1; r <= lastRow; r++) height[r] = rowHeightPt(ws, r) * scale;
+  for (let r = 1; r <= lastRow; r++) {
+    for (const s of spans.get(r)!) {
+      if (!s.text) continue;
+      const inner = x[s.right] - x[s.c - 1] - 2 * cellPadding(s.cell, scale) - 2 * BORDER;
+      const lines = wrappedLineCount(s.text, fontFamily(s.cell.font), s.fontSize, inner);
+      // The text box sits inside the padding and the borders; a point spare
+      // so react-pdf never drops the last line.
+      const need = lines * s.fontSize * LINE_HEIGHT + 2 * (V_PAD + BORDER) + 1;
+      let have = 0;
+      for (let rr = r; rr <= s.bottom; rr++) have += height[rr];
+      if (need > have) height[s.bottom] += need - have;
+    }
+  }
+
   const bottom = PAGE[paper].height - MARGIN - FOOTER;
   const pages: DrawCell[][] = [];
   let current: DrawCell[] = [];
   let y = MARGIN;
   const place = (r: number) => {
-    current.push(...drawRow(r, y, rowH));
-    y += rowH(r);
+    for (const s of spans.get(r)!) {
+      let h = 0;
+      for (let rr = r; rr <= s.bottom; rr++) h += height[rr];
+      current.push({ left: x[s.c - 1], top: y, width: x[s.right] - x[s.c - 1], height: h, text: s.text, cell: s.cell, fontSize: s.fontSize });
+    }
+    y += height[r];
   };
   const startPage = () => {
     pages.push(current);
@@ -164,13 +200,13 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
     y = MARGIN;
     for (const r of repeated) place(r);
   };
-  const repeatedHeight = repeated.reduce((s, r) => s + rowH(r), 0);
+  const repeatedHeight = repeated.reduce((sum, r) => sum + height[r], 0);
   for (let r = 1; r <= lastRow; r++) {
     // Rows a merge spans together (the two-row header) move as one block.
     let blockEnd = r;
     for (let c = 1; c <= cols; c++) blockEnd = Math.max(blockEnd, masterOf.get(`${r}:${c}`)?.bottom ?? r);
     let blockH = 0;
-    for (let rr = r; rr <= blockEnd; rr++) blockH += rowH(rr);
+    for (let rr = r; rr <= blockEnd; rr++) blockH += height[rr];
     const pageHasBody = y > MARGIN + repeatedHeight + 0.01;
     if (y + blockH > bottom && pageHasBody) startPage();
     for (let rr = r; rr <= blockEnd; rr++) place(rr);
@@ -183,31 +219,34 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
 function CellBox({ d, scale }: { d: DrawCell; scale: number }) {
   const { cell } = d;
   const b = cell.border ?? {};
-  const line = (side?: Partial<ExcelJS.Border>) => (side?.style ? 0.6 : 0);
+  const line = (side?: Partial<ExcelJS.Border>) => (side?.style ? BORDER : 0);
   const horizontal = cell.alignment?.horizontal;
   const textAlign = horizontal === 'center' || horizontal === 'centerContinuous' ? 'center' : horizontal === 'right' ? 'right' : 'left';
-  const size = (cell.font?.size ?? 11) * scale;
+  const size = d.fontSize;
   const vertical = cell.alignment?.vertical;
   return (
     <View
       style={{
         position: 'absolute',
-        left: d.left,
-        top: d.top,
-        width: d.width,
-        height: d.height,
+        // Grown by half a border all round, so a cell's border lands exactly
+        // on its neighbour's: every rule prints one border thick.
+        left: d.left - BORDER / 2,
+        top: d.top - BORDER / 2,
+        width: d.width + BORDER,
+        height: d.height + BORDER,
         borderTopWidth: line(b.top),
         borderBottomWidth: line(b.bottom),
         borderLeftWidth: line(b.left),
         borderRightWidth: line(b.right),
         borderColor: '#000',
         justifyContent: vertical === 'top' ? 'flex-start' : vertical === 'bottom' ? 'flex-end' : 'center',
-        paddingHorizontal: 2 + (cell.alignment?.indent ?? 0) * 4 * scale,
+        paddingHorizontal: cellPadding(cell, scale),
+        paddingVertical: V_PAD,
         overflow: 'hidden',
       }}
     >
       {d.text ? (
-        <Text style={{ fontFamily: fontFamily(cell.font), fontSize: size, textAlign, lineHeight: 1.15 }}>{d.text}</Text>
+        <Text style={{ fontFamily: fontFamily(cell.font), fontSize: size, textAlign, lineHeight: LINE_HEIGHT }}>{d.text}</Text>
       ) : null}
     </View>
   );
