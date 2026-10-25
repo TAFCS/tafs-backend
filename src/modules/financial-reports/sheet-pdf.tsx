@@ -1,7 +1,18 @@
 import React from 'react';
 import * as ExcelJS from 'exceljs';
-import { Document, Font, Page, Text, View, renderToBuffer } from '@react-pdf/renderer';
-import { type StandardFont, textWidthPt, wrappedLineCount } from './standard-font-widths';
+import {
+  Document,
+  Font,
+  Page,
+  Text,
+  View,
+  renderToBuffer,
+} from '@react-pdf/renderer';
+import {
+  type StandardFont,
+  textWidthPt,
+  wrappedLineCount,
+} from './standard-font-widths';
 
 /**
  * TAFSD-417: a landscape PDF print of an ExcelJS workbook — the defaulters
@@ -34,7 +45,8 @@ Font.registerHyphenationCallback((word) => [word]);
 
 type Region = { top: number; left: number; bottom: number; right: number };
 
-const colIndex = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+const colIndex = (letters: string) =>
+  [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
 function parseRange(ref: string): Region {
   const [a, b = a] = ref.split(':');
   const parse = (s: string) => {
@@ -46,9 +58,12 @@ function parseRange(ref: string): Region {
   return { top: from.row, left: from.col, bottom: to.row, right: to.col };
 }
 
-const columnCount = (ws: ExcelJS.Worksheet) => Math.max(ws.actualColumnCount, ws.columnCount, ws.columns?.length ?? 0, 1);
-const colWidthPt = (ws: ExcelJS.Worksheet, c: number) => (ws.getColumn(c).width ?? DEFAULT_COL_WIDTH) * PT_PER_CHAR;
-const rowHeightPt = (ws: ExcelJS.Worksheet, r: number) => ws.getRow(r).height ?? DEFAULT_ROW_HEIGHT;
+const columnCount = (ws: ExcelJS.Worksheet) =>
+  Math.max(ws.actualColumnCount, ws.columnCount, ws.columns?.length ?? 0, 1);
+const colWidthPt = (ws: ExcelJS.Worksheet, c: number) =>
+  (ws.getColumn(c).width ?? DEFAULT_COL_WIDTH) * PT_PER_CHAR;
+const rowHeightPt = (ws: ExcelJS.Worksheet, r: number) =>
+  ws.getRow(r).height ?? DEFAULT_ROW_HEIGHT;
 
 /** The sheet's natural width in points, before any shrinking. */
 export function sheetWidthPt(ws: ExcelJS.Worksheet): number {
@@ -60,8 +75,13 @@ export function sheetWidthPt(ws: ExcelJS.Worksheet): number {
 const usableWidth = (paper: SheetPaper) => PAGE[paper].width - 2 * MARGIN;
 
 /** Whether every sheet of the workbook fits this paper without shrinking past MIN_SCALE. */
-export function workbookFitsPaper(workbook: ExcelJS.Workbook, paper: SheetPaper): boolean {
-  return workbook.worksheets.every((ws) => sheetWidthPt(ws) * MIN_SCALE <= usableWidth(paper));
+export function workbookFitsPaper(
+  workbook: ExcelJS.Workbook,
+  paper: SheetPaper,
+): boolean {
+  return workbook.worksheets.every(
+    (ws) => sheetWidthPt(ws) * MIN_SCALE <= usableWidth(paper),
+  );
 }
 
 /** A cell's text as Excel shows it, for the number formats the school sheets use. */
@@ -72,22 +92,39 @@ export function displayText(cell: ExcelJS.Cell): string {
     const fmt = cell.numFmt ?? '';
     const prefix = /^"([^"]*)"/.exec(fmt)?.[1] ?? '';
     const decimals = /0\.(0+)/.exec(fmt)?.[1].length ?? (fmt ? 0 : -1);
-    return prefix + (decimals < 0 ? String(v) : v.toFixed(decimals));
+    if (decimals < 0) return prefix + String(v);
+    // "#,##0" / "#,##0.00": thousands separators, as Excel shows them.
+    if (/#,##/.test(fmt)) {
+      return (
+        prefix +
+        v.toLocaleString('en-US', {
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals,
+        })
+      );
+    }
+    return prefix + v.toFixed(decimals);
   }
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'object') {
-    const o = v as { richText?: Array<{ text: string }>; text?: string; result?: unknown };
+    const o = v as {
+      richText?: Array<{ text: string }>;
+      text?: string;
+      result?: string | number | boolean;
+    };
     if (o.richText) return o.richText.map((t) => t.text).join('');
     if (o.text != null) return String(o.text);
     if (o.result != null) return String(o.result);
+    return '';
   }
-  return String(v);
+  return String(v as string | boolean);
 }
 
 const LINE_HEIGHT = 1.15;
 const V_PAD = 1.5;
 const BORDER = 0.6;
-const cellPadding = (cell: ExcelJS.Cell, scale: number) => 2 + (cell.alignment?.indent ?? 0) * 4 * scale;
+const cellPadding = (cell: ExcelJS.Cell, scale: number) =>
+  2 + (cell.alignment?.indent ?? 0) * 4 * scale;
 
 const fontFamily = (font: Partial<ExcelJS.Font> | undefined): StandardFont => {
   const serif = /times|serif/i.test(font?.name ?? '');
@@ -97,7 +134,13 @@ const fontFamily = (font: Partial<ExcelJS.Font> | undefined): StandardFont => {
 
 type Box = { left: number; top: number; width: number; height: number };
 type DrawCell = Box & { text: string; cell: ExcelJS.Cell; fontSize: number };
-type PageModel = { cells: DrawCell[]; pageNumber: number; totalPages: number; sheetName: string; scale: number };
+type PageModel = {
+  cells: DrawCell[];
+  pageNumber: number;
+  totalPages: number;
+  sheetName: string;
+  scale: number;
+};
 
 /**
  * Lays one worksheet out into pages: absolute boxes for every cell in
@@ -109,13 +152,16 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   const x: number[] = [MARGIN];
   for (let c = 1; c <= cols; c++) x[c] = x[c - 1] + colWidthPt(ws, c) * scale;
 
-  const merges: Region[] = (((ws.model as { merges?: string[] }).merges) ?? []).map(parseRange);
+  const merges: Region[] = (
+    (ws.model as { merges?: string[] }).merges ?? []
+  ).map(parseRange);
   const masterOf = new Map<string, Region>();
   const covered = new Set<string>();
   for (const m of merges) {
     masterOf.set(`${m.top}:${m.left}`, m);
     for (let r = m.top; r <= m.bottom; r++)
-      for (let c = m.left; c <= m.right; c++) if (r !== m.top || c !== m.left) covered.add(`${r}:${c}`);
+      for (let c = m.left; c <= m.right; c++)
+        if (r !== m.top || c !== m.left) covered.add(`${r}:${c}`);
   }
 
   const lastRow = ws.actualRowCount ? ws.rowCount : 0;
@@ -124,17 +170,32 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   const headerTo = titles ? Number(titles[2]) : 0;
   // The title block: the banner rows above the first blank row.
   let titleTo = 0;
-  while (titleTo < lastRow && ws.getRow(titleTo + 1).actualCellCount > 0) titleTo++;
+  while (titleTo < lastRow && ws.getRow(titleTo + 1).actualCellCount > 0)
+    titleTo++;
   if (headerFrom && titleTo >= headerFrom) titleTo = 0;
   const repeated = [
     ...Array.from({ length: titleTo }, (_, i) => i + 1),
-    ...(headerFrom ? Array.from({ length: headerTo - headerFrom + 1 }, (_, i) => headerFrom + i) : []),
+    ...(headerFrom
+      ? Array.from(
+          { length: headerTo - headerFrom + 1 },
+          (_, i) => headerFrom + i,
+        )
+      : []),
   ];
 
   const isEmpty = (r: number, c: number) =>
-    !covered.has(`${r}:${c}`) && !masterOf.has(`${r}:${c}`) && displayText(ws.getCell(r, c)) === '';
+    !covered.has(`${r}:${c}`) &&
+    !masterOf.has(`${r}:${c}`) &&
+    displayText(ws.getCell(r, c)) === '';
 
-  type Span = { c: number; right: number; bottom: number; text: string; cell: ExcelJS.Cell; fontSize: number };
+  type Span = {
+    c: number;
+    right: number;
+    bottom: number;
+    text: string;
+    cell: ExcelJS.Cell;
+    fontSize: number;
+  };
   /** The cells a row draws: each with the last column and row it covers. */
   const spansOf = (r: number): Span[] => {
     const out: Span[] = [];
@@ -145,17 +206,27 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
       let right = merge?.right ?? c;
       const text = displayText(cell);
       // Excel lets unwrapped text run on into empty cells to its right.
-      if (!merge && text && !cell.alignment?.wrapText && (cell.alignment?.horizontal ?? 'left') === 'left') {
+      if (
+        !merge &&
+        text &&
+        !cell.alignment?.wrapText &&
+        (cell.alignment?.horizontal ?? 'left') === 'left'
+      ) {
         while (right < cols && isEmpty(r, right + 1)) right++;
       }
       if (!text && !cell.border) continue;
       // A word wider than its box ("EARLIER" over a narrow month column)
       // can't wrap, so the font shrinks until it fits, as Excel's shrink to fit.
       const size = (cell.font?.size ?? 11) * scale;
-      const inner = x[right] - x[c - 1] - 2 * cellPadding(cell, scale) - 2 * BORDER;
+      const inner =
+        x[right] - x[c - 1] - 2 * cellPadding(cell, scale) - 2 * BORDER;
       const font = fontFamily(cell.font);
-      const widest = Math.max(0, ...text.split(/\s+/).map((w) => textWidthPt(w, font, size)));
-      const fontSize = widest > inner && inner > 0 ? (size * inner) / widest : size;
+      const widest = Math.max(
+        0,
+        ...text.split(/\s+/).map((w) => textWidthPt(w, font, size)),
+      );
+      const fontSize =
+        widest > inner && inner > 0 ? (size * inner) / widest : size;
       out.push({ c, right, bottom: merge?.bottom ?? r, text, cell, fontSize });
     }
     return out;
@@ -171,8 +242,14 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   for (let r = 1; r <= lastRow; r++) {
     for (const s of spans.get(r)!) {
       if (!s.text) continue;
-      const inner = x[s.right] - x[s.c - 1] - 2 * cellPadding(s.cell, scale) - 2 * BORDER;
-      const lines = wrappedLineCount(s.text, fontFamily(s.cell.font), s.fontSize, inner);
+      const inner =
+        x[s.right] - x[s.c - 1] - 2 * cellPadding(s.cell, scale) - 2 * BORDER;
+      const lines = wrappedLineCount(
+        s.text,
+        fontFamily(s.cell.font),
+        s.fontSize,
+        inner,
+      );
       // The text box sits inside the padding and the borders; a point spare
       // so react-pdf never drops the last line.
       const need = lines * s.fontSize * LINE_HEIGHT + 2 * (V_PAD + BORDER) + 1;
@@ -190,7 +267,15 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
     for (const s of spans.get(r)!) {
       let h = 0;
       for (let rr = r; rr <= s.bottom; rr++) h += height[rr];
-      current.push({ left: x[s.c - 1], top: y, width: x[s.right] - x[s.c - 1], height: h, text: s.text, cell: s.cell, fontSize: s.fontSize });
+      current.push({
+        left: x[s.c - 1],
+        top: y,
+        width: x[s.right] - x[s.c - 1],
+        height: h,
+        text: s.text,
+        cell: s.cell,
+        fontSize: s.fontSize,
+      });
     }
     y += height[r];
   };
@@ -204,7 +289,8 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   for (let r = 1; r <= lastRow; r++) {
     // Rows a merge spans together (the two-row header) move as one block.
     let blockEnd = r;
-    for (let c = 1; c <= cols; c++) blockEnd = Math.max(blockEnd, masterOf.get(`${r}:${c}`)?.bottom ?? r);
+    for (let c = 1; c <= cols; c++)
+      blockEnd = Math.max(blockEnd, masterOf.get(`${r}:${c}`)?.bottom ?? r);
     let blockH = 0;
     for (let rr = r; rr <= blockEnd; rr++) blockH += height[rr];
     const pageHasBody = y > MARGIN + repeatedHeight + 0.01;
@@ -213,7 +299,13 @@ function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
     r = blockEnd;
   }
   pages.push(current);
-  return pages.map((cells, i) => ({ cells, pageNumber: i + 1, totalPages: pages.length, sheetName: ws.name, scale }));
+  return pages.map((cells, i) => ({
+    cells,
+    pageNumber: i + 1,
+    totalPages: pages.length,
+    sheetName: ws.name,
+    scale,
+  }));
 }
 
 function CellBox({ d, scale }: { d: DrawCell; scale: number }) {
@@ -221,7 +313,12 @@ function CellBox({ d, scale }: { d: DrawCell; scale: number }) {
   const b = cell.border ?? {};
   const line = (side?: Partial<ExcelJS.Border>) => (side?.style ? BORDER : 0);
   const horizontal = cell.alignment?.horizontal;
-  const textAlign = horizontal === 'center' || horizontal === 'centerContinuous' ? 'center' : horizontal === 'right' ? 'right' : 'left';
+  const textAlign =
+    horizontal === 'center' || horizontal === 'centerContinuous'
+      ? 'center'
+      : horizontal === 'right'
+        ? 'right'
+        : 'left';
   const size = d.fontSize;
   const vertical = cell.alignment?.vertical;
   return (
@@ -239,24 +336,51 @@ function CellBox({ d, scale }: { d: DrawCell; scale: number }) {
         borderLeftWidth: line(b.left),
         borderRightWidth: line(b.right),
         borderColor: '#000',
-        justifyContent: vertical === 'top' ? 'flex-start' : vertical === 'bottom' ? 'flex-end' : 'center',
+        justifyContent:
+          vertical === 'top'
+            ? 'flex-start'
+            : vertical === 'bottom'
+              ? 'flex-end'
+              : 'center',
         paddingHorizontal: cellPadding(cell, scale),
         paddingVertical: V_PAD,
         overflow: 'hidden',
       }}
     >
       {d.text ? (
-        <Text style={{ fontFamily: fontFamily(cell.font), fontSize: size, textAlign, lineHeight: LINE_HEIGHT }}>{d.text}</Text>
+        <Text
+          style={{
+            fontFamily: fontFamily(cell.font),
+            fontSize: size,
+            textAlign,
+            lineHeight: LINE_HEIGHT,
+          }}
+        >
+          {d.text}
+        </Text>
       ) : null}
     </View>
   );
 }
 
-function SheetDocument({ pages, paper, title }: { pages: PageModel[]; paper: SheetPaper; title: string }) {
+function SheetDocument({
+  pages,
+  paper,
+  title,
+}: {
+  pages: PageModel[];
+  paper: SheetPaper;
+  title: string;
+}) {
   return (
     <Document title={title} creator="The American Foundation School">
       {pages.map((p, i) => (
-        <Page key={i} size={paper} orientation="landscape" style={{ color: '#000' }}>
+        <Page
+          key={i}
+          size={paper}
+          orientation="landscape"
+          style={{ color: '#000' }}
+        >
           {p.cells.map((d, j) => (
             <CellBox key={j} d={d} scale={p.scale} />
           ))}
@@ -282,9 +406,17 @@ function SheetDocument({ pages, paper, title }: { pages: PageModel[]; paper: She
 }
 
 /** Every worksheet of the workbook, in order, as one landscape PDF. */
-export async function workbookToPdf(workbook: ExcelJS.Workbook, paper: SheetPaper, title: string): Promise<Buffer> {
+export async function workbookToPdf(
+  workbook: ExcelJS.Workbook,
+  paper: SheetPaper,
+  title: string,
+): Promise<Buffer> {
   const pages = workbook.worksheets.flatMap((ws) => layoutSheet(ws, paper));
-  return Buffer.from(await renderToBuffer(<SheetDocument pages={pages} paper={paper} title={title} />));
+  return Buffer.from(
+    await renderToBuffer(
+      <SheetDocument pages={pages} paper={paper} title={title} />,
+    ),
+  );
 }
 
 export const __test = { layoutSheet };
