@@ -40,8 +40,14 @@ describe('defaulters sheet PDF (TAFSD-417)', () => {
   });
 
   it('goes to A3 when the sheet is too wide for A4, whatever was asked', async () => {
-    const file = await service(5)({ format: 'pdf', paper: 'A4', months_back: 24, breakdown_by_head: true });
+    const file = await service(5)({ format: 'pdf', paper: 'A4', months_back: 12 });
     expect(file.filename).toBe('defaulters-A3.pdf');
+  });
+
+  it('refuses a sheet too wide to read even on A3', async () => {
+    await expect(service(5)({ format: 'pdf', paper: 'A3', months_back: 24, breakdown_by_head: true })).rejects.toThrow(
+      /even on A3/,
+    );
   });
 
   it('repeats the title block and header on every page, and numbers the pages', async () => {
@@ -84,5 +90,37 @@ describe('defaulters sheet PDF (TAFSD-417)', () => {
     for (let c = 1; c <= 40; c++) ws.getColumn(c).width = 10;
     expect(sheetWidthPt(ws) * MIN_SCALE).toBeGreaterThan(801);
     expect(workbookFitsPaper(wb, 'A4')).toBe(false);
+  });
+});
+
+describe('standard font widths (TAFSD-417)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { textWidthPt, wrappedLineCount } = require('./standard-font-widths');
+
+  it('measures text from the AFM widths', () => {
+    // Times-Roman: "A" 722, "1" 500.
+    expect(textWidthPt('A1', 'Times-Roman', 10)).toBeCloseTo(12.22);
+    expect(textWidthPt('—', 'Helvetica-Bold', 10)).toBeCloseTo(10);
+  });
+
+  it('counts wrapped lines, never fewer than the text needs', () => {
+    expect(wrappedLineCount('3889, 4769, 4813, 5201, 5516', 'Times-Roman', 7, 45)).toBe(3);
+    expect(wrappedLineCount('ONE', 'Times-Roman', 7, 200)).toBe(1);
+    expect(wrappedLineCount('a\nb', 'Times-Roman', 7, 200)).toBe(2);
+    expect(wrappedLineCount('MONTHLYTUITIONFEE', 'Times-Bold', 10, 30)).toBeGreaterThan(2);
+  });
+});
+
+describe('sheet PDF row fitting (TAFSD-417)', () => {
+  it('grows a row whose wrapped text needs more lines than Excel gave it', () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('x');
+    ws.getColumn(1).width = 14;
+    const c = ws.getCell('A1');
+    c.value = '3889, 4769, 4813, 5201, 5516';
+    c.alignment = { wrapText: true };
+    ws.getRow(1).height = 15;
+    const [page] = __test.layoutSheet(ws, 'A4');
+    expect(page.cells[0].height).toBeGreaterThan(15);
   });
 });

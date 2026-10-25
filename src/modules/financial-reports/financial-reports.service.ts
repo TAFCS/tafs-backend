@@ -3811,6 +3811,7 @@ export class FinancialReportsService {
       // opaque download failure.
       const sheet = workbook.addWorksheet(opts.emptySheetName);
       sheet.getCell('A1').value = opts.emptyMessage;
+      sheet.getColumn(1).width = 60;
       return this.studentMonthReportFile(workbook, query, basename, opts.listTitle);
     }
 
@@ -3850,14 +3851,29 @@ export class FinancialReportsService {
           },
         });
       if (show('link_to_gr'))
-        specs.push({ header: 'LINK TO GR', width: 14, wrap: true, fill: (c, r) => void (c.value = linkToGr(r.item)) });
+        specs.push({
+          header: 'LINK TO GR',
+          width: 14,
+          wrap: true,
+          fill: (c, r) => {
+            const text = linkToGr(r.item);
+            c.value = text;
+            // TAFSD-417: about 12 characters a line at this width ("3889, 4769, ").
+            return Math.max(1, Math.ceil(text.length / 12));
+          },
+        });
       if (show('level')) specs.push({ header: 'LEVEL', width: 11, fill: (c, r) => void (c.value = level(r.item)) });
       if (show('name'))
         specs.push({
           header: 'STUDENT NAME',
           width: 30,
           wrap: true,
-          fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
+          fill: (c, r) => {
+            const name = String(r.item.student_name ?? '').toUpperCase();
+            c.value = name;
+            // TAFSD-417: a long name wraps (~26 capitals a line at this width).
+            return Math.max(1, Math.ceil(name.length / 26));
+          },
         });
       if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
       if (show('contact'))
@@ -4114,6 +4130,12 @@ export class FinancialReportsService {
     title: string,
   ): Promise<ExportFile> {
     if (query.format === 'pdf') {
+      // Shrunk any further it can't be read; the columns have to be cut down.
+      if (!workbookFitsPaper(workbook, 'A3')) {
+        throw new BadRequestException(
+          'Too many columns to print even on A3. Lower "months back", turn off the fee head breakdown, or untick some columns. Excel has no such limit.',
+        );
+      }
       const paper: SheetPaper = query.paper === 'A3' || !workbookFitsPaper(workbook, 'A4') ? 'A3' : 'A4';
       return {
         buffer: await workbookToPdf(workbook, paper, title),

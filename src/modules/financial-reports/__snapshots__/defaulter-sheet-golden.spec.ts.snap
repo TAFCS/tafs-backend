@@ -5008,7 +5008,7 @@ exports[`defaulters student sheet golden output (TAFSD-341) xlsx: nothing matche
     ],
     "views": null,
     "widths": [
-      null,
+      60,
     ],
   },
 ]
