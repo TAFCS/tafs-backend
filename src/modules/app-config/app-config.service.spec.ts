@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpStatus } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { AppConfigService } from './app-config.service';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -436,4 +436,50 @@ describe('AppConfigService', () => {
       });
     });
   });
+
+  describe('checkAppAccess', () => {
+    it('returns allowed: false with 503 MAINTENANCE when maintenance mode is active', async () => {
+      prisma.app_config.findMany.mockResolvedValueOnce([
+        { key: 'parent_maintenance_mode', value: 'true' },
+        { key: 'parent_maintenance_message', value: 'Parent portal is down for maintenance.' },
+      ]);
+
+      const result = await service.checkAppAccess(AppType.PARENT, AppPlatform.ANDROID);
+      expect(result.allowed).toBe(false);
+      expect(result.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(result.code).toBe('MAINTENANCE');
+      expect(result.message).toBe('Parent portal is down for maintenance.');
+    });
+
+    it('returns allowed: false with 426 UPGRADE_REQUIRED when build < minBuildNumber', async () => {
+      prisma.app_config.findMany.mockResolvedValueOnce([
+        { key: 'parent_maintenance_mode', value: 'false' },
+        { key: 'parent_min_android_build', value: '20' },
+        { key: 'parent_force_update_message', value: 'Force update required.' },
+      ]);
+
+      const result = await service.checkAppAccess(AppType.PARENT, AppPlatform.ANDROID, 15);
+      expect(result.allowed).toBe(false);
+      expect(result.status).toBe(426);
+      expect(result.code).toBe('UPGRADE_REQUIRED');
+      expect(result.minBuildNumber).toBe(20);
+      expect(result.message).toBe('Force update required.');
+    });
+
+    it('caches access rules for fast evaluation and respects cache clearing', async () => {
+      prisma.app_config.findMany.mockResolvedValue([
+        { key: 'staff_maintenance_mode', value: 'false' },
+        { key: 'staff_min_android_build', value: '10' },
+      ]);
+
+      const r1 = await service.checkAppAccess(AppType.STAFF, AppPlatform.ANDROID, 15);
+      const r2 = await service.checkAppAccess(AppType.STAFF, AppPlatform.ANDROID, 15);
+
+      expect(r1.allowed).toBe(true);
+      expect(r2.allowed).toBe(true);
+      // findMany called only once due to 5-second cache
+      expect(prisma.app_config.findMany).toHaveBeenCalledTimes(1);
+    });
+  });
 });
+

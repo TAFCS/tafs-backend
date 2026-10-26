@@ -155,6 +155,9 @@ async function bootstrap() {
       'Authorization',
       'X-Requested-With',
       'Origin',
+      'X-App',
+      'X-App-Build',
+      'X-App-Platform',
     ],
     // TAFSD-417: let the webapp read export filenames (a defaulters PDF moved
     // to A3 says so in its name).

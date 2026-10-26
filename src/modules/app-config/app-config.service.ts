@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, HttpStatus } from '@nestjs/common';
 import { StaffRole, type app_config } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
@@ -76,6 +76,158 @@ export class AppConfigService {
   ) {}
 
   private statusCache = new Map<string, { data: any; expiresAt: number }>();
+  private accessRulesCache = new Map<string, { data: any; expiresAt: number }>();
+
+  /**
+   * Fast, short-cached check used by AppMaintenanceGuard on incoming mobile requests.
+   * Cached for 5 seconds to avoid DB load on every request while reacting promptly
+   * to changes and scheduled maintenance windows.
+   */
+  async checkAppAccess(
+    app: AppType,
+    platform: AppPlatform = AppPlatform.ANDROID,
+    build?: number,
+  ): Promise<{
+    allowed: boolean;
+    status?: HttpStatus | number;
+    code?: 'MAINTENANCE' | 'UPGRADE_REQUIRED';
+    message?: string;
+    minBuildNumber?: number;
+    storeUrl?: string;
+  }> {
+    const appPrefix = app === AppType.STAFF ? 'staff' : 'parent';
+    const nowMs = Date.now();
+    const cacheKey = `${appPrefix}:${platform}`;
+    const cached = this.accessRulesCache.get(cacheKey);
+
+    let rules: {
+      maintenanceMode: boolean;
+      maintenanceMessage: string;
+      forceUpdateMessage: string;
+      minBuildNumber: number;
+      storeUrl: string;
+    };
+
+    if (cached && cached.expiresAt > nowMs) {
+      rules = cached.data;
+    } else {
+      const keysToQuery = [
+        `${appPrefix}_maintenance_mode`,
+        `${appPrefix}_maintenance_message`,
+        `${appPrefix}_maintenance_start`,
+        `${appPrefix}_maintenance_end`,
+        `${appPrefix}_min_${platform}_build`,
+        `${appPrefix}_force_update_message`,
+        `${appPrefix}_${platform}_store_url`,
+        'maintenance_mode',
+        'maintenance_message',
+        `min_${platform}_build`,
+        `${platform}_store_url`,
+      ];
+
+      const configs = await this.prisma.app_config.findMany({
+        where: { key: { in: keysToQuery } },
+      });
+
+      const configsMap = new Map<string, string>();
+      for (const config of configs) {
+        configsMap.set(config.key, config.value);
+      }
+
+      const rawMaintenanceMode =
+        configsMap.get(`${appPrefix}_maintenance_mode`) ??
+        configsMap.get('maintenance_mode');
+      let maintenanceMode = rawMaintenanceMode?.toLowerCase() === 'true';
+
+      const maintenanceStartStr = configsMap.get(`${appPrefix}_maintenance_start`);
+      const maintenanceEndStr = configsMap.get(`${appPrefix}_maintenance_end`);
+
+      if (maintenanceMode) {
+        const nowDate = new Date();
+        if (maintenanceStartStr && maintenanceStartStr.trim()) {
+          const startDate = new Date(maintenanceStartStr.trim());
+          if (!isNaN(startDate.getTime()) && nowDate < startDate) {
+            maintenanceMode = false;
+          }
+        }
+        if (maintenanceEndStr && maintenanceEndStr.trim()) {
+          const endDate = new Date(maintenanceEndStr.trim());
+          if (!isNaN(endDate.getTime()) && nowDate > endDate) {
+            maintenanceMode = false;
+          }
+        }
+      }
+
+      const maintenanceMessage =
+        configsMap.get(`${appPrefix}_maintenance_message`) ??
+        configsMap.get('maintenance_message') ??
+        'The app is currently under maintenance. Please try again later.';
+
+      const forceUpdateMessage =
+        configsMap.get(`${appPrefix}_force_update_message`) ??
+        'A new version of the app is available with critical improvements and new features. Please update to continue.';
+
+      const rawMinBuild =
+        configsMap.get(`${appPrefix}_min_${platform}_build`) ??
+        configsMap.get(`min_${platform}_build`);
+      const minBuildNumber = parseInt(rawMinBuild || '0', 10);
+
+      const fallbackStoreUrl =
+        platform === AppPlatform.ANDROID
+          ? (app === AppType.STAFF
+              ? 'https://play.google.com/store/apps/details?id=com.tafsstaff.app'
+              : 'https://play.google.com/store/apps/details?id=com.tafs.app')
+          : 'https://apps.apple.com/app/id6572338575';
+
+      const configuredStoreUrl =
+        configsMap.get(`${appPrefix}_${platform}_store_url`) ??
+        configsMap.get(`${platform}_store_url`);
+
+      const storeUrl =
+        configuredStoreUrl &&
+        !['https://play.google.com/store', 'https://apps.apple.com/store'].includes(configuredStoreUrl)
+          ? configuredStoreUrl
+          : fallbackStoreUrl;
+
+      rules = {
+        maintenanceMode,
+        maintenanceMessage,
+        forceUpdateMessage,
+        minBuildNumber,
+        storeUrl,
+      };
+
+      if (this.accessRulesCache.size > 200) {
+        this.accessRulesCache.clear();
+      }
+      this.accessRulesCache.set(cacheKey, {
+        data: rules,
+        expiresAt: nowMs + 5 * 1000,
+      });
+    }
+
+    if (rules.maintenanceMode) {
+      return {
+        allowed: false,
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        code: 'MAINTENANCE',
+        message: rules.maintenanceMessage,
+      };
+    }
+
+    if (build !== undefined && !isNaN(build) && build < rules.minBuildNumber) {
+      return {
+        allowed: false,
+        status: 426,
+        code: 'UPGRADE_REQUIRED',
+        message: rules.forceUpdateMessage,
+        minBuildNumber: rules.minBuildNumber,
+        storeUrl: rules.storeUrl,
+      };
+    }
+
+    return { allowed: true };
+  }
 
   /**
    * Retrieves the current app status (maintenance mode, force-update requirement,
@@ -396,8 +548,9 @@ export class AppConfigService {
       return { records, auditEntries };
     });
 
-    // 3. Invalidate status cache on mutation
+    // 3. Invalidate status and access rules caches on mutation
     this.statusCache.clear();
+    this.accessRulesCache.clear();
 
     // 4. Log audit entries
     if (auditEntries.length > 0) {
