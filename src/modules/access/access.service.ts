@@ -752,25 +752,14 @@ export class AccessService {
         });
       }
 
-      // Only touch sub-permissions when the caller actually sent them, so a
-      // client built before actions existed cannot silently wipe them.
-      if (dto.tileActionGrants !== undefined) {
-        await tx.user_tile_action_grants.deleteMany({ where: { user_id: userId } });
-        if (actionGrants.length > 0) {
-          await tx.user_tile_action_grants.createMany({
-            data: actionGrants.map((g) => ({
-              user_id: userId,
-              tile_id: g.tileId,
-              action_id: g.actionId,
-              allow: g.allow,
-              granted_by: actorId,
-              note: g.note ?? null,
-            })),
-            skipDuplicates: true,
-          });
-        }
-      }
     }, { maxWait: 10000, timeout: 20000 });
+
+    // Only touch sub-permissions when the caller actually sent them, so a
+    // client built before actions existed cannot silently wipe them. Guarded
+    // with readUntilMigrated so missing user_tile_action_grants table doesn't fail save.
+    if (dto.tileActionGrants !== undefined) {
+      await this.writeUserActionGrants(userId, actionGrants, actorId);
+    }
     this.invalidateLiveSession(userId);
 
     // Collected and written in one insert after the change commits; one
@@ -1087,6 +1076,39 @@ export class AccessService {
                 pack_id: packId,
                 tile_id: a.tileId,
                 action_id: a.actionId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        });
+        return true;
+      },
+      false,
+    );
+  }
+
+  /**
+   * Replaces a user's sub-permissions. Guarded until the migration lands, so
+   * an access edit on an unmigrated deploy still saves tiles rather than 500ing.
+   */
+  private async writeUserActionGrants(
+    userId: string,
+    actionGrants: { tileId: string; actionId: string; allow: boolean; note?: string }[],
+    actorId: string,
+  ) {
+    await readUntilMigrated(
+      async () => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.user_tile_action_grants.deleteMany({ where: { user_id: userId } });
+          if (actionGrants.length > 0) {
+            await tx.user_tile_action_grants.createMany({
+              data: actionGrants.map((g) => ({
+                user_id: userId,
+                tile_id: g.tileId,
+                action_id: g.actionId,
+                allow: g.allow,
+                granted_by: actorId,
+                note: g.note ?? null,
               })),
               skipDuplicates: true,
             });
