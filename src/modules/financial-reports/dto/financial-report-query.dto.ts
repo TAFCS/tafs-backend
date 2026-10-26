@@ -512,6 +512,16 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @IsBoolean()
   breakdown_by_head?: boolean;
 
+  /**
+   * TAFSD-431: show each month's fee dates — a column per date when a month
+   * has several (with the head breakdown, a REMARKS note instead). Off when
+   * omitted: one column per month, as on the defaulters list.
+   */
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  split_by_fee_date?: boolean;
+
   @IsOptional()
   @Transform(toStringArray)
   @IsArray()

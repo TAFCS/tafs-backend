@@ -104,6 +104,8 @@ type DefaulterOwedMonth = {
   owed: number;
   partial: boolean;
   heads: Array<{ name: string; owed: number; partial: boolean }>;
+  /** TAFSD-431: day of month -> amount, for sheets that split a month by fee date. */
+  days?: Map<number, number>;
 };
 /** One student row on a per-student month sheet: its fields, each month's cell and the row total. */
 type StudentMonthRow = {
@@ -144,6 +146,12 @@ type StudentMonthReportOptions = {
   filterLines: (names: DefaulterFilterNames, omitClasses: boolean, groupLine: string[]) => string[];
   emptyMessage: string;
   emptySheetName: string;
+  /**
+   * TAFSD-431: show each month's fee dates (from `days`). A month with one
+   * date gets it as a sub-header ("1 NOV"); one with several splits into a
+   * column per date plus the month TOTAL. Ignored with the head breakdown.
+   */
+  dateColumns?: boolean;
 };
 /** One campus x class x fee date line of the By fee date export (TAFSD-341). */
 /** One groupBy cell of the Fee Heads summary sheets (TAFSD-341). */
@@ -1382,12 +1390,14 @@ export class FinancialReportsService {
       waived: number;
       /** month index -> head name -> net billed */
       months: Map<number, Map<string, number>>;
+      /** TAFSD-431: month index -> day of month -> net billed */
+      days: Map<number, Map<number, number>>;
     };
     const money = new Map<number, Money>();
     for (const g of groups) {
       let m = money.get(g.student_id);
       if (!m) {
-        m = { billed: 0, discount: 0, headsPaid: 0, discountConsumed: 0, waived: 0, months: new Map() };
+        m = { billed: 0, discount: 0, headsPaid: 0, discountConsumed: 0, waived: 0, months: new Map(), days: new Map() };
         money.set(g.student_id, m);
       }
       const amount = this.toMoney(g._sum.amount);
@@ -1411,6 +1421,12 @@ export class FinancialReportsService {
       const month = m.months.get(idx) ?? new Map<string, number>();
       month.set(head, this.roundMoney((month.get(head) ?? 0) + signed));
       m.months.set(idx, month);
+      if (g.fee_date) {
+        const days = m.days.get(idx) ?? new Map<number, number>();
+        const day = g.fee_date.getUTCDate();
+        days.set(day, this.roundMoney((days.get(day) ?? 0) + signed));
+        m.days.set(idx, days);
+      }
     }
 
     const rows: StudentMonthRow[] = students
@@ -1426,6 +1442,7 @@ export class FinancialReportsService {
             owed: this.roundMoney([...heads.values()].reduce((sum, v) => sum + v, 0)),
             partial: false,
             heads: names.map((name) => ({ name, owed: heads.get(name)!, partial: false })),
+            days: m?.days.get(idx),
           });
         }
         return {
@@ -1459,12 +1476,28 @@ export class FinancialReportsService {
     const hi = toIdx(query.to_date);
     const lo = Math.max(toIdx(query.from_date), hi - 23);
     const period = periodLine(query.from_date, query.to_date);
-    const remark = (r: StudentMonthRow) => {
+    const state = (r: StudentMonthRow) => {
       const outstanding = Number(r.item.outstanding);
       const paid = Number(r.item.amount_paid);
       if (outstanding <= 0) return paid <= 0 && Number(r.item.waived) > 0 ? 'Waived' : 'Paid';
       return paid > 0 ? 'Part-paid' : 'Unpaid';
     };
+    // TAFSD-431: the head breakdown has no room for date columns, so a month
+    // billed on more than one fee date lists them here ("AUG: 1 AUG 15,000 · 2 AUG 4,500").
+    const dateNotes = (r: StudentMonthRow) =>
+      [...r.months.entries()]
+        .filter(([idx, mo]) => idx >= lo && idx <= hi && [...(mo.days ?? new Map()).values()].filter((v) => v !== 0).length > 1)
+        .sort(([a], [b]) => a - b)
+        .map(([idx, mo]) => {
+          const name = MONTH_ABBR_UPPER[idx % 12];
+          const parts = [...mo.days!.entries()]
+            .filter(([, v]) => v !== 0)
+            .sort(([a], [b]) => a - b)
+            .map(([day, v]) => `${day} ${name} ${v.toLocaleString('en-US')}`);
+          return `${name}: ${parts.join(' · ')}`;
+        });
+    const remark = (r: StudentMonthRow) =>
+      [state(r), ...(query.split_by_fee_date && query.breakdown_by_head ? dateNotes(r) : [])].join('\n');
     return this.buildStudentMonthReport(rows, {
       query,
       basename: `fee-heads-by-student-${query.from_date}-to-${query.to_date}`,
@@ -1486,6 +1519,7 @@ export class FinancialReportsService {
         defaulterFilterLines(query, names, period, omitClasses, [], [...this.feeHeadsFilterWords(query), ...groupLine]),
       emptyMessage: 'Nothing matches the current filters.',
       emptySheetName: 'Fee Heads by Student',
+      dateColumns: Boolean(query.split_by_fee_date),
     });
   }
 
@@ -3577,6 +3611,21 @@ export class FinancialReportsService {
       return [...names].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
     };
     const remarkFor = opts.remark;
+    // TAFSD-431: the fee dates (days of the month) owed in a single-month
+    // column by at least one of the rows, oldest first.
+    const dateColumns = Boolean(opts.dateColumns) && !breakdown;
+    const daysIn = (rows: SheetRow[], col: SheetCol): number[] => {
+      if (!dateColumns || col.from !== col.to) return [];
+      const days = new Set<number>();
+      for (const r of rows) {
+        if (!cellFor(r, col)) continue;
+        for (const [day, amount] of r.months.get(col.from)?.days ?? []) if (amount !== 0) days.add(day);
+      }
+      return [...days].sort((a, b) => a - b);
+    };
+    const dayLabel = (day: number, col: SheetCol) => `${day} ${col.label}`;
+    const dayOwed = (r: SheetRow, col: SheetCol, day: number) =>
+      cellFor(r, col) ? r.months.get(col.from)?.days?.get(day) ?? 0 : 0;
     // A class or segment filter narrows the sheet to part of the school; without
     // one it is the whole school and gets the plain name.
     const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
@@ -3641,7 +3690,14 @@ export class FinancialReportsService {
       const monthCols: Array<{ header: string; value: (r: SheetRow) => number | '' }> = [];
       for (const col of show('months') ? sheetColumns(sheetRows) : []) {
         if (!breakdown) {
-          monthCols.push({ header: col.label, value: (r) => cellFor(r, col)?.owed ?? '' });
+          const days = daysIn(sheetRows, col);
+          for (const day of days.length > 1 ? days : []) {
+            monthCols.push({ header: dayLabel(day, col), value: (r) => dayOwed(r, col, day) || '' });
+          }
+          monthCols.push({
+            header: days.length > 1 ? `${col.label} TOTAL` : days.length === 1 ? dayLabel(days[0], col) : col.label,
+            value: (r) => cellFor(r, col)?.owed ?? '',
+          });
           continue;
         }
         for (const name of headsIn(sheetRows, col, order)) {
@@ -3766,7 +3822,8 @@ export class FinancialReportsService {
           wrap: true,
           fill: (c, r) => void (c.value = String(r.item.student_name ?? '').toUpperCase()),
         });
-      if (show('status')) specs.push({ header: 'STATUS', width: 11, fill: (c, r) => void (c.value = statusFor(r.item)) });
+      // Wraps: "SOFT ADMISSION" is wider than the column fits a word to.
+      if (show('status')) specs.push({ header: 'STATUS', width: 11, wrap: true, fill: (c, r) => void (c.value = statusFor(r.item)) });
       if (show('contact'))
         specs.push({
           header: 'CONTACT',
@@ -3790,7 +3847,41 @@ export class FinancialReportsService {
             cell.numFmt = owed.partial ? '"BP "0' : '0';
           };
           if (!breakdown) {
-            specs.push({ header: col.label, width: 10, month: true, total: (r) => cellFor(r, col)?.owed ?? 0, fill: monthCell });
+            const days = daysIn(campus.rows, col);
+            if (!days.length) {
+              specs.push({ header: col.label, width: 10, month: true, total: (r) => cellFor(r, col)?.owed ?? 0, fill: monthCell });
+              continue;
+            }
+            // TAFSD-431: the month over its fee dates; one date is just a
+            // sub-header, several get a column each and the month's TOTAL.
+            if (days.length === 1) {
+              specs.push({ group: col.label, header: dayLabel(days[0], col), width: 10, month: true, total: (r) => cellFor(r, col)?.owed ?? 0, fill: monthCell });
+              continue;
+            }
+            for (const day of days) {
+              specs.push({
+                group: col.label,
+                header: dayLabel(day, col),
+                width: 10,
+                month: true,
+                total: (r) => dayOwed(r, col, day),
+                fill: (cell, r) => {
+                  const owed = dayOwed(r, col, day);
+                  if (!owed) return;
+                  cell.value = owed;
+                  cell.numFmt = '0';
+                },
+              });
+            }
+            specs.push({
+              group: col.label,
+              header: 'TOTAL',
+              width: 10,
+              month: true,
+              monthTotal: true,
+              total: (r) => cellFor(r, col)?.owed ?? 0,
+              fill: monthCell,
+            });
             continue;
           }
           for (const name of headsIn(campus.rows, col, order)) {
