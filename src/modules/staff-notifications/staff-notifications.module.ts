@@ -7,7 +7,7 @@ import { StaffNotificationsService } from './staff-notifications.service';
 import { StaffNotificationsController } from './staff-notifications.controller';
 
 @Module({
-  imports: [PrismaModule, forwardRef(() => AuthModule), FcmModule, EmployeeNoticeBoardModule],
+  imports: [PrismaModule, forwardRef(() => AuthModule), FcmModule, forwardRef(() => EmployeeNoticeBoardModule)],
   providers: [StaffNotificationsService],
   controllers: [StaffNotificationsController],
   exports: [StaffNotificationsService],
