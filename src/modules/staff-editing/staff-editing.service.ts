@@ -17,6 +17,9 @@ import { StudentStatus } from '../../constants/student-status.constant';
 import { ProgressionHistoryService } from '../students/progression-history.service';
 import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/invalidate-unpaid-pdfs';
 
+import { StorageService } from '../../common/storage/storage.service';
+import { schoolHeadingForClass } from '../../common/utils/school-heading.util';
+
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
@@ -27,6 +30,7 @@ export class StaffEditingService {
     private readonly allocation: StudentAllocationService,
     private readonly progressionHistory: ProgressionHistoryService,
     private readonly scope: ScopeService,
+    private readonly storage: StorageService,
   ) { }
 
   // ─── Scope ───────────────────────────────────────────────────────────────
@@ -282,6 +286,7 @@ export class StaffEditingService {
                 student_admissions: { orderBy: { application_date: 'desc' }, take: 1 },
                 classes: true,
                 sections: true,
+                campuses: true,
               }
             }
           }
@@ -371,7 +376,13 @@ export class StaffEditingService {
       },
     );
 
-    return this.flattenStudentFull(s);
+    const photoHistory = await this.getStudentPhotoHistory(
+      cc,
+      s.photograph_url,
+      s.doa || s.created_at,
+    );
+
+    return this.flattenStudentFull(s, photoHistory);
   }
 
   async updateStudent(cc: number, dto: UpdateStudentDto, changedBy: string) {
@@ -1720,7 +1731,47 @@ export class StaffEditingService {
     };
   }
 
-  private flattenStudentFull(s: any) {
+  async getStudentPhotoHistory(
+    cc: number,
+    currentPhoto?: string | null,
+    fallbackDate?: Date | null,
+  ): Promise<{
+    first_photo_url: string | null;
+    first_photo_date: string | null;
+    latest_photo_url: string | null;
+    latest_photo_date: string | null;
+  }> {
+    const items = await this.storage.listStudentPhotos(cc);
+    if (items.length > 0) {
+      const first = items[0];
+      const latest = items[items.length - 1];
+      return {
+        first_photo_url: first.url,
+        first_photo_date: first.date,
+        latest_photo_url: latest.url,
+        latest_photo_date: latest.date,
+      };
+    }
+
+    if (currentPhoto) {
+      const d = fallbackDate ? fallbackDate.toISOString().slice(0, 10) : null;
+      return {
+        first_photo_url: currentPhoto,
+        first_photo_date: d,
+        latest_photo_url: currentPhoto,
+        latest_photo_date: d,
+      };
+    }
+
+    return {
+      first_photo_url: null,
+      first_photo_date: null,
+      latest_photo_url: null,
+      latest_photo_date: null,
+    };
+  }
+
+  private flattenStudentFull(s: any, photoHistory?: any) {
     const admission = s.student_admissions?.[0];
     const actionLogs = this.buildStudentActionLogs(s);
     return {
@@ -1760,6 +1811,16 @@ export class StaffEditingService {
       medical_info: s.medical_info,
       interests: s.interests,
       photograph_url: s.photograph_url,
+      first_photo_url: photoHistory?.first_photo_url ?? s.photograph_url ?? null,
+      first_photo_date: photoHistory?.first_photo_date ?? null,
+      latest_photo_url: photoHistory?.latest_photo_url ?? s.photograph_url ?? null,
+      latest_photo_date: photoHistory?.latest_photo_date ?? null,
+      school_heading: schoolHeadingForClass({
+        class_id: s.class_id,
+        class_name: s.classes?.description,
+        class_code: s.classes?.class_code,
+        academic_system: admission?.academic_system ?? s.academic_system,
+      }),
       // Latest for backward compat
       requested_grade: admission?.requested_grade ?? null,
       academic_system: admission?.academic_system ?? null,
@@ -1804,6 +1865,10 @@ export class StaffEditingService {
           grade: sib.classes
             ? `${sib.classes.description}${sib.sections ? ` (${sib.sections.description})` : ''}`
             : sib.student_admissions?.[0]?.requested_grade,
+          class_name: sib.classes?.description ?? null,
+          section_name: sib.sections?.description ?? null,
+          campus_name: sib.campuses?.campus_name ?? null,
+          photograph_url: sib.photograph_url ?? null,
           status: sib.status,
           father_name: sib.student_guardians?.find((sg: any) => {
             const r = (sg.relationship || '').trim().toUpperCase();

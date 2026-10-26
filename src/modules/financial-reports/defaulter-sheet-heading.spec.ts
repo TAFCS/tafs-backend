@@ -1,4 +1,4 @@
-import { campusLine, defaulterFilterLines, defaulterSheetHeading, sessionLine } from './defaulter-sheet-heading';
+import { campusLine, defaulterFilterLines, defaulterSheetHeading, sessionLine, schoolHeadingForClass } from './defaulter-sheet-heading';
 
 const VIII = { class_id: 17, class_name: 'VIII' };
 const IX = { class_id: 18, class_name: 'IX' };
@@ -83,5 +83,24 @@ describe('defaulterFilterLines (TAFSD-291)', () => {
 
   it('does not repeat the classes when the title block already names them', () => {
     expect(defaulterFilterLines({ class_id: [17], student_status: ['ENROLLED'] }, names, null, true)).toEqual([]);
+  });
+});
+
+describe('schoolHeadingForClass', () => {
+  it('classes VI to X (ids 15-19) -> Secondary Studies', () => {
+    expect(schoolHeadingForClass({ class_id: 17 })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR SECONDARY STUDIES');
+    expect(schoolHeadingForClass({ class_name: 'VIII' })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR SECONDARY STUDIES');
+    expect(schoolHeadingForClass({ class_code: 'X' })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR SECONDARY STUDIES');
+  });
+
+  it('A Level classes (ids 20-21, AS, A2) -> A Level Studies', () => {
+    expect(schoolHeadingForClass({ class_id: 20 })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES');
+    expect(schoolHeadingForClass({ class_name: 'AS Level' })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES');
+    expect(schoolHeadingForClass({ academic_system: 'A Level' })).toBe('THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES');
+  });
+
+  it('other classes -> plain school name', () => {
+    expect(schoolHeadingForClass({ class_id: 1, class_name: 'PRE NURSERY' })).toBe('THE AMERICAN FOUNDATION SCHOOL');
+    expect(schoolHeadingForClass({ class_id: 4, class_name: 'JR-I' })).toBe('THE AMERICAN FOUNDATION SCHOOL');
   });
 });
