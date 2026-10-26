@@ -10,7 +10,7 @@ const g = (student_id: number, fee_date: string, fee_type_id: number | null, is_
   _sum: { amount, amount_paid }, _count: { _all: 1 },
 });
 
-function service() {
+function service(extra: ReturnType<typeof g>[] = []) {
   const prisma = {
     students: {
       findMany: jest.fn(async () => [
@@ -31,6 +31,7 @@ function service() {
         // Sara: Aug tuition paid in full; Sep tuition 5,000 waived.
         g(102, '2026-08-01', 1, false, fee_status_enum.PAID, 10000, 10000),
         g(102, '2026-09-01', 1, false, fee_status_enum.WAIVED, 5000, 0),
+        ...extra,
       ]),
     },
     fee_types: {
@@ -51,8 +52,8 @@ function service() {
 
 const user = { sub: 1, username: 'aawaiz.ali', role: 'SUPER_ADMIN', permissions: [] };
 
-async function load(query: Record<string, unknown>) {
-  const file = await service().exportFeeHeads({ from_date: '2026-08-01', to_date: '2026-09-30', view: 'student', format: 'xlsx', ...query }, user);
+async function load(query: Record<string, unknown>, extra: ReturnType<typeof g>[] = []) {
+  const file = await service(extra).exportFeeHeads({ from_date: '2026-08-01', to_date: '2026-09-30', view: 'student', format: 'xlsx', ...query }, user);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(file.buffer as any);
   const ws = wb.worksheets[0];
@@ -99,5 +100,49 @@ describe('Fee Heads by student export, defaulters format (TAFSD-341)', () => {
     expect(header).toBe('Campus,S#,C.C.,G.R.#,Link to GR,Level,Student Name,Status,Contact,AUG,SEP,Amount,Amount paid,Waived,Outstanding,Remarks');
     expect(first).toContain('Sara');
     expect(s.prisma.student_fees.groupBy).toHaveBeenCalledWith(expect.objectContaining({ by: ['student_id', 'fee_date', 'fee_type_id', 'is_discount', 'status'] }));
+  });
+
+  describe('split_by_fee_date (TAFSD-431)', () => {
+    // Ali also billed 3,000 on 2 Aug: August has two fee dates, September one.
+    const secondDate = [g(101, '2026-08-02', 2, false, fee_status_enum.ISSUED, 3000, 0)];
+
+    it('off by default: one column per month, the two August dates added together', async () => {
+      const { hdr, row } = await load({}, secondDate);
+      const header = row(hdr);
+      const ali = row(hdr + 2);
+      expect(ali[header.indexOf('AUG')]).toBe(14000);
+    });
+
+    it('on: a column per date in a month with several, the month TOTAL after; one date is a sub-header', async () => {
+      const { ws, hdr, row } = await load({ split_by_fee_date: true }, secondDate);
+      const months = row(hdr);
+      const dates = row(hdr + 1);
+      const aug = months.indexOf('AUG');
+      expect(dates.slice(aug, aug + 4)).toEqual(['1 AUG', '2 AUG', 'TOTAL', '1 SEP']);
+      expect(ws.getCell(hdr, aug + 2).isMerged).toBe(true); // AUG spans its three sub-columns
+      expect(months[aug + 3]).toBe('SEP');
+      const sara = row(hdr + 2);
+      const ali = row(hdr + 3);
+      expect(ali.slice(aug, aug + 4)).toEqual([11000, 3000, 14000, 10000]);
+      expect(sara.slice(aug, aug + 4)).toEqual([10000, undefined, 10000, 5000]);
+      expect(ali[months.indexOf('AMOUNT')]).toBe(24000);
+    });
+
+    it('on with the head breakdown: heads stay, the dates go in REMARKS', async () => {
+      const { hdr, row } = await load({ split_by_fee_date: true, breakdown_by_head: true }, secondDate);
+      const heads = row(hdr + 1);
+      expect(heads).not.toContain('1 AUG');
+      const ali = row(hdr + 3);
+      expect(ali[row(hdr).indexOf('REMARKS')]).toBe('Part-paid\nAUG: 1 AUG 11,000 · 2 AUG 3,000');
+    });
+
+    it('CSV: the date columns and the month TOTAL', async () => {
+      const csv = await service(secondDate).exportFeeHeads(
+        { from_date: '2026-08-01', to_date: '2026-09-30', view: 'student', format: 'csv', split_by_fee_date: true },
+        user,
+      );
+      const [header] = csv.buffer.toString('utf8').replace('\ufeff', '').split('\n');
+      expect(header).toContain('1 AUG,2 AUG,AUG TOTAL,1 SEP,Amount');
+    });
   });
 });
