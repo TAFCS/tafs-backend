@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppPlatform, AppType } from '../src/modules/app-config/dto/app-config.dto';
 
 const prisma = new PrismaClient();
-const mockAuditLogs = { log: async () => {} } as any;
+const mockAuditLogs = { log: async () => {}, logMany: async () => {} } as any;
 const service = new AppConfigService(prisma as unknown as PrismaService, mockAuditLogs);
 
 const results: { name: string; pass: boolean; detail?: string }[] = [];
@@ -21,11 +21,7 @@ function record(name: string, pass: boolean, detail?: string) {
 }
 
 async function setKey(key: string, value: string) {
-  await prisma.app_config.upsert({
-    where: { key },
-    update: { value, updated_by: 'TEST_ADMIN_FLOW' },
-    create: { key, value, updated_by: 'TEST_ADMIN_FLOW', updated_at: new Date() },
-  });
+  await service.setConfig(key, value, 'TEST_ADMIN_FLOW');
 }
 
 async function main() {
