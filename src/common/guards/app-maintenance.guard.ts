@@ -21,7 +21,7 @@ export class AppMaintenanceGuard implements CanActivate {
     if (!this.appConfigService) {
       this.appConfigService = this.moduleRef.get(AppConfigService, { strict: false });
     }
-    return this.appConfigService;
+    return this.appConfigService!;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

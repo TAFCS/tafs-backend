@@ -1,11 +1,13 @@
 import {
     BadRequestException,
+    BeforeApplicationShutdown,
     ForbiddenException,
     Injectable,
     Logger,
     NotFoundException,
+    OnModuleInit,
 } from '@nestjs/common';
-import { BulkJobStatus } from '@prisma/client';
+import { BulkJobStatus, Prisma } from '@prisma/client';
 import { PDFDocument } from 'pdf-lib';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
@@ -56,8 +58,10 @@ export interface BulkStudentPreview {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable()
-export class BulkVoucherJobsService {
+export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly logger = new Logger(BulkVoucherJobsService.name);
+    private isShuttingDown = false;
+    private readonly activeJobIds = new Set<number>();
 
     constructor(
         private readonly prisma: PrismaService,
@@ -69,6 +73,174 @@ export class BulkVoucherJobsService {
         private readonly auditLogs: AuditLogsService,
         private readonly scope: ScopeService,
     ) {}
+
+    async onModuleInit() {
+        this.registerSignalHandlers();
+        await this.recoverStaleProcessingJobs();
+    }
+
+    async beforeApplicationShutdown() {
+        this.isShuttingDown = true;
+    }
+
+    private registerSignalHandlers() {
+        const handleShutdown = async (signal: string) => {
+            if (this.isShuttingDown) return;
+            this.isShuttingDown = true;
+            this.logger.warn(`[BulkVoucherJobsService] Received ${signal}. Stopping new batches and marking active jobs INTERRUPTED...`);
+            for (const jobId of this.activeJobIds) {
+                try {
+                    await this.finalizeInterruptedJob(
+                        jobId,
+                        `Process received ${signal} during deploy/shutdown. Halting execution.`,
+                    );
+                } catch (err: any) {
+                    this.logger.error(`[BulkVoucherJobsService] Error interrupting job #${jobId} during ${signal}: ${err.message}`);
+                }
+            }
+        };
+
+        process.once('SIGTERM', () => handleShutdown('SIGTERM'));
+        process.once('SIGINT', () => handleShutdown('SIGINT'));
+    }
+
+    /**
+     * Fix 2: Never leave a job PROCESSING after the process dies.
+     * On boot, any job still PROCESSING belongs to a dead process.
+     * Mark it INTERRUPTED with a note and rebuild report from vouchers.
+     */
+    async recoverStaleProcessingJobs() {
+        try {
+            const staleJobs = await this.prisma.bulk_voucher_jobs.findMany({
+                where: { status: 'PROCESSING' },
+            });
+
+            if (staleJobs.length === 0) return;
+
+            this.logger.warn(
+                `[BulkVoucherJobsService] Found ${staleJobs.length} bulk voucher job(s) left in PROCESSING state on startup. Finalizing as INTERRUPTED...`,
+            );
+
+            for (const job of staleJobs) {
+                await this.finalizeInterruptedJob(
+                    job.id,
+                    'Process died while job was PROCESSING (server resize, crash, or deployment killed the instance).',
+                );
+            }
+        } catch (err: any) {
+            this.logger.error(`[BulkVoucherJobsService] Error recovering stale jobs on boot: ${err.message}`, err.stack);
+        }
+    }
+
+    /**
+     * Defensively updates bulk_voucher_jobs:
+     * - Drops phase / pdf_rendered_count if DB columns do not exist yet (Finance Rule 11).
+     * - Falls back to PARTIAL_FAILURE if INTERRUPTED enum value does not exist yet.
+     */
+    private async updateJobDefensively(
+        jobId: number,
+        data: Prisma.bulk_voucher_jobsUpdateInput,
+    ) {
+        try {
+            return await this.prisma.bulk_voucher_jobs.update({
+                where: { id: jobId },
+                data,
+            });
+        } catch (err: any) {
+            const workingData: any = { ...data };
+            if (err?.code === 'P2022' || err?.message?.includes('does not exist')) {
+                delete workingData.phase;
+                delete workingData.pdf_rendered_count;
+            }
+            if (err?.message?.includes('BulkJobStatus') || err?.message?.includes('INTERRUPTED')) {
+                if (workingData.status === 'INTERRUPTED') {
+                    workingData.status = 'PARTIAL_FAILURE';
+                }
+            }
+            return await this.prisma.bulk_voucher_jobs.update({
+                where: { id: jobId },
+                data: workingData,
+            });
+        }
+    }
+
+    /**
+     * Rebuilds report from vouchers.bulk_voucher_job_id, reconciles counters,
+     * appends an interruption note, and marks the job INTERRUPTED.
+     */
+    async finalizeInterruptedJob(jobId: number, note: string) {
+        try {
+            const job = await this.prisma.bulk_voucher_jobs.findUnique({
+                where: { id: jobId },
+            });
+            if (!job) return;
+
+            // Fetch all vouchers generated under this job
+            const vouchers = await this.prisma.vouchers.findMany({
+                where: { bulk_voucher_job_id: jobId },
+                select: {
+                    id: true,
+                    student_id: true,
+                    status: true,
+                    fee_date: true,
+                    pdf_url: true,
+                    students: { select: { full_name: true } },
+                },
+                orderBy: { id: 'asc' },
+            });
+
+            // Reconstruct report if partial or empty
+            const report: any[] = Array.isArray(job.report) ? [...job.report] : [];
+            const existingVoucherIds = new Set(
+                report.filter((r) => r.voucher_id).map((r) => r.voucher_id),
+            );
+
+            for (const v of vouchers) {
+                if (!existingVoucherIds.has(v.id)) {
+                    report.push({
+                        cc: v.student_id,
+                        student_name: v.students?.full_name ?? 'Unknown',
+                        voucher_id: v.id,
+                        status: v.status === 'VOID' ? 'SKIPPED' : 'SUCCESS',
+                        pdf_url: v.pdf_url ?? null,
+                        reason: v.status === 'VOID' ? 'Superseded by later month' : undefined,
+                    });
+                }
+            }
+
+            // Cross-check counters: non-void vouchers are successful
+            const nonVoidVouchers = vouchers.filter((v) => v.status !== 'VOID');
+            const reconciledSuccess = Math.max(job.success_count, nonVoidVouchers.length);
+
+            // Append INTERRUPTED note to report
+            report.push({
+                status: 'INTERRUPTED',
+                reason: note,
+                interrupted_at: new Date().toISOString(),
+            });
+
+            await this.updateJobDefensively(jobId, {
+                status: 'INTERRUPTED',
+                phase: 'INTERRUPTED',
+                success_count: reconciledSuccess,
+                report: report as any,
+            });
+
+            this.logger.warn(`[Job #${jobId}] Interrupted: ${note} (reconciled ${nonVoidVouchers.length} vouchers)`);
+
+            await this.auditLogs.log({
+                entity_type: 'BULK_VOUCHER',
+                entity_id: String(jobId),
+                action: 'UPDATED',
+                field: 'status',
+                new_value: 'INTERRUPTED',
+                changed_by: 'system',
+                note: `Bulk voucher job #${jobId} marked INTERRUPTED. ${note}`,
+            });
+        } catch (err: any) {
+            this.logger.error(`[Job #${jobId}] Failed to finalize interrupted job: ${err.message}`, err.stack);
+        }
+    }
 
     /**
      * Confirms every cc is inside the caller's own scope, or throws — the
@@ -272,6 +444,8 @@ export class BulkVoucherJobsService {
                 apply_late_fee: dto.apply_late_fee ?? true,
                 late_fee_amount: dto.late_fee_amount ?? 1000,
                 status: 'PENDING',
+                phase: 'ISSUING',
+                pdf_rendered_count: 0,
                 total_count: totalCount,
                 success_count: 0,
                 skip_count: 0,
@@ -333,25 +507,59 @@ export class BulkVoucherJobsService {
     // ── Job Status ──────────────────────────────────────────────────────────
 
     async getJobStatus(jobId: number, user: IJwtStaffPayload) {
-        const job = await this.prisma.bulk_voucher_jobs.findUnique({
-            where: { id: jobId },
-            select: {
-                id: true,
-                status: true,
-                total_count: true,
-                success_count: true,
-                skip_count: true,
-                fail_count: true,
-                merged_pdf_url: true,
-                created_at: true,
-                updated_at: true,
-                created_by: true,
-                campus_ids: true,
-                class_ids: true,
-                section_ids: true,
-                report: true,
-            },
-        });
+        let job: any;
+        try {
+            job = await this.prisma.bulk_voucher_jobs.findUnique({
+                where: { id: jobId },
+                select: {
+                    id: true,
+                    status: true,
+                    phase: true,
+                    pdf_rendered_count: true,
+                    total_count: true,
+                    success_count: true,
+                    skip_count: true,
+                    fail_count: true,
+                    merged_pdf_url: true,
+                    created_at: true,
+                    updated_at: true,
+                    created_by: true,
+                    campus_ids: true,
+                    class_ids: true,
+                    section_ids: true,
+                    report: true,
+                },
+            });
+        } catch (err: any) {
+            // Defensive read: if phase / pdf_rendered_count do not exist in DB yet
+            if (err?.code === 'P2022' || err?.message?.includes('does not exist')) {
+                job = await this.prisma.bulk_voucher_jobs.findUnique({
+                    where: { id: jobId },
+                    select: {
+                        id: true,
+                        status: true,
+                        total_count: true,
+                        success_count: true,
+                        skip_count: true,
+                        fail_count: true,
+                        merged_pdf_url: true,
+                        created_at: true,
+                        updated_at: true,
+                        created_by: true,
+                        campus_ids: true,
+                        class_ids: true,
+                        section_ids: true,
+                        report: true,
+                    },
+                });
+                if (job) {
+                    job.phase = job.status === 'DONE' ? 'DONE' : 'ISSUING';
+                    job.pdf_rendered_count = 0;
+                }
+            } else {
+                throw err;
+            }
+        }
 
         if (!job || !this.canSeeJob(user, job)) {
             throw new NotFoundException(`Job #${jobId} not found.`);
@@ -371,10 +579,6 @@ export class BulkVoucherJobsService {
     // ── Job History ─────────────────────────────────────────────────────────
 
     async listJobs(campusIds: number[] | undefined, user: IJwtStaffPayload) {
-        // The caller's own scope is ANDed onto the requested campusIds
-        // filter (never replacing it), same floor-beneath-the-query-filter
-        // rule as everywhere else. A scoped user also always sees their own
-        // jobs, even ones with no campus_ids label (student_ccs-only jobs).
         const requestedFilter = campusIds?.length ? { campus_ids: { hasSome: campusIds } } : {};
         const scopeCampuses = this.scope.isExempt(user) ? null : this.scope.scopeOf(user).campuses;
         const scopeFilter = scopeCampuses && scopeCampuses.length > 0
@@ -385,33 +589,188 @@ export class BulkVoucherJobsService {
                 ],
             }
             : {};
-        const jobs = await this.prisma.bulk_voucher_jobs.findMany({
-            where: {
-                ...requestedFilter,
-                ...(Object.keys(scopeFilter).length > 0 ? { AND: [scopeFilter] } : {}),
-            },
-            orderBy: { created_at: 'desc' },
-            take: 50,
-            select: {
-                id: true,
-                status: true,
-                total_count: true,
-                success_count: true,
-                skip_count: true,
-                fail_count: true,
-                academic_year: true,
-                fee_date_from: true,
-                fee_date_to: true,
-                merged_pdf_url: true,
-                created_at: true,
-                campus_ids: true,
-                report: true,
-            },
+
+        try {
+            return await this.prisma.bulk_voucher_jobs.findMany({
+                where: {
+                    ...requestedFilter,
+                    ...(Object.keys(scopeFilter).length > 0 ? { AND: [scopeFilter] } : {}),
+                },
+                orderBy: { created_at: 'desc' },
+                take: 50,
+                select: {
+                    id: true,
+                    status: true,
+                    phase: true,
+                    pdf_rendered_count: true,
+                    total_count: true,
+                    success_count: true,
+                    skip_count: true,
+                    fail_count: true,
+                    academic_year: true,
+                    fee_date_from: true,
+                    fee_date_to: true,
+                    merged_pdf_url: true,
+                    created_at: true,
+                    campus_ids: true,
+                    report: true,
+                },
+            });
+        } catch (err: any) {
+            // Defensive read: fallback without phase / pdf_rendered_count
+            if (err?.code === 'P2022' || err?.message?.includes('does not exist')) {
+                const legacyJobs = await this.prisma.bulk_voucher_jobs.findMany({
+                    where: {
+                        ...requestedFilter,
+                        ...(Object.keys(scopeFilter).length > 0 ? { AND: [scopeFilter] } : {}),
+                    },
+                    orderBy: { created_at: 'desc' },
+                    take: 50,
+                    select: {
+                        id: true,
+                        status: true,
+                        total_count: true,
+                        success_count: true,
+                        skip_count: true,
+                        fail_count: true,
+                        academic_year: true,
+                        fee_date_from: true,
+                        fee_date_to: true,
+                        merged_pdf_url: true,
+                        created_at: true,
+                        campus_ids: true,
+                        report: true,
+                    },
+                });
+                return legacyJobs.map((j) => ({
+                    ...j,
+                    phase: j.status === 'DONE' ? 'DONE' : 'ISSUING',
+                    pdf_rendered_count: 0,
+                }));
+            }
+            throw err;
+        }
+    }
+
+    /**
+     * Fix 4: Deploy gate query. Returns whether any bulk voucher job is currently PROCESSING.
+     */
+    async getActiveJobs(): Promise<{ active: boolean; count: number; job_ids: number[] }> {
+        const activeJobs = await this.prisma.bulk_voucher_jobs.findMany({
+            where: { status: 'PROCESSING' },
+            select: { id: true },
+        });
+        return {
+            active: activeJobs.length > 0,
+            count: activeJobs.length,
+            job_ids: activeJobs.map((j) => j.id),
+        };
+    }
+
+    /**
+     * Fix 5: Resume instead of redo.
+     * Reruns the same settings with skip_already_issued: true,
+     * so only unprocessed students get vouchers.
+     */
+    async resumeJob(
+        jobId: number,
+        user: IJwtStaffPayload,
+    ): Promise<{ job_id: number; resumed_from: number }> {
+        const oldJob = await this.prisma.bulk_voucher_jobs.findUnique({
+            where: { id: jobId },
         });
 
-        // We'll let the frontend map IDs to names for the list, or we could fetch here.
-        // For efficiency in listing, return as is.
-        return jobs;
+        if (!oldJob || !this.canSeeJob(user, oldJob)) {
+            throw new NotFoundException(`Job #${jobId} not found.`);
+        }
+
+        if (this.activeJobIds.has(jobId)) {
+            throw new BadRequestException(`Job #${jobId} is currently running in this process.`);
+        }
+
+        if (oldJob.status === 'DONE' && oldJob.fail_count === 0) {
+            throw new BadRequestException(`Job #${jobId} is already completed successfully.`);
+        }
+
+        // If it was left PROCESSING, finalize it as INTERRUPTED first
+        if (oldJob.status === 'PROCESSING') {
+            await this.finalizeInterruptedJob(
+                jobId,
+                'Marked INTERRUPTED before resuming.',
+            );
+        }
+
+        // Collect student CCs from old job's report or campus/class filters
+        let studentCcs: number[] = [];
+        if (Array.isArray(oldJob.report) && oldJob.report.length > 0) {
+            studentCcs = [
+                ...new Set(
+                    (oldJob.report as any[])
+                        .map((r) => r.cc)
+                        .filter((cc) => typeof cc === 'number' && cc > 0),
+                ),
+            ];
+        }
+
+        if (studentCcs.length === 0) {
+            const students = await this.prisma.students.findMany({
+                where: {
+                    deleted_at: null,
+                    status: 'ENROLLED',
+                    ...(oldJob.campus_ids.length ? { campus_id: { in: oldJob.campus_ids } } : {}),
+                    ...(oldJob.class_ids.length ? { class_id: { in: oldJob.class_ids } } : {}),
+                    ...(oldJob.section_ids.length ? { section_id: { in: oldJob.section_ids } } : {}),
+                },
+                select: { cc: true },
+            });
+            studentCcs = students.map((s) => s.cc);
+        }
+
+        if (studentCcs.length === 0) {
+            throw new BadRequestException('Could not determine candidate students to resume.');
+        }
+
+        const dateFromStr = oldJob.fee_date_from.toISOString().slice(0, 10);
+        const dateToStr = oldJob.fee_date_to.toISOString().slice(0, 10);
+        const issueDateStr = oldJob.issue_date.toISOString().slice(0, 10);
+        const dueDateStr = oldJob.due_date.toISOString().slice(0, 10);
+        const validityDateStr = oldJob.validity_date
+            ? oldJob.validity_date.toISOString().slice(0, 10)
+            : undefined;
+
+        const dto: StartBulkJobDto = {
+            student_ccs: studentCcs,
+            campus_ids: oldJob.campus_ids,
+            class_ids: oldJob.class_ids,
+            section_ids: oldJob.section_ids,
+            academic_year: oldJob.academic_year,
+            fee_date_from: dateFromStr,
+            fee_date_to: dateToStr,
+            issue_date: issueDateStr,
+            due_date: dueDateStr,
+            validity_date: validityDateStr,
+            bank_account_id: oldJob.bank_account_id,
+            skip_already_issued: true, // Crucial: avoid re-issuing and avoid double notifications
+            apply_late_fee: oldJob.apply_late_fee,
+            late_fee_amount: oldJob.late_fee_amount,
+            waive_surcharge: oldJob.waive_surcharge,
+            send_notification: oldJob.send_notification,
+            hold_for_release: oldJob.hold_for_release,
+            job_type: oldJob.job_type,
+        };
+
+        const createdBy = user.username ?? user.sub;
+        const result = await this.startJob(dto, createdBy, user.fullName, user);
+
+        await this.auditLogs.log({
+            entity_type: 'BULK_VOUCHER',
+            entity_id: String(result.job_id),
+            action: 'CREATED',
+            changed_by: createdBy,
+            note: `Resumed bulk voucher job #${result.job_id} from interrupted job #${jobId} (skip_already_issued=true).`,
+        });
+
+        return { job_id: result.job_id, resumed_from: jobId };
     }
 
     // ── Async Pipeline ──────────────────────────────────────────────────────
@@ -424,6 +783,7 @@ export class BulkVoucherJobsService {
         createdByDisplayName?: string,
         auditParentId?: number | null,
     ) {
+        this.activeJobIds.add(jobId);
         const jobReport: any[] = [];
         const academicYear = dto.academic_year || deriveAcademicYear(dto.fee_date_to);
         const generatedByName =
@@ -434,11 +794,13 @@ export class BulkVoucherJobsService {
         );
 
         try {
-            await this.prisma.bulk_voucher_jobs.update({
-                where: { id: jobId },
-                data: { status: 'PROCESSING' },
+            await this.updateJobDefensively(jobId, {
+                status: 'PROCESSING',
+                phase: 'ISSUING',
+                pdf_rendered_count: 0,
             });
         } catch (err) {
+            this.activeJobIds.delete(jobId);
             this.logger.error(`[Job #${jobId}] Failed to mark PROCESSING: ${(err as Error).message}`);
             return;
         }
@@ -479,7 +841,6 @@ export class BulkVoucherJobsService {
                 `[Job #${jobId}] Processing ${STUDENT_BATCH_SIZE} students at a time (connection_limit=${connectionLimit}). PDF_CONCURRENCY=${PDF_CONCURRENCY}.`,
             );
 
-
             const campusIds = dto.campus_ids || (dto.campus_id ? [dto.campus_id] : []);
             const classIds = dto.class_ids || (dto.class_id ? [dto.class_id] : []);
             const sectionIds = dto.section_ids || (dto.section_id ? [dto.section_id] : []);
@@ -516,10 +877,11 @@ export class BulkVoucherJobsService {
                 ...(s.partially_paid ? { partially_paid: true } : {}),
             })));
 
+            // Fix 3: Persist skips and initial report immediately
             if (skipCountTotal > 0) {
-                await this.prisma.bulk_voucher_jobs.update({
-                    where: { id: jobId },
-                    data: { skip_count: skipCountTotal },
+                await this.updateJobDefensively(jobId, {
+                    skip_count: skipCountTotal,
+                    report: jobReport as any,
                 });
             }
 
@@ -528,12 +890,6 @@ export class BulkVoucherJobsService {
             );
 
             // ── PHASE A PREFETCH: one arrear query for all students ───────────────
-            // Each processWorkItem previously called computeArrears(cc, feeDate)
-            // which hits student_fees once per student per batch. With ~900 students
-            // that is ~900 extra round trips. We fetch all candidate rows in one
-            // query, group by student_id, and derive per-student arrears in-memory.
-            // create() re-derives authoritatively inside its own transaction — this
-            // only feeds orderedFeeIds / fee_lines for the outer call.
             const allStudentIds = [...new Set(workItems.map((w) => w.cc))];
             const allArrearRows = allStudentIds.length > 0
                 ? await this.prisma.student_fees.findMany({
@@ -559,26 +915,21 @@ export class BulkVoucherJobsService {
             );
 
             // ── PHASE A: DB-ONLY ISSUANCE ─────────────────────────────────────────
-            // PDF rendering is deliberately excluded here. Phase A runs at full DB
-            // concurrency (STUDENT_BATCH_SIZE). Phase B renders at PDF_CONCURRENCY.
-            //
-            // A student's months MUST be issued one at a time, ascending by fee
-            // date, so fee-date supersession collapses each month into the next —
-            // exactly as it would if an operator issued them singly. Issuing a
-            // student's months in parallel raced supersession (no transaction saw
-            // the siblings' uncommitted vouchers), leaving a separate voucher per
-            // month each carrying its own stacked late-payment surcharge. Different
-            // students are still processed concurrently.
             const itemsByStudent = new Map<number, any[]>();
             for (const item of workItems) {
                 if (!itemsByStudent.has(item.cc)) itemsByStudent.set(item.cc, []);
                 itemsByStudent.get(item.cc)!.push(item);
             }
-            // expectedFeeDates is ascending and resolveWorkItems emits items in that
-            // order, so each student's list is already ascending by fee_date.
             const studentGroups = [...itemsByStudent.values()];
 
             for (let i = 0; i < studentGroups.length; i += STUDENT_BATCH_SIZE) {
+                // Fix 2: Check SIGTERM shutdown between batches
+                if (this.isShuttingDown) {
+                    this.logger.warn(`[Job #${jobId}] Server shutdown in progress. Halting Phase A batch processing.`);
+                    await this.finalizeInterruptedJob(jobId, 'Job halted during Phase A due to process shutdown (SIGTERM).');
+                    return;
+                }
+
                 const groupChunk = studentGroups.slice(i, i + STUDENT_BATCH_SIZE);
 
                 const chunkOutcomes = await Promise.all(
@@ -626,10 +977,6 @@ export class BulkVoucherJobsService {
                 let chunkSkip = 0;
 
                 for (const perItem of chunkOutcomes) {
-                    // Within one student's ascending run every earlier voucher is
-                    // superseded (VOID) by the next month's, which already carries
-                    // its heads and surcharges. Only the LAST success survives — it
-                    // is the one whose PDF belongs in the merged file.
                     const successes = perItem.filter((r) => r.outcome === 'SUCCESS');
                     const survivor = successes.length > 0 ? successes[successes.length - 1] : null;
 
@@ -655,8 +1002,6 @@ export class BulkVoucherJobsService {
                                     : {}),
                             });
                         } else if (r.outcome === 'SUCCESS') {
-                            // Intermediate month: a voucher was created then immediately
-                            // superseded by a later month in the same range.
                             chunkSkip++;
                             skipCountTotal++;
                             jobReport.push({
@@ -688,13 +1033,12 @@ export class BulkVoucherJobsService {
                     }
                 }
 
-                await this.prisma.bulk_voucher_jobs.update({
-                    where: { id: jobId },
-                    data: {
-                        ...(chunkSuccess > 0 ? { success_count: { increment: chunkSuccess } } : {}),
-                        ...(chunkFail > 0 ? { fail_count: { increment: chunkFail } } : {}),
-                        ...(chunkSkip > 0 ? { skip_count: { increment: chunkSkip } } : {}),
-                    },
+                // Fix 3: Persist report rows alongside counter updates on every batch
+                await this.updateJobDefensively(jobId, {
+                    ...(chunkSuccess > 0 ? { success_count: { increment: chunkSuccess } } : {}),
+                    ...(chunkFail > 0 ? { fail_count: { increment: chunkFail } } : {}),
+                    ...(chunkSkip > 0 ? { skip_count: { increment: chunkSkip } } : {}),
+                    report: jobReport as any,
                 });
 
                 this.logger.log(
@@ -716,9 +1060,12 @@ export class BulkVoucherJobsService {
             }
 
             // ── PHASE B: NOTIFICATIONS ────────────────────────────────────────────
-            // Notifications were suppressed inside create() (send_notification=false)
-            // and are sent here in batches so they do not block Phase A or Phase B
-            // PDF rendering. Errors are non-fatal — the voucher is already committed.
+            if (this.isShuttingDown) {
+                this.logger.warn(`[Job #${jobId}] Server shutdown in progress. Halting before notifications.`);
+                await this.finalizeInterruptedJob(jobId, 'Job halted before notifications due to process shutdown (SIGTERM).');
+                return;
+            }
+
             if (notifQueue.length > 0) {
                 const NOTIF_BATCH = 20;
                 this.logger.log(`[Job #${jobId}] Sending ${notifQueue.length} notifications in batches of ${NOTIF_BATCH}.`);
@@ -738,19 +1085,29 @@ export class BulkVoucherJobsService {
             }
 
             // ── PHASE B: PDF RENDER + INCREMENTAL MERGE ──────────────────────────
-            // Buffers are appended into one PDFDocument as they arrive — never held
-            // all at once — so peak heap is ~PDF_CONCURRENCY × one voucher PDF, not
-            // N × one voucher PDF as in the old pdfBuffers[] approach.
             let mergedPdfUrl: string | null = null;
             if (survivorVoucherIds.length > 0) {
                 try {
+                    // Fix 1: Transition phase to RENDERING
+                    await this.updateJobDefensively(jobId, {
+                        phase: 'RENDERING',
+                        pdf_rendered_count: 0,
+                    });
+
                     this.logger.log(
                         `[Job #${jobId}] Phase B: rendering and merging ${survivorVoucherIds.length} PDFs (concurrency=${PDF_CONCURRENCY}).`,
                     );
                     const mergedPdf = await PDFDocument.create();
                     const pdfTimings: number[] = [];
+                    let pdfRenderedCount = 0;
 
                     for (let i = 0; i < survivorVoucherIds.length; i += PDF_CONCURRENCY) {
+                        if (this.isShuttingDown) {
+                            this.logger.warn(`[Job #${jobId}] Server shutdown in progress. Halting Phase B PDF rendering.`);
+                            await this.finalizeInterruptedJob(jobId, 'Job halted during PDF rendering due to process shutdown (SIGTERM).');
+                            return;
+                        }
+
                         const slice = survivorVoucherIds.slice(i, i + PDF_CONCURRENCY);
                         const results = await Promise.all(
                             slice.map(async (voucherId) => {
@@ -782,8 +1139,14 @@ export class BulkVoucherJobsService {
                             const doc = await PDFDocument.load(buf);
                             const pages = await mergedPdf.copyPages(doc, doc.getPageIndices());
                             pages.forEach((p) => mergedPdf.addPage(p));
-                            // buf released here — not kept for the whole run
                         }
+
+                        // Fix 1 & 3: Update pdf_rendered_count and persist report progressively
+                        pdfRenderedCount += results.filter((b) => b !== null).length;
+                        await this.updateJobDefensively(jobId, {
+                            pdf_rendered_count: pdfRenderedCount,
+                            report: jobReport as any,
+                        });
                     }
 
                     if (pdfTimings.length > 0) {
@@ -795,6 +1158,11 @@ export class BulkVoucherJobsService {
                     }
 
                     if (mergedPdf.getPageCount() > 0) {
+                        // Fix 1: Transition phase to MERGING
+                        await this.updateJobDefensively(jobId, {
+                            phase: 'MERGING',
+                        });
+
                         const mergedKey = `bulk-vouchers/job-${jobId}-${Date.now()}.pdf`;
                         mergedPdfUrl = await this.storage.upload(
                             mergedKey,
@@ -812,13 +1180,11 @@ export class BulkVoucherJobsService {
             if (!jobWasSuccessful && hasFailures) finalStatus = 'FAILED';
             else if (hasFailures) finalStatus = 'PARTIAL_FAILURE';
 
-            await this.prisma.bulk_voucher_jobs.update({
-                where: { id: jobId },
-                data: { 
-                    status: finalStatus, 
-                    merged_pdf_url: mergedPdfUrl,
-                    report: jobReport as any,
-                },
+            await this.updateJobDefensively(jobId, {
+                status: finalStatus,
+                phase: 'DONE',
+                merged_pdf_url: mergedPdfUrl,
+                report: jobReport as any,
             });
 
             this.logger.log(
@@ -848,18 +1214,16 @@ export class BulkVoucherJobsService {
             let finalStatus: BulkJobStatus = 'FAILED';
             if (jobWasSuccessful) finalStatus = 'PARTIAL_FAILURE';
 
-            await this.prisma.bulk_voucher_jobs.update({
-                where: { id: jobId },
-                data: { 
-                    status: finalStatus,
-                    report: [
-                        ...jobReport,
-                        {
-                            status: 'FAILED',
-                            error: `Fatal system error: ${(fatalError as Error).message}`,
-                        },
-                    ] as any,
-                },
+            await this.updateJobDefensively(jobId, {
+                status: finalStatus,
+                phase: 'FAILED',
+                report: [
+                    ...jobReport,
+                    {
+                        status: 'FAILED',
+                        error: `Fatal system error: ${(fatalError as Error).message}`,
+                    },
+                ] as any,
             });
 
             await this.auditLogs.log({
@@ -879,6 +1243,8 @@ export class BulkVoucherJobsService {
                     `Error=${(fatalError as Error).message}`,
                 ].join(' | '),
             });
+        } finally {
+            this.activeJobIds.delete(jobId);
         }
     }
 

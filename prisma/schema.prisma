@@ -56,6 +56,8 @@ model bulk_voucher_jobs {
   success_count       Int           @default(0)
   skip_count          Int           @default(0)
   fail_count          Int           @default(0)
+  phase               String?       @default("ISSUING") @db.VarChar(20)
+  pdf_rendered_count  Int           @default(0)
   merged_pdf_url      String?
   created_at          DateTime      @default(now()) @db.Timestamp(6)
   updated_at          DateTime      @updatedAt
@@ -2706,6 +2708,7 @@ enum BulkJobStatus {
   DONE
   PARTIAL_FAILURE
   FAILED
+  INTERRUPTED
 }
 
 enum StaffRole {

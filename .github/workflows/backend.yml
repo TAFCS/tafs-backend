@@ -65,6 +65,36 @@ jobs:
       - uses: digitalocean/action-doctl@v2
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Wait for active bulk voucher jobs
+        env:
+          APP_ID: ${{ vars.DO_APP_ID }}
+        run: |
+          INGRESS=$(doctl apps get "$APP_ID" --format DefaultIngress --no-header 2>/dev/null | tr -d '[:space:]')
+          if [ -n "$INGRESS" ]; then
+            echo "Checking for active bulk voucher jobs on https://$INGRESS/api/v1/bulk-voucher-jobs/active..."
+            MAX_WAIT=300
+            WAITED=0
+            INTERVAL=10
+            while [ $WAITED -lt $MAX_WAIT ]; do
+              RESPONSE=$(curl -s -f "https://$INGRESS/api/v1/bulk-voucher-jobs/active" || echo '{"active":false}')
+              HAS_ACTIVE=$(echo "$RESPONSE" | jq -r '.active // false' 2>/dev/null || echo "false")
+              if [ "$HAS_ACTIVE" != "true" ]; then
+                echo "No bulk voucher jobs currently processing. Proceeding with deploy."
+                break
+              fi
+              ACTIVE_COUNT=$(echo "$RESPONSE" | jq -r '.count // 1' 2>/dev/null || echo "1")
+              echo "Bulk voucher job is currently PROCESSING ($ACTIVE_COUNT active). Waiting ${INTERVAL}s (elapsed: ${WAITED}s / ${MAX_WAIT}s)..."
+              sleep $INTERVAL
+              WAITED=$((WAITED + INTERVAL))
+            done
+
+            if [ $WAITED -ge $MAX_WAIT ]; then
+              echo "::error::Deploy aborted: A bulk voucher job has been PROCESSING for over ${MAX_WAIT}s. Aborting deploy to prevent job interruption."
+              exit 1
+            fi
+          else
+            echo "Ingress URL not found or DO_APP_ID empty; skipping active job check."
+          fi
       - name: Point the app at this commit's image and deploy
         env:
           APP_ID: ${{ vars.DO_APP_ID }}

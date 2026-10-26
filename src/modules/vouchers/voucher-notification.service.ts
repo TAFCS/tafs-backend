@@ -106,6 +106,7 @@ export class VoucherNotificationService {
     alertType: VoucherAlertType,
     title: string,
     body: string,
+    options?: { skipPush?: boolean },
   ) {
     const existing = await this.prisma.voucher_notifications.findUnique({
       where: { voucher_id_alert_type: { voucher_id: voucherId, alert_type: alertType } },
@@ -123,15 +124,17 @@ export class VoucherNotificationService {
       },
     });
 
-    await this.fcmService.sendToFamily(familyId, title, body, {
-      type: 'voucher_alert',
-      notification_id: String(row.id),
-      voucher_id: String(voucherId),
-      student_cc: String(studentCc),
-      alert_type: alertType,
-      title,
-      body,
-    });
+    if (!options?.skipPush) {
+      await this.fcmService.sendToFamily(familyId, title, body, {
+        type: 'voucher_alert',
+        notification_id: String(row.id),
+        voucher_id: String(voucherId),
+        student_cc: String(studentCc),
+        alert_type: alertType,
+        title,
+        body,
+      });
+    }
 
     try {
       this.chatGateway.broadcastVoucherAlert(familyId, {
@@ -182,6 +185,34 @@ export class VoucherNotificationService {
     const body = await resolveTemplate(this.prisma, 'notif_fee_issued_body',
       "Please pay {student_name}'s {month} school fees by {due_date}.", vars);
 
+    // Fix 6: Don't re-notify a family for the same fee period on the same day.
+    // Skip FCM push if this family already received VOUCHER_ISSUED today (PKT)
+    // for a voucher with the same student and fee_date.
+    let skipPush = false;
+    try {
+      const todayStartPKT = dateFromPktKey(pktDateKey(new Date()));
+      const existingTodayNotification = await this.prisma.voucher_notifications.findFirst({
+        where: {
+          family_id: familyId,
+          student_cc: voucher.student_id,
+          alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED,
+          created_at: { gte: todayStartPKT },
+          vouchers: {
+            fee_date: voucher.fee_date,
+          },
+        },
+      });
+
+      if (existingTodayNotification) {
+        skipPush = true;
+        this.logger.log(
+          `[VOUCHER_ISSUED] Skipping push notification: family ${familyId} already received VOUCHER_ISSUED today for student ${voucher.student_id} and fee_date ${voucher.fee_date ? new Date(voucher.fee_date).toISOString().slice(0, 10) : 'none'}. In-app record kept.`,
+        );
+      }
+    } catch (dedupErr: any) {
+      this.logger.warn(`[VOUCHER_ISSUED] Error checking same-day notification deduplication: ${dedupErr.message}`);
+    }
+
     const row = await this.notifyVoucher(
       familyId,
       voucher.student_id,
@@ -189,9 +220,10 @@ export class VoucherNotificationService {
       VOUCHER_ALERT_TYPES.VOUCHER_ISSUED,
       title,
       body,
+      { skipPush },
     );
 
-    this.logger.log(`[VOUCHER_ISSUED] Notified family ${familyId} for voucher #${voucherId}`);
+    this.logger.log(`[VOUCHER_ISSUED] Notified family ${familyId} for voucher #${voucherId}${skipPush ? ' (push suppressed due to same-day duplicate)' : ''}`);
     return row;
   }
 

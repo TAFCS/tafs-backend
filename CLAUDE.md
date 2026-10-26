@@ -102,7 +102,13 @@ change makes one false, the change is wrong, not the rule.
     migration first, or read the column defensively until it lands.
     `npx prisma migrate status` must say "Database schema is up to date!"
     before shipping code that reads new columns.
-12. `npx tsc --noEmit -p tsconfig.build.json` is clean.
+12. **Deploy & DO dashboard safety (TAFSD-395/396)** — never deploy or perform
+    manual infrastructure changes (resizing vCPU/RAM, changing env vars, restarts)
+    while a bulk voucher job is running. Check `/bulk-voucher` in the webapp or
+    `GET /api/v1/bulk-voucher-jobs/active` before any DO operations. CI/CD
+    (`backend.yml`) automatically polls this endpoint and aborts after 300s.
+    Protect `main` with GitHub branch protection requiring PR reviews.
+13. `npx tsc --noEmit -p tsconfig.build.json` is clean.
 
 ---
 
