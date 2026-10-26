@@ -620,6 +620,23 @@ export class StaffEditingService {
             data: studentData as any,
           });
 
+          if (
+            studentData.photograph_url &&
+            typeof studentData.photograph_url === 'string' &&
+            studentData.photograph_url.trim() !== '' &&
+            studentData.photograph_url !== existing.photograph_url
+          ) {
+            await tx.student_photo_history.create({
+              data: {
+                student_id: cc,
+                url: studentData.photograph_url,
+                photo_type: 'standard',
+                uploaded_by: changedBy || 'staff',
+                uploaded_at: new Date(),
+              },
+            });
+          }
+
           const nextAcademicYear =
             (dto as any).academic_year !== undefined
               ? (dto as any).academic_year
@@ -1741,15 +1758,19 @@ export class StaffEditingService {
     latest_photo_url: string | null;
     latest_photo_date: string | null;
   }> {
-    const items = await this.storage.listStudentPhotos(cc);
-    if (items.length > 0) {
-      const first = items[0];
-      const latest = items[items.length - 1];
+    const rows = await this.prisma.student_photo_history.findMany({
+      where: { student_id: cc, photo_type: 'standard' },
+      orderBy: { uploaded_at: 'asc' },
+    });
+
+    if (rows.length > 0) {
+      const first = rows[0];
+      const latest = rows[rows.length - 1];
       return {
         first_photo_url: first.url,
-        first_photo_date: first.date,
+        first_photo_date: first.uploaded_at ? first.uploaded_at.toISOString().slice(0, 10) : null,
         latest_photo_url: latest.url,
-        latest_photo_date: latest.date,
+        latest_photo_date: latest.uploaded_at ? latest.uploaded_at.toISOString().slice(0, 10) : null,
       };
     }
 
@@ -1769,6 +1790,34 @@ export class StaffEditingService {
       latest_photo_url: null,
       latest_photo_date: null,
     };
+  }
+
+  async listStudentPhotoHistory(cc: number) {
+    const rows = await this.prisma.student_photo_history.findMany({
+      where: { student_id: cc },
+      orderBy: { uploaded_at: 'asc' },
+    });
+
+    if (rows.length === 0) {
+      const student = await this.prisma.students.findUnique({
+        where: { cc },
+        select: { cc: true, photograph_url: true, doa: true, created_at: true },
+      });
+      if (student?.photograph_url) {
+        return [
+          {
+            id: 0,
+            student_id: cc,
+            url: student.photograph_url,
+            photo_type: 'standard',
+            uploaded_by: 'system_backfill',
+            uploaded_at: student.doa || student.created_at || new Date(),
+          },
+        ];
+      }
+    }
+
+    return rows;
   }
 
   private flattenStudentFull(s: any, photoHistory?: any) {

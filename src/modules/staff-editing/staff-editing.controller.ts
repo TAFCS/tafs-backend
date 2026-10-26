@@ -60,6 +60,20 @@ export class StaffEditingController {
     );
   }
 
+  @Get('students/:id/photo-history')
+  async getStudentPhotoHistory(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.staffEditingService.assertStudentVisible(user, id);
+    const history = await this.staffEditingService.listStudentPhotoHistory(id);
+    return createApiResponse(
+      history,
+      HttpStatus.OK,
+      'Student photo history retrieved successfully',
+    );
+  }
+
   @Patch('students/:id')
   @RequireAction('student.directory#identity.edit')
   async updateStudent(
