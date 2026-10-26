@@ -136,6 +136,11 @@ export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   @IsOptional()
   @IsIn(['xlsx', 'csv', 'pdf'])
   format?: 'xlsx' | 'csv' | 'pdf';
+
+  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 }
 
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -430,9 +435,18 @@ export const DEFAULTER_GROUP_BY = ['class', 'section', 'family'] as const;
 export type DefaulterGroupBy = (typeof DEFAULTER_GROUP_BY)[number];
 
 export class ExportDefaultersQueryDto extends ListDefaultersQueryDto {
+  /** pdf (TAFSD-417): a landscape print of the Excel sheet. */
   @IsOptional()
-  @IsIn(['xlsx', 'csv'])
-  format?: 'xlsx' | 'csv';
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
+
+  /**
+   * TAFSD-417: the PDF's paper. A sheet too wide for A4 prints on A3
+   * regardless. Omitted = A4.
+   */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 
   /**
    * TAFSD-337: list the students in groups — by class, section or family —
@@ -480,6 +494,11 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @IsIn(['xlsx', 'csv', 'pdf'])
   format?: 'xlsx' | 'csv' | 'pdf';
 
+  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
+
   /**
    * TAFSD-341: the per-student sheet options, as on the defaulters export.
    * By student only; the other views ignore them.
@@ -492,6 +511,16 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @Transform(toOptionalBoolean)
   @IsBoolean()
   breakdown_by_head?: boolean;
+
+  /**
+   * TAFSD-431: show each month's fee dates — a column per date when a month
+   * has several (with the head breakdown, a REMARKS note instead). Off when
+   * omitted: one column per month, as on the defaulters list.
+   */
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  split_by_fee_date?: boolean;
 
   @IsOptional()
   @Transform(toStringArray)

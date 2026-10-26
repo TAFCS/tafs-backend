@@ -1,5 +1,12 @@
 import * as ExcelJS from 'exceljs';
 import type { DefaulterSheetHeading } from './defaulter-sheet-heading';
+import {
+  fitSheetToText,
+  headerText,
+  SHEET_SERIF,
+  writeBanner,
+  writeTitleBlock,
+} from './school-sheet-common';
 
 /**
  * TAFSD-268: the school's paper-sheet layout for the Fee Heads and Deposits
@@ -67,9 +74,17 @@ export interface SchoolSheetOptions {
   columns: SchoolSheetColumn[];
 }
 
-const SERIF = 'Times New Roman';
-const thin: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FF000000' } };
-const box: Partial<ExcelJS.Borders> = { top: thin, left: thin, bottom: thin, right: thin };
+const SERIF = SHEET_SERIF;
+const thin: Partial<ExcelJS.Border> = {
+  style: 'thin',
+  color: { argb: 'FF000000' },
+};
+const box: Partial<ExcelJS.Borders> = {
+  top: thin,
+  left: thin,
+  bottom: thin,
+  right: thin,
+};
 /** Whole rupees normally; two decimals only for a column that actually has paisa. */
 const MONEY_FMT = '#,##0';
 const MONEY_FMT_DECIMAL = '#,##0.00';
@@ -85,27 +100,30 @@ export function writeSchoolSheets(
   const usedTabs = new Set<string>();
   for (const sheetData of sheets) {
     const sheet = workbook.addWorksheet(uniqueTab(sheetData.tab, usedTabs));
-    const columns: SchoolSheetColumn[] = [{ header: 'S#', key: '__sno', width: 5 }, ...(sheetData.columns ?? opts.columns)];
+    const columns: SchoolSheetColumn[] = [
+      { header: 'S#', key: '__sno', width: 5 },
+      ...(sheetData.columns ?? opts.columns),
+    ];
     const lastCol = columns.length;
 
-    let line = 1;
+    // TAFSD-425: the title block every school sheet shares.
+    let line = writeTitleBlock(sheet, lastCol, 1, {
+      school: opts.heading.school,
+      classesLine: opts.heading.classesLine,
+      title: opts.reportTitle,
+      campus: sheetData.campus,
+      session: opts.heading.session,
+    });
     const banner = (text: string, size: number, height: number) => {
-      if (lastCol > 1) sheet.mergeCells(line, 1, line, lastCol);
-      const cell = sheet.getCell(line, 1);
-      cell.value = text;
-      cell.font = { name: SERIF, bold: true, size };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      sheet.getRow(line).height = height;
-      line++;
+      line = writeBanner(sheet, lastCol, line, text, size, height);
     };
-    banner(opts.heading.school, 20, 32);
-    if (opts.heading.classesLine) banner(opts.heading.classesLine, 13, 20);
-    banner(opts.reportTitle, 17, 26);
-    banner(sheetData.campus, 15, 22);
-    banner(opts.heading.session, 14, 20);
 
     line++;
-    for (const text of [dayLine, dateLine, ...(opts.generatedLine ? [opts.generatedLine] : [])]) {
+    for (const text of [
+      dayLine,
+      dateLine,
+      ...(opts.generatedLine ? [opts.generatedLine] : []),
+    ]) {
       const cell = sheet.getCell(line, 1);
       cell.value = text;
       cell.font = { name: 'Arial', bold: true, size: 11 };
@@ -121,9 +139,13 @@ export function writeSchoolSheets(
     const twoRowHeader = columns.some((col) => col.group);
     const HEADER_LAST = twoRowHeader ? HEADER_ROW + 1 : HEADER_ROW;
     const styleHeader = (cell: ExcelJS.Cell, text: string, size: number) => {
-      cell.value = text.toUpperCase();
+      cell.value = headerText(text);
       cell.font = { name: SERIF, bold: true, size };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
       cell.border = box;
     };
     columns.forEach((col, i) => {
@@ -134,14 +156,20 @@ export function writeSchoolSheets(
           sheet.getCell(HEADER_LAST, c).border = box;
           sheet.mergeCells(HEADER_ROW, c, HEADER_LAST, c);
         }
-        styleHeader(sheet.getCell(HEADER_ROW, c), col.header, col.money ? 11 : 13);
+        styleHeader(
+          sheet.getCell(HEADER_ROW, c),
+          col.header,
+          col.money ? 11 : 13,
+        );
         return;
       }
-      styleHeader(sheet.getCell(HEADER_LAST, c), col.header, 10);
+      // One size under the defaulters' 10: a fee date sheet has twenty of these (TAFSD-425).
+      styleHeader(sheet.getCell(HEADER_LAST, c), col.header, 9);
       if (columns[i - 1]?.group === col.group) return;
       let end = i;
       while (columns[end + 1]?.group === col.group) end++;
-      for (let x = c; x <= end + 1; x++) sheet.getCell(HEADER_ROW, x).border = box;
+      for (let x = c; x <= end + 1; x++)
+        sheet.getCell(HEADER_ROW, x).border = box;
       if (end > i) sheet.mergeCells(HEADER_ROW, c, HEADER_ROW, end + 1);
       styleHeader(sheet.getCell(HEADER_ROW, c), col.group, 13);
     });
@@ -155,9 +183,12 @@ export function writeSchoolSheets(
           c.key,
           sheetData.defaulterNumbers
             ? '0'
-            : sheetData.rows.some((r) => typeof r[c.key] === 'number' && !Number.isInteger(r[c.key]))
-            ? MONEY_FMT_DECIMAL
-            : MONEY_FMT,
+            : sheetData.rows.some(
+                  (r) =>
+                    typeof r[c.key] === 'number' && !Number.isInteger(r[c.key]),
+                )
+              ? MONEY_FMT_DECIMAL
+              : MONEY_FMT,
         ]),
     );
     let rowIdx = HEADER_LAST + 1;
@@ -167,36 +198,59 @@ export function writeSchoolSheets(
         const cell = row.getCell(c + 1);
         const value = col.key === '__sno' ? i + 1 : data[col.key];
         cell.value = value === undefined || value === null ? '' : value;
-        if (col.money && typeof value === 'number') cell.numFmt = moneyFmt.get(col.key)!;
+        if (col.money && typeof value === 'number')
+          cell.numFmt = moneyFmt.get(col.key)!;
         cell.border = box;
-        cell.font = col.money ? { name: SERIF, bold: true, size: col.group ? 11 : 12 } : { name: SERIF, size: 11 };
-        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: col.width >= 20 };
+        cell.font = col.money
+          ? { name: SERIF, bold: true, size: col.group ? 11 : 12 }
+          : { name: SERIF, size: 11 };
+        // Text wraps (and the row grows) rather than being cut off at the column edge (TAFSD-425).
+        cell.alignment = {
+          horizontal: 'center',
+          vertical: 'middle',
+          wrapText: typeof value === 'string',
+        };
       });
       row.height = 22;
     };
 
     // TOTAL (or a group's SUBTOTAL) under every summed column, labelled in the
     // columns before the first.
-    const totalIdx = columns.map((col, i) => (col.total ? i + 1 : 0)).filter(Boolean);
-    const writeTotal = (rows: Array<Record<string, string | number>>, text: string) => {
+    const totalIdx = columns
+      .map((col, i) => (col.total ? i + 1 : 0))
+      .filter(Boolean);
+    const writeTotal = (
+      rows: Array<Record<string, string | number>>,
+      text: string,
+    ) => {
       if (!totalIdx.length || !rows.length) return;
       const totalRow = sheet.getRow(rowIdx);
       const first = totalIdx[0];
       if (first > 1) {
         const labelFrom = Math.max(1, first - 3);
-        if (first - 1 > labelFrom) sheet.mergeCells(rowIdx, labelFrom, rowIdx, first - 1);
+        if (first - 1 > labelFrom)
+          sheet.mergeCells(rowIdx, labelFrom, rowIdx, first - 1);
         const label = totalRow.getCell(labelFrom);
         label.value = text;
         label.font = { name: SERIF, bold: true, size: 12 };
         label.alignment = { horizontal: 'center', vertical: 'middle' };
-        for (let c = labelFrom; c < first; c++) totalRow.getCell(c).border = box;
+        for (let c = labelFrom; c < first; c++)
+          totalRow.getCell(c).border = box;
       }
       for (const idx of totalIdx) {
         const col = columns[idx - 1];
         const cell = totalRow.getCell(idx);
-        const sum = rows.reduce((acc, r) => acc + (typeof r[col.key] === 'number' ? (r[col.key] as number) : 0), 0);
+        const sum = rows.reduce(
+          (acc, r) =>
+            acc + (typeof r[col.key] === 'number' ? (r[col.key] as number) : 0),
+          0,
+        );
         cell.value = Math.round(sum * 100) / 100;
-        cell.numFmt = col.money ? (sheetData.defaulterNumbers ? '0.00' : moneyFmt.get(col.key)!) : '0';
+        cell.numFmt = col.money
+          ? sheetData.defaulterNumbers
+            ? '0.00'
+            : moneyFmt.get(col.key)!
+          : '0';
         cell.font = { name: SERIF, bold: true, size: 12 };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = box;
@@ -216,7 +270,11 @@ export function writeSchoolSheets(
         const heading = sheet.getCell(rowIdx, 1);
         heading.value = `${group.label} · ${group.rows.length} ${group.rows.length === 1 ? one : many}`;
         heading.font = { name: SERIF, bold: true, size: 12 };
-        heading.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+        heading.alignment = {
+          horizontal: 'left',
+          vertical: 'middle',
+          indent: 1,
+        };
         heading.border = box;
         sheet.getRow(rowIdx).height = 22;
         rowIdx++;
@@ -227,6 +285,8 @@ export function writeSchoolSheets(
     }
     writeTotal(sheetData.rows, 'TOTAL');
 
+    // TAFSD-425: columns and rows grow to fit what's in them, so nothing is cut off.
+    fitSheetToText(sheet, HEADER_ROW, HEADER_LAST);
     sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: HEADER_LAST }];
     sheet.pageSetup = {
       paperSize: 9, // A4
@@ -236,19 +296,34 @@ export function writeSchoolSheets(
       fitToHeight: 0,
       horizontalCentered: true,
       printTitlesRow: `${HEADER_ROW}:${HEADER_LAST}`,
-      margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+      margins: {
+        left: 0.3,
+        right: 0.3,
+        top: 0.4,
+        bottom: 0.4,
+        header: 0.2,
+        footer: 0.2,
+      },
     };
   }
 }
 
 /** "DAY :MONDAY" / "DATE : OCTOBER 12, 2026", as on the school's sheets. */
-export function dayDateLines(isoDate: string): { dayLine: string; dateLine: string } {
+export function dayDateLines(isoDate: string): {
+  dayLine: string;
+  dateLine: string;
+} {
   const [y, m, d] = isoDate.split('-').map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
   return {
     dayLine: `DAY :${date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }).toUpperCase()}`,
     dateLine: `DATE : ${date
-      .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+      .toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
       .toUpperCase()}`,
   };
 }
@@ -258,17 +333,28 @@ export function periodLine(fromDate: string, toDate: string): string {
   const fmt = (v: string) => {
     const [y, m, d] = v.split('-').map(Number);
     return new Date(Date.UTC(y, m - 1, d))
-      .toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+      .toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      })
       .toUpperCase();
   };
-  return fromDate === toDate ? `ON ${fmt(fromDate)}` : `FROM ${fmt(fromDate)} TO ${fmt(toDate)}`;
+  return fromDate === toDate
+    ? `ON ${fmt(fromDate)}`
+    : `FROM ${fmt(fromDate)} TO ${fmt(toDate)}`;
 }
 
 /** Excel tab names: ≤31 chars, no []:/?\*, unique within the workbook. */
 function uniqueTab(name: string, used: Set<string>): string {
-  const base = (name.replace(/[[\]:/?\\*]/g, ' ').trim() || 'Sheet').slice(0, 31);
+  const base = (name.replace(/[[\]:/?\\*]/g, ' ').trim() || 'Sheet').slice(
+    0,
+    31,
+  );
   let tab = base;
-  for (let n = 2; used.has(tab.toLowerCase()); n++) tab = `${base.slice(0, 28)} ${n}`;
+  for (let n = 2; used.has(tab.toLowerCase()); n++)
+    tab = `${base.slice(0, 28)} ${n}`;
   used.add(tab.toLowerCase());
   return tab;
 }

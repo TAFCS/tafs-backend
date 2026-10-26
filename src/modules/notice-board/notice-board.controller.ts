@@ -180,6 +180,16 @@ export class NoticeBoardController {
     return this.service.getReadStats(id, user);
   }
 
+  // TAFSD-416: the author sees why their notice was rejected and what others changed.
+  @Get('admin/notice-board/:id/history')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
+  @RequireAction('communication.notice_board#view')
+  @ApiOperation({ summary: 'Review decisions and edit history of a post, for its author or a manager' })
+  history(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.service.getPostHistory(id, user);
+  }
+
   @Post('admin/notice-board/upload')
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))

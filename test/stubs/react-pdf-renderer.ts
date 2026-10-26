@@ -8,4 +8,4 @@ export const Page: any = () => null;
 export const Text: any = () => null;
 export const View: any = () => null;
 export const StyleSheet = { create: (s: any) => s };
-export const Font = { register: () => undefined };
+export const Font = { register: () => undefined, registerHyphenationCallback: () => undefined };

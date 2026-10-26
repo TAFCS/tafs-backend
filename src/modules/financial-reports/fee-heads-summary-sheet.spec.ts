@@ -2,7 +2,7 @@ import * as ExcelJS from 'exceljs';
 import { fee_status_enum } from '@prisma/client';
 import { FinancialReportsService } from './financial-reports.service';
 
-// TAFSD-341: Fee Heads "By class" / "By fee type" Excel in the defaulters format.
+// TAFSD-341: Fee Heads "By class" / "By fee type" / "By period" Excel in the defaulters format.
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
 const g = (
@@ -15,6 +15,8 @@ const g = (
   amount_paid: number,
 ) => ({
   student_id, fee_date: d(fee_date), fee_type_id, description_prefix: null, is_discount, status,
+  // Each head billed for the month of its fee date.
+  target_month: Number(fee_date.slice(5, 7)), academic_year: '2026-2027', term_start_month: null,
   _sum: { amount, amount_paid }, _count: { _all: 1 },
 });
 
@@ -48,6 +50,7 @@ function service() {
       ]),
     },
     campuses: { findMany: jest.fn(async () => [{ campus_name: 'Gulistan-e-Johar Campus', campus_code: 'GEJ' }]) },
+    classes: { findMany: jest.fn(async () => [{ id: 15, term_start_month: 8 }, { id: 16, term_start_month: 8 }]) },
   };
   const s = new FinancialReportsService(prisma as any, {} as any, { whereForStudents: () => ({}) } as any) as any;
   s.loadDefaulterFilterNames = jest.fn(async () => ({ campuses: new Map(), classes: new Map(), sections: new Map(), segments: new Map() }));
@@ -93,6 +96,17 @@ describe('Fee Heads summary sheets in the defaulters format (TAFSD-341)', () => 
     expect(total[2]).toBe('TOTAL');
     expect(total.slice(3)).toEqual([6, 21000, 15000, 36000, 18000, 5000, 13000]);
     expect(ws.getCell(ws.rowCount, 7).numFmt).toBe('0.00');
+  });
+
+  it('by period: periods in order, discount netted into its period, no students total', async () => {
+    const { header, rows } = (await load('period')) as any;
+    expect(header).toEqual(['S#', 'PERIOD', 'STUDENTS', 'HEADS', 'AUG', 'SEP', 'AMOUNT', 'PAID', 'WAIVED', 'OUTSTANDING']);
+    // Aug: Ali 10,000 + 2,000 - 1,000 discount, Sara 10,000; 8,000 + 10,000 cash.
+    expect(rows[0]).toEqual([1, 'AUG 26', 2, 4, 21000, 0, 21000, 18000, 0, 3000]);
+    // Sep: Ali 10,000 unpaid, Sara 5,000 waived.
+    expect(rows[1]).toEqual([2, 'SEP 26', 2, 2, 0, 15000, 15000, 0, 5000, 10000]);
+    expect(rows[2][2]).toBe('TOTAL');
+    expect(rows[2].slice(3)).toEqual([6, 21000, 15000, 36000, 18000, 5000, 13000]);
   });
 
   it('csv: flat, with the campus', async () => {

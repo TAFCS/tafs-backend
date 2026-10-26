@@ -21,7 +21,14 @@ function build() {
       ]),
     ],
     [102, new Map([[SEP, { owed: 9000, partial: false, heads: [{ name: 'Tuition', owed: 9000, partial: false }] }]])],
-    [103, new Map([[AUG, { owed: 7000, partial: false, heads: [{ name: 'Tuition', owed: 7000, partial: false }] }]])],
+    [
+      103,
+      new Map([
+        [AUG, { owed: 7000, partial: false, heads: [{ name: 'Tuition', owed: 7000, partial: false }] }],
+        // TAFSD-418: November tuition billed in advance and left unpaid -> LATER.
+        [SEP + 2, { owed: 7000, partial: false, heads: [{ name: 'Tuition', owed: 7000, partial: false }] }],
+      ]),
+    ],
     [201, new Map([[JUL, { owed: 6000, partial: true, heads: [{ name: 'Tuition', owed: 6000, partial: true }] }]])],
   ]);
   const s = service as any;

@@ -156,6 +156,9 @@ async function bootstrap() {
       'X-Requested-With',
       'Origin',
     ],
+    // TAFSD-417: let the webapp read export filenames (a defaulters PDF moved
+    // to A3 says so in its name).
+    exposedHeaders: ['Content-Disposition'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
