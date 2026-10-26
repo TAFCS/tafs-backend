@@ -6,6 +6,7 @@ import { StorageModule } from '../../common/storage/storage.module';
 import { AuthModule } from '../auth/auth.module';
 import { FcmModule } from '../../common/fcm/fcm.module';
 import { ChatModule } from '../chat/chat.module';
+import { StaffNotificationsModule } from '../staff-notifications/staff-notifications.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ChatModule } from '../chat/chat.module';
     forwardRef(() => AuthModule),
     FcmModule,
     forwardRef(() => ChatModule),
+    StaffNotificationsModule,
   ],
   providers: [NoticeBoardService],
   controllers: [NoticeBoardController],

@@ -1007,6 +1007,11 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.server.to(`family_app_${familyId}`).emit('voucherAlertReceived', payload);
   }
 
+  /** TAFSD-429: an event for one staff member's open webapp / app sessions. */
+  emitToStaff(userId: string, event: string, payload: unknown) {
+    this.server.to(`staff_inbox_${userId}`).emit(event, payload);
+  }
+
   broadcastNoticeBoard(
     familyId: number,
     payload: {
