@@ -141,7 +141,25 @@ export class MediaController {
       throw new BadRequestException('Invalid photo type. Use "standard" or "blue_bg"');
     }
     const isTemp = temp === 'true';
-    return this.mediaService.uploadStudentPhoto(cc, file, type as 'standard' | 'blue_bg', isTemp);
+    const uploader = (user as any)?.username || (user as any)?.sub || 'system';
+    return this.mediaService.uploadStudentPhoto(
+      cc,
+      file,
+      type as 'standard' | 'blue_bg',
+      isTemp,
+      uploader,
+    );
+  }
+
+  @Get('student/:cc/photo-history')
+  @UseGuards(JwtStaffOrParentGuard)
+  @ApiOperation({ summary: 'Get student photo history list' })
+  async getStudentPhotoHistory(
+    @Param('cc', ParseIntPipe) cc: number,
+    @CurrentUser() user: Caller,
+  ) {
+    await this.assertStudentAccess(user, cc, false);
+    return this.mediaService.getStudentPhotoHistory(cc);
   }
 
   @Post('guardian/:id/photo')

@@ -160,12 +160,16 @@ export class ScopeService {
       }
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user_scope_entries.deleteMany({ where: { user_id: userId } });
-      if (rows.length > 0) {
-        await tx.user_scope_entries.createMany({ data: rows, skipDuplicates: true });
-      }
-    });
+    await readUntilMigrated(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.user_scope_entries.deleteMany({ where: { user_id: userId } });
+          if (rows.length > 0) {
+            await tx.user_scope_entries.createMany({ data: rows, skipDuplicates: true });
+          }
+        }),
+      undefined,
+    );
 
     this.invalidateScopeCache(userId);
     return this.resolve(userId);

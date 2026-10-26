@@ -64,6 +64,7 @@ describe('VoucherNotificationService', () => {
     prisma = {
       voucher_notifications: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 1, ...data })),
         findMany: jest.fn().mockResolvedValue([]),
       },
@@ -237,8 +238,8 @@ describe('VoucherNotificationService', () => {
 
     expect(fcm.sendToFamily).toHaveBeenCalledWith(
       42,
-      'School Fees: AUG 25',
-      expect.stringContaining("Ali Khan's AUG 25 school fees"),
+      'School Fees: AUGUST 25',
+      expect.stringContaining("Ali Khan's AUGUST 25 school fees"),
       expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
     );
   });
@@ -278,10 +279,31 @@ describe('VoucherNotificationService', () => {
 
     expect(fcm.sendToFamily).toHaveBeenCalledWith(
       42,
-      'School Fees: AUG 25 - SEP 25',
-      expect.stringContaining("Ali Khan's AUG 25 - SEP 25 school fees"),
+      'School Fees: AUGUST 25 - SEPTEMBER 25',
+      expect.stringContaining("Ali Khan's AUGUST 25 - SEPTEMBER 25 school fees"),
       expect.objectContaining({ alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED }),
     );
+  });
+
+  it('sendVoucherIssuedNotification skips FCM push when family already notified today for the same fee period', async () => {
+    const feeDate = new Date('2026-11-01');
+    prisma.vouchers.findUnique.mockResolvedValue({
+      ...sampleVoucher,
+      fee_date: feeDate,
+    });
+    prisma.voucher_notifications.findFirst.mockResolvedValue({
+      id: 99,
+      family_id: 42,
+      student_cc: 12345,
+      alert_type: VOUCHER_ALERT_TYPES.VOUCHER_ISSUED,
+    });
+
+    const result = await service.sendVoucherIssuedNotification(100);
+
+    expect(prisma.voucher_notifications.create).toHaveBeenCalled();
+    expect(fcm.sendToFamily).not.toHaveBeenCalled();
+    expect(chatGateway.broadcastVoucherAlert).toHaveBeenCalled();
+    expect(result).toBeDefined();
   });
 
   it('sendVoucherIssuedNotification falls back to voucher.month when heads have no target_month', async () => {

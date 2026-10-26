@@ -11,7 +11,13 @@ export class MediaService {
     private readonly auditLogs: AuditLogsService,
   ) {}
 
-  async uploadStudentPhoto(cc: number, file: Express.Multer.File, type: 'standard' | 'blue_bg', isTemp = false) {
+  async uploadStudentPhoto(
+    cc: number,
+    file: Express.Multer.File,
+    type: 'standard' | 'blue_bg',
+    isTemp = false,
+    uploadedBy = 'system',
+  ) {
     const student = await this.prisma.students.findUnique({ where: { cc } });
     if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
 
@@ -28,19 +34,59 @@ export class MediaService {
         data: { [field]: url },
       });
 
+      if (type === 'standard') {
+        await this.prisma.student_photo_history.create({
+          data: {
+            student_id: cc,
+            url,
+            photo_type: type,
+            uploaded_by: uploadedBy,
+            uploaded_at: new Date(),
+          },
+        });
+      }
+
       const label = type === 'blue_bg' ? 'blue-background photo' : 'standard photo';
       await this.auditLogs.log({
         entity_type: 'STUDENT',
         entity_id: String(cc),
         action: 'UPDATED',
         field,
-        changed_by: 'system',
+        changed_by: uploadedBy,
         student_id: cc,
         note: `Uploaded student ${label} for CC ${cc} (${student.full_name || 'N/A'}).`,
       });
     }
 
     return { url };
+  }
+
+  async getStudentPhotoHistory(cc: number) {
+    const student = await this.prisma.students.findUnique({
+      where: { cc },
+      select: { cc: true, photograph_url: true, doa: true, created_at: true },
+    });
+    if (!student) throw new NotFoundException(`Student with CC ${cc} not found`);
+
+    const rows = await this.prisma.student_photo_history.findMany({
+      where: { student_id: cc },
+      orderBy: { uploaded_at: 'asc' },
+    });
+
+    if (rows.length === 0 && student.photograph_url) {
+      return [
+        {
+          id: 0,
+          student_id: cc,
+          url: student.photograph_url,
+          photo_type: 'standard',
+          uploaded_by: 'system_backfill',
+          uploaded_at: student.doa || student.created_at || new Date(),
+        },
+      ];
+    }
+
+    return rows;
   }
 
   async uploadGuardianPhoto(id: number, file: Express.Multer.File, isTemp = false) {

@@ -311,6 +311,16 @@ export class UnconfirmedAdmissionsService {
       data: { photograph_url: url },
     });
 
+    await this.prisma.student_photo_history.create({
+      data: {
+        student_id: cc,
+        url,
+        photo_type: 'standard',
+        uploaded_by: changedBy || 'system',
+        uploaded_at: new Date(),
+      },
+    });
+
     void this.auditLogs.log({
       entity_type: 'STUDENT',
       entity_id: String(cc),

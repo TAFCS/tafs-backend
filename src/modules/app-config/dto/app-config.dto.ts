@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsInt, IsEnum, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsInt, IsEnum, IsOptional, IsArray, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum AppPlatform {
@@ -31,6 +31,22 @@ export class AppStatusQueryDto {
 
 export class UpdateAppConfigDto {
   @IsString()
-  @IsNotEmpty()
   value: string;
 }
+
+export class ConfigUpdateItemDto {
+  @IsString()
+  @IsNotEmpty()
+  key: string;
+
+  @IsString()
+  value: string;
+}
+
+export class BatchUpdateAppConfigDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConfigUpdateItemDto)
+  updates: ConfigUpdateItemDto[];
+}
+

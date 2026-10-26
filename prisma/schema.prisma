@@ -56,6 +56,8 @@ model bulk_voucher_jobs {
   success_count       Int           @default(0)
   skip_count          Int           @default(0)
   fail_count          Int           @default(0)
+  phase               String?       @default("ISSUING") @db.VarChar(20)
+  pdf_rendered_count  Int           @default(0)
   merged_pdf_url      String?
   created_at          DateTime      @default(now()) @db.Timestamp(6)
   updated_at          DateTime      @updatedAt
@@ -812,6 +814,7 @@ model students {
   graduated_from_class        classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
   houses                      houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                    sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student_photo_history       student_photo_history[]
   support_tickets             support_tickets[]
   voucher_notifications       voucher_notifications[]
   vouchers                    vouchers[]
@@ -2707,6 +2710,7 @@ enum BulkJobStatus {
   DONE
   PARTIAL_FAILURE
   FAILED
+  INTERRUPTED
 }
 
 enum StaffRole {
@@ -3013,4 +3017,17 @@ model staff_notifications {
   users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id, created_at(sort: Desc)])
+}
+
+model student_photo_history {
+  id          Int      @id @default(autoincrement())
+  student_id  Int
+  url         String   @db.Text
+  photo_type  String?  @default("standard") @db.VarChar(50)
+  uploaded_by String?  @db.VarChar(255)
+  uploaded_at DateTime @default(now()) @db.Timestamp(6)
+  students    students @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+
+  @@index([student_id])
+  @@index([student_id, uploaded_at])
 }

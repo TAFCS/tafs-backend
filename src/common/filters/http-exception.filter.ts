@@ -32,14 +32,34 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? (exceptionResponse as { message?: string | string[] }).message ?? 'Internal server error'
           : 'Internal server error';
 
-    if (status >= 500) {
-      this.logger.error(exception instanceof Error ? exception.stack : String(exception));
-    }
-
-    res.status(status).json({
+    const payload: Record<string, any> = {
       status,
       message,
       data: null,
-    });
+    };
+
+    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      if ('code' in exceptionResponse) {
+        payload.code = (exceptionResponse as any).code;
+      }
+      if ('minBuildNumber' in exceptionResponse) {
+        payload.minBuildNumber = (exceptionResponse as any).minBuildNumber;
+      }
+      if ('storeUrl' in exceptionResponse) {
+        payload.storeUrl = (exceptionResponse as any).storeUrl;
+      }
+    }
+
+    const isMaintenance503 =
+      status === HttpStatus.SERVICE_UNAVAILABLE &&
+      typeof exceptionResponse === 'object' &&
+      exceptionResponse !== null &&
+      (exceptionResponse as any).code === 'MAINTENANCE';
+
+    if (status >= 500 && !isMaintenance503) {
+      this.logger.error(exception instanceof Error ? exception.stack : String(exception));
+    }
+
+    res.status(status).json(payload);
   }
 }

@@ -4,17 +4,29 @@
  * campus line and the session line.
  */
 
-/** `classes.id` 15–19 — VI, VII, VIII, IX, X: The American Foundation School for Secondary Studies. */
-const SECONDARY_CLASS_IDS = new Set([15, 16, 17, 18, 19]);
+import {
+  SCHOOL_NAME,
+  SCHOOL_NAME_SECONDARY,
+  SCHOOL_NAME_A_LEVEL,
+  SECONDARY_CLASS_IDS,
+  A_LEVEL_CLASS_IDS,
+  schoolHeadingForClass,
+} from '../../common/utils/school-heading.util';
+
+export {
+  SCHOOL_NAME,
+  SCHOOL_NAME_SECONDARY,
+  SCHOOL_NAME_A_LEVEL,
+  SECONDARY_CLASS_IDS,
+  A_LEVEL_CLASS_IDS,
+  schoolHeadingForClass,
+};
+
 /** Secondary runs Apr–Mar; every other class runs Aug–Jul. */
 const SECONDARY_TERM_START_MONTH = 4;
 const DEFAULT_TERM_START_MONTH = 8;
 
 export const DEFAULTER_SHEET_LIST_TITLE = "AT A GLANCE CONSOLIDATED DEFAULTERS' LIST";
-
-const SCHOOL = 'THE AMERICAN FOUNDATION SCHOOL';
-const SCHOOL_SECONDARY = `${SCHOOL} FOR SECONDARY STUDIES`;
-const SCHOOL_A_LEVEL = `${SCHOOL} FOR A LEVEL STUDIES`;
 
 export interface DefaulterSheetClass {
   class_id: number | null;
@@ -46,14 +58,15 @@ export function defaulterSheetHeading(
   }
   const ids = [...classes.keys()];
   const secondary = ids.filter((id) => SECONDARY_CLASS_IDS.has(id)).length;
+  const aLevel = ids.filter((id) => A_LEVEL_CLASS_IDS.has(id)).length;
   const allSecondary = ids.length > 0 && secondary === ids.length;
-  const noSecondary = ids.length > 0 && secondary === 0;
+  const allALevel = ids.length > 0 && aLevel === ids.length;
 
-  let school = SCHOOL;
+  let school = SCHOOL_NAME;
   let classesLine: string | null = null;
   if (classFiltered) {
-    if (allSecondary) school = SCHOOL_SECONDARY;
-    else if (noSecondary) school = SCHOOL_A_LEVEL;
+    if (allSecondary) school = SCHOOL_NAME_SECONDARY;
+    else if (allALevel) school = SCHOOL_NAME_A_LEVEL;
     else if (ids.length > 0) {
       classesLine = `CLASSES: ${ids
         .sort((a, b) => a - b)

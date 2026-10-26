@@ -239,4 +239,44 @@ export class StorageService {
             throw new InternalServerErrorException('Failed to generate download link');
         }
     }
+
+    /**
+     * Lists all photo objects stored in Spaces for a student under `media/students/${cc}/`.
+     * Returns an array sorted chronologically by upload date.
+     */
+    async listStudentPhotos(cc: number): Promise<Array<{ url: string; date: string; timestamp: number }>> {
+        if (!this.client) return [];
+        try {
+            const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
+            const res = await this.client.send(
+                new ListObjectsV2Command({
+                    Bucket: this.bucket,
+                    Prefix: `media/students/${cc}/`,
+                }),
+            );
+            const items = (res.Contents || [])
+                .filter((o) => o.Key && /\.(jpe?g|png|webp|gif)$/i.test(o.Key))
+                .map((o) => {
+                    const match = o.Key!.match(/-(?:[a-z_]+-)?(\d{10,13})\./i) || o.Key!.match(/(\d{10,13})/);
+                    let date = o.LastModified || new Date();
+                    if (match) {
+                        const ms = parseInt(match[1], 10);
+                        if (ms > 1000000000000) date = new Date(ms);
+                        else if (ms > 1000000000) date = new Date(ms * 1000);
+                    }
+                    return {
+                        url: this.getPublicUrl(o.Key!),
+                        date: date.toISOString().slice(0, 10),
+                        timestamp: date.getTime(),
+                    };
+                })
+                .sort((a, b) => a.timestamp - b.timestamp);
+
+            return items;
+        } catch (err: any) {
+            this.logger.warn(`Failed to list student photos in Spaces for CC ${cc}: ${err.message}`);
+            return [];
+        }
+    }
 }
+

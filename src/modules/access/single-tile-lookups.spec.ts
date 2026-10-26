@@ -71,6 +71,7 @@ const EMPLOYEE_PICKER_TILES = [
   'attendance.shift_overrides', // 195
   'attendance.teaching_groups', // 196
   'attendance.timetables', // 197
+  'system.people_access', // 190
 ];
 const EMPLOYEE_SEARCH_TILES = [
   'hr.employee_loans', // 198

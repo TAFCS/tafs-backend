@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from './app-config.service';
-import { AppStatusQueryDto, UpdateAppConfigDto } from './dto/app-config.dto';
+import { AppStatusQueryDto, BatchUpdateAppConfigDto, UpdateAppConfigDto } from './dto/app-config.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { RequireAnyAction } from '../../decorators/require-action.decorator';
@@ -50,6 +50,18 @@ export class AppConfigController {
   }
 
   @ApiBearerAuth()
+  @Patch()
+  @UseGuards(JwtStaffGuard, TileActionGuard)
+  @RequireAnyAction('communication.notification_templates#edit', 'system.developer_settings#edit')
+  async batchSetConfigs(
+    @Body() dto: BatchUpdateAppConfigDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.appConfigService.batchSetConfigs(dto.updates, user);
+    return createApiResponse(data, HttpStatus.OK, 'Configurations updated successfully');
+  }
+
+  @ApiBearerAuth()
   @Patch(':key')
   @UseGuards(JwtStaffGuard, TileActionGuard)
   @RequireAnyAction('communication.notification_templates#edit', 'system.developer_settings#edit')
@@ -58,7 +70,7 @@ export class AppConfigController {
     @Body() dto: UpdateAppConfigDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.appConfigService.setConfig(key, dto.value, user.username);
-    return createApiResponse(data, HttpStatus.OK, 'Configuration updated successfully');
+    const data = await this.appConfigService.batchSetConfigs([{ key, value: dto.value }], user);
+    return createApiResponse(data[0], HttpStatus.OK, 'Configuration updated successfully');
   }
 }

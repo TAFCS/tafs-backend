@@ -1,0 +1,7 @@
+-- AlterEnum
+ALTER TYPE "BulkJobStatus" ADD VALUE IF NOT EXISTS 'INTERRUPTED';
+
+-- AlterTable
+ALTER TABLE "bulk_voucher_jobs"
+  ADD COLUMN IF NOT EXISTS "phase" VARCHAR(20) DEFAULT 'ISSUING',
+  ADD COLUMN IF NOT EXISTS "pdf_rendered_count" INTEGER NOT NULL DEFAULT 0;

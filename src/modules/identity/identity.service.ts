@@ -579,6 +579,18 @@ export class IdentityService {
               },
             },
           });
+
+          if (unconfirmed.photograph_url) {
+            await tx.student_photo_history.create({
+              data: {
+                student_id: student.cc,
+                url: unconfirmed.photograph_url,
+                photo_type: 'standard',
+                uploaded_by: user?.username || 'system',
+                uploaded_at: new Date(),
+              },
+            });
+          }
         }
 
         const promoteFromQuick = student.status === StudentStatus.QUICK_ADMISSION;
