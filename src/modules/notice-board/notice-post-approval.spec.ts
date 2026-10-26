@@ -41,8 +41,9 @@ function build() {
   const gateway = { broadcastNoticeBoard: jest.fn() };
   // Unrestricted scope for both callers, so only the review rules are under test.
   const scope = { isExempt: () => true, scopeOf: () => ({ campuses: [], classes: [], sections: [], segments: [] }) };
-  const service = new NoticeBoardService(prisma as any, {} as any, fcm as any, audit as any, gateway as any, scope as any);
-  return { service, prisma, fcm, audit };
+  const staffNotifications = { notify: jest.fn(async () => undefined) };
+  const service = new NoticeBoardService(prisma as any, {} as any, fcm as any, audit as any, gateway as any, scope as any, staffNotifications as any);
+  return { service, prisma, fcm, audit, staffNotifications };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -71,7 +72,7 @@ describe('notice board approval', () => {
   });
 
   it('approve flips PENDING atomically, re-dates the post and notifies families and the author', async () => {
-    const { service, prisma, fcm } = build();
+    const { service, prisma, fcm, staffNotifications } = build();
     await service.approvePost(7, superAdmin, 'sa');
     await flush();
     const call = prisma.notice_board_posts.updateMany.mock.calls[0][0];
@@ -79,7 +80,7 @@ describe('notice board approval', () => {
     expect(call.data).toMatchObject({ status: NoticePostStatus.APPROVED, reviewed_by: 'sa' });
     expect(call.data.posted_at).toBeInstanceOf(Date);
     expect(fcm.sendToFamily).toHaveBeenCalled();
-    expect(fcm.sendToUsers).toHaveBeenCalledWith(['ca'], 'Notice approved', expect.any(String), expect.any(Object));
+    expect(staffNotifications.notify).toHaveBeenCalledWith('ca', expect.objectContaining({ kind: 'NOTICE_APPROVED', title: 'Your notice was approved' }));
   });
 
   it('refuses to decide a post that is no longer pending', async () => {
@@ -90,7 +91,7 @@ describe('notice board approval', () => {
   });
 
   it('reject needs a reason and never notifies families', async () => {
-    const { service, prisma, fcm } = build();
+    const { service, prisma, fcm, staffNotifications } = build();
     await expect(service.rejectPost(7, '  ', superAdmin, 'sa')).rejects.toBeInstanceOf(BadRequestException);
     prisma.notice_board_posts.findUniqueOrThrow.mockResolvedValueOnce(row({ status: NoticePostStatus.REJECTED }) as any);
     await service.rejectPost(7, 'Wrong date', superAdmin, 'sa');
@@ -100,6 +101,11 @@ describe('notice board approval', () => {
       review_reason: 'Wrong date',
     });
     expect(fcm.sendToFamily).not.toHaveBeenCalled();
+    // TAFSD-429: the author is told, with the reason.
+    expect(staffNotifications.notify).toHaveBeenCalledWith(
+      'ca',
+      expect.objectContaining({ kind: 'NOTICE_REJECTED', body: expect.stringContaining('Reason: Wrong date') }),
+    );
   });
 
   it('only a superadmin can review', async () => {

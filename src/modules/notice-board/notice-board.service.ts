@@ -14,6 +14,7 @@ import { FcmService } from '../../common/fcm/fcm.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ChatGateway } from '../chat/chat.gateway';
+import { StaffNotificationsService } from '../staff-notifications/staff-notifications.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
@@ -53,6 +54,7 @@ export class NoticeBoardService {
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
     private readonly scope: ScopeService,
+    private readonly staffNotifications: StaffNotificationsService,
   ) {}
 
   /**
@@ -796,10 +798,12 @@ export class NoticeBoardService {
       });
     }
     if (contentChanged && post.posted_by !== user.sub) {
+      const what = this._authorNoun(updated);
       this._notifyAuthor(
         updated,
-        'Notice edited',
-        `"${updated.title?.trim() || this._snippet(updated.body, 60)}" was edited by ${changedBy ?? 'an admin'}.`,
+        'NOTICE_EDITED',
+        `Your ${what} was edited`,
+        `"${this._postLabel(updated)}" was edited by ${changedBy ?? 'an admin'}. Open it to see what changed.`,
       );
     }
 
@@ -1049,7 +1053,12 @@ export class NoticeBoardService {
     this._sendPostNotifications(post).catch((err) =>
       console.error('Notice board FCM dispatch failed:', err.message),
     );
-    this._notifyAuthor(post, 'Notice approved', `"${post.title?.trim() || this._snippet(post.body, 60)}" is now live.`);
+    this._notifyAuthor(
+      post,
+      'NOTICE_APPROVED',
+      `Your ${this._authorNoun(post)} was approved`,
+      `"${this._postLabel(post)}" was approved and is now live.`,
+    );
 
     await this.auditLogs.log({
       entity_type: 'NOTICE',
@@ -1069,7 +1078,12 @@ export class NoticeBoardService {
     if (!trimmed) throw new BadRequestException('A reason is required to reject a post.');
     const post = await this._decide(id, user, NoticePostStatus.REJECTED, trimmed);
 
-    this._notifyAuthor(post, 'Notice not approved', `"${post.title?.trim() || this._snippet(post.body, 60)}": ${trimmed}`);
+    this._notifyAuthor(
+      post,
+      'NOTICE_REJECTED',
+      `Your ${this._authorNoun(post)} was not approved`,
+      `"${this._postLabel(post)}" was not approved. Reason: ${trimmed}`,
+    );
 
     await this.auditLogs.log({
       entity_type: 'NOTICE',
@@ -1157,10 +1171,29 @@ export class NoticeBoardService {
     });
   }
 
-  private _notifyAuthor(post: { id: number; posted_by: string }, title: string, body: string) {
-    this.fcm
-      .sendToUsers([post.posted_by], title, body, { type: 'notice_board_review', post_id: String(post.id) })
-      .catch((err) => console.error('Notice review push failed:', err.message));
+  /**
+   * TAFSD-429: tells the author their post was approved, rejected or edited —
+   * under the webapp's bell, and in the staff app's notices with a push.
+   */
+  private _notifyAuthor(post: { id: number; posted_by: string }, kind: string, title: string, body: string) {
+    void this.staffNotifications.notify(post.posted_by, {
+      kind,
+      title,
+      body,
+      link: `/notice-board?post=${post.id}`,
+      entityType: 'NOTICE',
+      entityId: String(post.id),
+      pushData: { post_id: String(post.id) },
+    });
+  }
+
+  /** "message" for a notification-only post, else "notice". */
+  private _authorNoun(post: { notification_only?: boolean | null }) {
+    return post.notification_only ? 'message' : 'notice';
+  }
+
+  private _postLabel(post: { title?: string | null; body?: string | null }) {
+    return post.title?.trim() || this._snippet(post.body, 60);
   }
 
   // ── Media upload ─────────────────────────────────────────────────────────

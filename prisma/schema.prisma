@@ -905,6 +905,7 @@ model users {
   class_session_reschedules_created                                        class_session_reschedules[]
   employee_notice_post_reads                                               employee_notice_post_reads[]
   employee_notice_posts                                                    employee_notice_posts[]
+  staff_notifications                                                      staff_notifications[]
   employee_profile                                                         employee_profiles?
   employee_shift_overrides_created                                         employee_shift_overrides[]   @relation("ShiftOverrideCreatedBy")
   fcm_device_tokens                                                        fcm_device_tokens[]
@@ -2359,7 +2360,7 @@ model class_check_in_schedules {
   intermediate_time            DateTime?                      @db.Time(0)
   effective_from               DateTime                       @db.Date
   /// TAFSD-385: last day of a temporary timing (exam week, winter). Null = open-ended.
-  effective_to                 DateTime?                     @db.Date
+  effective_to                 DateTime?                      @db.Date
   created_by                   String?
   created_at                   DateTime                       @default(now()) @db.Timestamp(6)
   campuses                     campuses                       @relation(fields: [campus_id], references: [id], onDelete: Cascade)
@@ -2996,6 +2997,26 @@ enum LoanTransactionType {
   DEDUCTION
   LUMP_SUM_REPAYMENT
   WRITE_OFF
+}
+
+/// TAFSD-429: a staff member's own notifications (e.g. their notice was
+/// approved, rejected or edited), listed under the webapp's bell.
+model staff_notifications {
+  id          Int       @id @default(autoincrement())
+  user_id     String
+  /// What happened, e.g. NOTICE_APPROVED, NOTICE_REJECTED, NOTICE_EDITED.
+  kind        String    @db.VarChar(50)
+  title       String    @db.VarChar(255)
+  body        String
+  /// Webapp path to open, e.g. /notice-board?post=12.
+  link        String?   @db.VarChar(500)
+  entity_type String?   @db.VarChar(50)
+  entity_id   String?   @db.VarChar(100)
+  created_at  DateTime  @default(now()) @db.Timestamp(6)
+  read_at     DateTime? @db.Timestamp(6)
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, created_at(sort: Desc)])
 }
 
 model student_photo_history {

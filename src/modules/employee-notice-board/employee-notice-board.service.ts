@@ -321,6 +321,32 @@ export class EmployeeNoticeBoardService {
     return post;
   }
 
+  /**
+   * Same personal, single-recipient notice pattern as createAttendanceNotice,
+   * for anything else addressed to one staff member (TAFSD-429: their notice
+   * board post was approved, rejected or edited). `label` names it in the audit log.
+   */
+  async createPersonalNotice(employeeId: number, userId: string, title: string, body: string, label: string) {
+    const post = await this.prisma.employee_notice_posts.create({
+      data: { posted_by: userId, employee_id: employeeId, title, body },
+    });
+
+    await this.auditLogs.log({
+      entity_type: 'EMPLOYEE_NOTICE',
+      entity_id: String(post.id),
+      action: 'CREATED',
+      section: 'communication',
+      changed_by: 'system',
+      note: `${label} notice #${post.id} created for employee #${employeeId}: "${title}" — ${body.slice(0, 120)}${body.length > 120 ? '…' : ''}.`,
+    });
+
+    void this.fcmService
+      .sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE', postId: String(post.id) })
+      .catch((err) => console.error(`[EmployeeNoticeBoard] ${label} notice FCM send failed:`, err?.message));
+
+    return post;
+  }
+
   /** Same personal, single-recipient notice pattern as createAttendanceNotice, for payroll finalize/settle events. */
   async createPayrollNotice(employeeId: number, userId: string, title: string, body: string, payrollRunId: number) {
     const post = await this.prisma.employee_notice_posts.create({

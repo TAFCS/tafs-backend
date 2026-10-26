@@ -25,6 +25,7 @@ function build(p: any, logs: any[] = [], canManage = true) {
   });
   svc.auditLogs = { log: jest.fn() };
   svc.fcm = { sendToUsers: jest.fn(async () => undefined) };
+  svc.staffNotifications = { notify: jest.fn(async () => undefined) };
   return svc;
 }
 
@@ -35,13 +36,17 @@ describe('notice edit history', () => {
     const entry = svc.auditLogs.log.mock.calls[0][0];
     expect(JSON.parse(entry.old_value)).toEqual({ title: 'Trip', body: 'Friday' });
     expect(JSON.parse(entry.new_value)).toEqual({ title: 'Trip', body: 'Saturday instead' });
-    expect(svc.fcm.sendToUsers).toHaveBeenCalledWith(['u1'], 'Notice edited', expect.stringContaining('Admin'), expect.anything());
+    // TAFSD-429: through the author's own notifications (webapp bell + staff app).
+    expect(svc.staffNotifications.notify).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ kind: 'NOTICE_EDITED', title: 'Your notice was edited', body: expect.stringContaining('Admin'), link: '/notice-board?post=7' }),
+    );
   });
 
   it("doesn't notify the author about their own edit", async () => {
     const svc = build(post());
     await svc.updatePost(7, { body: 'Saturday' }, 'Author', author);
-    expect(svc.fcm.sendToUsers).not.toHaveBeenCalled();
+    expect(svc.staffNotifications.notify).not.toHaveBeenCalled();
   });
 
   it('gives the author the rejection reason and the edits', async () => {
