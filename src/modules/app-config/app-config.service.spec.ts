@@ -481,5 +481,34 @@ describe('AppConfigService', () => {
       expect(prisma.app_config.findMany).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('parseStoredBuildNumber (prevent silent gate disable)', () => {
+    it('correctly parses clean integer strings', () => {
+      expect(service.parseStoredBuildNumber('45', 'min_android_build')).toBe(45);
+      expect(service.parseStoredBuildNumber('  52  ', 'min_android_build')).toBe(52);
+    });
+
+    it('returns fallback for empty or null strings without producing NaN', () => {
+      expect(service.parseStoredBuildNumber(undefined, 'min_android_build', 0)).toBe(0);
+      expect(service.parseStoredBuildNumber('', 'min_android_build', 0)).toBe(0);
+      expect(service.parseStoredBuildNumber('   ', 'min_android_build', 10)).toBe(10);
+    });
+
+    it('extracts embedded digits when non-numeric prefix/suffix is stored', () => {
+      expect(service.parseStoredBuildNumber('v45', 'min_android_build')).toBe(45);
+      expect(service.parseStoredBuildNumber('build-52', 'min_android_build')).toBe(52);
+      expect(service.parseStoredBuildNumber('50-beta', 'min_android_build')).toBe(50);
+    });
+
+    it('fails closed (Number.MAX_SAFE_INTEGER) on completely non-numeric strings to prevent gate bypass', () => {
+      const result = service.parseStoredBuildNumber('corrupted-data', 'min_android_build');
+      expect(result).toBe(Number.MAX_SAFE_INTEGER);
+      expect(Number.isNaN(result)).toBe(false);
+
+      // Verify that any build will fail the gate rather than bypassing it
+      expect(100 < result).toBe(true);
+    });
+  });
 });
+
 

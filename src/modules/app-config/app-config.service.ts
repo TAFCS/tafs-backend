@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, HttpStatus } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, HttpStatus, Logger } from '@nestjs/common';
 import { StaffRole, type app_config } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
@@ -70,6 +70,8 @@ export function isNotificationTemplateKey(key: string): boolean {
 
 @Injectable()
 export class AppConfigService {
+  private readonly logger = new Logger(AppConfigService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
@@ -77,6 +79,39 @@ export class AppConfigService {
 
   private statusCache = new Map<string, { data: any; expiresAt: number }>();
   private accessRulesCache = new Map<string, { data: any; expiresAt: number }>();
+
+  /**
+   * Safely parses a stored build number. If non-numeric characters are stored,
+   * it prevents silent gate disabling by parsing any present digits, or failing
+   * closed (requiring update) with an error log rather than returning NaN.
+   */
+  parseStoredBuildNumber(
+    raw: string | undefined | null,
+    keyName: string,
+    fallback: number = 0,
+  ): number {
+    if (raw === undefined || raw === null || raw.trim() === '') {
+      return fallback;
+    }
+    const trimmed = raw.trim();
+    if (/^\d+$/.test(trimmed)) {
+      return parseInt(trimmed, 10);
+    }
+
+    const digitsMatch = trimmed.match(/\d+/);
+    if (digitsMatch) {
+      const extracted = parseInt(digitsMatch[0], 10);
+      this.logger.warn(
+        `[AppConfig] Non-numeric stored build for "${keyName}": "${raw}". Extracted "${extracted}" to prevent silent gate disable.`,
+      );
+      return extracted;
+    }
+
+    this.logger.error(
+      `[AppConfig] Corrupted non-numeric stored build for "${keyName}": "${raw}". Failing closed to prevent silent gate bypass.`,
+    );
+    return Number.MAX_SAFE_INTEGER;
+  }
 
   /**
    * Fast, short-cached check used by AppMaintenanceGuard on incoming mobile requests.
@@ -170,7 +205,11 @@ export class AppConfigService {
       const rawMinBuild =
         configsMap.get(`${appPrefix}_min_${platform}_build`) ??
         configsMap.get(`min_${platform}_build`);
-      const minBuildNumber = parseInt(rawMinBuild || '0', 10);
+      const minBuildNumber = this.parseStoredBuildNumber(
+        rawMinBuild,
+        `${appPrefix}_min_${platform}_build`,
+        0,
+      );
 
       const fallbackStoreUrl =
         platform === AppPlatform.ANDROID
@@ -329,11 +368,19 @@ export class AppConfigService {
     const rawMinBuild =
       configsMap.get(`${appPrefix}_min_${platform}_build`) ??
       configsMap.get(`min_${platform}_build`);
-    const minBuildNumber = parseInt(rawMinBuild || '0', 10);
+    const minBuildNumber = this.parseStoredBuildNumber(
+      rawMinBuild,
+      `${appPrefix}_min_${platform}_build`,
+      0,
+    );
 
     const rawLatestBuild =
       configsMap.get(`${appPrefix}_latest_${platform}_build`);
-    const latestBuildNumber = parseInt(rawLatestBuild || `${minBuildNumber}`, 10);
+    const latestBuildNumber = this.parseStoredBuildNumber(
+      rawLatestBuild,
+      `${appPrefix}_latest_${platform}_build`,
+      minBuildNumber,
+    );
 
     // Canonical store listings per app & platform (avoiding generic homepage placeholders)
     const fallbackStoreUrl =
