@@ -1,18 +1,18 @@
 import { Injectable, Logger, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
+import { createGzip } from 'zlib';
 import { join } from 'path';
 import { existsSync, mkdirSync, createReadStream, createWriteStream } from 'fs';
 import { unlink, rm } from 'fs/promises';
-import { finished } from 'stream/promises';
+import { finished, pipeline } from 'stream/promises';
 import type { WriteStream } from 'fs';
 import { StorageService } from '../../common/storage/storage.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
-
-const execPromise = promisify(exec);
+import { FcmService } from '../../common/fcm/fcm.service';
+import { StaffRole } from '@prisma/client';
+import { S3Client, ListObjectsV2Command, type ListObjectsV2CommandOutput } from '@aws-sdk/client-s3';
 
 /** Yield so HTTP/socket handlers (incl. iclock getrequest) can run mid-backup. */
 function yieldEventLoop(): Promise<void> {
@@ -50,6 +50,7 @@ export class BackupsService implements OnModuleInit {
         private readonly storage: StorageService,
         private readonly prisma: PrismaService,
         private readonly auditLogs: AuditLogsService,
+        private readonly fcmService: FcmService,
     ) {}
 
     onModuleInit() {
@@ -108,14 +109,16 @@ export class BackupsService implements OnModuleInit {
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit',
-            hour12: false,
+            hourCycle: 'h23',
         }).format(now);
 
         const parts = pktTime.split(/[/, :]+/);
         const day = parts[0];
         const month = parts[1];
         const year = parts[2];
-        const hour = parts[3];
+        let hour = parts[3];
+        // Enforce 00 instead of 24 for midnight across all Intl locales
+        if (hour === '24') hour = '00';
         const minute = parts[4];
         const second = parts[5];
 
@@ -134,7 +137,10 @@ export class BackupsService implements OnModuleInit {
 
     private async finalizeBackup(rawPath: string, filePath: string, fileName: string) {
         try {
-            await execPromise(`gzip "${rawPath}"`);
+            const inStream = createReadStream(rawPath);
+            const gzip = createGzip({ level: 6 });
+            const outStream = createWriteStream(filePath);
+            await pipeline(inStream, gzip, outStream);
             this.logger.log(`Backup compressed: ${fileName}`);
 
             const storageKey = `backups/${fileName}`;
@@ -162,32 +168,107 @@ export class BackupsService implements OnModuleInit {
         }
     }
 
-    async createSqlBackup(sharedTimestamp?: string) {
-        const { fileName, filePath, rawPath } = this.getBackupInfo('SQL', sharedTimestamp);
-        const dbUrl = this.config.get<string>('DATABASE_URL');
+    /**
+     * Resolves the direct database connection string for pg_dump.
+     * DigitalOcean / Managed Postgres PgBouncer (transaction pooler on port 25061 / pooler)
+     * rejects session features (SET synchronize_seqscans) and pg_dump rejects ?pgbouncer=true.
+     * We prefer DIRECT_URL (direct port 25060 / defaultdb) and strip all non-standard URI parameters.
+     */
+    private getDumpDatabaseUrl(): string {
+        const directUrl = this.config.get<string>('DIRECT_URL');
+        const dbUrl = directUrl || this.config.get<string>('DATABASE_URL');
 
         if (!dbUrl) {
-            throw new InternalServerErrorException('DATABASE_URL not found in environment');
+            throw new InternalServerErrorException('Neither DIRECT_URL nor DATABASE_URL found in environment');
         }
 
-        let sanitizedUrl = dbUrl;
         try {
             const url = new URL(dbUrl);
+            // pg_dump rejects Prisma / PgBouncer specific query parameters
             url.searchParams.delete('connection_limit');
             url.searchParams.delete('pool_timeout');
-            sanitizedUrl = url.toString();
+            url.searchParams.delete('pgbouncer');
+
+            // If pointing to DigitalOcean PgBouncer transaction pooler (port 25061 or /pooler db),
+            // rewrite to direct postgres port 25060 and defaultdb to prevent SET synchronize_seqscans error
+            if (url.port === '25061' || url.pathname === '/pooler') {
+                this.logger.warn(
+                    `[Backups] Rewriting PgBouncer connection (port: ${url.port}, path: ${url.pathname}) to direct database port (25060, defaultdb) for pg_dump`,
+                );
+                if (url.port === '25061') url.port = '25060';
+                if (url.pathname === '/pooler') url.pathname = '/defaultdb';
+            }
+
+            return url.toString();
         } catch (e: any) {
-            this.logger.warn(`Failed to parse DATABASE_URL for sanitization: ${e.message}`);
+            this.logger.warn(`Failed to parse database URL for pg_dump: ${e.message}`);
+            return dbUrl;
         }
+    }
+
+    async createSqlBackup(sharedTimestamp?: string) {
+        const { fileName, filePath } = this.getBackupInfo('SQL', sharedTimestamp);
+        const sanitizedUrl = this.getDumpDatabaseUrl();
 
         this.logger.log(`Starting SQL database backup: ${fileName} (PKT)`);
 
         try {
-            await execPromise(`pg_dump "${sanitizedUrl}" --no-owner --no-privileges -f "${rawPath}"`);
-            this.logger.log(`SQL data extracted via pg_dump`);
+            // Stream pg_dump stdout directly into createGzip() and write only the compressed file to disk.
+            // Avoids shell maxBuffer limit and avoids writing 300+ MB uncompressed SQL to disk.
+            const dumpProcess = spawn('pg_dump', [
+                sanitizedUrl,
+                '--no-owner',
+                '--no-privileges',
+            ], {
+                env: process.env,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
 
-            return await this.finalizeBackup(rawPath, filePath, fileName);
+            let stderrOutput = '';
+            dumpProcess.stderr.on('data', (chunk) => {
+                stderrOutput += chunk.toString();
+            });
+
+            const exitPromise = new Promise<void>((resolve, reject) => {
+                dumpProcess.on('close', (code) => {
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        reject(new Error(`pg_dump exited with code ${code}: ${stderrOutput.trim()}`));
+                    }
+                });
+                dumpProcess.on('error', (err) => {
+                    reject(new Error(`Failed to start pg_dump process: ${err.message}`));
+                });
+            });
+
+            const gzipStream = createGzip({ level: 6 });
+            const fileWriteStream = createWriteStream(filePath);
+
+            await Promise.all([
+                pipeline(dumpProcess.stdout, gzipStream, fileWriteStream),
+                exitPromise,
+            ]);
+
+            this.logger.log(`SQL data extracted and compressed: ${fileName}`);
+
+            const storageKey = `backups/${fileName}`;
+            const publicUrl = await this.storage.upload(
+                storageKey,
+                createReadStream(filePath),
+                'application/gzip',
+            );
+
+            this.logger.log(`SQL backup uploaded successfully: ${publicUrl}`);
+            await unlink(filePath).catch(() => undefined);
+
+            return {
+                fileName,
+                storageKey,
+                url: publicUrl,
+            };
         } catch (error: any) {
+            await unlink(filePath).catch(() => undefined);
             this.logger.error(`SQL Backup process failed: ${error.message}`);
             throw new InternalServerErrorException(`Database backup failed: ${error.message}`);
         }
@@ -222,9 +303,6 @@ export class BackupsService implements OnModuleInit {
                 await writeChunk(stream, '[');
 
                 try {
-                    // Page through the table. A single SELECT * on zk_attendance_scans /
-                    // audit_logs loaded hundreds of MB into V8 and GC-froze the process
-                    // for minutes (getrequest 499s with no error log).
                     let offset = 0;
                     let firstRow = true;
                     for (;;) {
@@ -270,6 +348,10 @@ export class BackupsService implements OnModuleInit {
         }
     }
 
+    /**
+     * Lists backups from Spaces, paginating through all ContinuationTokens
+     * so that the full history is retrieved beyond the 1,000 object limit.
+     */
     async listBackups() {
         const client = (this.storage as any).client as S3Client;
         const bucket = (this.storage as any).bucket;
@@ -280,16 +362,25 @@ export class BackupsService implements OnModuleInit {
         }
 
         try {
-            const command = new ListObjectsV2Command({
-                Bucket: bucket,
-                Prefix: 'backups/',
-            });
+            const allContents: any[] = [];
+            let continuationToken: string | undefined = undefined;
 
-            const response = await client.send(command);
-            const contents = response.Contents || [];
+            do {
+                const command = new ListObjectsV2Command({
+                    Bucket: bucket,
+                    Prefix: 'backups/',
+                    ContinuationToken: continuationToken,
+                });
 
-            return contents
-                .filter((item) => item.Key !== 'backups/')
+                const response: ListObjectsV2CommandOutput = await client.send(command);
+                if (response.Contents) {
+                    allContents.push(...response.Contents);
+                }
+                continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+            } while (continuationToken);
+
+            return allContents
+                .filter((item) => item.Key && item.Key !== 'backups/')
                 .map((item) => ({
                     key: item.Key,
                     fileName: item.Key?.replace('backups/', ''),
@@ -329,5 +420,44 @@ export class BackupsService implements OnModuleInit {
             changed_by: changedBy,
             note: `Deleted backup ${sanitizedKey.split('/').pop() ?? sanitizedKey}.`,
         });
+    }
+
+    /**
+     * Alert super admins via Audit Log and FCM push when automated backup fails.
+     */
+    async notifyBackupFailure(actor: string, errorMessage: string) {
+        try {
+            await this.auditLogs.log({
+                entity_type: 'BACKUP',
+                entity_id: 'automated-job',
+                action: 'FAILED',
+                changed_by: actor,
+                note: `Database backup failed: ${errorMessage.slice(0, 500)}`,
+            });
+        } catch (logErr: any) {
+            this.logger.warn(`Failed to write backup failure audit log: ${logErr.message}`);
+        }
+
+        try {
+            const superAdmins = await this.prisma.users.findMany({
+                where: {
+                    role: StaffRole.SUPER_ADMIN,
+                    is_active: true,
+                    deleted_at: null,
+                },
+                select: { id: true },
+            });
+
+            if (superAdmins.length > 0) {
+                await this.fcmService.sendToUsers(
+                    superAdmins.map((u) => u.id),
+                    'Database Backup Failed',
+                    `Automated database backup failed: ${errorMessage.slice(0, 150)}`,
+                    { type: 'BACKUP_FAILED' },
+                );
+            }
+        } catch (fcmErr: any) {
+            this.logger.warn(`Failed to push backup failure notification: ${fcmErr.message}`);
+        }
     }
 }

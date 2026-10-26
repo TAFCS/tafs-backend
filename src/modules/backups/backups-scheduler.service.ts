@@ -24,8 +24,9 @@ export class BackupsSchedulerService {
             this.logger.log(
                 `[Backup Scheduler] Scheduled backup completed: ${result.sql.fileName}`,
             );
-        } catch (error) {
+        } catch (error: any) {
             this.logger.error(`[Backup Scheduler] Scheduled backup failed: ${error.message}`);
+            await this.backupsService.notifyBackupFailure('scheduled-job', error.message);
         }
     }
 }
