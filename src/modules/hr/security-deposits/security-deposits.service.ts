@@ -103,23 +103,23 @@ export class SecurityDepositsService {
   }
 
   /**
-   * The current cycle — unless the cycle that just ended is still an open
-   * (unfinalized) real draft for this employee, in which case that payroll
-   * is about to run and would otherwise skip the deposit. A cycle paid
-   * outside the system has no draft, so it is never picked by mistake.
+   * Earliest cycle a new plan may start in. The cycle that just ended stays
+   * open until this employee's real payroll for it is finalized, so a plan
+   * recorded on the 27th can still be taken from that month's salary
+   * (TAFSD-435).
    */
   private async defaultStartFor(employeeId: number): Promise<Date> {
     const current = currentCycleStart();
     const previous = shiftCycleStart(current, -1);
-    const openDraft = await this.prisma.payroll_run_lines.findFirst({
+    const finalized = await this.prisma.payroll_run_lines.findFirst({
       where: {
         employee_id: employeeId,
-        finalized_at: null,
+        finalized_at: { not: null },
         payroll_runs: { period_start: previous, is_test: false },
       },
       select: { id: true },
     });
-    return openDraft ? previous : current;
+    return finalized ? current : previous;
   }
 
   async listOpen(user: IJwtStaffPayload, status?: SecurityDepositStatus) {

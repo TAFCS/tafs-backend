@@ -41,6 +41,10 @@ function currentCycleStart(): Date {
   return computePayrollWindow(year, month).periodStart;
 }
 
+function shiftCycleStart(periodStart: Date, months: number): Date {
+  return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + months, 26));
+}
+
 /** Snaps any date to the start of the 26th-25th cycle that contains it. */
 function snapToCycleStart(date: Date): Date {
   const y = date.getUTCFullYear();
@@ -99,8 +103,28 @@ export class EmployeeLoansService {
     return {
       current: current ? this.serializeLoan(current) : null,
       history: history.map((l) => this.serializeLoan(l)),
-      default_start_period_start: dateOnly(currentCycleStart()),
+      default_start_period_start: dateOnly(await this.defaultStartFor(employeeId)),
     };
+  }
+
+  /**
+   * Earliest cycle a new loan may start in. The cycle that just ended stays
+   * open until this employee's real payroll for it is finalized, so a loan
+   * recorded on the 27th can still be recovered from that month's salary
+   * (TAFSD-435).
+   */
+  private async defaultStartFor(employeeId: number): Promise<Date> {
+    const current = currentCycleStart();
+    const previous = shiftCycleStart(current, -1);
+    const finalized = await this.prisma.payroll_run_lines.findFirst({
+      where: {
+        employee_id: employeeId,
+        finalized_at: { not: null },
+        payroll_runs: { period_start: previous, is_test: false },
+      },
+      select: { id: true },
+    });
+    return finalized ? current : previous;
   }
 
   async listOpen(user: IJwtStaffPayload, status?: LoanStatus) {
@@ -163,7 +187,7 @@ export class EmployeeLoansService {
       : new Date(`${dateOnly(new Date())}T00:00:00.000Z`);
     const start = dto.start_period_start
       ? snapToCycleStart(new Date(`${dto.start_period_start.slice(0, 10)}T00:00:00.000Z`))
-      : currentCycleStart();
+      : await this.defaultStartFor(employeeId);
 
     await this.prisma.$transaction(async (tx) => {
       let loan: employee_loans;
