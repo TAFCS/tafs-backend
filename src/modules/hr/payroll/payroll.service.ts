@@ -11,7 +11,7 @@ import { EmployeeExpectedTimesService } from '../../timetables/employee-expected
 import { StorageService } from '../../../common/storage/storage.service';
 import { AttendanceMatrixQueryDto, GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
-import { computePayrollWindow } from './payroll-period.util';
+import { computePayrollWindow, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
 import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
@@ -67,6 +67,8 @@ export interface DayBreakdownEntry {
   check_out_at: string | null;
   break_minutes: number;
   late_minutes: number;
+  /** TAFSD-434: minutes checked out before the expected leaving time. Absent on lines computed before. */
+  early_leave_minutes?: number;
   source: AttendanceSource | null;
   segments?: { type: string; start: string; end: string; isMissingOut?: boolean }[];
   /** Raw device punches for the day, kept even when a manual override replaces them. */
@@ -99,6 +101,7 @@ interface ComputedLine {
   unresolved_days: number;
   total_break_minutes: number;
   total_late_minutes: number;
+  total_early_leave_minutes: number;
   total_overtime_minutes: number;
   overtime_days: number;
   scheduled_minutes_per_day: number;
@@ -108,6 +111,7 @@ interface ComputedLine {
   absence_deduction: Prisma.Decimal;
   half_day_deduction: Prisma.Decimal;
   late_deduction: Prisma.Decimal;
+  early_leave_deduction: Prisma.Decimal;
   break_deduction: Prisma.Decimal;
   eobi_deduction: Prisma.Decimal;
   income_tax_deduction: Prisma.Decimal;
@@ -651,6 +655,23 @@ export class PayrollService {
         lateMinutes = rawLate > relaxation ? rawLate : 0;
       }
 
+      // TAFSD-434: checking out before the expected leaving time is deducted
+      // per minute, like arriving late but with no grace window. A shift
+      // override that moves check-out earlier is approved early leave: it
+      // has already moved expectedCheckOut, so it costs nothing.
+      let earlyLeaveMinutes = 0;
+      if (
+        resolved.isWorkingDay &&
+        (classification === 'PRESENT' || classification === 'LATE') &&
+        checkOutAt &&
+        expected.expectedCheckOut
+      ) {
+        const leavingMinutes =
+          expected.expectedCheckOut.getUTCHours() * 60 + expected.expectedCheckOut.getUTCMinutes();
+        const checkOutMinutes = checkOutAt.getUTCHours() * 60 + checkOutAt.getUTCMinutes();
+        earlyLeaveMinutes = Math.max(0, leavingMinutes - checkOutMinutes);
+      }
+
       dailyBreakdown.push({
         date: key,
         is_working_day: resolved.isWorkingDay,
@@ -661,6 +682,7 @@ export class PayrollService {
         check_out_at: checkOutAt?.toISOString() ?? null,
         break_minutes: manualClearsPunches ? 0 : breakMinutes,
         late_minutes: lateMinutes,
+        early_leave_minutes: earlyLeaveMinutes,
         source: record?.source ?? (dayScans.length ? AttendanceSource.BIOMETRIC : null),
         segments,
         punches: dayScans.map((s) => ({
@@ -692,6 +714,7 @@ export class PayrollService {
     const unresolvedDays = dailyBreakdown.filter((d) => d.classification === 'UNRESOLVED').length;
     const totalBreakMinutes = dailyBreakdown.reduce((sum, d) => sum + d.break_minutes, 0);
     const totalLateMinutes = dailyBreakdown.reduce((sum, d) => sum + d.late_minutes, 0);
+    const totalEarlyLeaveMinutes = dailyBreakdown.reduce((sum, d) => sum + (d.early_leave_minutes ?? 0), 0);
     // Overtime is read back out of the segments already built above rather
     // than recomputed separately — one classification pass stays the single
     // source of truth for every aggregate, overtime included.
@@ -734,13 +757,25 @@ export class PayrollService {
       periodStart.getTime() >= PAY_BY_EFFECTIVE_DATE_FROM.getTime() &&
       [...dayPay.values()].some((v) => !v.equals([...dayPay.values()][0]));
 
-    const monthlyPay = payVaries && totalCalendarDays > 0
-      ? [...dayPay.values()].reduce((sum, v) => sum.plus(v), new Prisma.Decimal(0)).dividedBy(totalCalendarDays)
-      : profilePay;
-    const dailyRate = totalCalendarDays > 0 ? monthlyPay.dividedBy(totalCalendarDays) : new Prisma.Decimal(0);
-    /** The daily rate on one date: that day's pay over the cycle's days. */
+    const payDaySum = [...dayPay.values()].reduce((sum, v) => sum.plus(v), new Prisma.Decimal(0));
+    /** One month's salary, averaged across the cycle when pay changes mid-cycle. */
+    const fullMonthPay = payVaries && totalCalendarDays > 0 ? payDaySum.dividedBy(totalCalendarDays) : profilePay;
+    // TAFSD-434: a range that isn't a whole pay month (e.g. an 8-day custom
+    // run) earns each day at monthly pay / days in its starting month, capped
+    // at one month's pay — not the full salary with an inflated daily rate.
+    const partialDivisor = partialMonthDivisor(periodStart, periodEnd);
+    const rateDivisor = partialDivisor ?? totalCalendarDays;
+    const monthlyPay =
+      partialDivisor == null
+        ? fullMonthPay
+        : Prisma.Decimal.min(
+            fullMonthPay,
+            (payVaries ? payDaySum : profilePay.times(totalCalendarDays)).dividedBy(partialDivisor),
+          );
+    const dailyRate = rateDivisor > 0 ? fullMonthPay.dividedBy(rateDivisor) : new Prisma.Decimal(0);
+    /** The daily rate on one date: that day's pay over the rate divisor. */
     const rateOn = (key: string) =>
-      payVaries && totalCalendarDays > 0 ? (dayPay.get(key) ?? profilePay).dividedBy(totalCalendarDays) : dailyRate;
+      payVaries && rateDivisor > 0 ? (dayPay.get(key) ?? profilePay).dividedBy(rateDivisor) : dailyRate;
 
     // Prefer the average Mon–Fri window across the cycle, each weekday judged
     // by the timings in effect on it (TAFSD-277); fall back to profile FIXED times.
@@ -795,6 +830,13 @@ export class PayrollService {
           ? sumDays((d) => d.late_minutes).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalLateMinutes);
+    const earlyLeaveDeduction = fullPayOverride
+      ? zero
+      : payVaries
+        ? minuteRateDivisor
+          ? sumDays((d) => d.early_leave_minutes ?? 0).dividedBy(minuteRateDivisor)
+          : zero
+        : perMinuteRate.times(totalEarlyLeaveMinutes);
     const breakDeduction = fullPayOverride
       ? zero
       : payVaries
@@ -835,13 +877,18 @@ export class PayrollService {
       },
       { eobi: eobiExempt || waivers.eobi, sessi: sessiExempt || waivers.sessi },
     );
+    // Tax is assessed on the annualised full salary; a partial-month range
+    // owes the same share of it as it earns of the month (TAFSD-434).
     const incomeTaxDeduction = !waivers.income_tax && incomeTaxValue.slabs
-      ? calculateMonthlyIncomeTax(monthlyPay.times(12).toNumber(), incomeTaxValue.slabs)
+      ? calculateMonthlyIncomeTax(fullMonthPay.times(12).toNumber(), incomeTaxValue.slabs)
+          .times(fullMonthPay.isZero() ? 1 : monthlyPay.dividedBy(fullMonthPay))
+          .toDecimalPlaces(2)
       : new Prisma.Decimal(0);
 
     const totalDeductions = absenceDeduction
       .plus(halfDayDeduction)
       .plus(lateDeduction)
+      .plus(earlyLeaveDeduction)
       .plus(breakDeduction)
       .plus(afterLeavingDeduction)
       .plus(eobiDeduction)
@@ -863,6 +910,7 @@ export class PayrollService {
       unresolved_days: unresolvedDays,
       total_break_minutes: totalBreakMinutes,
       total_late_minutes: totalLateMinutes,
+      total_early_leave_minutes: totalEarlyLeaveMinutes,
       total_overtime_minutes: Math.round(totalOvertimeMinutes),
       overtime_days: overtimeDays,
       // Standard 8h workday only when this employee's schedule can't be
@@ -875,6 +923,7 @@ export class PayrollService {
       absence_deduction: absenceDeduction.toDecimalPlaces(2),
       half_day_deduction: halfDayDeduction.toDecimalPlaces(2),
       late_deduction: lateDeduction.toDecimalPlaces(2),
+      early_leave_deduction: earlyLeaveDeduction.toDecimalPlaces(2),
       break_deduction: breakDeduction.toDecimalPlaces(2),
       eobi_deduction: eobiDeduction,
       income_tax_deduction: incomeTaxDeduction,
@@ -2246,6 +2295,7 @@ export class PayrollService {
       { header: 'Absent / Unpaid', width: 16, getValue: (l) => l.absent_days + (l.unpaid_leave_days ?? 0) },
       { header: 'Unresolved', width: 12, getValue: (l) => l.unresolved_days },
       { header: 'Late (min)', width: 12, getValue: (l) => l.total_late_minutes },
+      { header: 'Left early (min)', width: 16, getValue: (l) => l.total_early_leave_minutes },
       { header: 'Break (min)', width: 12, getValue: (l) => l.total_break_minutes },
       { header: 'Daily Rate', width: 14, getValue: (l) => Number(l.daily_rate) },
       { header: 'Total Pay', width: 14, getValue: (l) => Number(l.monthly_pay) },
@@ -2681,6 +2731,7 @@ export class PayrollService {
       absence_deduction: Number(line.absence_deduction),
       half_day_deduction: Number(line.half_day_deduction),
       late_deduction: Number(line.late_deduction),
+      early_leave_deduction: Number(line.early_leave_deduction),
       break_deduction: Number(line.break_deduction),
       sandwich_deduction: Number(line.sandwich_deduction),
       after_leaving_deduction: Number(line.after_leaving_deduction),
@@ -2905,6 +2956,7 @@ export class PayrollService {
           unpaidLeaveDays: line.unpaid_leave_days,
           totalBreakMinutes: line.total_break_minutes,
           totalLateMinutes: line.total_late_minutes,
+          totalEarlyLeaveMinutes: line.total_early_leave_minutes,
         },
         pay: {
           monthlyPay: Number(line.monthly_pay),
@@ -2912,6 +2964,7 @@ export class PayrollService {
           absenceDeduction: Number(line.absence_deduction),
           halfDayDeduction: Number(line.half_day_deduction),
           lateDeduction: Number(line.late_deduction),
+          earlyLeaveDeduction: Number(line.early_leave_deduction),
           breakDeduction: Number(line.break_deduction),
           sandwichDeduction: Number(line.sandwich_deduction),
           afterLeavingDeduction: Number(line.after_leaving_deduction),

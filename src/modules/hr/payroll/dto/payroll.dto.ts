@@ -46,9 +46,10 @@ export class GeneratePayrollRunDto {
 
 /**
  * TAFSD-271: a custom run pays hand-picked employees over any date range
- * (e.g. 1st -> 30th for O/A part-time teachers). The range is treated as one
- * salary month: monthly pay is earned in full, and per-day deductions use
- * monthly pay / days in the range. Employees on several campuses get one run
+ * (e.g. 1st -> 30th for O/A part-time teachers). A range that is a whole
+ * calendar month (or a 26th -> 25th cycle) earns the full monthly pay; any
+ * other range earns monthly pay / days in its starting month per day, capped
+ * at one month's pay (TAFSD-434). Employees on several campuses get one run
  * per campus. Nobody may already be on another real run whose dates overlap.
  */
 export class GenerateCustomPayrollRunDto {

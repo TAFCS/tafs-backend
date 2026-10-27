@@ -152,6 +152,8 @@ export interface PayslipPDFProps {
     unpaidLeaveDays: number;
     totalBreakMinutes: number;
     totalLateMinutes: number;
+    /** TAFSD-434. Optional so payslips rendered from older lines still type-check. */
+    totalEarlyLeaveMinutes?: number;
   };
   pay: {
     monthlyPay: number;
@@ -159,6 +161,7 @@ export interface PayslipPDFProps {
     absenceDeduction: number;
     halfDayDeduction: number;
     lateDeduction: number;
+    earlyLeaveDeduction?: number;
     breakDeduction: number;
     sandwichDeduction: number;
     afterLeavingDeduction: number;
@@ -284,6 +287,14 @@ export const PayslipPDF = ({ employee, period, attendance, pay, overtime, netPai
           <View style={styles.tableRow}>
             <Text style={styles.colLabel}>Late Deduction (minutes arrived after grace period)</Text>
             <Text style={styles.deductionValue}>-{money(pay.lateDeduction)}</Text>
+          </View>
+        )}
+        {(pay.earlyLeaveDeduction ?? 0) > 0 && (
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>
+              Early Leave Deduction ({attendance.totalEarlyLeaveMinutes ?? 0}m left before leaving time)
+            </Text>
+            <Text style={styles.deductionValue}>-{money(pay.earlyLeaveDeduction ?? 0)}</Text>
           </View>
         )}
         {pay.breakDeduction > 0 && (
