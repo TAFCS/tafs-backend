@@ -1118,7 +1118,7 @@ export class StaffAttendanceService {
     const actorName = (v: string | null) => {
       if (!v) return null;
       const u = userById.get(v) ?? userByUsername.get(v);
-      return u ? u.full_name?.trim() || u.username : v === 'zk-device' ? 'ZK Device' : v;
+      return u ? u.full_name?.trim() || u.username : v === 'zk-device' ? 'Biometric device' : v;
     };
 
     return {

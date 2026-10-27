@@ -3,7 +3,7 @@ export const AUDIT_ACTOR_UUID_RE =
 
 /** Human-readable labels for non-user system actors stored in audit_logs.changed_by. */
 export const AUDIT_SYSTEM_ACTOR_LABELS: Record<string, string> = {
-  'zk-device': 'ZK Device',
+  'zk-device': 'Biometric device',
   system: 'System',
   'meezan-bank': 'Meezan Bank',
   'ubl-bank': 'UBL',
