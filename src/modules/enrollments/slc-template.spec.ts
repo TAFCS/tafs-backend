@@ -3,6 +3,7 @@ import {
   PAGE_HEIGHT,
   PAGE_WIDTH,
   SLC_TEMPLATES,
+  SLC_STAMP_COORDINATES,
   fillLeavingCertificate,
   resolveSlcTemplate,
   type SlcCertificateData,
@@ -108,7 +109,8 @@ describe('leaving-certificate templates', () => {
 
   it.each(templates.map((t) => [t.id, t] as const))(
     '%s: keeps every mapped rule and box inside the page',
-    (id, { rules, boxes }) => {
+    (id, { rules, boxes, stampFile }) => {
+      expect(stampFile).toMatch(/^stamp-.*\.png$/);
       for (const [name, rule] of Object.entries(rules)) {
         const key = `${id}.${name}`;
         expect(`${key}:${rule.x0 >= 0 && rule.x1 <= PAGE_WIDTH}`).toBe(`${key}:true`);
@@ -127,4 +129,17 @@ describe('leaving-certificate templates', () => {
       }
     },
   );
+
+  it('keeps the school stamp inside page boundaries and overlaps photo box', () => {
+    const { x, y, width, height } = SLC_STAMP_COORDINATES;
+    expect(x).toBeGreaterThan(0);
+    expect(x + width).toBeLessThan(PAGE_WIDTH);
+    expect(y).toBeGreaterThan(0);
+    expect(y + height).toBeLessThan(PAGE_HEIGHT);
+
+    // Overlaps the right edge of photo box (x0: 51.44, x1: 170.51)
+    expect(x).toBeLessThan(170.51);
+    expect(x + width).toBeGreaterThan(170.51);
+  });
 });
+

@@ -181,6 +181,8 @@ export interface SlcTemplate {
   id: SlcTemplateId;
   /** File name inside `slc-formats/`. */
   file: string;
+  /** Stamp image file name inside `src/assets/stamps/`. */
+  stampFile: string;
   /** The segment the blank is printed for — its title and COMPUTER CODE prefix. */
   prefix: 'TAFSAL' | 'TAFSS';
   /**
@@ -196,6 +198,7 @@ export const SLC_TEMPLATES: Record<SlcTemplateId, SlcTemplate> = {
   'tafsal-jauhar': {
     id: 'tafsal-jauhar',
     file: 'slc-tafsal-jauhar.pdf',
+    stampFile: 'stamp-tafsal-jauhar.png',
     prefix: 'TAFSAL',
     codePrefixEnd: 106.16,
     rules: RULES,
@@ -204,6 +207,7 @@ export const SLC_TEMPLATES: Record<SlcTemplateId, SlcTemplate> = {
   'tafsal-kaneez-fatima': {
     id: 'tafsal-kaneez-fatima',
     file: 'slc-tafsal-kaneez-fatima.pdf',
+    stampFile: 'stamp-tafsal-kaneez-fatima.png',
     prefix: 'TAFSAL',
     codePrefixEnd: 106.16,
     rules: RULES,
@@ -212,6 +216,7 @@ export const SLC_TEMPLATES: Record<SlcTemplateId, SlcTemplate> = {
   'tafsal-north-nazimabad': {
     id: 'tafsal-north-nazimabad',
     file: 'slc-tafsal-north-nazimabad.pdf',
+    stampFile: 'stamp-tafsal-north-nazimabad.png',
     prefix: 'TAFSAL',
     codePrefixEnd: 106.16,
     rules: RULES,
@@ -220,6 +225,7 @@ export const SLC_TEMPLATES: Record<SlcTemplateId, SlcTemplate> = {
   'tafss-jauhar': {
     id: 'tafss-jauhar',
     file: 'slc-tafss-jauhar.pdf',
+    stampFile: 'stamp-tafss-jauhar.png',
     prefix: 'TAFSS',
     codePrefixEnd: 96.8,
     rules: TAFSS_RULES,
@@ -539,6 +545,7 @@ export async function fillLeavingCertificate(
   onRule(RULE.date, data.date);
 
   await drawPhotograph(pdfDoc, page, BOX.photo, data.photograph_base64);
+  await drawSchoolStamp(pdfDoc, page, template);
 
   return pdfDoc.save();
 }
@@ -575,5 +582,56 @@ async function drawPhotograph(
     });
   } catch {
     /* unreadable photo — print the certificate without it */
+  }
+}
+
+/**
+ * Official school stamp coordinates measured directly off the school's CorelDRAW
+ * artwork export (`slc-formats/School Leaving Certificate.cdr 2027.pdf`, where
+ * the attestation stamp sits at x: 144.78, y: 43.67, w: 120.75, h: 120.75).
+ * The circular stamp overlaps the bottom-right of the photo box (from x = 144.78
+ * to x = 170.51) and extends into the issuance block (up to x = 265.53), exactly
+ * as an in-person ink attestation stamp is applied across the photo edge.
+ */
+export const SLC_STAMP_COORDINATES = {
+  x: 144.78,
+  y: 43.67, // pdf-lib bottom-left origin
+  width: 120.75,
+  height: 120.75,
+};
+
+const resolveStampPath = (file: string): string => {
+  const candidates = [
+    join(process.cwd(), 'src', 'assets', 'stamps', file),
+    join(__dirname, '..', '..', 'assets', 'stamps', file),
+  ];
+  for (const p of candidates) {
+    try {
+      readFileSync(p);
+      return p;
+    } catch {
+      /* try next */
+    }
+  }
+  throw new Error(`Stamp image ${file} not found. Looked in: ${candidates.join(', ')}`);
+};
+
+async function drawSchoolStamp(
+  pdfDoc: PDFDocument,
+  page: PDFPage,
+  template: SlcTemplate,
+): Promise<void> {
+  try {
+    const stampPath = resolveStampPath(template.stampFile);
+    const stampBytes = readFileSync(stampPath);
+    const stampImage = await pdfDoc.embedPng(stampBytes);
+    page.drawImage(stampImage, {
+      x: SLC_STAMP_COORDINATES.x,
+      y: SLC_STAMP_COORDINATES.y,
+      width: SLC_STAMP_COORDINATES.width,
+      height: SLC_STAMP_COORDINATES.height,
+    });
+  } catch {
+    /* missing stamp image should not abort certificate generation */
   }
 }

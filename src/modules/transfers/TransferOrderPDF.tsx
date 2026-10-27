@@ -45,14 +45,44 @@ const styles = StyleSheet.create({
     copiesToText: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', textAlign: 'center', marginBottom: 6, borderTopWidth: 0.5, borderTopColor: '#000', paddingTop: 4 },
     ccListItem: { fontSize: 7.5, marginBottom: 1 },
     segmentHeadRow: { flexDirection: 'row', alignItems: 'center' },
-    signatureSection: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 28 },
-    stampBox: { width: 80, height: 40, borderWidth: 0.5, borderColor: '#aaa', borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
+    signatureSection: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 16 },
+    stampBox: { width: 75, height: 75, justifyContent: 'center', alignItems: 'center' },
+    stampImage: { width: 75, height: 75, objectFit: 'contain' },
     stampLabel: { fontSize: 7, color: '#aaa', textTransform: 'uppercase' },
     signatureBlock: { alignItems: 'center', minWidth: 130 },
     signatureLine: { borderTopWidth: 1, borderTopColor: '#000', width: '100%', paddingTop: 3, alignItems: 'center' },
     signatureName: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', textTransform: 'uppercase', textAlign: 'center' },
     signatureTitle: { fontSize: 7, textAlign: 'center' },
 });
+
+export function resolveTransferStampPath(data: TransferOrderPDFData): string | null {
+    const campusStr = `${data.campus_number || ''} ${data.campus_name || ''} ${data.transfer_to || ''}`.toUpperCase();
+    
+    let stampFilename = 'stamp-tafsal-jauhar.png';
+    if (campusStr.includes('KANEEZ') || campusStr.includes('FATIMA') || campusStr.includes('KNF') || campusStr.includes('CAMPUS-2') || campusStr.includes('CAMPUS 2')) {
+        stampFilename = 'stamp-tafsal-kaneez-fatima.png';
+    } else if (campusStr.includes('NORTH') || campusStr.includes('NAZIMABAD') || campusStr.includes('NNZ') || campusStr.includes('CAMPUS-3') || campusStr.includes('CAMPUS 3')) {
+        stampFilename = 'stamp-tafsal-north-nazimabad.png';
+    } else {
+        const system = `${data.discipline || ''} ${data.class_name || ''}`.toUpperCase();
+        if (system.includes('MATRIC') || system.includes('SECONDARY') || /\b(VI|VII|VIII|IX|X)\b/.test(system)) {
+            stampFilename = 'stamp-tafss-jauhar.png';
+        } else {
+            stampFilename = 'stamp-tafsal-jauhar.png';
+        }
+    }
+
+    const candidates = [
+        path.join(process.cwd(), 'src', 'assets', 'stamps', stampFilename),
+        path.join(__dirname, '..', '..', 'assets', 'stamps', stampFilename),
+    ];
+    for (const c of candidates) {
+        try {
+            if (require('fs').existsSync(c)) return c;
+        } catch {}
+    }
+    return candidates[0];
+}
 
 const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return '';
@@ -102,6 +132,7 @@ export interface TransferOrderPDFData {
 export const TransferOrderPDF = ({ data }: { data: TransferOrderPDFData }) => {
     const isMale = data.gender?.toUpperCase() === 'MALE';
     const isFemale = data.gender?.toUpperCase() === 'FEMALE';
+    const stampPath = resolveTransferStampPath(data);
 
     return (
         <Document>
@@ -220,7 +251,13 @@ export const TransferOrderPDF = ({ data }: { data: TransferOrderPDFData }) => {
                             </View>
 
                             <View style={styles.signatureSection}>
-                                <View style={styles.stampBox}><Text style={styles.stampLabel}>School Stamp</Text></View>
+                                <View style={styles.stampBox}>
+                                    {stampPath ? (
+                                        <Image src={stampPath} style={styles.stampImage} />
+                                    ) : (
+                                        <Text style={styles.stampLabel}>School Stamp</Text>
+                                    )}
+                                </View>
                                 <View style={styles.signatureBlock}>
                                     <View style={styles.signatureLine}>
                                         <Text style={styles.signatureName}>MRS. ASIEA SOMROO</Text>
