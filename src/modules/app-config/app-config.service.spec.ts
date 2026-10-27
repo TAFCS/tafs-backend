@@ -354,39 +354,46 @@ describe('AppConfigService', () => {
       userType: 'STAFF',
     };
 
-    it('forbids staff lacking developer_settings#edit from editing developer keys', async () => {
+    it('forbids staff lacking developer_settings#edit from editing developer keys and names key in 403', async () => {
       await expect(
-        service.setConfig('staff_maintenance_mode', 'true', notifManagerUser),
-      ).rejects.toThrow(ForbiddenException);
+        service.setConfig('maintenance_mode', 'true', notifManagerUser),
+      ).rejects.toThrow(new ForbiddenException('Missing permission: system.developer_settings#edit is required to modify "maintenance_mode".'));
+
+      await expect(
+        service.setConfig('pay_immediately_enabled', 'false', notifManagerUser),
+      ).rejects.toThrow(new ForbiddenException('Missing permission: system.developer_settings#edit is required to modify "pay_immediately_enabled".'));
+
+      await expect(
+        service.setConfig('attendance_same_day_override_cutoff', '16:00', notifManagerUser),
+      ).rejects.toThrow(new ForbiddenException('Missing permission: system.developer_settings#edit is required to modify "attendance_same_day_override_cutoff".'));
 
       await expect(
         service.setConfig('parent_min_android_build', '46', regularStaffUser),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(new ForbiddenException('Missing permission: system.developer_settings#edit is required to modify "parent_min_android_build".'));
     });
 
-    it('forbids staff lacking notification_templates#edit from editing template keys', async () => {
+    it('forbids staff lacking notification_templates#edit from editing template keys and names key in 403', async () => {
       await expect(
         service.setConfig('notif_fee_issued_title', 'New Fee Voucher', devAdminUser),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(new ForbiddenException('Missing permission: communication.notification_templates#edit is required to modify notification template "notif_fee_issued_title".'));
 
       await expect(
         service.setConfig('notif_fee_issued_body', 'Pay fees', regularStaffUser),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(new ForbiddenException('Missing permission: communication.notification_templates#edit is required to modify notification template "notif_fee_issued_body".'));
     });
 
-    it('restricts developer settings keys strictly to SUPER_ADMIN', async () => {
-      await expect(
-        service.setConfig('staff_maintenance_mode', 'true', devAdminUser),
-      ).rejects.toThrow(ForbiddenException);
-
-      const result = await service.setConfig('staff_maintenance_mode', 'true', superAdminUser);
+    it('allows staff holding developer_settings#edit to update developer keys', async () => {
+      const result = await service.setConfig('staff_maintenance_mode', 'true', devAdminUser);
       expect(result).toBeDefined();
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 
-    it('allows staff holding notification_templates#edit to update notification templates', async () => {
-      const result = await service.setConfig('notif_fee_issued_title', 'New Fee Voucher', notifManagerUser);
-      expect(result).toBeDefined();
+    it('allows staff holding notification_templates#edit to update notification templates and disabled flags', async () => {
+      const resultTitle = await service.setConfig('notif_fee_issued_title', 'New Fee Voucher', notifManagerUser);
+      expect(resultTitle).toBeDefined();
+
+      const resultDisabled = await service.setConfig('notif_fee_issued_disabled', 'true', notifManagerUser);
+      expect(resultDisabled).toBeDefined();
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 

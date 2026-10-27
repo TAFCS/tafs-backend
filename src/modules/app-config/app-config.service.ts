@@ -443,21 +443,27 @@ export class AppConfigService {
       throw new ForbiddenException('Staff authentication required.');
     }
 
+    const isSuperAdmin = user.role === StaffRole.SUPER_ADMIN;
+
     if (isNotificationTemplateKey(key)) {
-      const isSuperAdmin = user.role === StaffRole.SUPER_ADMIN;
-      const holdsAction = actionsCover(new Set(user.actions ?? []), 'communication.notification_templates#edit');
-      if (!isSuperAdmin && !holdsAction) {
+      const holdsAction =
+        isSuperAdmin ||
+        actionsCover(new Set(user.actions ?? []), 'communication.notification_templates#edit');
+      if (!holdsAction) {
         throw new ForbiddenException(
-          'Missing permission: communication.notification_templates#edit is required to modify notification templates.',
+          `Missing permission: communication.notification_templates#edit is required to modify notification template "${key}".`,
         );
       }
       return;
     }
 
     if (DEVELOPER_SETTINGS_KEYS.has(key)) {
-      if (user.role !== StaffRole.SUPER_ADMIN) {
+      const holdsAction =
+        isSuperAdmin ||
+        actionsCover(new Set(user.actions ?? []), 'system.developer_settings#edit');
+      if (!holdsAction) {
         throw new ForbiddenException(
-          'Developer settings keys (app version, store, maintenance, and system switches) are restricted to SUPER_ADMIN only.',
+          `Missing permission: system.developer_settings#edit is required to modify "${key}".`,
         );
       }
       return;
