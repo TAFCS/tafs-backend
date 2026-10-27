@@ -538,8 +538,8 @@ describe('Scope on the policy tiles', () => {
 
   describe('Staff Attendance Controller (post Staff Register / Employee Attendance tile removal — TAFSD-270)', () => {
     it('removes the Staff Register and Employee Attendance tiles from the manifest', () => {
-      expect(() => tile('attendance.staff_register')).toThrow();
-      expect(() => tile('attendance.employee_attendance')).toThrow();
+      expect(tile('attendance.staff_register')).toBeUndefined();
+      expect(tile('attendance.employee_attendance')).toBeUndefined();
     });
 
     it('gates remaining routes on Employee Attendance by Cycle (with fallbacks) or payroll permissions', () => {

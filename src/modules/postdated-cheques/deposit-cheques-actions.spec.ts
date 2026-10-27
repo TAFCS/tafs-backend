@@ -130,18 +130,17 @@ describe('Receive Deposit sub-permissions', () => {
     for (const a of deposit.actions!) expect(r.actionIds).toContain(actionKey(DEPOSIT, a.id));
   });
 
-  // A tile grant also confers the tile's own capabilities, and here that
-  // capability IS the bridge, so a bare grant means the whole tile. Same as
-  // every other tile bridged from the capability that opens it. Narrowing is
-  // done by denying the actions a person should not have.
-  it('confers the whole tile on a bare grant, and a per-action deny narrows it', () => {
+  // A bare tile grant confers default actions (view only). A role key holding
+  // the bridge capability confers every action of the tile, which a per-action
+  // deny then narrows.
+  it('confers default view on a bare grant, and a role key confers all actions which a deny narrows', () => {
     const bare = computeEffectiveAccess({ ...base, role: StaffRole.EMPLOYEE, allowTileIds: [DEPOSIT] });
-    for (const a of deposit.actions!) expect(bare.actionIds).toContain(actionKey(DEPOSIT, a.id));
+    expect(bare.actionIds).toEqual([actionKey(DEPOSIT, 'view')]);
 
     const narrowed = computeEffectiveAccess({
       ...base,
       role: StaffRole.EMPLOYEE,
-      allowTileIds: [DEPOSIT],
+      roleKeys: ['finance.deposits.record'],
       userActionGrants: [
         { tileId: DEPOSIT, actionId: 'record', allow: false },
         { tileId: DEPOSIT, actionId: 'waive', allow: false },
@@ -165,7 +164,12 @@ describe('Receive Deposit sub-permissions', () => {
     [
       'generatePdf',
       'any',
-      [actionKey(DEPOSIT, 'print'), actionKey('finance.vouchers', 'edit'), actionKey('finance.single_voucher', 'create')],
+      [
+        actionKey('finance.vouchers', 'download'),
+        actionKey(DEPOSIT, 'print'),
+        actionKey('finance.single_voucher', 'create'),
+        actionKey('finance.vouchers', 'edit'),
+      ],
     ],
     ['generateMainColumnReceipt', 'any', [actionKey(DEPOSIT, 'main_receipt'), actionKey('finance.vouchers', 'edit')]],
   ])('%s is gated as expected and names only real actions', (handler, mode, keys) => {
