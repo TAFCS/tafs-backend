@@ -313,7 +313,7 @@ export class FamiliesService {
       data: {
         household_name: dto.household_name,
         primary_address: dto.primary_address,
-        email: dto.email,
+        email: dto.email ? dto.email.toLowerCase().trim() : null,
         password_hash,
         legacy_pid: dto.legacy_pid,
       },
@@ -364,7 +364,7 @@ export class FamiliesService {
         data: {
           ...(dto.household_name !== undefined && { household_name: dto.household_name }),
           ...(dto.primary_address !== undefined && { primary_address: dto.primary_address }),
-          ...(dto.email !== undefined && { email: dto.email }),
+          ...(dto.email !== undefined && { email: dto.email ? dto.email.toLowerCase().trim() : null }),
           ...(password_hash !== undefined && { password_hash }),
           ...(dto.legacy_pid !== undefined && { legacy_pid: dto.legacy_pid }),
         },

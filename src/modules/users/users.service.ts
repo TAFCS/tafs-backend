@@ -171,8 +171,13 @@ export class UsersService {
   }
 
   async findParentByUsername(username: string) {
+    const normalized = username.toLowerCase().trim();
     return this.prisma.families.findFirst({
-      where: { email: username, deleted_at: null, password_hash: { not: null } },
+      where: {
+        email: { equals: normalized, mode: 'insensitive' },
+        deleted_at: null,
+        password_hash: { not: null },
+      },
       select: {
         id: true,
         email: true,
