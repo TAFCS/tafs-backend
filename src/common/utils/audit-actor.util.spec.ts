@@ -18,7 +18,7 @@ describe('auditActorLabel', () => {
   });
 
   it('labels known system actors', () => {
-    expect(auditActorLabel('zk-device')).toBe('ZK Device');
+    expect(auditActorLabel('zk-device')).toBe('Biometric device');
     expect(auditActorLabel('system')).toBe('System');
   });
 

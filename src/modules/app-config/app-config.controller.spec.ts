@@ -22,6 +22,9 @@ describe('AppConfigController', () => {
     sub: 'user-1',
     username: 'superadmin',
     role: StaffRole.SUPER_ADMIN,
+    campusId: null,
+    allowedClassIds: [],
+    permissions: [],
     actions: [],
     userType: 'STAFF',
   };
@@ -128,6 +131,9 @@ describe('AppConfigController', () => {
       sub: 'user-2',
       username: 'teacher',
       role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: [],
       userType: 'STAFF',
     };
@@ -135,7 +141,10 @@ describe('AppConfigController', () => {
     const notifEditor: IJwtStaffPayload = {
       sub: 'user-3',
       username: 'notif_editor',
-      role: StaffRole.OFFICE_STAFF,
+      role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: ['communication.notification_templates#edit'],
       userType: 'STAFF',
     };
@@ -143,7 +152,10 @@ describe('AppConfigController', () => {
     const devEditor: IJwtStaffPayload = {
       sub: 'user-4',
       username: 'dev_editor',
-      role: StaffRole.OFFICE_STAFF,
+      role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: ['system.developer_settings#edit'],
       userType: 'STAFF',
     };

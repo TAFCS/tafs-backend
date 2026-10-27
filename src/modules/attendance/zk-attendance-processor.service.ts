@@ -29,6 +29,7 @@ import {
   shouldAnnouncePunch,
   type StudentDayPunches,
 } from './student-punch-direction.util';
+import { buildAttendanceActivityNote, formatPunchTime } from './attendance-activity-note.util';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -280,7 +281,7 @@ export class ZkAttendanceProcessorService {
     if (cached !== undefined) return cached;
     const row = await this.prisma.students.findUnique({
       where: { cc: studentCc },
-      select: { campus_id: true, class_id: true, section_id: true },
+      select: { campus_id: true, class_id: true, section_id: true, full_name: true },
     });
     this.personCache?.set(key, row ?? null);
     return row ?? null;
@@ -1267,10 +1268,22 @@ export class ZkAttendanceProcessorService {
 
     if (changed) {
       const empName = employee?.full_name?.trim();
-      const empCode = employee?.employee_code?.trim();
-      const empRef = empName
-        ? `${empName}${empCode ? ` (${empCode})` : ''}`
-        : `employee #${employeeId}${empCode ? ` (${empCode})` : ''}`;
+      const personName = empName || `Employee #${employeeId}`;
+
+      const note = buildAttendanceActivityNote({
+        personName,
+        date,
+        status,
+        checkInAt: seg.checkInAt,
+        checkOutAt: seg.checkOutAt,
+        lastScanAt: seg.lastScanAt,
+        scanCount: seg.scanCount,
+        expectedCheckIn,
+        previousStatus: existing?.status ?? null,
+        previousCheckInAt: existing?.check_in_at ?? null,
+        previousCheckOutAt: existing?.check_out_at ?? null,
+        changedBy: 'zk-device',
+      });
 
       void this.auditLogs.log({
         entity_type: 'STAFF_ATTENDANCE',
@@ -1280,7 +1293,7 @@ export class ZkAttendanceProcessorService {
         field: 'status',
         old_value: existing?.status ?? null,
         new_value: status,
-        note: `Biometric scan ${isCreate ? 'created' : 'updated'} staff attendance for ${empRef} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        note,
         changed_by: 'zk-device',
       });
     }
@@ -1365,6 +1378,23 @@ export class ZkAttendanceProcessorService {
       existing.last_scan_at?.getTime() !== (seg.lastScanAt?.getTime() ?? undefined);
 
     if (changed) {
+      const studentName = student?.full_name?.trim() || `CC ${studentCc}`;
+
+      const note = buildAttendanceActivityNote({
+        personName: studentName,
+        date,
+        status,
+        checkInAt: seg.checkInAt,
+        checkOutAt: seg.checkOutAt,
+        lastScanAt: seg.lastScanAt,
+        scanCount: seg.scanCount,
+        expectedCheckIn: policy.expectedCheckIn,
+        previousStatus: existing?.status ?? null,
+        previousCheckInAt: existing?.check_in_at ?? null,
+        previousCheckOutAt: existing?.check_out_at ?? null,
+        changedBy,
+      });
+
       void this.auditLogs.log({
         entity_type: 'STUDENT_ATTENDANCE',
         entity_id: String(studentCc),
@@ -1373,7 +1403,7 @@ export class ZkAttendanceProcessorService {
         field: 'status',
         old_value: existing?.status ?? null,
         new_value: status,
-        note: `${changedBy === 'zk-device' ? 'Biometric scan' : 'Manual check-in/out'} ${isCreate ? 'created' : 'updated'} student attendance for CC ${studentCc} — ${existing?.status ?? '—'}→${status} on ${dateKey} (scans=${seg.scanCount}).`,
+        note,
         changed_by: changedBy,
         student_id: studentCc,
       });
@@ -1542,7 +1572,7 @@ export class ZkAttendanceProcessorService {
       section: 'attendance',
       field: direction === ScanDirection.IN ? 'check_in_at' : 'check_out_at',
       new_value: scanTime.toISOString(),
-      note: `Manual ${direction === ScanDirection.IN ? 'check-in' : 'check-out'} recorded for CC ${studentCc} at ${scanTime.toISOString().slice(11, 16)} (scan #${scanRow.id}).`,
+      note: `Manual ${direction === ScanDirection.IN ? 'check-in' : 'check-out'} recorded for CC ${studentCc} at ${formatPunchTime(scanTime)}.`,
       changed_by: actor,
       student_id: studentCc,
     });

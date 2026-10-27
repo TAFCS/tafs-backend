@@ -43,6 +43,7 @@ import { HrModule } from './modules/hr/hr.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NoticeBoardModule } from './modules/notice-board/notice-board.module';
 import { EmployeeNoticeBoardModule } from './modules/employee-notice-board/employee-notice-board.module';
+import { StaffNotificationsModule } from './modules/staff-notifications/staff-notifications.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { TimetablesModule } from './modules/timetables/timetables.module';
@@ -99,6 +100,7 @@ import { ScopeModule } from './common/scope/scope.module';
     TimetablesModule,
     NoticeBoardModule,
     EmployeeNoticeBoardModule,
+    StaffNotificationsModule,
     AppConfigModule,
     AuditLogsModule,
     UnconfirmedAdmissionsModule,
