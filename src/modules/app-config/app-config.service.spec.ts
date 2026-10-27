@@ -326,6 +326,9 @@ describe('AppConfigService', () => {
       sub: 'user-1',
       username: 'clerk',
       role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: [],
       userType: 'STAFF',
     };
@@ -333,7 +336,10 @@ describe('AppConfigService', () => {
     const notifManagerUser: IJwtStaffPayload = {
       sub: 'user-2',
       username: 'notif_admin',
-      role: StaffRole.OFFICE_STAFF,
+      role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: ['communication.notification_templates#edit'],
       userType: 'STAFF',
     };
@@ -341,7 +347,10 @@ describe('AppConfigService', () => {
     const devAdminUser: IJwtStaffPayload = {
       sub: 'user-3',
       username: 'dev_admin',
-      role: StaffRole.OFFICE_STAFF,
+      role: StaffRole.TEACHER,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: ['system.developer_settings#edit'],
       userType: 'STAFF',
     };
@@ -350,6 +359,9 @@ describe('AppConfigService', () => {
       sub: 'user-4',
       username: 'super_admin',
       role: StaffRole.SUPER_ADMIN,
+      campusId: null,
+      allowedClassIds: [],
+      permissions: [],
       actions: [],
       userType: 'STAFF',
     };
