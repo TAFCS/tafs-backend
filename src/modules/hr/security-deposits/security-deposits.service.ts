@@ -473,6 +473,7 @@ export class SecurityDepositsService {
     const base = money(line.absence_deduction)
       .plus(line.half_day_deduction)
       .plus(line.late_deduction)
+      .plus(line.early_leave_deduction)
       .plus(line.break_deduction)
       .plus(line.eobi_deduction)
       .plus(line.income_tax_deduction)

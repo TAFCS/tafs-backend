@@ -1752,6 +1752,9 @@ model payroll_run_lines {
   disbursement_notes            String?                                  @db.VarChar(300)
   total_late_minutes            Int                                      @default(0)
   late_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
+  // TAFSD-434: checking out before the expected leaving time, per minute.
+  total_early_leave_minutes     Int                                      @default(0)
+  early_leave_deduction         Decimal                                  @default(0) @db.Decimal(12, 2)
   unpaid_leave_days             Int                                      @default(0)
   has_salary                    Boolean                                  @default(true)
   is_mapped                     Boolean                                  @default(true)
