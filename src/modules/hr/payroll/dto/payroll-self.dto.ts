@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OvertimeRateType } from '@prisma/client';
 
@@ -31,6 +31,18 @@ export class SetStatutoryWaiversDto {
   @IsOptional()
   @IsBoolean()
   income_tax?: boolean;
+}
+
+/**
+ * TAFSD-436: the same switches for many lines at once. Omit employee_ids to
+ * apply to every open (not finalized) line on the run.
+ */
+export class BulkStatutoryWaiversDto extends SetStatutoryWaiversDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5000)
+  @IsInt({ each: true })
+  employee_ids?: number[];
 }
 
 export class DisbursePayrollLineDto {

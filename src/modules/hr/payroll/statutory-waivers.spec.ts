@@ -49,3 +49,52 @@ describe('per-cycle statutory waivers', () => {
     expect(l).toMatchObject({ eobi_waived: true, sessi_waived: false, income_tax_waived: true, eobi_exempt: false });
   });
 });
+
+// TAFSD-436: the same switches for many lines at once.
+describe('bulk statutory waivers', () => {
+  const admin = { sub: 'u1', role: 'SUPER_ADMIN' } as any;
+
+  function bulkSvc(openIds: number[]) {
+    const svc = Object.create(PayrollService.prototype) as any;
+    svc.prisma = {
+      payroll_runs: { findUnique: jest.fn(async () => ({ id: 5, campus_id: 1, is_test: false, period_start: D('2026-09-26'), period_end: D('2026-10-25') })) },
+      payroll_run_lines: {
+        findMany: jest.fn(async ({ where }: any) => {
+          const ids = where.employee_id?.in as number[] | undefined;
+          return openIds.filter((id) => !ids || ids.includes(id)).map((employee_id) => ({ employee_id }));
+        }),
+      },
+      employee_profiles: { findMany: jest.fn(async ({ where }: any) => where.id.in.map((id: number) => ({ id }))) },
+    };
+    svc.canSeeRun = () => true;
+    svc.assertNoOverlap = jest.fn(async () => undefined);
+    svc.upsertOpenLines = jest.fn(async (_r: number, _c: number, emps: unknown[]) => ({ touched: emps.length, finalized: 0, excluded: 0 }));
+    svc.getRun = jest.fn(async () => ({ id: 5 }));
+    svc.auditLogs = { log: jest.fn() };
+    return svc;
+  }
+
+  it('applies only the given switches to every open line when no employees are picked', async () => {
+    const svc = bulkSvc([1, 2, 3]);
+    const out = await svc.setStatutoryWaiversBulk(5, { eobi: true }, admin);
+    const [, , emps, , , patch] = svc.upsertOpenLines.mock.calls[0];
+    expect(emps.map((e: any) => e.id)).toEqual([1, 2, 3]);
+    expect(patch).toEqual({ eobi: true });
+    expect(out.bulk_result).toEqual({ updated: 3, skipped: 0 });
+  });
+
+  it('limits to the picked employees and counts finalized ones as skipped', async () => {
+    const svc = bulkSvc([1, 3]); // 2 is finalized, so not an open line
+    const out = await svc.setStatutoryWaiversBulk(5, { employee_ids: [1, 2], sessi: false, income_tax: true }, admin);
+    expect(svc.upsertOpenLines.mock.calls[0][2].map((e: any) => e.id)).toEqual([1]);
+    expect(svc.upsertOpenLines.mock.calls[0][5]).toEqual({ sessi: false, income_tax: true });
+    expect(out.bulk_result).toEqual({ updated: 1, skipped: 1 });
+  });
+
+  it('needs at least one switch and refuses test runs', async () => {
+    await expect(bulkSvc([1]).setStatutoryWaiversBulk(5, {}, admin)).rejects.toThrow('Choose EOBI');
+    const svc = bulkSvc([1]);
+    svc.prisma.payroll_runs.findUnique = jest.fn(async () => ({ id: 5, campus_id: 1, is_test: true }));
+    await expect(svc.setStatutoryWaiversBulk(5, { eobi: true }, admin)).rejects.toThrow('Test runs');
+  });
+});

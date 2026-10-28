@@ -1448,6 +1448,78 @@ export class PayrollService {
     return result;
   }
 
+  /**
+   * TAFSD-436: switch EOBI, SESSI and/or income tax off (or back on) for many
+   * employees in this cycle at once. No employee_ids = every open line on the
+   * run. Finalized and excluded lines are left alone, and so is anyone this
+   * user may not change (counted as skipped rather than failing the batch).
+   */
+  async setStatutoryWaiversBulk(
+    runId: number,
+    dto: Partial<StatutoryWaivers> & { employee_ids?: number[] },
+    user: IJwtStaffPayload,
+  ) {
+    const patch: Partial<StatutoryWaivers> = {};
+    for (const key of ['eobi', 'sessi', 'income_tax'] as const) {
+      if (dto[key] !== undefined) patch[key] = dto[key];
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new BadRequestException('Choose EOBI, SESSI or income tax to switch on or off.');
+    }
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id: runId } });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${runId} not found`);
+    }
+    if (run.is_test) {
+      throw new BadRequestException('Test runs do not support per-employee changes — use "Generate Test Run" instead.');
+    }
+
+    const openLines = await this.prisma.payroll_run_lines.findMany({
+      where: {
+        payroll_run_id: runId,
+        finalized_at: null,
+        ...(dto.employee_ids ? { employee_id: { in: dto.employee_ids } } : {}),
+      },
+      select: { employee_id: true },
+    });
+    const allowed: number[] = [];
+    for (const { employee_id } of openLines) {
+      try {
+        await assertMayChangeEmployee(this.prisma, user, employee_id, 'payroll line');
+        allowed.push(employee_id);
+      } catch {
+        // Counted as skipped below.
+      }
+    }
+    const employees = allowed.length
+      ? await this.prisma.employee_profiles.findMany({
+          where: { id: { in: allowed }, campus_id: run.campus_id, monthly_pay: { not: null } },
+          select: this.employeeLineSelect,
+        })
+      : [];
+    if (employees.length > 0) {
+      await this.assertNoOverlap(employees.map((e) => e.id), run.period_start, run.period_end, [runId]);
+    }
+    const { touched } = employees.length
+      ? await this.upsertOpenLines(runId, run.campus_id, employees, run.period_start, run.period_end, patch)
+      : { touched: 0 };
+    const requested = dto.employee_ids ? dto.employee_ids.length : openLines.length;
+
+    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const changes = (Object.keys(patch) as (keyof StatutoryWaivers)[]).map(
+      (k) => `${labels[k]} ${patch[k] ? 'waived' : 'applied again'}`,
+    );
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINES_STATUTORY_WAIVERS',
+      changed_by: auditActorLabel(user),
+      note: `${changes.join(', ')} for ${touched} employee(s) on this payroll run only (${requested - touched} skipped: finalized, excluded or not yours to change).`,
+    });
+
+    return { ...(await this.getRun(runId, user)), bulk_result: { updated: touched, skipped: requested - touched } };
+  }
+
 
   /**
    * Finalizes (locks) exactly one employee's line, independent of the rest
@@ -1859,6 +1931,7 @@ export class PayrollService {
     employees: EmployeeLineInput[],
     periodStart: Date,
     periodEnd: Date,
+    waiverPatch?: Partial<StatutoryWaivers>,
   ): Promise<{ touched: number; finalized: number; excluded: number }> {
     const [existingLines, exclusions] = await Promise.all([
       this.prisma.payroll_run_lines.findMany({
@@ -1876,6 +1949,9 @@ export class PayrollService {
     const fullPayIds = new Set(existingLines.filter((l) => l.full_pay_override).map((l) => l.employee_id));
     // ...and its per-cycle EOBI / SESSI / income tax waivers (TAFSD-383).
     const waiversById = new Map(existingLines.map((l) => [l.employee_id, waiversOf(l)]));
+    if (waiverPatch) {
+      for (const e of employees) waiversById.set(e.id, { ...(waiversById.get(e.id) ?? NO_WAIVERS), ...waiverPatch });
+    }
     const toCompute = employees.filter((e) => !lockedIds.has(e.id) && !excludedIds.has(e.id));
 
     if (toCompute.length > 0) {
