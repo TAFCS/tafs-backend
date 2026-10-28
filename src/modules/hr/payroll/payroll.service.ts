@@ -11,7 +11,7 @@ import { EmployeeExpectedTimesService } from '../../timetables/employee-expected
 import { StorageService } from '../../../common/storage/storage.service';
 import { AttendanceMatrixQueryDto, GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
 import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
-import { computePayrollWindow, partialMonthDivisor } from './payroll-period.util';
+import { computePayrollWindow, monthShareOfDay, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
 import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
@@ -761,16 +761,18 @@ export class PayrollService {
     /** One month's salary, averaged across the cycle when pay changes mid-cycle. */
     const fullMonthPay = payVaries && totalCalendarDays > 0 ? payDaySum.dividedBy(totalCalendarDays) : profilePay;
     // TAFSD-434: a range that isn't a whole pay month (e.g. an 8-day custom
-    // run) earns each day at monthly pay / days in its starting month, capped
-    // at one month's pay — not the full salary with an inflated daily rate.
+    // run) earns only its share of the salary, not the full salary with an
+    // inflated daily rate. TAFSD-438: each day earns pay / days in its own
+    // month, with no one-month cap, so a 1 Oct – 30 Nov run earns two months.
     const partialDivisor = partialMonthDivisor(periodStart, periodEnd);
     const rateDivisor = partialDivisor ?? totalCalendarDays;
     const monthlyPay =
       partialDivisor == null
         ? fullMonthPay
-        : Prisma.Decimal.min(
-            fullMonthPay,
-            (payVaries ? payDaySum : profilePay.times(totalCalendarDays)).dividedBy(partialDivisor),
+        : cycleDays.reduce(
+            (sum, cd) =>
+              sum.plus((payVaries ? dayPay.get(cd.toISOString().slice(0, 10)) ?? profilePay : profilePay).times(monthShareOfDay(cd))),
+            new Prisma.Decimal(0),
           );
     const dailyRate = rateDivisor > 0 ? fullMonthPay.dividedBy(rateDivisor) : new Prisma.Decimal(0);
     /** The daily rate on one date: that day's pay over the rate divisor. */
@@ -877,11 +879,14 @@ export class PayrollService {
       },
       { eobi: eobiExempt || waivers.eobi, sessi: sessiExempt || waivers.sessi },
     );
-    // Tax is assessed on the annualised full salary; a partial-month range
-    // owes the same share of it as it earns of the month (TAFSD-434).
+    // Tax is assessed on the annualised full salary; a range owes the same
+    // share of it as it earns of the month: a partial-month range (TAFSD-434)
+    // and, from TAFSD-438, days off the roster too — a mid-cycle joiner or
+    // leaver is taxed only on the days they are paid for.
+    const earnedPay = Prisma.Decimal.max(0, monthlyPay.minus(afterLeavingDeduction));
     const incomeTaxDeduction = !waivers.income_tax && incomeTaxValue.slabs
       ? calculateMonthlyIncomeTax(fullMonthPay.times(12).toNumber(), incomeTaxValue.slabs)
-          .times(fullMonthPay.isZero() ? 1 : monthlyPay.dividedBy(fullMonthPay))
+          .times(fullMonthPay.isZero() ? 1 : earnedPay.dividedBy(fullMonthPay))
           .toDecimalPlaces(2)
       : new Prisma.Decimal(0);
 

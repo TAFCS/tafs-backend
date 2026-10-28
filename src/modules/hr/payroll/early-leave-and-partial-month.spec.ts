@@ -128,3 +128,41 @@ describe('payroll: leaving early is deducted per minute', () => {
     expect(Number(l.early_leave_deduction)).toBe(0);
   });
 });
+
+// TAFSD-438: gaps found in the payroll audit.
+describe('payroll: multi-month custom ranges and tax on earned pay', () => {
+  it('a 1 Oct – 30 Nov range earns two months, not one', async () => {
+    const range = days('2026-10-01', '2026-11-30');
+    const svc = build(new Set(range));
+    const l = await svc.computeEmployeeLine(employee, 1, D('2026-10-01'), D('2026-11-30'), [], [], fullAttendance('2026-10-01', '2026-11-30'), true);
+    expect(Number(l.monthly_pay)).toBeCloseTo(62000, 2);
+  });
+
+  it('a range across two months earns each day at its own month rate', async () => {
+    // 25–31 Oct = 7/31, 1–5 Nov = 5/30
+    const range = days('2026-10-25', '2026-11-05');
+    const svc = build(new Set(range));
+    const l = await svc.computeEmployeeLine(employee, 1, D('2026-10-25'), D('2026-11-05'), [], [], fullAttendance('2026-10-25', '2026-11-05'), true);
+    expect(Number(l.monthly_pay)).toBeCloseTo(31000 * (7 / 31 + 5 / 30), 2);
+  });
+
+  it('a mid-cycle leaver is taxed only on the days they are paid for', async () => {
+    const range = days('2026-09-26', '2026-10-25');
+    const svc = build(new Set(range));
+    svc.payrollRules = {
+      findEffective: jest.fn(async (type: string) =>
+        type === 'INCOME_TAX' ? { value_json: { slabs: [{ min: 0, max: null, fixed_amount: 0, rate_percent: 12 }] } } : null,
+      ),
+    };
+    const rich = { ...employee, monthly_pay: new Prisma.Decimal(300000) };
+    const full = await svc.computeEmployeeLine(rich, 1, D('2026-09-26'), D('2026-10-25'), [], [], fullAttendance('2026-09-26', '2026-10-25'), true);
+    const leaver = await svc.computeEmployeeLine(
+      { ...rich, date_of_leaving: D('2026-09-28') }, 1, D('2026-09-26'), D('2026-10-25'), [], [],
+      fullAttendance('2026-09-26', '2026-09-28'), true,
+    );
+    expect(Number(full.income_tax_deduction)).toBeCloseTo(36000, 0);
+    // Paid 3 of 30 days, so 3/30 of the month's tax.
+    expect(Number(leaver.income_tax_deduction)).toBeCloseTo(3600, 0);
+    expect(Number(leaver.net_pay)).toBeGreaterThan(0);
+  });
+});
