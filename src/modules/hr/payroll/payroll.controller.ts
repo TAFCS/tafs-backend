@@ -12,7 +12,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SetStatutoryWaiversDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { BulkStatutoryWaiversDto, DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SetStatutoryWaiversDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -176,6 +176,18 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.setFullPayOverride(runId, employeeId, dto.enabled, user);
     return createApiResponse(data, HttpStatus.OK, dto.enabled ? 'Employee set to full salary' : 'Full salary override removed');
+  }
+
+  @Post(':runId/statutory-waivers')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
+  async setStatutoryWaiversBulk(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Body() dto: BulkStatutoryWaiversDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.setStatutoryWaiversBulk(runId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Statutory deductions updated for this cycle');
   }
 
   @Post(':runId/lines/:employeeId/statutory-waivers')
