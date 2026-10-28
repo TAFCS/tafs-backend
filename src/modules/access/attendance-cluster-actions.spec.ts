@@ -43,6 +43,7 @@ const effectiveTiles: EffectiveTile[] = TILES_MANIFEST.map((t) => ({
 const base = {
   allPermissionKeys: [...new Set(TILES_MANIFEST.flatMap((t) => t.capabilities))],
   activeTiles: effectiveTiles,
+  roleKeys: [] as string[],
   packTileIds: [] as string[],
   allowTileIds: [] as string[],
   denyTileIds: [] as string[],
@@ -402,7 +403,7 @@ describe('Scope on the policy tiles', () => {
       const prisma = {
         class_check_in_schedules: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn().mockResolvedValue(row), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
       };
-      return { s: new ClassCheckInScheduleService(prisma as any, { log: jest.fn() } as any, realScope), prisma };
+      return { s: new ClassCheckInScheduleService(prisma as any, { log: jest.fn() } as any, realScope, {} as any), prisma };
     }
     it('refuses another campus (and a class outside scope) on list and create, before any write', async () => {
       const { s, prisma } = svc(null);
