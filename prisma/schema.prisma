@@ -1371,6 +1371,8 @@ model employee_profiles {
   // TAFSD-278: legally exempt — payroll skips that scheme for this employee.
   eobi_exempt                        Boolean                              @default(false)
   sessi_exempt                       Boolean                              @default(false)
+  // TAFSD-437: payroll makes no attendance deductions for this employee.
+  always_full_pay                    Boolean                              @default(false)
   date_of_leaving                    DateTime?                            @db.Date
   academic_calendar_days             academic_calendar_days[]
   attendance_objections              attendance_objections[]
@@ -1797,6 +1799,8 @@ model payroll_run_lines {
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
   after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
   full_pay_override             Boolean                                  @default(false)
+  // TAFSD-437: the profile's always_full_pay as it stood when this line was computed.
+  always_full_pay               Boolean                                  @default(false)
   // TAFSD-383: waived for this line (this cycle) only, on top of the
   // profile's eobi_exempt / sessi_exempt. Kept across regenerate.
   eobi_waived                   Boolean                                  @default(false)

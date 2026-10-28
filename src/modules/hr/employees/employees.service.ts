@@ -221,6 +221,10 @@ export class CreateEmployeeDto {
   @IsOptional() @IsBoolean()
   sessi_exempt?: boolean;
 
+  /** TAFSD-437: payroll makes no attendance deductions for this employee. */
+  @IsOptional() @IsBoolean()
+  always_full_pay?: boolean;
+
   @IsOptional() @IsInt()
   campus_id?: number;
 
@@ -1739,6 +1743,7 @@ export class EmployeesService {
             payroll_enabled: rest.payroll_enabled !== undefined ? rest.payroll_enabled : undefined,
             eobi_exempt: rest.eobi_exempt !== undefined ? rest.eobi_exempt : undefined,
             sessi_exempt: rest.sessi_exempt !== undefined ? rest.sessi_exempt : undefined,
+            always_full_pay: rest.always_full_pay !== undefined ? rest.always_full_pay : undefined,
             campus_id: rest.campus_id !== undefined ? rest.campus_id : undefined,
             days_per_week: rest.days_per_week !== undefined ? rest.days_per_week : undefined,
             photo_url: rest.photo_url !== undefined ? rest.photo_url : undefined,
@@ -1817,6 +1822,7 @@ export class EmployeesService {
       { key: 'employment_subtype', label: 'Employment Subtype' },
       { key: 'eobi_exempt', label: 'EOBI Exempt' },
       { key: 'sessi_exempt', label: 'SESSI Exempt' },
+      { key: 'always_full_pay', label: 'Always Full Pay' },
       { key: 'days_per_week', label: 'Working Days / Week' },
       { key: 'check_in_source', label: 'Check-in Source' },
       { key: 'reporting_time', label: 'Expected Check-in' },
