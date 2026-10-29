@@ -19,6 +19,7 @@ import {
   MANIFEST_ACTION_KEYS,
   MANIFEST_EFFECTIVE_TILES,
   MANIFEST_TILE_IDS,
+  SUPER_ADMIN_ONLY_TILE_IDS,
 } from './tiles.manifest';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
 import { PEOPLE_ACCESS_TILE_ID } from '../users/user-field-tabs';
@@ -1124,6 +1125,12 @@ export class AccessService {
     if (tileIds.length === 0) return;
     if (tileIds.some((id) => !MANIFEST_TILE_IDS.has(id))) {
       throw new BadRequestException('One or more tiles do not exist');
+    }
+    // A super-admin-only tile would be inert if granted (computeEffectiveAccess
+    // drops it), but storing the grant would show it as given.
+    const superOnly = tileIds.filter((id) => SUPER_ADMIN_ONLY_TILE_IDS.has(id));
+    if (superOnly.length > 0) {
+      throw new BadRequestException(`Only super admins can use ${superOnly.join(', ')}; it can't be granted.`);
     }
   }
 }

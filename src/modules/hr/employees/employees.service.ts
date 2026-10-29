@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
-import { EmployeeProgressionService, EmployeeProgressionSnapshot } from './employee-progression.service';
+import { EmployeeProgressionService, EmployeeProgressionSnapshot, progressionSnapshotFromRow } from './employee-progression.service';
 import { hhmm, parseHhmm, timingsSnapshotFrom, WEEKDAY_SHORT } from './employee-day-timings.util';
 import { CheckInSource, EmployeeStatus, EmploymentSubtype, Prisma, StaffRole } from '@prisma/client';
 import { assertMayChangeRecordOf } from '../../../common/auth/super-admin';
@@ -47,9 +47,11 @@ import { TileGrantDto } from '../../access/dto/access.dto';
 /** Largest value a Postgres INT4 column can hold. */
 const INT4_MAX = 2_147_483_647;
 
-
 /** Roles a non-super-admin may give a login it creates while registering staff. */
 const DELEGABLE_LOGIN_ROLES: StaffRole[] = [StaffRole.EMPLOYEE, StaffRole.TEACHER];
+
+const REPORTING_MANAGER_MOVED =
+  'Reporting managers are set on the Reporting Hierarchy page, by a super admin.';
 
 export class ClassSectionAssignmentDto {
   @IsInt()
@@ -884,20 +886,7 @@ export class EmployeesService {
   /** Snapshot the tracked employment state of an employee_profiles row (with relations loaded). */
   private progressionSnapshotFrom(row: any): EmployeeProgressionSnapshot {
     return {
-      campusId: row.campus_id ?? null,
-      segmentId: row.segment_id ?? null,
-      departmentId: row.department_id ?? null,
-      staffCategoryId: row.staff_category_id ?? null,
-      reportingManagerId: row.reporting_manager_id ?? null,
-      jobTitle: row.job_title ?? null,
-      employmentType: row.employment_type ?? null,
-      employmentStatus: row.employment_status,
-      monthlyPay: row.monthly_pay ?? null,
-      payrollEnabled: row.payroll_enabled ?? true,
-      classSections: (row.employee_class_section_assignments ?? []).map((a: any) => ({
-        class_id: a.class_id,
-        section_id: a.section_id ?? null,
-      })),
+      ...progressionSnapshotFromRow(row),
       // Only when the row carries the schedule relations; otherwise the open
       // period's timings carry forward rather than reading as "all cleared".
       timings:
@@ -1248,6 +1237,7 @@ export class EmployeesService {
     this.assertFieldsEditable(dto, caller, {
       registering: !!caller?.actions?.includes('hr.register_employee#create'),
     });
+    if (dto.reporting_manager_id) throw new BadRequestException(REPORTING_MANAGER_MOVED);
     if (dto.user_id) await this.assertMayLinkLogin(dto.user_id, caller);
     // Checked BEFORE anything is written: refusing the packs/tiles only after
     // the employee and login were committed would leave a half-made person.
@@ -1343,7 +1333,6 @@ export class EmployeesService {
             // TAFSD-376: a new joiner left unclassified starts NON_PERMANENT.
             ...permanenceFields(status, rest.employment_subtype ?? EmploymentSubtype.NON_PERMANENT),
             department_id: rest.department_id || null,
-            reporting_manager_id: rest.reporting_manager_id || null,
             employee_code: codeFields.employee_code,
             employee_code_dep: codeFields.employee_code_dep,
             employee_code_number: codeFields.employee_code_number,
@@ -1616,6 +1605,15 @@ export class EmployeesService {
     if (portal_account && existing.user_id) {
       throw new BadRequestException('This employee already has a portal account.');
     }
+    // TAFSD-327: reporting lines belong to the Reporting Hierarchy page
+    // (SUPER_ADMIN only), which keeps reporting_manager_id in step with
+    // employee_reporting_lines. Forms still echo the current value back.
+    if (
+      rest.reporting_manager_id !== undefined &&
+      (rest.reporting_manager_id || null) !== (existing.reporting_manager_id ?? null)
+    ) {
+      throw new BadRequestException(REPORTING_MANAGER_MOVED);
+    }
     const account = await this.preparePortalAccount(portal_account, rest, caller);
 
     // Only enforce fixed-time requirements when this patch touches schedule fields.
@@ -1712,7 +1710,6 @@ export class EmployeesService {
               ? permanenceFields(existing.employment_status, rest.employment_subtype)
               : {}),
             department_id: rest.department_id !== undefined ? rest.department_id : undefined,
-            reporting_manager_id: rest.reporting_manager_id !== undefined ? rest.reporting_manager_id : undefined,
             employee_code: codeFields
               ? codeFields.employee_code
               : rest.employee_code !== undefined

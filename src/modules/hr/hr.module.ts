@@ -46,6 +46,8 @@ import { EmployeeNoticeBoardModule } from '../employee-notice-board/employee-not
 import { AccessModule } from '../access/access.module';
 import { SalaryIncrementsController } from './salary-increments/salary-increments.controller';
 import { SalaryIncrementsService } from './salary-increments/salary-increments.service';
+import { ReportingHierarchyController } from './reporting-hierarchy/reporting-hierarchy.controller';
+import { ReportingHierarchyService } from './reporting-hierarchy/reporting-hierarchy.service';
 
 @Module({
   imports: [
@@ -77,6 +79,7 @@ import { SalaryIncrementsService } from './salary-increments/salary-increments.s
     EmployeeLoansListController,
     EmployeeLoansController,
     SalaryIncrementsController,
+    ReportingHierarchyController,
   ],
   providers: [
     EmployeesService,
@@ -100,6 +103,7 @@ import { SalaryIncrementsService } from './salary-increments/salary-increments.s
     PayslipPdfService,
     EmployeeProfileResolverService,
     SalaryIncrementsService,
+    ReportingHierarchyService,
   ],
   exports: [
     EmployeesService,

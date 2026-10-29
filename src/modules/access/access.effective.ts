@@ -18,6 +18,8 @@ export type EffectiveTile = {
    * surface them. Staff App tabs leave this off and keep inheriting.
    */
   requiresExplicitAllow?: boolean;
+  /** Never effective for anyone but SUPER_ADMIN, whatever was granted. */
+  superAdminOnly?: boolean;
 };
 
 export type ActionRef = { tileId: string; actionId: string };
@@ -157,6 +159,7 @@ export function computeEffectiveAccess(args: {
   const effectiveTiles = activeTiles.filter(
     (t) =>
       !denied.has(t.id) &&
+      !t.superAdminOnly &&
       (!t.requiresExplicitAllow || explicitlyAllowed.has(t.id)) &&
       t.capabilities.every((c) => keySet.has(c)),
   );

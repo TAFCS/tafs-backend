@@ -362,3 +362,32 @@ describe('tile sub-permissions', () => {
     });
   });
 });
+
+describe('superAdminOnly tiles (TAFSD-327)', () => {
+  const hierarchy: EffectiveTile = {
+    id: 'system.reporting_hierarchy',
+    capabilities: ['system.permissions.manage'],
+    superAdminOnly: true,
+  };
+  const withHierarchy = {
+    ...base,
+    allPermissionKeys: [...allKeys, 'system.permissions.manage'],
+    activeTiles: [...tiles, hierarchy],
+  };
+
+  it('never resolves for anyone else, even when granted and the capability is held', () => {
+    const out = computeEffectiveAccess({
+      ...withHierarchy,
+      role: StaffRole.CAMPUS_ADMIN,
+      roleKeys: ['system.permissions.manage'],
+      allowTileIds: ['system.reporting_hierarchy'],
+      packTileIds: ['system.reporting_hierarchy'],
+    });
+    expect(out.tileIds).not.toContain('system.reporting_hierarchy');
+  });
+
+  it('resolves for SUPER_ADMIN', () => {
+    const out = computeEffectiveAccess({ ...withHierarchy, role: StaffRole.SUPER_ADMIN });
+    expect(out.tileIds).toContain('system.reporting_hierarchy');
+  });
+});
