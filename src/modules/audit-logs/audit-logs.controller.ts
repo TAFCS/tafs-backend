@@ -19,10 +19,10 @@ import { createApiResponse } from '../../utils/serializer.util';
 export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
-  // Shared with the Student Directory's timeline (?student_id). AuditLogsGuard
-  // still confines a directory-only caller to that one student.
+  // Shared with Student Directory (?student_id) and Employee Directory (?employee_id).
+  // AuditLogsGuard and ScopeService confine directory callers to in-scope entities.
   @Get()
-  @RequireAnyAction('system.activity_logs#view', 'student.directory#view')
+  @RequireAnyAction('system.activity_logs#view', 'student.directory#view', 'hr.employee_directory#view')
   async findAll(@Query() query: QueryAuditLogsDto, @Request() req: any) {
     const result = await this.auditLogsService.findAll(query, req.user);
     return createApiResponse(

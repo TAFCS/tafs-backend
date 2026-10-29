@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
@@ -143,6 +143,93 @@ export function parseSearchTerms(raw: string): SearchTerm[] {
   }
 
   return terms;
+}
+
+export type AuditCategory = 'Profile' | 'Attendance' | 'Payroll' | 'Access' | 'Device';
+
+export function resolveAuditCategory(log: {
+  entity_type: string;
+  action: string;
+  section?: string | null;
+  field?: string | null;
+  note?: string | null;
+}): AuditCategory {
+  const entityType = log.entity_type?.toUpperCase() ?? '';
+  const action = log.action?.toUpperCase() ?? '';
+  const section = log.section?.toLowerCase() ?? '';
+  const field = log.field?.toLowerCase() ?? '';
+  const note = log.note?.toLowerCase() ?? '';
+
+  // 1. Device: biometric mapping added or removed
+  if (
+    entityType === 'ZK_ATTENDANCE_MAPPING' ||
+    action.includes('BIOMETRIC') ||
+    action.includes('ZK') ||
+    note.includes('biometric') ||
+    note.includes('device mapping')
+  ) {
+    return 'Device';
+  }
+
+  // 2. Access: login account created, password reset, tiles & scope changes, impersonation
+  if (
+    entityType === 'USER' ||
+    entityType === 'PERMISSION' ||
+    section === 'system' ||
+    action.includes('IMPERSONAT') ||
+    action.includes('PASSWORD') ||
+    action.includes('LOGIN') ||
+    action.includes('TILE') ||
+    action.includes('SCOPE') ||
+    action.includes('ACCESS') ||
+    field === 'password' ||
+    field === 'password_hash' ||
+    field === 'tiles' ||
+    field === 'scope' ||
+    note.includes('impersonat')
+  ) {
+    return 'Access';
+  }
+
+  // 3. Payroll: increments, loans, security deposits, payroll lines generated/regenerated
+  if (
+    entityType === 'PAYROLL_RUN' ||
+    entityType === 'INCREMENT' ||
+    entityType.startsWith('LOAN') ||
+    entityType.startsWith('SECURITY_DEPOSIT') ||
+    action.includes('PAYROLL') ||
+    action.includes('LOAN') ||
+    action.includes('INCREMENT') ||
+    action.includes('SECURITY_DEPOSIT') ||
+    note.includes('payroll') ||
+    note.includes('loan') ||
+    note.includes('increment') ||
+    note.includes('security deposit')
+  ) {
+    return 'Payroll';
+  }
+
+  // 4. Attendance: overrides, objections & resolution, manual check-ins, shift overrides, recomputes
+  if (
+    entityType === 'STAFF_ATTENDANCE' ||
+    entityType === 'EMPLOYEE_SHIFT_OVERRIDE' ||
+    entityType === 'ATTENDANCE_OBJECTION' ||
+    section === 'attendance' ||
+    action.includes('ATTENDANCE') ||
+    action.includes('OBJECTION') ||
+    action.includes('RECOMPUTE') ||
+    action.includes('SHIFT_OVERRIDE') ||
+    action.includes('CHECK_IN') ||
+    note.includes('attendance') ||
+    note.includes('objection') ||
+    note.includes('shift override') ||
+    note.includes('recompute')
+  ) {
+    return 'Attendance';
+  }
+
+  // 5. Profile: edits from audit log with what changed (timings, working days, check-in source, pay, campus, job title, status, joining & leaving dates)
+  return 'Profile';
 }
 
 @Injectable()
@@ -380,15 +467,19 @@ export class AuditLogsService {
    * Global feed: top-level parents only (`parent_id` null), with `children` attached.
    * Student-scoped: top-level rows for that student (parent_id null, or orphans whose
    * parent is not student-scoped), each with nested children when available.
+   * Employee-scoped: top-level rows for that employee across Profile, Attendance, Payroll,
+   * Access, and Device categories, each with nested children when available.
    */
   async findAll(query: QueryAuditLogsDto, requestingUser?: Partial<IJwtStaffPayload>) {
     const where: any = {};
     const studentId = query.student_id ? Number(query.student_id) : null;
     const isStudentScoped = studentId != null && Number.isFinite(studentId);
+    const employeeId = query.employee_id ? Number(query.employee_id) : null;
+    const isEmployeeScoped = employeeId != null && Number.isFinite(employeeId);
 
     // Global activity feed hides children (they're nested under parents).
-    // Student timelines also return top-level rows only; children are nested below.
-    if (!isStudentScoped) {
+    // Student & employee timelines also return top-level rows only; children are nested below.
+    if (!isStudentScoped && !isEmployeeScoped) {
       where.parent_id = null;
     }
 
@@ -439,7 +530,93 @@ export class AuditLogsService {
 
     const clauses: any[] = [where];
 
-    if (!isStudentScoped) {
+    if (isEmployeeScoped) {
+      const employee = await this.prisma.employee_profiles.findUnique({
+        where: { id: employeeId },
+        select: {
+          id: true,
+          user_id: true,
+          full_name: true,
+          employee_code: true,
+          campus_id: true,
+          segment_id: true,
+          department_id: true,
+          staff_category_id: true,
+        },
+      });
+      if (!employee) {
+        throw new NotFoundException(`Employee #${employeeId} not found`);
+      }
+      if (this.isScopeRestricted(requestingUser as IJwtStaffPayload)) {
+        this.scope.assertEmployee(requestingUser as IJwtStaffPayload, employee);
+      }
+
+      const [mappings, objections, shiftOverrides] = await Promise.all([
+        this.prisma.device_user_mappings.findMany({
+          where: { employee_id: employeeId },
+          select: { id: true },
+        }),
+        this.prisma.attendance_objections.findMany({
+          where: { employee_id: employeeId },
+          select: { id: true },
+        }),
+        this.prisma.employee_shift_overrides.findMany({
+          where: { employee_id: employeeId },
+          select: { id: true },
+        }),
+      ]);
+
+      const mappingIds = mappings.map((m) => String(m.id));
+      const objectionIds = objections.map((o) => String(o.id));
+      const shiftOverrideIds = shiftOverrides.map((s) => String(s.id));
+
+      const employeeOrClauses: any[] = [
+        { entity_type: 'EMPLOYEE', entity_id: String(employeeId) },
+        { entity_type: 'STAFF_ATTENDANCE', entity_id: String(employeeId) },
+        { entity_type: 'EMPLOYEE_SHIFT_OVERRIDE', entity_id: String(employeeId) },
+        { entity_type: 'EMPLOYEE_SHIFT_OVERRIDE', entity_id: { contains: String(employeeId) } },
+        ...(shiftOverrideIds.length > 0
+          ? [{ entity_type: 'EMPLOYEE_SHIFT_OVERRIDE', entity_id: { in: shiftOverrideIds } }]
+          : []),
+        ...(objectionIds.length > 0
+          ? [{ entity_type: 'ATTENDANCE_OBJECTION', entity_id: { in: objectionIds } }]
+          : []),
+        ...(mappingIds.length > 0
+          ? [{ entity_type: 'ZK_ATTENDANCE_MAPPING', entity_id: { in: mappingIds } }]
+          : []),
+        { entity_type: 'PAYROLL_RUN', field: 'employee_id', new_value: String(employeeId) },
+        { note: { contains: `employee #${employeeId}`, mode: 'insensitive' as const } },
+        { note: { contains: `employee ${employeeId}`, mode: 'insensitive' as const } },
+      ];
+
+      if (employee.user_id) {
+        employeeOrClauses.push(
+          { entity_type: 'USER', entity_id: employee.user_id },
+          { entity_type: 'PERMISSION', entity_id: employee.user_id },
+          { note: { contains: employee.user_id, mode: 'insensitive' as const } },
+        );
+      }
+
+      if (employee.full_name?.trim()) {
+        const name = employee.full_name.trim();
+        employeeOrClauses.push(
+          { entity_type: 'ATTENDANCE_OBJECTION', note: { contains: name, mode: 'insensitive' as const } },
+          { entity_type: 'ZK_ATTENDANCE_MAPPING', note: { contains: name, mode: 'insensitive' as const } },
+        );
+      }
+
+      if (employee.employee_code?.trim()) {
+        const code = employee.employee_code.trim();
+        employeeOrClauses.push(
+          { entity_type: 'ATTENDANCE_OBJECTION', note: { contains: code, mode: 'insensitive' as const } },
+          { note: { contains: `(${code})`, mode: 'insensitive' as const } },
+        );
+      }
+
+      clauses.push({ OR: employeeOrClauses });
+    }
+
+    if (!isStudentScoped && !isEmployeeScoped) {
       clauses.push({
         NOT: {
           AND: [
@@ -453,7 +630,7 @@ export class AuditLogsService {
     if (query.q?.trim()) {
       const searchClause = await this.buildSearchClause(query.q);
       if (searchClause) {
-        if (isStudentScoped) {
+        if (isStudentScoped || isEmployeeScoped) {
           clauses.push(searchClause);
         } else {
           // The global feed only lists parents, but the text people search for
@@ -487,7 +664,8 @@ export class AuditLogsService {
     // scope. Audit rows carry a student but no campus, so an event with no
     // student (an employee, finance or settings change) cannot be placed in the
     // caller's scope and is left out rather than risk showing another campus's.
-    if (this.isScopeRestricted(requestingUser as IJwtStaffPayload)) {
+    // For employee-scoped queries, we have already asserted caller scope above.
+    if (this.isScopeRestricted(requestingUser as IJwtStaffPayload) && !isEmployeeScoped) {
       clauses.push({
         students: {
           AND: [
@@ -520,6 +698,57 @@ export class AuditLogsService {
       const page = topLevel.slice(offset, offset + limit);
 
       // Hydrate children of page parents (from full student match + any siblings by parent_id).
+      const parentIds = page.map((p) => p.id);
+      const nestedFromMatch = allMatching.filter(
+        (r) => r.parent_id != null && parentIds.includes(r.parent_id),
+      );
+      const extraChildren =
+        parentIds.length === 0
+          ? []
+          : await this.prisma.audit_logs.findMany({
+              where: {
+                parent_id: { in: parentIds },
+                id: { notIn: nestedFromMatch.map((c) => c.id) },
+              },
+              orderBy: { id: 'asc' },
+            });
+      const children = [...nestedFromMatch, ...extraChildren];
+      const childrenByParent = new Map<number, typeof children>();
+      for (const child of children) {
+        if (child.parent_id == null) continue;
+        const list = childrenByParent.get(child.parent_id) ?? [];
+        list.push(child);
+        childrenByParent.set(child.parent_id, list);
+      }
+
+      return this.enrichAndReturn(page, childrenByParent, total);
+    }
+
+    // Employee-scoped: load matching rows, collapse children under parents, filter category, paginate.
+    if (isEmployeeScoped) {
+      const allMatching = await this.prisma.audit_logs.findMany({
+        where: finalWhere,
+        orderBy: { changed_at: 'desc' },
+      });
+
+      const byId = new Map(allMatching.map((r) => [r.id, r]));
+      const childIds = new Set(
+        allMatching.filter((r) => r.parent_id != null && byId.has(r.parent_id)).map((r) => r.id),
+      );
+      // Top-level for employee: no parent, or parent not in this employee result set.
+      let topLevel = allMatching.filter((r) => !childIds.has(r.id));
+
+      if (query.category) {
+        const targetCategory = query.category.trim().toLowerCase();
+        topLevel = topLevel.filter(
+          (log) => resolveAuditCategory(log).toLowerCase() === targetCategory,
+        );
+      }
+
+      const total = topLevel.length;
+      const page = topLevel.slice(offset, offset + limit);
+
+      // Hydrate children of page parents (from full employee match + any siblings by parent_id).
       const parentIds = page.map((p) => p.id);
       const nestedFromMatch = allMatching.filter(
         (r) => r.parent_id != null && parentIds.includes(r.parent_id),
@@ -813,6 +1042,7 @@ export class AuditLogsService {
         employee_id,
         employee_name,
         employee_code,
+        category: resolveAuditCategory(log),
       };
     };
 

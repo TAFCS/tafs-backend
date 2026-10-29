@@ -7,6 +7,15 @@ export class QueryAuditLogsDto {
   @IsInt()
   student_id?: number;
 
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  employee_id?: number;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
+
   /**
    * Free-text search across the whole row.
    *
