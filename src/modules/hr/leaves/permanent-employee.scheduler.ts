@@ -16,8 +16,8 @@ export class PermanentEmployeeScheduler {
 
   /**
    * Nightly: ACTIVE employees who have served their department's period
-   * (TAFSD-321: Academics and Support Services 12 months, Administration 14,
-   * anything else 14) become PERMANENT. employment_subtype is the source of
+   * (TAFSD-442: Academics 14 months, every other department or none 12)
+   * become PERMANENT. employment_subtype is the source of
    * truth (TAFSD-275) and is_permanent_employee — read by leave policy — moves
    * with it.
    *
@@ -29,8 +29,8 @@ export class PermanentEmployeeScheduler {
   async markPermanentEmployees(now: Date = new Date()) {
     const departments = await this.prisma.departments.findMany({ select: { id: true, name: true } });
 
-    // One update per distinct period; the longest period also takes staff with
-    // no department or an unmapped one.
+    // One update per distinct period; the default period also takes staff
+    // with no department or an unmapped one.
     const idsByMonths = new Map<number, number[]>();
     for (const d of departments) {
       const months = monthsUntilPermanent(d.name);

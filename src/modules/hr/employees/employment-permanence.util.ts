@@ -20,16 +20,15 @@ export function permanenceFields(
 }
 
 /**
- * TAFSD-321: months of service after which an ACTIVE employee becomes
- * permanent, by department name. Any other department (or none) waits the
- * longest period, so an unmapped department never promotes early.
+ * Months of service after which an ACTIVE employee becomes permanent, by
+ * department name. TAFSD-442 (decided 2026-10-29, replacing TAFSD-321's
+ * Academics 12 / Administration 14): teachers — the Academics department —
+ * after 14 months, everyone else (any other department, or none) after 12.
  */
 export const PERMANENT_AFTER_MONTHS_BY_DEPARTMENT: Readonly<Record<string, number>> = {
-  ACADEMICS: 12,
-  'SUPPORT SERVICES': 12,
-  ADMINISTRATION: 14,
+  ACADEMICS: 14,
 };
-export const DEFAULT_PERMANENT_AFTER_MONTHS = 14;
+export const DEFAULT_PERMANENT_AFTER_MONTHS = 12;
 
 export function monthsUntilPermanent(departmentName: string | null | undefined): number {
   const key = (departmentName ?? '').trim().toUpperCase();
