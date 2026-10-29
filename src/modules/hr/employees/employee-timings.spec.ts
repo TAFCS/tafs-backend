@@ -1,4 +1,4 @@
-import { EmployeeTimingsService, pktDayStart } from './employee-timings.service';
+import { EmployeeTimingsService, pktDayStart, timingsDelta } from './employee-timings.service';
 
 // TAFSD-369: timing changes take effect from a chosen date, separate from when they're saved.
 
@@ -104,5 +104,49 @@ describe('EmployeeTimingsService.changeTimings (future date)', () => {
     expect(r.status).toBe('SCHEDULED');
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect((upsert.mock.calls[0] as any)[0].create.timings).toMatchObject({ leaving_time: '12:00' });
+  });
+});
+
+// TAFSD-439: a back-dated change can override a later timings change.
+describe('EmployeeTimingsService override of later changes', () => {
+  const history = () => [
+    { id: 1, ...dims, valid_from: new Date('2026-07-26T00:00:00Z'), valid_to: new Date('2026-10-13T02:19:25Z'), change_type: 'SALARY_INCREMENT', timings: T() },
+    // A later change moved reporting to 07:00 from 13 Oct.
+    { id: 2, ...dims, valid_from: new Date('2026-10-13T02:19:25Z'), valid_to: null, change_type: 'TIMING_CHANGED', timings: T({ reporting_time: '07:00' }) },
+  ];
+
+  it('timingsDelta keeps only what changed, a single weekday as a patch', () => {
+    const cur = T({ day_timings: [{ day_of_week: 1, reporting_time: '08:00', leaving_time: null }] }) as any;
+    const next = T({ day_timings: [
+      { day_of_week: 1, reporting_time: '08:00', leaving_time: null },
+      { day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' },
+    ] }) as any;
+    expect(timingsDelta(cur, next)).toEqual({ day_timing_patch: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] });
+    expect(timingsDelta(T() as any, T({ leaving_time: '16:00' }) as any)).toEqual({ leaving_time: '16:00' });
+  });
+
+  it('applies from its date and carries only the changed day through the later period', async () => {
+    const { svc, tx, created, updated } = build(history());
+    const friday = { day_timing_patch: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] };
+    const latest = T({ reporting_time: '07:00', day_timings: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] });
+    const r = await svc.applyInTx(tx as any, 91, latest as any, '2026-09-26', 'x', new Date(), null, friday);
+    expect(r.status).toBe('APPLIED');
+    // Split at 26 Sep: 07:30 reporting kept, Friday added.
+    expect(created[0]).toMatchObject({ valid_from: pktDayStart('2026-09-26'), timings: { reporting_time: '07:30', day_timings: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] } });
+    // The 13 Oct change keeps its 07:00 reporting and gains the Friday hours.
+    expect(updated.find((u) => u.where.id === 2)?.data.timings).toMatchObject({ reporting_time: '07:00', day_timings: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] });
+    expect(tx.employee_profiles.update).toHaveBeenCalled();
+  });
+
+  it('without override it is still refused, and the message says it can be overridden', async () => {
+    const { svc, tx } = build(history());
+    await expect(svc.applyInTx(tx as any, 91, T({ leaving_time: '16:30' }) as any, '2026-10-10', 'x', new Date(), null))
+      .rejects.toThrow(/apply it anyway/);
+  });
+
+  it('a patch with both times null puts that weekday back to normal', () => {
+    const svc = new EmployeeTimingsService({} as any, {} as any);
+    const t = T({ day_timings: [{ day_of_week: 5, reporting_time: '07:30', leaving_time: '12:45' }] }) as any;
+    expect(svc.mergeSnapshot(t, { day_timing_patch: [{ day_of_week: 5, reporting_time: null, leaving_time: null }] }).day_timings).toEqual([]);
   });
 });

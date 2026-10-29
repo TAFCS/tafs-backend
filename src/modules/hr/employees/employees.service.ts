@@ -428,6 +428,10 @@ export class BulkDayTimingDto extends DayTimingDto {
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'effective_from must be YYYY-MM-DD' })
   effective_from?: string;
+  /** TAFSD-439: apply even when the timings changed again later (see EmployeeTimingsService). */
+  @IsOptional()
+  @IsBoolean()
+  override_later_changes?: boolean;
 }
 
 /** TAFSD-372: monthly pay effective from a date (null clears it). */
@@ -497,6 +501,11 @@ export class TimingsChangeDto {
   @IsString()
   @MaxLength(255)
   notes?: string | null;
+
+  /** TAFSD-439: apply even when the timings changed again later (see EmployeeTimingsService). */
+  @IsOptional()
+  @IsBoolean()
+  override_later_changes?: boolean;
 }
 
 export class UpdateWorkScheduleDto {
