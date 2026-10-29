@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ChatSenderType, ChatMessageType } from '@prisma/client';
@@ -351,6 +351,93 @@ export class ChatService {
       // Ignore probe failures; clients may still supply dimensions.
     }
     return {};
+  }
+
+  async assertMediaAccess(user: any, key: string): Promise<void> {
+    if (!key || typeof key !== 'string') {
+      throw new BadRequestException('A valid media key is required');
+    }
+    if (key.includes('..') || key.includes('\0')) {
+      throw new BadRequestException('Invalid media key');
+    }
+
+    // Super admin has full access
+    if (user?.role === 'SUPER_ADMIN') {
+      return;
+    }
+
+    const [chatMsgs, ticketMsgs] = await Promise.all([
+      this.prisma.chat_messages.findMany({
+        where: {
+          OR: [
+            { content: { contains: key } },
+            { media_metadata: { path: ['url'], string_contains: key } },
+          ],
+        },
+        select: {
+          id: true,
+          is_announcement: true,
+          conversation: {
+            select: { family_id: true },
+          },
+        },
+        take: 10,
+      }),
+      this.prisma.ticket_messages.findMany({
+        where: {
+          OR: [
+            { content: { contains: key } },
+            { media_metadata: { path: ['url'], string_contains: key } },
+          ],
+        },
+        select: {
+          id: true,
+          ticket: {
+            select: { family_id: true },
+          },
+        },
+        take: 10,
+      }),
+    ]);
+
+    // Announcements are public to both staff and parents
+    if (chatMsgs.some((m) => m.is_announcement)) {
+      return;
+    }
+
+    const familyIds = new Set<number>();
+    for (const m of chatMsgs) {
+      if (m.conversation?.family_id) {
+        familyIds.add(m.conversation.family_id);
+      }
+    }
+    for (const m of ticketMsgs) {
+      if (m.ticket?.family_id) {
+        familyIds.add(m.ticket.family_id);
+      }
+    }
+
+    if (familyIds.size === 0) {
+      throw new ForbiddenException('Media is not associated with any accessible conversation or ticket');
+    }
+
+    if (user?.userType === 'PARENT') {
+      if (!user.familyId || !familyIds.has(user.familyId)) {
+        throw new ForbiddenException('You do not have permission to view media from another family');
+      }
+      return;
+    }
+
+    if (user?.userType === 'STAFF') {
+      for (const fid of familyIds) {
+        if (await this.staffCanSeeFamily(user, fid)) {
+          return;
+        }
+      }
+      throw new ForbiddenException('Family is outside your staff scope');
+    }
+
+    throw new ForbiddenException('Access denied');
   }
 
   async getMediaFile(key: string) {

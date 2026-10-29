@@ -91,6 +91,7 @@ export class JwtStaffOrParentGuard implements CanActivate {
 
   private extractToken(request: {
     headers?: { authorization?: string; cookie?: string };
+    query?: { token?: string };
   }): string | null {
     const authHeader = request.headers?.authorization;
     if (authHeader?.startsWith('Bearer ')) {
@@ -100,6 +101,10 @@ export class JwtStaffOrParentGuard implements CanActivate {
     if (cookie) {
       const match = cookie.match(/(?:^|;\s*)tafs_access=([^;]+)/);
       if (match) return decodeURIComponent(match[1]);
+    }
+    const tokenQuery = request.query?.token;
+    if (typeof tokenQuery === 'string' && tokenQuery.length > 0) {
+      return tokenQuery;
     }
     return null;
   }

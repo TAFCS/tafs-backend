@@ -196,14 +196,21 @@ export class ChatController {
   }
 
   @Get('media/proxy')
+  @UseGuards(JwtStaffOrParentGuard)
   @ApiOperation({ summary: 'Proxy media to bypass CORS' })
   async proxyMedia(
+    @CurrentUser() user: any,
     @Query('key') key: string,
     @Res() res: any,
   ) {
-    const { buffer, mime } = await this.chatService.getMediaFile(key);
+    let cleanKey = (key || '').trim().replace(/^\/+/, '');
+    if (cleanKey.includes('digitaloceanspaces.com/')) {
+      cleanKey = cleanKey.split('digitaloceanspaces.com/')[1];
+    }
+    await this.chatService.assertMediaAccess(user, cleanKey);
+    const { buffer, mime } = await this.chatService.getMediaFile(cleanKey);
     res.set('Content-Type', mime);
-    res.set('Cache-Control', 'public, max-age=31536000');
+    res.set('Cache-Control', 'private, max-age=3600');
     res.send(buffer);
   }
 
