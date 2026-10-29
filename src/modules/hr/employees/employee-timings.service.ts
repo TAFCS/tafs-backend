@@ -24,7 +24,15 @@ export type TimingsChangeInput = {
   working_days?: number[] | null;
   days_per_week?: number | null;
   day_timings?: { day_of_week: number; reporting_time?: string | null; leaving_time?: string | null }[];
+  /** TAFSD-439: change only these weekdays (both times null puts that day back to normal); other days keep theirs. */
+  day_timing_patch?: { day_of_week: number; reporting_time: string | null; leaving_time: string | null }[];
   notes?: string | null;
+  /**
+   * TAFSD-439: a back-dated change normally stops at a later timings change.
+   * With this set it applies anyway: the fields it changes are written from
+   * its date and through every later period, which keep everything else.
+   */
+  override_later_changes?: boolean;
 };
 
 export type TimingsChangeResult = {
@@ -87,12 +95,46 @@ function defaultPattern(n: number): number[] {
 }
 
 /**
+ * TAFSD-439: only what a change actually alters, as an input that can be
+ * merged onto any other snapshot — so an override touches just those fields
+ * in later periods and leaves the rest of each later change alone.
+ */
+export function timingsDelta(current: EmployeeTimingsSnapshot, next: EmployeeTimingsSnapshot): TimingsChangeInput {
+  const same = (a: unknown, b: unknown) => (a ?? null) === (b ?? null);
+  const delta: TimingsChangeInput = {};
+  if (!same(current.check_in_source, next.check_in_source)) delta.check_in_source = next.check_in_source as 'FIXED' | 'TIMETABLE';
+  if (!same(current.reporting_time, next.reporting_time)) delta.reporting_time = next.reporting_time;
+  if (!same(current.leaving_time, next.leaving_time)) delta.leaving_time = next.leaving_time;
+  if (!same(current.late_relaxation_minutes, next.late_relaxation_minutes)) delta.late_relaxation_minutes = next.late_relaxation_minutes;
+  if (
+    !same(current.days_per_week, next.days_per_week) ||
+    JSON.stringify(current.working_days ?? null) !== JSON.stringify(next.working_days ?? null)
+  ) {
+    delta.days_per_week = next.days_per_week;
+    delta.working_days = next.working_days ?? null;
+  }
+  const dayOf = (t: EmployeeTimingsSnapshot, d: number) => t.day_timings?.find((x) => x.day_of_week === d);
+  const patch: NonNullable<TimingsChangeInput['day_timing_patch']> = [];
+  for (let d = 0; d < 7; d++) {
+    const a = dayOf(current, d);
+    const b = dayOf(next, d);
+    if (!same(a?.reporting_time, b?.reporting_time) || !same(a?.leaving_time, b?.leaving_time)) {
+      patch.push({ day_of_week: d, reporting_time: b?.reporting_time ?? null, leaving_time: b?.leaving_time ?? null });
+    }
+  }
+  if (patch.length) delta.day_timing_patch = patch;
+  return delta;
+}
+
+/**
  * TAFSD-369: timing and working-day changes with an effective-from date.
  *
  * - Effective today or earlier: applied now. The progression timeline is
  *   split at the start of that day (PKT) and the new timings run forward
  *   from there; a back-dated change is refused when the timings changed
- *   again later, since that later change would otherwise be overwritten.
+ *   again later, since that later change would otherwise be overwritten —
+ *   unless override_later_changes is set (TAFSD-439), which writes only the
+ *   changed fields through the later periods.
  * - Effective later: stored in employee_scheduled_timing_changes and applied
  *   on the day by applyDueScheduledChanges (daily, just after midnight PKT).
  *
@@ -140,6 +182,16 @@ export class EmployeeTimingsService {
         seen.add(d.day_of_week);
         const rin = d.reporting_time ? d.reporting_time.slice(0, 5) : null;
         const rout = d.leaving_time ? d.leaving_time.slice(0, 5) : null;
+        if (rin || rout) next.day_timings.push({ day_of_week: d.day_of_week, reporting_time: rin, leaving_time: rout });
+      }
+      next.day_timings.sort((a, b) => a.day_of_week - b.day_of_week);
+    }
+    if (input.day_timing_patch?.length) {
+      for (const d of input.day_timing_patch) {
+        if (d.day_of_week < 0 || d.day_of_week > 6) throw new BadRequestException('day_of_week must be 0–6.');
+        const rin = d.reporting_time ? d.reporting_time.slice(0, 5) : null;
+        const rout = d.leaving_time ? d.leaving_time.slice(0, 5) : null;
+        next.day_timings = next.day_timings.filter((x) => x.day_of_week !== d.day_of_week);
         if (rin || rout) next.day_timings.push({ day_of_week: d.day_of_week, reporting_time: rin, leaving_time: rout });
       }
       next.day_timings.sort((a, b) => a.day_of_week - b.day_of_week);
@@ -208,7 +260,16 @@ export class EmployeeTimingsService {
     }
 
     const { status } = await this.prisma.$transaction((tx) =>
-      this.applyInTx(tx, employeeId, next, effective, changedBy, new Date(), input.notes ?? null),
+      this.applyInTx(
+        tx,
+        employeeId,
+        next,
+        effective,
+        changedBy,
+        new Date(),
+        input.notes ?? null,
+        input.override_later_changes ? timingsDelta(current, next) : undefined,
+      ),
     );
     if (status === 'UNCHANGED') return { status, effective_from: effective, warnings: [] };
 
@@ -237,6 +298,8 @@ export class EmployeeTimingsService {
     changedBy: string | null,
     recordedAt: Date,
     notes: string | null,
+    /** TAFSD-439: set to override later changes; only these fields are carried through them. */
+    overrideDelta?: TimingsChangeInput,
   ): Promise<{ status: 'APPLIED' | 'UNCHANGED' }> {
     const start = pktDayStart(effective);
     const periods = await tx.employee_progression_periods.findMany({
@@ -262,11 +325,16 @@ export class EmployeeTimingsService {
       const laterChange = periods
         .slice(idx + 1)
         .find((p) => timingsKey(p.timings as unknown as EmployeeTimingsSnapshot) !== coveringKey);
-      if (laterChange) {
+      if (laterChange && !overrideDelta) {
         throw new BadRequestException(
           `The timings were changed again with effect from ${laterChange.valid_from.toISOString().slice(0, 10)}. ` +
-            `Make this change effective from that date or later.`,
+            `Make this change effective from that date or later, or apply it anyway to override the later change.`,
         );
+      }
+      if (laterChange && overrideDelta) {
+        await this.overrideFrom(tx, periods, idx, start, overrideDelta, changedBy, recordedAt, notes);
+        await this.writeProfile(tx, employeeId, next);
+        return { status: 'APPLIED' };
       }
       if (coveringKey === nextKey) {
         // Same timings already in force from this day: only the profile may lag.
@@ -317,6 +385,64 @@ export class EmployeeTimingsService {
 
     await this.writeProfile(tx, employeeId, next);
     return { status: 'APPLIED' };
+  }
+
+  /**
+   * TAFSD-439: write `delta` from `start` onward when the timings changed
+   * again later. The covering period is split at `start` (or updated when it
+   * starts that day) and every later period gets the same fields changed, so
+   * each later change keeps whatever else it set.
+   */
+  private async overrideFrom(
+    tx: Tx,
+    periods: Awaited<ReturnType<Tx['employee_progression_periods']['findMany']>>,
+    idx: number,
+    start: Date,
+    delta: TimingsChangeInput,
+    changedBy: string | null,
+    recordedAt: Date,
+    notes: string | null,
+  ) {
+    const covering = periods[idx];
+    const prior = covering.timings as unknown as EmployeeTimingsSnapshot;
+    const fromStart = this.mergeSnapshot(prior, delta);
+    const changeNote = (notes ?? describeTimingsChange(prior, fromStart))?.slice(0, 255) || null;
+    if (covering.valid_from.getTime() === start.getTime()) {
+      await tx.employee_progression_periods.update({
+        where: { id: covering.id },
+        data: {
+          timings: fromStart as unknown as Prisma.InputJsonValue,
+          change_type: covering.change_type === 'ONBOARDED' ? covering.change_type : 'TIMING_CHANGED',
+          changed_by: changedBy,
+          notes: changeNote,
+          recorded_at: recordedAt,
+        },
+      });
+    } else if (timingsKey(prior) !== timingsKey(fromStart)) {
+      const { id: _id, valid_from: _vf, valid_to, recorded_at: _ra, change_type: _ct, changed_by: _cb, notes: _n, timings: _t, ...dims } = covering;
+      await tx.employee_progression_periods.update({ where: { id: covering.id }, data: { valid_to: start } });
+      await tx.employee_progression_periods.create({
+        data: {
+          ...dims,
+          class_sections: (dims.class_sections ?? Prisma.DbNull) as Prisma.InputJsonValue,
+          timings: fromStart as unknown as Prisma.InputJsonValue,
+          change_type: 'TIMING_CHANGED',
+          changed_by: changedBy,
+          notes: changeNote,
+          valid_from: start,
+          valid_to,
+          recorded_at: recordedAt,
+        },
+      });
+    }
+    for (const p of periods.slice(idx + 1)) {
+      const t = p.timings as unknown as EmployeeTimingsSnapshot | null;
+      if (!t) continue;
+      await tx.employee_progression_periods.update({
+        where: { id: p.id },
+        data: { timings: this.mergeSnapshot(t, delta) as unknown as Prisma.InputJsonValue },
+      });
+    }
   }
 
   /** Profile fields, custom working days and day timings from a snapshot. */
@@ -371,12 +497,17 @@ export class EmployeeTimingsService {
     day: { day_of_week: number; reporting_time: string | null; leaving_time: string | null },
     effective: string | undefined,
     changedBy: string,
+    overrideLaterChanges = false,
   ): Promise<TimingsChangeResult> {
     const current = await this.currentSnapshot(employeeId);
     const others = (current.day_timings ?? []).filter((d) => d.day_of_week !== day.day_of_week);
     return this.changeTimings(
       employeeId,
-      { effective_from: effective, day_timings: day.reporting_time || day.leaving_time ? [...others, day] : others },
+      {
+        effective_from: effective,
+        day_timings: day.reporting_time || day.leaving_time ? [...others, day] : others,
+        override_later_changes: overrideLaterChanges,
+      },
       changedBy,
     );
   }

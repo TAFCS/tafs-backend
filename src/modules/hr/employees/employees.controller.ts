@@ -153,6 +153,7 @@ export class EmployeesController {
           { day_of_week: dto.day_of_week, reporting_time: dto.reporting_time ?? null, leaving_time: dto.leaving_time ?? null },
           dto.effective_from,
           changedBy,
+          dto.override_later_changes === true,
         );
         if (r.status === 'APPLIED') updated++;
         if (r.status === 'SCHEDULED') scheduled++;
