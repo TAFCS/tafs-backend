@@ -33,6 +33,8 @@ import {
 } from '../../common/support-ticket-routing';
 import { TicketRoutingService } from './routing/ticket-routing.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
+import { CreateFlowTicketDto } from './flow/dto/ticket-flow.dto';
+import { TicketFlowService, type FlowOrigin } from './flow/ticket-flow.service';
 import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
 import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
@@ -41,6 +43,12 @@ import { CloseTicketDto } from './dto/close-ticket.dto';
 import { ScopeService } from '../../common/scope/scope.service';
 
 const MAX_OPEN_TICKETS_PER_FAMILY = 10;
+
+/** Optional ?lane= filter on ticket lists (a lane key, TAFSD-447). */
+function laneWhere(laneKey?: string): Prisma.support_ticketsWhereInput {
+  const key = laneKey?.trim();
+  return key ? { lane: { key } } : {};
+}
 
 const ticketInclude = {
   families: {
@@ -80,6 +88,9 @@ const ticketInclude = {
   current_assignee: {
     select: { id: true, full_name: true, username: true, role: true },
   },
+  lane: {
+    select: { id: true, key: true, name: true, name_ur: true, icon: true, color: true, is_active: true },
+  },
 } satisfies Prisma.support_ticketsInclude;
 
 @Injectable()
@@ -94,6 +105,7 @@ export class SupportTicketsService {
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
     private readonly routing: TicketRoutingService,
+    private readonly flow: TicketFlowService,
   ) {}
 
   private studentScopeWhere(staff?: IJwtStaffPayload) {
@@ -128,6 +140,7 @@ export class SupportTicketsService {
     status?: 'open' | 'closed',
     take = 50,
     skip = 0,
+    laneKey?: string,
   ) {
     const statusFilter =
       status === 'closed'
@@ -138,24 +151,25 @@ export class SupportTicketsService {
 
     const [items, total] = await Promise.all([
       this.prisma.support_tickets.findMany({
-        where: { family_id: parent.familyId, ...statusFilter },
+        where: { family_id: parent.familyId, ...statusFilter, ...laneWhere(laneKey) },
         include: ticketInclude,
         orderBy: { last_message_at: 'desc' },
         take,
         skip,
       }),
       this.prisma.support_tickets.count({
-        where: { family_id: parent.familyId, ...statusFilter },
+        where: { family_id: parent.familyId, ...statusFilter, ...laneWhere(laneKey) },
       }),
     ]);
 
     return { items, total, take, skip };
   }
 
-  async listMyQueue(staff: IJwtStaffPayload, take = 50, skip = 0) {
+  async listMyQueue(staff: IJwtStaffPayload, take = 50, skip = 0, laneKey?: string) {
     const where = {
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
       current_assignee_id: staff.sub,
+      ...laneWhere(laneKey),
     };
 
     const [items, total] = await Promise.all([
@@ -176,7 +190,7 @@ export class SupportTicketsService {
    * Open tickets waiting in the queues the caller belongs to (claimed or not).
    * Kept at /finance-queue for app compatibility; super admins see every queue.
    */
-  async listFinanceQueue(staff: IJwtStaffPayload, take = 50, skip = 0) {
+  async listFinanceQueue(staff: IJwtStaffPayload, take = 50, skip = 0, laneKey?: string) {
     const queueIds =
       staff.role === 'SUPER_ADMIN' ? null : await this.routing.queueIdsFor(staff.sub);
     if (queueIds && queueIds.length === 0) return { items: [], total: 0, take, skip };
@@ -185,6 +199,7 @@ export class SupportTicketsService {
       routed_queue_id: queueIds ? { in: queueIds } : { not: null },
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
       ...this.studentScopeWhere(staff),
+      ...laneWhere(laneKey),
     };
 
     const [items, total] = await Promise.all([
@@ -218,7 +233,7 @@ export class SupportTicketsService {
     return members.filter((m) => m.id !== staff.sub);
   }
 
-  async listOversightQueue(staff: IJwtStaffPayload, take = 50, skip = 0) {
+  async listOversightQueue(staff: IJwtStaffPayload, take = 50, skip = 0, laneKey?: string) {
     if (staff.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('Super Admin access required');
     }
@@ -226,6 +241,7 @@ export class SupportTicketsService {
     const where = {
       status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
       ...this.studentScopeWhere(staff),
+      ...laneWhere(laneKey),
     };
 
     const [items, total] = await Promise.all([
@@ -242,10 +258,10 @@ export class SupportTicketsService {
     return { items, total, take, skip };
   }
 
-  async listClosedTickets(staff: IJwtStaffPayload, take = 50, skip = 0) {
+  async listClosedTickets(staff: IJwtStaffPayload, take = 50, skip = 0, laneKey?: string) {
     const queueIds = await this.routing.queueIdsFor(staff.sub);
     const where = {
-      AND: [closedTicketVisibilityWhere(staff, queueIds), this.studentScopeWhere(staff)],
+      AND: [closedTicketVisibilityWhere(staff, queueIds), this.studentScopeWhere(staff), laneWhere(laneKey)],
     };
 
     const [items, total] = await Promise.all([
@@ -429,7 +445,40 @@ export class SupportTicketsService {
     return queueAllowsForward;
   }
 
+  /** Old-app ticket: category + subtopic text from the fixed wizard. */
   async createTicket(parent: IJwtParentPayload, dto: CreateTicketDto) {
+    const origin = await this.flow.legacyOrigin(dto.category, dto.subtopic, dto.studentId != null);
+    return this.openTicket(parent, origin, dto.studentId ?? null, dto.description, dto.mediaMetadata);
+  }
+
+  /** The published ticket flow for the parent app to walk (TAFSD-447). */
+  getParentFlow(parent: IJwtParentPayload) {
+    return this.flow.parentFlow(parent.familyId);
+  }
+
+  listLanes() {
+    return this.flow.lanes();
+  }
+
+  /** New-app ticket: the server re-walks the submitted path before anything is stored. */
+  async createFlowTicket(parent: IJwtParentPayload, dto: CreateFlowTicketDto) {
+    const student = dto.studentId != null ? await this.studentPlacement(dto.studentId, parent.familyId) : null;
+    const origin = await this.flow.resolvePath(parent.familyId, dto.flowVersion, dto.path, student);
+    const description = dto.description.trim();
+    if (description.length < origin.min_length) {
+      throw new BadRequestException(`Please describe the issue in at least ${origin.min_length} characters`);
+    }
+    return this.openTicket(parent, origin, dto.studentId ?? null, description, dto.mediaMetadata);
+  }
+
+  private async openTicket(
+    parent: IJwtParentPayload,
+    origin: FlowOrigin,
+    studentId: number | null,
+    description: string,
+    mediaMetadata?: Record<string, unknown>,
+  ) {
+    const dto = { category: origin.category, subtopic: origin.subtopic, studentId, description, mediaMetadata };
     const openCount = await this.prisma.support_tickets.count({
       where: {
         family_id: parent.familyId,
@@ -442,7 +491,7 @@ export class SupportTicketsService {
       );
     }
 
-    const routing = await this.resolveRouting(parent.familyId, dto);
+    const routing = await this.resolveRouting(parent.familyId, origin, studentId);
     if (routing.note) {
       this.logger.warn(`Ticket for family ${parent.familyId} routed with fallback: ${routing.note}`);
     }
@@ -471,6 +520,10 @@ export class SupportTicketsService {
           routed_queue_id: routing.queueId,
           routed_rule_id: routing.ruleId,
           routing_note: routing.note,
+          lane_id: origin.lane_id,
+          flow_version: origin.flow_version,
+          leaf_node_key: origin.leaf_node_key,
+          flow_path: origin.flow_path ? (origin.flow_path as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
           opened_by_guardian_id: guardian?.id ?? null,
           last_message_snippet: dto.description.slice(0, 50),
         },
@@ -1470,28 +1523,31 @@ export class SupportTicketsService {
     });
   }
 
-  private async resolveRouting(familyId: number, dto: CreateTicketDto) {
-    let student: { campus_id: number | null; class_id: number | null; segment_id: number | null } | null =
-      null;
-    if (dto.studentId) {
-      const row = await this.assertStudentInFamily(dto.studentId, familyId);
-      if (dto.category !== TicketCategory.FINANCIAL && (!row.campus_id || !row.class_id)) {
-        throw new UnprocessableEntityException('Student is missing campus or class assignment');
-      }
-      const cls = row.class_id
-        ? await this.prisma.classes.findUnique({
-            where: { id: row.class_id },
-            select: { segment_id: true },
-          })
-        : null;
-      student = { campus_id: row.campus_id, class_id: row.class_id, segment_id: cls?.segment_id ?? null };
-    }
-
+  private async resolveRouting(familyId: number, origin: FlowOrigin, studentId: number | null) {
+    const student = studentId != null ? await this.studentPlacement(studentId, familyId, origin.category) : null;
     return this.routing.resolve({
-      category: dto.category,
-      subtopic: dto.subtopic,
+      category: origin.category,
+      subtopic: origin.subtopic,
       student,
+      path_keys: origin.path_keys,
+      leaf_queue_id: origin.leaf_queue_id,
+      lane_fallback_queue_id: origin.lane_fallback_queue_id,
     });
+  }
+
+  /** The child's placement for routing; general tickets need a campus and class. */
+  private async studentPlacement(studentId: number, familyId: number, category?: TicketCategory) {
+    const row = await this.assertStudentInFamily(studentId, familyId);
+    if (category !== undefined && category !== TicketCategory.FINANCIAL && (!row.campus_id || !row.class_id)) {
+      throw new UnprocessableEntityException('Student is missing campus or class assignment');
+    }
+    const cls = row.class_id
+      ? await this.prisma.classes.findUnique({
+          where: { id: row.class_id },
+          select: { segment_id: true },
+        })
+      : null;
+    return { campus_id: row.campus_id, class_id: row.class_id, segment_id: cls?.segment_id ?? null };
   }
 
   private async assertStudentInFamily(studentId: number, familyId: number) {

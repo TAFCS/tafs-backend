@@ -4,6 +4,14 @@ import { StaffRole, TicketCategory, TicketChildMatch } from '@prisma/client';
 export interface RoutingSubject {
   category: TicketCategory;
   subtopic?: string | null;
+  /**
+   * Ticket flow (TAFSD-447): step keys from the lane down to the leaf. A rule
+   * naming a step matches every ticket whose path passes through it.
+   */
+  path_keys?: string[] | null;
+  /** The leaf's own queue and the lane's fallback, tried after the rules. */
+  leaf_queue_id?: number | null;
+  lane_fallback_queue_id?: number | null;
   /** Absent for family-level tickets that are not about one child. */
   student?: {
     campus_id: number | null;
@@ -20,6 +28,7 @@ export interface RoutingRuleShape {
   segment_id: number | null;
   class_ids: number[];
   subtopic: string | null;
+  node_key?: string | null;
   priority: number;
   is_active: boolean;
 }
@@ -33,6 +42,7 @@ export function ruleMatches(rule: RoutingRuleShape, subject: RoutingSubject): bo
   if (rule.subtopic && rule.subtopic.trim().toLowerCase() !== (subject.subtopic ?? '').trim().toLowerCase()) {
     return false;
   }
+  if (rule.node_key && !(subject.path_keys ?? []).includes(rule.node_key)) return false;
   // Placement conditions can only match a ticket about a specific child.
   if (rule.campus_id != null && rule.campus_id !== student?.campus_id) return false;
   if (rule.segment_id != null && rule.segment_id !== student?.segment_id) return false;
@@ -41,13 +51,17 @@ export function ruleMatches(rule: RoutingRuleShape, subject: RoutingSubject): bo
 }
 
 /**
- * How narrowly a rule is drawn. Subtopic outranks placement because it names
- * the kind of problem ("Transport"), which is a stronger signal than where the
- * child sits; among placements class > segment > campus.
+ * How narrowly a rule is drawn. Naming the kind of problem (a subtopic, or a
+ * flow step) outranks placement, because it is a stronger signal than where the
+ * child sits; a deeper step outranks a shallower one, and a subtopic counts as
+ * the leaf. Among placements class > segment > campus.
  */
-export function ruleSpecificity(rule: RoutingRuleShape): number {
+export function ruleSpecificity(rule: RoutingRuleShape, subject?: RoutingSubject): number {
+  const path = subject?.path_keys ?? [];
+  const leafLevel = Math.max(path.length - 1, 0);
+  const level = rule.node_key ? path.indexOf(rule.node_key) : rule.subtopic ? leafLevel : -1;
   return (
-    (rule.subtopic ? 16 : 0) +
+    (level >= 0 ? 16 * (level + 1) : 0) +
     (rule.class_ids.length > 0 ? 8 : 0) +
     (rule.segment_id != null ? 4 : 0) +
     (rule.campus_id != null ? 2 : 0) +
@@ -64,7 +78,7 @@ export function orderMatchingRules<T extends RoutingRuleShape>(
     .filter((r) => ruleMatches(r, subject))
     .sort(
       (a, b) =>
-        ruleSpecificity(b) - ruleSpecificity(a) || a.priority - b.priority || a.id - b.id,
+        ruleSpecificity(b, subject) - ruleSpecificity(a, subject) || a.priority - b.priority || a.id - b.id,
     );
 }
 
