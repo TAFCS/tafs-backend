@@ -20,6 +20,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import {
   CreateSaturdayScheduleDto,
   ListSaturdaySchedulesQueryDto,
+  SaturdayGapsQueryDto,
 } from './dto/saturday-schedules.dto';
 import { SaturdaySchedulesService } from './saturday-schedules.service';
 
@@ -61,6 +62,26 @@ export class SaturdaySchedulesController {
       HttpStatus.OK,
       'Saturday schedules retrieved successfully',
     );
+  }
+
+  // TAFSD-445: Saturdays this employee's segment works that they aren't marked for.
+  @Get('suggestions/:employeeId')
+  async suggestions(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.saturdayService.suggestionsFor(employeeId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Saturday suggestions retrieved successfully');
+  }
+
+  // TAFSD-445: employees with no working Saturday in a cycle their segment works.
+  @Get('gaps')
+  async gaps(
+    @Query() query: SaturdayGapsQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.saturdayService.gaps(query, user);
+    return createApiResponse(data, HttpStatus.OK, 'Saturday gaps retrieved successfully');
   }
 
   @Delete(':id')
