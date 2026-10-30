@@ -25,6 +25,21 @@ import {
   computePayrollWindow,
   currentPayrollPeriodLabel,
 } from '../payroll/payroll-period.util';
+import { peerGroupKey, suggestSaturdays } from './saturday-suggestions.util';
+
+const PEER_SELECT = {
+  id: true,
+  full_name: true,
+  employee_code: true,
+  campus_id: true,
+  segment_id: true,
+  department_id: true,
+  staff_category_id: true,
+  join_date: true,
+  date_of_leaving: true,
+  campuses: { select: { campus_name: true } },
+  segments: { select: { name: true } },
+} satisfies Prisma.employee_profilesSelect;
 
 // Max mandatory Saturdays that can be assigned to one employee in one payroll
 // month. Employees already at this count are skipped (and reported back in
@@ -458,6 +473,108 @@ export class SaturdaySchedulesService {
     }
 
     return { id };
+  }
+
+  /**
+   * TAFSD-445: the Saturdays this cycle and next that most of this employee's
+   * campus + segment peers are marked for, from their joining date, which they
+   * are not marked for yet. Shown on the employee so HR can add them in one
+   * click after a mid-cycle join, a rejoin or a move.
+   */
+  async suggestionsFor(employeeId: number, user: IJwtStaffPayload) {
+    this.assertCanManage(user, 'view');
+    const employee = await this.prisma.employee_profiles.findUnique({ where: { id: employeeId }, select: PEER_SELECT });
+    if (!employee) throw new NotFoundException('Employee not found');
+    this.assertCampusAccess(user, employee.campus_id);
+    this.scope.assertEmployee(user, employee);
+
+    const { start, end } = this.suggestionWindow();
+    const key = peerGroupKey(employee);
+    if (!key) return { employee_id: employeeId, dates: [] as string[], group: null };
+    const peers = await this.prisma.employee_profiles.findMany({
+      where: {
+        employment_status: 'ACTIVE',
+        campus_id: employee.campus_id,
+        ...(employee.segment_id != null
+          ? { segment_id: employee.segment_id }
+          : { segment_id: null, department_id: employee.department_id }),
+      },
+      select: PEER_SELECT,
+    });
+    const everyone = peers.some((p) => p.id === employee.id) ? peers : [...peers, employee];
+    const marks = await this.prisma.teacher_saturday_schedules.findMany({
+      where: { employee_id: { in: everyone.map((p) => p.id) }, date: { gte: start, lte: end } },
+      select: { employee_id: true, date: true },
+    });
+    return {
+      employee_id: employeeId,
+      dates: suggestSaturdays(everyone, marks).get(employee.id) ?? [],
+      group: {
+        campus: employee.campuses?.campus_name ?? null,
+        segment: employee.segments?.name ?? null,
+        size: everyone.length - 1,
+      },
+    };
+  }
+
+  /**
+   * TAFSD-445 safety net: ACTIVE employees with no working Saturday in a
+   * cycle although most of their segment works some — whatever route they
+   * came in by (new, rejoined, moved, imported). Each comes with the dates
+   * their peers work.
+   */
+  async gaps(query: { month: string; campusId?: number[] }, user: IJwtStaffPayload) {
+    this.assertCanManage(user, 'view');
+    const [year, month] = query.month.split('-').map((v) => parseInt(v, 10));
+    if (!year || !month || month < 1 || month > 12) throw new BadRequestException('month must be YYYY-MM');
+    const { periodStart, periodEnd } = computePayrollWindow(year, month);
+
+    const campusIds = this.scope.campusIdsFor(user, query.campusId);
+    const { campus_id: universalCampusFilter, ...restUniversalScope } = this.scope.whereForEmployees(user);
+    const universalCampusIds = universalCampusFilter?.in;
+    const effectiveCampusIds = universalCampusIds
+      ? campusIds?.length
+        ? campusIds.filter((id) => universalCampusIds.includes(id))
+        : universalCampusIds
+      : campusIds;
+    const campusWhere: Prisma.employee_profilesWhereInput =
+      effectiveCampusIds !== undefined ? { campus_id: { in: effectiveCampusIds } } : {};
+
+    // Peers are the whole campus; the list is limited to who this user may see.
+    const [universe, visible] = await Promise.all([
+      this.prisma.employee_profiles.findMany({ where: { employment_status: 'ACTIVE', ...campusWhere }, select: PEER_SELECT }),
+      this.prisma.employee_profiles.findMany({
+        where: { employment_status: 'ACTIVE', ...campusWhere, ...restUniversalScope },
+        select: { id: true },
+      }),
+    ]);
+    const marks = await this.prisma.teacher_saturday_schedules.findMany({
+      where: { employee_id: { in: universe.map((e) => e.id) }, date: { gte: periodStart, lte: periodEnd } },
+      select: { employee_id: true, date: true },
+    });
+    const hasAny = new Set(marks.map((m) => m.employee_id));
+    const visibleIds = new Set(visible.map((v) => v.id));
+    const suggested = suggestSaturdays(universe, marks);
+    return universe
+      .filter((e) => visibleIds.has(e.id) && !hasAny.has(e.id) && suggested.has(e.id))
+      .map((e) => ({
+        employee_id: e.id,
+        full_name: e.full_name,
+        employee_code: e.employee_code,
+        campus: e.campuses?.campus_name ?? null,
+        segment: e.segments?.name ?? null,
+        join_date: e.join_date ? this.dateKey(e.join_date) : null,
+        dates: suggested.get(e.id)!,
+      }))
+      .sort((a, b) => (a.full_name ?? '').localeCompare(b.full_name ?? ''));
+  }
+
+  /** The current payroll cycle and the next one (Saturdays for next month are often marked early). */
+  private suggestionWindow(): { start: Date; end: Date } {
+    const [y, m] = currentPayrollPeriodLabel(new Date()).split('-').map(Number);
+    const { periodStart } = computePayrollWindow(y, m);
+    const { periodEnd } = computePayrollWindow(m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1);
+    return { start: periodStart, end: periodEnd };
   }
 
   /**

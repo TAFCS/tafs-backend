@@ -58,3 +58,18 @@ export class ListSaturdaySchedulesQueryDto {
   @IsInt()
   employeeId?: number;
 }
+
+/** TAFSD-445: employees left without working Saturdays in a payroll cycle. */
+export class SaturdayGapsQueryDto {
+  @ApiProperty({ example: '2026-10', description: 'YYYY-MM payroll cycle (26th of previous month – 25th of this month)' })
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'month must be YYYY-MM' })
+  month: string;
+
+  @ApiPropertyOptional({ type: [Number] })
+  @IsOptional()
+  @Transform(toNumberArray)
+  @IsArray()
+  @IsInt({ each: true })
+  campusId?: number[];
+}
