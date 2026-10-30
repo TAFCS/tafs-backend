@@ -53,6 +53,8 @@ interface EmployeeLineInput {
   // TAFSD-278: skip that scheme entirely for this employee.
   eobi_exempt?: boolean;
   sessi_exempt?: boolean;
+  // TAFSD-437: no attendance deductions, every cycle.
+  always_full_pay?: boolean;
 }
 
 type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' | 'SICK_LEAVE' | 'CASUAL_LEAVE' | 'ANNUAL_LEAVE' | 'UNPAID_LEAVE' | 'UNRESOLVED' | 'DAY_OFF';
@@ -123,6 +125,7 @@ interface ComputedLine {
   net_pay: Prisma.Decimal;
   after_leaving_deduction: Prisma.Decimal;
   full_pay_override: boolean;
+  always_full_pay: boolean;
   eobi_waived: boolean;
   sessi_waived: boolean;
   income_tax_waived: boolean;
@@ -233,6 +236,7 @@ export class PayrollService {
     date_of_leaving: true,
     eobi_exempt: true,
     sessi_exempt: true,
+    always_full_pay: true,
   } as const;
 
   constructor(
@@ -815,31 +819,37 @@ export class PayrollService {
         return units ? sum.plus(rateOn(d.date).times(units)) : sum;
       }, new Prisma.Decimal(0));
     const minuteRateDivisor = scheduledMinutes > 0 ? scheduledMinutes : 0;
-    const absenceDeduction = fullPayOverride
+    // TAFSD-437: "always full pay" on the profile waives the same attendance
+    // deductions as this line's "pay full salary", every cycle. Unlike the
+    // line switch it keeps the off-roster proration below: someone who joins
+    // or leaves mid-cycle is still paid only for the days they were employed.
+    const alwaysFullPay = employee.always_full_pay === true;
+    const noAttendanceCuts = fullPayOverride || alwaysFullPay;
+    const absenceDeduction = noAttendanceCuts
       ? zero
       : payVaries
         ? sumDays((d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0))
         : dailyRate.times(absentDays + unpaidLeaveDays);
-    const halfDayDeduction = fullPayOverride
+    const halfDayDeduction = noAttendanceCuts
       ? zero
       : payVaries
         ? sumDays((d) => (d.classification === 'HALF_DAY' ? 0.5 : 0))
         : dailyRate.dividedBy(2).times(halfDays);
-    const lateDeduction = fullPayOverride
+    const lateDeduction = noAttendanceCuts
       ? zero
       : payVaries
         ? minuteRateDivisor
           ? sumDays((d) => d.late_minutes).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalLateMinutes);
-    const earlyLeaveDeduction = fullPayOverride
+    const earlyLeaveDeduction = noAttendanceCuts
       ? zero
       : payVaries
         ? minuteRateDivisor
           ? sumDays((d) => d.early_leave_minutes ?? 0).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalEarlyLeaveMinutes);
-    const breakDeduction = fullPayOverride
+    const breakDeduction = noAttendanceCuts
       ? zero
       : payVaries
         ? minuteRateDivisor
@@ -940,6 +950,7 @@ export class PayrollService {
       net_pay: netPay.toDecimalPlaces(2),
       after_leaving_deduction: afterLeavingDeduction.toDecimalPlaces(2),
       full_pay_override: fullPayOverride,
+      always_full_pay: alwaysFullPay,
       eobi_waived: waivers.eobi,
       sessi_waived: waivers.sessi,
       income_tax_waived: waivers.income_tax,
@@ -970,9 +981,9 @@ export class PayrollService {
   // Flip back to true to re-enable; sandwich detection is untouched either way.
   private readonly CONSECUTIVE_LATE_RULE_ENABLED = false;
 
-  /** A "pay full salary" line never raises sandwich/late flags — nothing is deducted for them. */
-  private detectFlagsForLine(line: { full_pay_override: boolean; daily_breakdown: DayBreakdownEntry[] }): DetectedFlag[] {
-    return line.full_pay_override ? [] : this.detectPayrollFlags(line.daily_breakdown);
+  /** A "pay full salary" or "always full pay" line never raises sandwich/late flags — nothing is deducted for them. */
+  private detectFlagsForLine(line: { full_pay_override: boolean; always_full_pay?: boolean; daily_breakdown: DayBreakdownEntry[] }): DetectedFlag[] {
+    return line.full_pay_override || line.always_full_pay ? [] : this.detectPayrollFlags(line.daily_breakdown);
   }
 
   private detectPayrollFlags(dailyBreakdown: DayBreakdownEntry[]): DetectedFlag[] {
@@ -2214,6 +2225,7 @@ export class PayrollService {
           employment_status: true,
           eobi_exempt: true,
           sessi_exempt: true,
+          always_full_pay: true,
         },
       }),
     ]);

@@ -20,7 +20,7 @@ const DTO_FIELDS = [
   'secondary_phone', 'personal_email', 'job_title', 'staff_category_id',
   'segment_id', 'job_description', 'notes', 'reporting_time', 'leaving_time',
   'check_in_source', 'late_relaxation_minutes', 'monthly_pay',
-  'payroll_enabled', 'eobi_exempt', 'sessi_exempt', 'campus_id', 'days_per_week', 'photo_url',
+  'payroll_enabled', 'eobi_exempt', 'sessi_exempt', 'always_full_pay', 'campus_id', 'days_per_week', 'photo_url',
   'father_photo_url', 'father_cnic', 'mother_photo_url', 'mother_cnic',
   'spouse_name', 'spouse_cnic', 'spouse_photo_url', 'account_number',
   'bank_name', 'emergency_contact_name', 'emergency_contact_phone',
