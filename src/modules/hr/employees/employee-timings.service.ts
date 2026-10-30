@@ -259,7 +259,7 @@ export class EmployeeTimingsService {
       return { status: 'SCHEDULED', effective_from: effective, warnings: [] };
     }
 
-    const { status } = await this.prisma.$transaction((tx) =>
+    const { status, appliedFrom } = await this.prisma.$transaction((tx) =>
       this.applyInTx(
         tx,
         employeeId,
@@ -272,6 +272,11 @@ export class EmployeeTimingsService {
       ),
     );
     if (status === 'UNCHANGED') return { status, effective_from: effective, warnings: [] };
+    // TAFSD-443: dated before the employee's history starts (they joined
+    // later), so it was applied from their first day instead.
+    const startedLater = appliedFrom
+      ? [`${employee.full_name ?? `#${employeeId}`} joined after ${formatDay(effective)}, so this was applied from their first day, ${formatDay(appliedFrom)}.`]
+      : [];
 
     this.auditLogs.log({
       entity_type: 'EMPLOYEE',
@@ -279,10 +284,14 @@ export class EmployeeTimingsService {
       action: 'UPDATED',
       section: 'hr',
       field: 'Timings',
-      note: `${employee.full_name ?? `#${employeeId}`} — effective ${formatDay(effective)}: ${change}`,
+      note: `${employee.full_name ?? `#${employeeId}`} — effective ${formatDay(appliedFrom ?? effective)}: ${change}`,
       changed_by: changedBy,
     });
-    return { status, effective_from: effective, warnings: await this.finalizedPayrollWarnings(employeeId, effective) };
+    return {
+      status,
+      effective_from: appliedFrom ?? effective,
+      warnings: [...startedLater, ...(await this.finalizedPayrollWarnings(employeeId, appliedFrom ?? effective))],
+    };
   }
 
   /**
@@ -300,8 +309,9 @@ export class EmployeeTimingsService {
     notes: string | null,
     /** TAFSD-439: set to override later changes; only these fields are carried through them. */
     overrideDelta?: TimingsChangeInput,
-  ): Promise<{ status: 'APPLIED' | 'UNCHANGED' }> {
-    const start = pktDayStart(effective);
+  ): Promise<{ status: 'APPLIED' | 'UNCHANGED'; appliedFrom?: string }> {
+    let start = pktDayStart(effective);
+    let appliedFrom: string | undefined;
     const periods = await tx.employee_progression_periods.findMany({
       where: { employee_id: employeeId },
       orderBy: { valid_from: 'asc' },
@@ -314,9 +324,11 @@ export class EmployeeTimingsService {
         if (p.valid_from.getTime() <= start.getTime()) idx = i;
       });
       if (idx < 0) {
-        throw new BadRequestException(
-          `${formatDay(effective)} is before this employee's history starts (${periods[0].valid_from.toISOString().slice(0, 10)}).`,
-        );
+        // TAFSD-443: the employee joined after this date. Their history starts
+        // at their first period, so the change applies from there.
+        idx = 0;
+        start = periods[0].valid_from;
+        appliedFrom = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(start);
       }
       const covering = periods[idx];
       const coveringKey = timingsKey(covering.timings as unknown as EmployeeTimingsSnapshot);
@@ -334,7 +346,7 @@ export class EmployeeTimingsService {
       if (laterChange && overrideDelta) {
         await this.overrideFrom(tx, periods, idx, start, overrideDelta, changedBy, recordedAt, notes);
         await this.writeProfile(tx, employeeId, next);
-        return { status: 'APPLIED' };
+        return { status: 'APPLIED', appliedFrom };
       }
       if (coveringKey === nextKey) {
         // Same timings already in force from this day: only the profile may lag.
@@ -384,7 +396,7 @@ export class EmployeeTimingsService {
     }
 
     await this.writeProfile(tx, employeeId, next);
-    return { status: 'APPLIED' };
+    return { status: 'APPLIED', appliedFrom };
   }
 
   /**
