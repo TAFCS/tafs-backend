@@ -13,6 +13,9 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { ORIGINATION_OPTIONS } from '../../../common/support-ticket-routing';
 import { TicketRoutingService } from './ticket-routing.service';
+import { TicketFlowService } from '../flow/ticket-flow.service';
+import { indexTree, laneSettings } from '../flow/flow-tree';
+import type { FlowTree } from '../flow/flow.types';
 import { ChatGateway } from '../../chat/chat.gateway';
 import {
   CreateRoutingRuleDto,
@@ -45,6 +48,7 @@ export class TicketRoutingAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly routing: TicketRoutingService,
+    private readonly flow: TicketFlowService,
     private readonly auditLogs: AuditLogsService,
     @Inject(forwardRef(() => ChatGateway))
     private readonly chatGateway: ChatGateway,
@@ -89,8 +93,31 @@ export class TicketRoutingAdminService {
     return {
       rules,
       queues: queues.map(({ _count, ...q }) => ({ ...q, open_tickets: _count.tickets })),
-      options: { campuses, segments, classes, staff: users, subtopics: ORIGINATION_OPTIONS.topics, all_subtopics: subtopics },
+      options: {
+        campuses,
+        segments,
+        classes,
+        staff: users,
+        subtopics: ORIGINATION_OPTIONS.topics,
+        all_subtopics: subtopics,
+        flow_nodes: await this.flowNodes(),
+      },
     };
+  }
+
+  /** Steps of the published ticket flow a rule can name, with their breadcrumb (TAFSD-447). */
+  private async flowNodes() {
+    const tree = (await this.flow.published()).tree as unknown as FlowTree;
+    const idx = indexTree(tree);
+    return [...idx.values()]
+      .filter((x) => x.node.type !== 'INFO' && x.node.type !== 'SCREEN')
+      .map((x) => ({
+        key: x.node.key,
+        type: x.node.type,
+        lane_key: x.lane.key,
+        category: laneSettings(x.lane).legacy_category,
+        breadcrumb: x.path.map((k) => idx.get(k)!.node.label).join(' › '),
+      }));
   }
 
   async health(staff: IJwtStaffPayload) {
@@ -171,6 +198,7 @@ export class TicketRoutingAdminService {
     if (dto.segment_id !== undefined) data.segment_id = dto.segment_id;
     if (dto.class_ids !== undefined) data.class_ids = [...new Set(dto.class_ids)];
     if (dto.subtopic !== undefined) data.subtopic = dto.subtopic?.trim() || null;
+    if (dto.node_key !== undefined) data.node_key = dto.node_key?.trim() || null;
     if (dto.target_user_id !== undefined) data.target_user_id = dto.target_user_id;
     if (dto.target_queue_id !== undefined) data.target_queue_id = dto.target_queue_id;
     if (dto.priority !== undefined) data.priority = dto.priority;
@@ -199,6 +227,14 @@ export class TicketRoutingAdminService {
       if (!queue) throw new BadRequestException('Target queue not found');
       if (queue.category !== dto.category) {
         throw new BadRequestException('A rule can only target a queue of the same category');
+      }
+    }
+    if (dto.node_key) {
+      const tree = (await this.flow.published()).tree as unknown as FlowTree;
+      const hit = indexTree(tree).get(dto.node_key);
+      if (!hit) throw new BadRequestException('That ticket flow step is not in the published flow');
+      if (laneSettings(hit.lane).legacy_category !== dto.category) {
+        throw new BadRequestException('That ticket flow step is in a lane of the other category');
       }
     }
     const placed = dto.campus_id != null || dto.segment_id != null || (dto.class_ids?.length ?? 0) > 0;
