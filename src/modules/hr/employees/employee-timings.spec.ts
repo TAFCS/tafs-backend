@@ -65,10 +65,15 @@ describe('EmployeeTimingsService.applyInTx', () => {
     expect(updated[0]).toMatchObject({ where: { id: 3 }, data: { timings: T({ leaving_time: '16:30' }), change_type: 'TIMING_CHANGED' } });
   });
 
-  it('refuses a date before the employee\'s history starts', async () => {
-    const { svc, tx } = build(history());
-    await expect(svc.applyInTx(tx as any, 91, T({ leaving_time: '16:30' }) as any, '2026-01-01', 'x', new Date(), null))
-      .rejects.toThrow(/before this employee's history starts/);
+  it('a date before the employee joined applies from their first day (TAFSD-443)', async () => {
+    const { svc, tx, created, updated } = build(history());
+    const next = T({ leaving_time: '16:30' });
+    const r = await svc.applyInTx(tx as any, 91, next as any, '2026-01-01', 'x', new Date(), null);
+    expect(r).toEqual({ status: 'APPLIED', appliedFrom: '2026-07-26' });
+    // No split: the first period itself takes the new timings, and so does the later one.
+    expect(created).toHaveLength(0);
+    expect(updated.find((u) => u.where.id === 1)?.data.timings).toEqual(next);
+    expect(updated.find((u) => u.where.id === 2)?.data.timings).toEqual(next);
   });
 });
 
