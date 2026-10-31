@@ -4,7 +4,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createApiResponse } from '../../utils/serializer.util';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
-import { RequireAnyAction } from '../../decorators/require-action.decorator';
+import { RequireAnyAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
@@ -40,6 +40,7 @@ export class StudentFlagsController {
   }
 
   @Get(':cc')
+  @RequireAnyTile('student.directory')
   @ApiOperation({ summary: 'Get all flags for a student' })
   async getFlags(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
     await this.svc.assertStudentVisible(user, cc);

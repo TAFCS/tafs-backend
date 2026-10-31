@@ -63,4 +63,16 @@ describe('ChatController', () => {
       expect(mockRes.send).toHaveBeenCalledWith(Buffer.from('fake-audio'));
     });
   });
+
+  describe('getAcknowledgments', () => {
+    it('delegates to chatService.getAcknowledgments with messageId and user', async () => {
+      chatService.getAcknowledgments = jest.fn().mockResolvedValue([{ id: 1 }]);
+      const user = { userType: 'STAFF', sub: 'u1', role: 'EMPLOYEE' } as any;
+
+      const res = await controller.getAcknowledgments('msg-123', user);
+
+      expect(chatService.getAcknowledgments).toHaveBeenCalledWith('msg-123', user);
+      expect(res).toEqual([{ id: 1 }]);
+    });
+  });
 });

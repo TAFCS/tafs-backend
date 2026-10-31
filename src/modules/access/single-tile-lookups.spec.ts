@@ -14,6 +14,8 @@ import { MANIFEST_EFFECTIVE_TILES, TILES_MANIFEST } from './tiles.manifest';
 import { EmployeesController } from '../hr/employees/employees.controller';
 import { EmployeesService } from '../hr/employees/employees.service';
 import { StudentsController } from '../students/students.controller';
+import { StaffEditingController } from '../staff-editing/staff-editing.controller';
+import { StudentFlagsController } from '../student-flags/student-flags.controller';
 
 /**
  * TAFSD-191..204: a user delegated ONE tile must be able to load the lookups
@@ -96,6 +98,8 @@ describe.each([
   ['GET /hr/employees/search-simple', EmployeesController, 'searchSimple', EMPLOYEE_SEARCH_TILES],
   ['GET /students/search-simple', StudentsController, 'searchSimple', STUDENT_SEARCH_TILES],
   ['GET /students', StudentsController, 'findAll', STUDENT_LIST_TILES],
+  ['GET /staff-editing/guardians/by-nic/:nic', StaffEditingController, 'getGuardianByNic', ['student.directory', 'student.families']],
+  ['GET /student-flags/:cc', StudentFlagsController, 'getFlags', ['student.directory']],
 ])('%s', (_label, controller, handler, tiles) => {
   it.each(tiles)('opens for a user holding ONLY %s', (tileId) => {
     expect(TILES_MANIFEST.some((t) => t.id === tileId)).toBe(true);

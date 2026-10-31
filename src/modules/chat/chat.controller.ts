@@ -11,6 +11,7 @@ import { Action } from '../auth/casl/actions';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('Chat')
 @ApiBearerAuth()
@@ -191,8 +192,11 @@ export class ChatController {
     ability.can(Action.Read, 'Chat') || ability.can(Action.Manage, 'all'),
   )
   @ApiOperation({ summary: 'Admin: see which families have acknowledged a message' })
-  getAcknowledgments(@Param('messageId') messageId: string) {
-    return this.chatService.getAcknowledgments(messageId);
+  getAcknowledgments(
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return this.chatService.getAcknowledgments(messageId, user);
   }
 
   @Get('media/proxy')

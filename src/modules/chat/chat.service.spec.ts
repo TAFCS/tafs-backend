@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
@@ -9,9 +9,10 @@ import { ScopeService } from '../../common/scope/scope.service';
 describe('ChatService', () => {
   let service: ChatService;
   let prisma: {
-    chat_messages: { findMany: jest.Mock };
+    chat_messages: { findMany: jest.Mock; findUnique: jest.Mock };
     ticket_messages: { findMany: jest.Mock };
     families: { count: jest.Mock };
+    message_acknowledgments: { findMany: jest.Mock };
   };
   let scope: {
     isUnrestricted: jest.Mock;
@@ -20,9 +21,10 @@ describe('ChatService', () => {
 
   beforeEach(async () => {
     prisma = {
-      chat_messages: { findMany: jest.fn().mockResolvedValue([]) },
+      chat_messages: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn().mockResolvedValue(null) },
       ticket_messages: { findMany: jest.fn().mockResolvedValue([]) },
       families: { count: jest.fn().mockResolvedValue(0) },
+      message_acknowledgments: { findMany: jest.fn().mockResolvedValue([]) },
     };
 
     scope = {
@@ -161,6 +163,60 @@ describe('ChatService', () => {
           'chat/misc/2026/10/random.bin',
         ),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('getAcknowledgments', () => {
+    it('throws NotFoundException if message does not exist', async () => {
+      prisma.chat_messages.findUnique.mockResolvedValue(null);
+      const user = { sub: 's1', role: 'EMPLOYEE' } as any;
+
+      await expect(service.getAcknowledgments('non-existent', user)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws NotFoundException if family is out of scope for direct message', async () => {
+      prisma.chat_messages.findUnique.mockResolvedValue({
+        id: 'msg-1',
+        conversation: { family_id: 99 },
+      });
+      prisma.families.count.mockResolvedValue(0);
+      scope.isUnrestricted.mockReturnValue(false);
+      scope.whereForStudents.mockReturnValue({ campus_id: 1 });
+
+      const user = { sub: 's1', role: 'EMPLOYEE' } as any;
+
+      await expect(service.getAcknowledgments('msg-1', user)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('returns acknowledgments filtered by caller scope', async () => {
+      prisma.chat_messages.findUnique.mockResolvedValue({
+        id: 'msg-1',
+        conversation: { family_id: 42 },
+      });
+      prisma.families.count.mockResolvedValue(1);
+      scope.isUnrestricted.mockReturnValue(false);
+      scope.whereForStudents.mockReturnValue({ campus_id: 1 });
+
+      prisma.message_acknowledgments.findMany.mockResolvedValue([
+        { id: 1, family_id: 42, families: { id: 42, household_name: 'Khan' } },
+      ]);
+
+      const user = { sub: 's1', role: 'EMPLOYEE' } as any;
+      const result = await service.getAcknowledgments('msg-1', user);
+
+      expect(result).toHaveLength(1);
+      expect(prisma.message_acknowledgments.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            message_id: 'msg-1',
+            families: { students: { some: { deleted_at: null, campus_id: 1 } } },
+          }),
+        }),
+      );
     });
   });
 });

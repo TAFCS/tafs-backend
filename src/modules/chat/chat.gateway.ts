@@ -691,8 +691,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     this.server.to(targetRoom).emit('receiveMessage', { message: announcement, conversation });
     
-    // Also update Admin Inbox for reference
+    // Also update Admin Inbox for reference (unrestricted and scoped staff)
     this.server.to('admin_inbox').emit('receiveMessage', { message: announcement, conversation });
+    this.server.to('admin_inbox_scoped').emit('receiveMessage', { message: announcement, conversation });
 
     // 3. Send Push Notifications (Background)
     const targetFamilies = await this.prisma.families.findMany({

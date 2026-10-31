@@ -1220,9 +1220,20 @@ export class StaffEditingService {
    * Unique households linked to a guardian via student_guardians → students → families.
    * Used by staff guardian search so the UI can show / open the associated family.
    */
-  private async familiesForGuardian(guardianId: number): Promise<Array<{ id: number; household_name: string | null }>> {
+  private async familiesForGuardian(
+    guardianId: number,
+    user?: IJwtStaffPayload,
+  ): Promise<Array<{ id: number; household_name: string | null }>> {
+    const studentFilter =
+      user && !this.scope.isUnrestricted(user)
+        ? { deleted_at: null, ...this.scope.whereForStudents(user) }
+        : { deleted_at: null };
+
     const links = await this.prisma.student_guardians.findMany({
-      where: { guardian_id: guardianId },
+      where: {
+        guardian_id: guardianId,
+        students: studentFilter,
+      },
       select: {
         students: {
           select: {
@@ -1247,10 +1258,10 @@ export class StaffEditingService {
     return Array.from(byId.values());
   }
 
-  async getGuardian(id: number) {
+  async getGuardian(id: number, user?: IJwtStaffPayload) {
     const guardian = await this.prisma.guardians.findUnique({ where: { id } });
     if (!guardian || guardian.deleted_at) throw new NotFoundException(`Guardian #${id} not found`);
-    const families = await this.familiesForGuardian(guardian.id);
+    const families = await this.familiesForGuardian(guardian.id, user);
     return {
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
@@ -1413,12 +1424,12 @@ export class StaffEditingService {
     }
   }
 
-  async getGuardianByNic(nic: string) {
+  async getGuardianByNic(nic: string, user?: IJwtStaffPayload) {
     const guardian = await this.prisma.guardians.findUnique({
       where: { cnic: nic },
     });
     if (!guardian || guardian.deleted_at) return null;
-    const families = await this.familiesForGuardian(guardian.id);
+    const families = await this.familiesForGuardian(guardian.id, user);
     return {
       ...guardian,
       dob: this.formatDateToFrontend(guardian.dob),
