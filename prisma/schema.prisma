@@ -1154,6 +1154,13 @@ model support_tickets {
   routed_queue_id         Int?
   routed_rule_id          Int?
   routing_note            String?               @db.VarChar(500)
+  /// Ticket flow (TAFSD-447): the lane the parent chose, the published flow
+  /// version they walked, the leaf they reached and a snapshot of the path.
+  lane_id                 Int?
+  flow_version            Int?
+  leaf_node_key           String?               @db.VarChar(40)
+  flow_path               Json?
+  lane                    ticket_lanes?         @relation(fields: [lane_id], references: [id], onDelete: SetNull)
   routed_queue            ticket_queues?        @relation(fields: [routed_queue_id], references: [id], onDelete: SetNull)
   routed_rule             ticket_routing_rules? @relation(fields: [routed_rule_id], references: [id], onDelete: SetNull)
   closed_by_guardian      guardians?            @relation("TicketClosedByGuardian", fields: [closed_by_guardian_id], references: [id])
@@ -1171,6 +1178,7 @@ model support_tickets {
   @@index([last_message_at(sort: Desc)])
   @@index([closed_at(sort: Desc)])
   @@index([routed_queue_id, status])
+  @@index([lane_id])
 }
 
 model ticket_messages {
@@ -1200,6 +1208,44 @@ model ticket_messages {
 }
 
 /// A named pool of staff that support tickets can be routed to (e.g. Finance, General desk).
+/// One version of the parent ticket flow (TAFSD-447): lanes and their question
+/// trees as JSON. At most one DRAFT and one PUBLISHED; publishing archives the
+/// previous one.
+model ticket_flows {
+  id           Int              @id @default(autoincrement())
+  version      Int              @unique
+  status       TicketFlowStatus
+  tree         Json
+  notes        String?          @db.VarChar(500)
+  lock_version Int              @default(0)
+  created_from Int?
+  created_at   DateTime         @default(now()) @db.Timestamp(6)
+  created_by   String?          @db.VarChar(255)
+  updated_at   DateTime         @updatedAt @db.Timestamp(6)
+  updated_by   String?          @db.VarChar(255)
+  published_at DateTime?        @db.Timestamp(6)
+  published_by String?          @db.VarChar(255)
+  archived_at  DateTime?        @db.Timestamp(6)
+
+  @@index([status])
+}
+
+/// A lane as last published, so tickets keep a name, icon and colour after the
+/// lane leaves the flow.
+model ticket_lanes {
+  id              Int               @id @default(autoincrement())
+  key             String            @unique @db.VarChar(40)
+  name            String            @db.VarChar(80)
+  name_ur         String?           @db.VarChar(80)
+  icon            String            @db.VarChar(40)
+  color           String            @db.VarChar(9)
+  legacy_category TicketCategory
+  sort_order      Int               @default(0)
+  is_active       Boolean           @default(true)
+  updated_at      DateTime          @updatedAt @db.Timestamp(6)
+  tickets         support_tickets[]
+}
+
 model ticket_queues {
   id            Int                    @id @default(autoincrement())
   name          String                 @unique @db.VarChar(100)
@@ -1242,6 +1288,8 @@ model ticket_routing_rules {
   /// Empty = any class.
   class_ids       Int[]             @default([])
   subtopic        String?           @db.VarChar(100)
+  /// Ticket flow node (TAFSD-447): matches tickets whose path passes through it.
+  node_key        String?           @db.VarChar(40)
   target_user_id  String?
   target_queue_id Int?
   /// Lower runs first among equally specific rules.
@@ -2749,6 +2797,12 @@ enum StaffRole {
   STAFF_EDITOR
   GENERAL_RESPONDENT
   EMPLOYEE
+}
+
+enum TicketFlowStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
 }
 
 enum TicketCategory {
