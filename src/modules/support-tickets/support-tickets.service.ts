@@ -44,10 +44,10 @@ import { ScopeService } from '../../common/scope/scope.service';
 
 const MAX_OPEN_TICKETS_PER_FAMILY = 10;
 
-/** Optional ?lane= filter on ticket lists (a lane key, TAFSD-447). */
-function laneWhere(laneKey?: string): Prisma.support_ticketsWhereInput {
-  const key = laneKey?.trim();
-  return key ? { lane: { key } } : {};
+/** Optional ?lane= filter on ticket lists: one or more comma-separated lane keys (TAFSD-447). */
+function laneWhere(laneKeys?: string): Prisma.support_ticketsWhereInput {
+  const keys = (laneKeys ?? '').split(',').map((k) => k.trim()).filter(Boolean);
+  return keys.length ? { lane: { key: { in: keys } } } : {};
 }
 
 const ticketInclude = {
