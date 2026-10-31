@@ -1359,6 +1359,10 @@ export class EmployeesService {
             late_relaxation_minutes: rest.late_relaxation_minutes ?? null,
             monthly_pay: rest.monthly_pay ?? null,
             payroll_enabled: payroll_enabled ?? rest.monthly_pay != null,
+            // TAFSD-445: settable at registration; the DTO always took them, create dropped them.
+            eobi_exempt: rest.eobi_exempt ?? false,
+            sessi_exempt: rest.sessi_exempt ?? false,
+            always_full_pay: rest.always_full_pay ?? false,
             campus_id: rest.campus_id || null,
             days_per_week: rest.days_per_week ?? null,
             photo_url: rest.photo_url || null,
