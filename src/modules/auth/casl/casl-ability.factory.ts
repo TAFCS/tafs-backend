@@ -141,7 +141,8 @@ export class CaslAbilityFactory {
       // Map permission resource keys to CASL Subjects
       let subjects: AppSubjects[] = [];
       switch (resource) {
-        case 'campuses': subjects = ['Campus']; break;
+        case 'campuses': subjects = ['Campus', 'House']; break;
+        case 'houses': subjects = ['House']; break;
         case 'classes': subjects = ['Class']; break;
         case 'sections': subjects = ['Section']; break;
         case 'registration':
@@ -189,6 +190,7 @@ export class CaslAbilityFactory {
     can(Action.Read, 'Challan', { familyId: user.familyId } as any);
     can(Action.Read, 'Class');
     can(Action.Read, 'Section');
+    can(Action.Read, 'House');
     can(Action.Read, 'SupportTicket');
     can(Action.Manage, 'SupportTicket');
 

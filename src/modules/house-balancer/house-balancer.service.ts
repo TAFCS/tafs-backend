@@ -394,7 +394,10 @@ export class HouseBalancerService {
     const meta = await this.loadScopeMeta(dto);
     const [students, houses] = await Promise.all([
       this.loadScopedStudents(dto),
-      this.prisma.houses.findMany({ orderBy: { id: 'asc' } }),
+      this.prisma.houses.findMany({
+        where: { is_active: true },
+        orderBy: { id: 'asc' },
+      }),
     ]);
 
     const assignments = this.buildBalancedAssignments(students, houses);
@@ -422,7 +425,10 @@ export class HouseBalancerService {
   async apply(dto: ApplyHouseBalanceDto, changedBy?: string, user?: IJwtStaffPayload) {
     this.assertScope(user, dto);
     const meta = await this.loadScopeMeta(dto);
-    const houses = await this.prisma.houses.findMany({ orderBy: { id: 'asc' } });
+    const houses = await this.prisma.houses.findMany({
+      where: { is_active: true },
+      orderBy: { id: 'asc' },
+    });
     const houseIds = new Set(houses.map((h) => h.id));
 
     if (houses.length === 0) {
@@ -604,7 +610,10 @@ export class HouseBalancerService {
     }
 
     const [houses, offerings, campusStudents] = await Promise.all([
-      this.prisma.houses.findMany({ orderBy: { id: 'asc' } }),
+      this.prisma.houses.findMany({
+        where: { is_active: true },
+        orderBy: { id: 'asc' },
+      }),
       this.prisma.campus_sections.findMany({
         where: {
           campus_id: dto.campus_id,
@@ -720,6 +729,7 @@ export class HouseBalancerService {
     }
 
     const houses = await this.prisma.houses.findMany({
+      where: { is_active: true },
       orderBy: { id: 'asc' },
     });
     if (houses.length === 0) {

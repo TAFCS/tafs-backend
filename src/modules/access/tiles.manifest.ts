@@ -235,6 +235,14 @@ const SECTIONS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a section', implies: ['view'] },
 ];
 
+const HOUSES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View houses', default: true },
+
+  { id: 'create', label: 'Add a house', implies: ['view'] },
+  { id: 'edit', label: 'Edit houses (rename, color, active state)', implies: ['view'] },
+  { id: 'delete', label: 'Delete a house', implies: ['view'] },
+];
+
 // `edit` covers renaming a segment AND the campus-map (which segments run at
 // which campus — scoped: a campus-scoped admin may only map their own campus).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
@@ -1008,6 +1016,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'], actions: CAMPUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'], actions: CLASSES_ACTIONS, legacyFullAccessCapabilities: ['academic.classes.edit'] },
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
+  { id: 'school-setup.houses', module: 'school-setup', label: 'Houses', description: 'Student house configuration', href: '/houses', capabilities: ['academic.campuses.view'], actions: HOUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },

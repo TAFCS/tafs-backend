@@ -363,6 +363,7 @@ model houses {
   id                          Int                           @id @default(autoincrement())
   house_name                  String?                       @db.VarChar(100)
   house_color                 String?                       @db.VarChar(50)
+  is_active                   Boolean                       @default(true)
   student_progression_periods student_progression_periods[]
   students                    students[]
 }

@@ -13,6 +13,7 @@ import { StudentsModule } from './modules/students/students.module';
 import { FamiliesModule } from './modules/families/families.module';
 import { ClassesModule } from './modules/classes/classes.module';
 import { SectionsModule } from './modules/sections/sections.module';
+import { HousesModule } from './modules/houses/houses.module';
 import { FeeTypesModule } from './modules/fee-types/fee-types.module';
 import { ClassFeeScheduleModule } from './modules/class-fee-schedule/class-fee-schedule.module';
 import { FeesModule } from './modules/fees/fees.module';
@@ -69,6 +70,7 @@ import { ScopeModule } from './common/scope/scope.module';
     FamiliesModule,
     ClassesModule,
     SectionsModule,
+    HousesModule,
     FeeTypesModule,
     ClassFeeScheduleModule,
     FeesModule,
