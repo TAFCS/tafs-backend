@@ -477,12 +477,6 @@ export function validateTree(
               `${name} sends tickets to ${q.name}, which is switched off`,
               node.key,
             );
-        } else if (ls.fallback_queue_id == null) {
-          warn(
-            'LEAF_FALLBACK',
-            `${name} has no queue: unless a routing rule matches it, it goes to the category fallback`,
-            node.key,
-          );
         }
         if (node.label.length > 100)
           warn(
@@ -503,10 +497,9 @@ export function validateTree(
         break;
     }
 
-    if (
-      children.length === 1 &&
-      (node.type === 'QUESTION' || node.type === 'LANE')
-    ) {
+    // A lane with one step is the normal shape (lane → pick a child); only a
+    // question with a single answer is worth flagging.
+    if (children.length === 1 && node.type === 'QUESTION') {
       warn(
         'SINGLE_ANSWER',
         `${name} has one answer, so the app skips straight past it`,

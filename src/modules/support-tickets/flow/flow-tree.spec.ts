@@ -362,14 +362,14 @@ describe('validateTree', () => {
     );
   });
 
-  it('warns about switched-off queues and leaves that only reach the fallback', () => {
+  it('warns about switched-off queues, and not about leaves left to the rules', () => {
     const t = defaultTree();
     (t.lanes[0].children![0].children![0].settings as any).queue_id = 3;
     const issues = validateTree(t, queues);
     expect(issues.find((i) => i.code === 'QUEUE_INACTIVE')?.severity).toBe(
       'warning',
     );
-    expect(issues.filter((i) => i.code === 'LEAF_FALLBACK').length).toBe(20);
+    expect(issues.filter((i) => i.severity === 'warning')).toHaveLength(1);
   });
 });
 
