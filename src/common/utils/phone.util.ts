@@ -12,7 +12,7 @@ export function normalizePkPhone(raw: string | null | undefined): string {
   let digits = String(raw ?? '').replace(/\D/g, '');
   if (digits.length < 7) return '';
   if (digits.startsWith('0092')) digits = digits.slice(4);
-  else if (digits.startsWith('92') && digits.length === 12) digits = digits.slice(2);
+  else if (digits.startsWith('92') && (digits.length === 11 || digits.length === 12)) digits = digits.slice(2);
   // A mobile number saved without its leading zero.
   if (digits.length === 10 && digits.startsWith('3')) digits = `0${digits}`;
   return digits;
