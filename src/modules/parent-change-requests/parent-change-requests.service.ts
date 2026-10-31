@@ -136,6 +136,86 @@ export class ParentChangeRequestsService {
     return result;
   }
 
+  private normalizeGuardianField(field: string): string {
+    if (field === 'primary_phone_country_code') return 'primary_phone';
+    if (field === 'whatsapp_country_code') return 'whatsapp_number';
+    return field;
+  }
+
+  private findMatchingPendingRequest(
+    pendingRequests: Array<{
+      id: number;
+      guardian_id: number;
+      family_id: number;
+      requested_data: any;
+      status: string;
+      created_at: Date;
+    }>,
+    guardianId: number,
+    requestedData: Record<string, any>,
+  ) {
+    if (!requestedData) return null;
+
+    const incomingType = requestedData.request_type;
+
+    if (incomingType === ACCOUNT_DELETION_REQUEST_TYPE) {
+      return (
+        pendingRequests.find(
+          (r) =>
+            (r.requested_data as Record<string, unknown>)?.request_type ===
+            ACCOUNT_DELETION_REQUEST_TYPE,
+        ) ?? null
+      );
+    }
+
+    if (incomingType === 'STUDENT_UPDATE') {
+      const incomingCc = Number(requestedData.student_cc);
+      const incomingChanges =
+        (requestedData.changes as Record<string, any>) || {};
+      const incomingFields = Object.keys(incomingChanges);
+
+      return (
+        pendingRequests.find((r) => {
+          if (r.guardian_id !== guardianId) return false;
+          const rData = r.requested_data as Record<string, any>;
+          if (rData?.request_type !== 'STUDENT_UPDATE') return false;
+          if (Number(rData.student_cc) !== incomingCc) return false;
+          const rChanges = (rData.changes as Record<string, any>) || {};
+          const rFields = Object.keys(rChanges);
+          return incomingFields.some((f) => rFields.includes(f));
+        }) ?? null
+      );
+    }
+
+    // Guardian profile update
+    const incomingFields = Object.keys(requestedData).filter(
+      (k) => k !== 'request_type' && k !== 'student_cc',
+    );
+    const normalizedIncoming = new Set(
+      incomingFields.map((f) => this.normalizeGuardianField(f)),
+    );
+
+    return (
+      pendingRequests.find((r) => {
+        if (r.guardian_id !== guardianId) return false;
+        const rData = r.requested_data as Record<string, any>;
+        if (
+          rData?.request_type === 'STUDENT_UPDATE' ||
+          rData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE
+        ) {
+          return false;
+        }
+        const rFields = Object.keys(rData || {}).filter(
+          (k) => k !== 'request_type' && k !== 'student_cc',
+        );
+        const normalizedRFields = rFields.map((f) =>
+          this.normalizeGuardianField(f),
+        );
+        return normalizedRFields.some((f) => normalizedIncoming.has(f));
+      }) ?? null
+    );
+  }
+
   async createAccountDeletionRequestForFamily(familyId: number, reason?: string) {
     const familyGuardianLinks = await this.prisma.student_guardians.findMany({
       where: {
@@ -218,6 +298,105 @@ export class ParentChangeRequestsService {
       }
     }
 
+    // Look for an existing PENDING request for the same family, guardian, and subject/fields
+    const pendingRequests = await this.prisma.parent_change_requests.findMany({
+      where: {
+        family_id: dto.family_id,
+        status: 'PENDING',
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    const matchingPending = this.findMatchingPendingRequest(
+      pendingRequests,
+      dto.guardian_id,
+      reqData,
+    );
+
+    const actorLabel = guardian.full_name
+      ? `${guardian.full_name} (Guardian #${guardian.id}, Family ${family.household_name ?? family.id})`
+      : `Guardian #${guardian.id} (Family ${family.household_name ?? family.id})`;
+
+    if (matchingPending) {
+      if (reqData?.request_type === ACCOUNT_DELETION_REQUEST_TYPE) {
+        throw new BadRequestException(
+          'An account deletion request is already pending admin review',
+        );
+      }
+
+      if (reqData?.request_type === 'STUDENT_UPDATE') {
+        const existingData =
+          (matchingPending.requested_data as Record<string, any>) || {};
+        const existingChanges =
+          (existingData.changes as Record<string, any>) || {};
+        const mergedChanges = {
+          ...existingChanges,
+          ...((reqData.changes as Record<string, any>) || {}),
+        };
+        const updatedRequestedData = {
+          ...existingData,
+          request_type: 'STUDENT_UPDATE',
+          student_cc: reqData.student_cc,
+          changes: mergedChanges,
+        };
+
+        const updatedRequest = await this.prisma.parent_change_requests.update({
+          where: { id: matchingPending.id },
+          data: {
+            requested_data: updatedRequestedData as any,
+            updated_at: new Date(),
+          },
+        });
+
+        const diffs = await this.buildFieldDiffs(
+          updatedRequestedData,
+          dto.guardian_id,
+        );
+        const studentId =
+          diffs.find((d) => d.student_id != null)?.student_id ?? null;
+        await this.auditLogs.log({
+          entity_type: AUDIT_ENTITY_TYPE,
+          entity_id: String(updatedRequest.id),
+          action: 'REQUESTED',
+          changed_by: actorLabel,
+          student_id: studentId,
+          note: `Change request #${updatedRequest.id} updated by ${actorLabel} for Family #${dto.family_id}. Changes: ${this.formatDiffsSummary(diffs)}`,
+        });
+
+        return updatedRequest;
+      }
+
+      // Guardian profile update: merge requested changes into existing pending request
+      const existingData =
+        (matchingPending.requested_data as Record<string, any>) || {};
+      const updatedRequestedData = {
+        ...existingData,
+        ...reqData,
+      };
+
+      const updatedRequest = await this.prisma.parent_change_requests.update({
+        where: { id: matchingPending.id },
+        data: {
+          requested_data: updatedRequestedData as any,
+          updated_at: new Date(),
+        },
+      });
+
+      const diffs = await this.buildFieldDiffs(
+        updatedRequestedData,
+        dto.guardian_id,
+      );
+      await this.auditLogs.log({
+        entity_type: AUDIT_ENTITY_TYPE,
+        entity_id: String(updatedRequest.id),
+        action: 'REQUESTED',
+        changed_by: actorLabel,
+        note: `Change request #${updatedRequest.id} updated by ${actorLabel} for Family #${dto.family_id}. Changes: ${this.formatDiffsSummary(diffs)}`,
+      });
+
+      return updatedRequest;
+    }
+
     const request = await this.prisma.parent_change_requests.create({
       data: {
         guardian_id: dto.guardian_id,
@@ -226,10 +405,6 @@ export class ParentChangeRequestsService {
         status: 'PENDING',
       },
     });
-
-    const actorLabel = guardian.full_name
-      ? `${guardian.full_name} (Guardian #${guardian.id}, Family ${family.household_name ?? family.id})`
-      : `Guardian #${guardian.id} (Family ${family.household_name ?? family.id})`;
 
     const diffs = await this.buildFieldDiffs(dto.requested_data, dto.guardian_id);
     const contextNote = `Change request #${request.id} submitted by ${actorLabel} for Family #${dto.family_id}.` +
