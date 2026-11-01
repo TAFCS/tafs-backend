@@ -55,6 +55,7 @@ import { StudentAllocationModule } from './modules/student-allocation/student-al
 import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 import { AccessModule } from './modules/access/access.module';
 import { ScopeModule } from './common/scope/scope.module';
+import { HierarchyModule } from './common/hierarchy/hierarchy.module';
 
 @Module({
   imports: [
@@ -113,6 +114,7 @@ import { ScopeModule } from './common/scope/scope.module';
     DailyDigestModule,
     AccessModule,
     ScopeModule,
+    HierarchyModule,
   ],
   controllers: [AppController],
   providers: [

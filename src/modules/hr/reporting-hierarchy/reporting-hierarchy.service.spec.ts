@@ -101,4 +101,56 @@ describe('ReportingHierarchyService', () => {
       }),
     );
   });
+
+  describe('getMismatches', () => {
+    it('refuses non super-admin', async () => {
+      const { svc } = mk([row(1)]);
+      await expect(svc.getMismatches(campusAdmin)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('flags report whose campus is outside manager scope', async () => {
+      const people = [
+        row(1, { user_id: 'u-mgr', full_name: 'Manager Bob' }),
+        row(2, { user_id: 'u-rep', full_name: 'Report Alice', campus_id: 2 }),
+      ];
+      const { svc, scope } = mk(people);
+      // Manager is scoped only to campus 1
+      scope.resolveEffective = jest.fn().mockResolvedValue({
+        campuses: [1],
+        segments: [],
+        classes: [],
+        sections: [],
+        departments: [],
+        staffCategories: [],
+      });
+
+      // Prisma mocks for getMismatches
+      (svc as any).prisma.employee_reporting_lines = {
+        findMany: jest.fn().mockResolvedValue([{ manager_id: 1, employee_id: 2 }]),
+      };
+      (svc as any).prisma.employee_profiles.findMany = jest.fn().mockResolvedValue(people);
+      (svc as any).prisma.campuses = {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 1, campus_name: 'Campus One' },
+          { id: 2, campus_name: 'Campus Two' },
+        ]),
+      };
+      (svc as any).prisma.segments = { findMany: jest.fn().mockResolvedValue([]) };
+      (svc as any).prisma.departments = { findMany: jest.fn().mockResolvedValue([]) };
+      (svc as any).prisma.ticket_queues = { findMany: jest.fn().mockResolvedValue([]) };
+      (svc as any).prisma.ticket_routing_rules = { findMany: jest.fn().mockResolvedValue([]) };
+      (svc as any).prisma.users = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'u-mgr', role: StaffRole.CAMPUS_ADMIN }),
+      };
+
+      const report = await svc.getMismatches(superAdmin);
+      expect(report.managerReportMismatches).toHaveLength(1);
+      expect(report.managerReportMismatches[0]).toMatchObject({
+        managerId: 1,
+        reportId: 2,
+        mismatchedDimensions: ['campus'],
+      });
+      expect(report.totalMismatches).toBe(1);
+    });
+  });
 });

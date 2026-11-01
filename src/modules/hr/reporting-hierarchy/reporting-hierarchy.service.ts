@@ -12,6 +12,12 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { isPendingMigrationError, readUntilMigrated } from '../../../utils/pending-migration.util';
 import { EmployeeProgressionService, progressionSnapshotFromRow } from '../employees/employee-progression.service';
 import { ScopeService } from '../../../common/scope/scope.service';
+import { HierarchyService } from '../../../common/hierarchy/hierarchy.service';
+import type {
+  DeskMemberMismatch,
+  HierarchyReportMismatch,
+  ScopeMismatchReport,
+} from '../../../common/hierarchy/hierarchy.types';
 import { SetManagersDto } from './dto/set-managers.dto';
 
 const PERSON_SELECT = {
@@ -41,12 +47,17 @@ const NOT_MIGRATED =
  */
 @Injectable()
 export class ReportingHierarchyService {
+  private readonly hierarchy: HierarchyService;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly progression: EmployeeProgressionService,
     private readonly scope: ScopeService,
-  ) {}
+    hierarchy?: HierarchyService,
+  ) {
+    this.hierarchy = hierarchy ?? new HierarchyService(this.prisma);
+  }
 
   private assertSuperAdmin(user: IJwtStaffPayload) {
     if (user?.role !== StaffRole.SUPER_ADMIN) {
@@ -178,6 +189,7 @@ export class ReportingHierarchyService {
     });
 
     this.scope.invalidateScopeCache();
+    this.hierarchy.invalidateCache();
 
     return {
       employee_id: employeeId,
@@ -201,5 +213,227 @@ export class ReportingHierarchyService {
       note: `Reporting hierarchy enforcement turned ${enforced ? 'ON' : 'OFF'} by ${user.fullName ?? user.username ?? 'super admin'}`,
     });
     return { enforced };
+  }
+
+  /**
+   * Generates a read-only mismatch report:
+   * 1. Manager -> report pairs where the report's campus, segment or department is outside manager's scope.
+   * 2. Desk members whose manager chain reaches no one covering that desk's campus.
+   */
+  async getMismatches(user: IJwtStaffPayload): Promise<ScopeMismatchReport> {
+    this.assertSuperAdmin(user);
+
+    const [lines, employees, campuses, segments, departments, queues, rules] = await Promise.all([
+      readUntilMigrated(
+        () =>
+          this.prisma.employee_reporting_lines.findMany({
+            where: {
+              employee: { employment_status: EmployeeStatus.ACTIVE },
+              manager: { employment_status: EmployeeStatus.ACTIVE },
+            },
+            select: { employee_id: true, manager_id: true },
+          }),
+        [] as { employee_id: number; manager_id: number }[],
+      ),
+      this.prisma.employee_profiles.findMany({
+        where: { employment_status: EmployeeStatus.ACTIVE },
+        select: {
+          id: true,
+          full_name: true,
+          user_id: true,
+          campus_id: true,
+          segment_id: true,
+          department_id: true,
+        },
+      }),
+      this.prisma.campuses.findMany({ select: { id: true, campus_name: true } }),
+      this.prisma.segments.findMany({ select: { id: true, name: true } }),
+      this.prisma.departments.findMany({ select: { id: true, name: true } }),
+      this.prisma.ticket_queues.findMany({
+        where: { is_active: true },
+        include: {
+          members: {
+            include: {
+              user: { select: { id: true, full_name: true, is_active: true, deleted_at: true, role: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.ticket_routing_rules.findMany({
+        where: { is_active: true, campus_id: { not: null } },
+        select: { target_queue_id: true, campus_id: true },
+      }),
+    ]);
+
+    const campusMap = new Map(campuses.map((c) => [c.id, c.campus_name]));
+    const segmentMap = new Map(segments.map((s) => [s.id, s.name]));
+    const departmentMap = new Map(departments.map((d) => [d.id, d.name]));
+    const empById = new Map(employees.map((e) => [e.id, e]));
+    const empByUserId = new Map(employees.filter((e) => e.user_id).map((e) => [e.user_id!, e]));
+
+    // Resolve user roles & scopes for managers
+    const userRoleCache = new Map<string, string>();
+    const userScopeCache = new Map<string, any>();
+
+    const getManagerInfo = async (userId: string) => {
+      if (!userRoleCache.has(userId)) {
+        const u = await this.prisma.users.findUnique({
+          where: { id: userId },
+          select: { id: true, role: true },
+        });
+        userRoleCache.set(userId, u?.role ?? 'STAFF');
+      }
+      const role = userRoleCache.get(userId);
+      if (role === 'SUPER_ADMIN' || role === 'DEVELOPER') {
+        return { isExempt: true, scope: null, role };
+      }
+      if (!userScopeCache.has(userId)) {
+        const s = await this.scope.resolveEffective(userId);
+        userScopeCache.set(userId, s);
+      }
+      return { isExempt: false, scope: userScopeCache.get(userId), role };
+    };
+
+    // 1. Manager -> report pairs mismatch
+    const managerReportMismatches: HierarchyReportMismatch[] = [];
+    for (const line of lines) {
+      const manager = empById.get(line.manager_id);
+      const report = empById.get(line.employee_id);
+      if (!manager || !report) continue;
+
+      if (!manager.user_id) {
+        managerReportMismatches.push({
+          managerId: manager.id,
+          managerName: manager.full_name ?? `Employee #${manager.id}`,
+          managerRole: null,
+          reportId: report.id,
+          reportName: report.full_name ?? `Employee #${report.id}`,
+          reportCampus: report.campus_id
+            ? { id: report.campus_id, name: campusMap.get(report.campus_id) ?? `#${report.campus_id}` }
+            : null,
+          reportSegment: report.segment_id
+            ? { id: report.segment_id, name: segmentMap.get(report.segment_id) ?? `#${report.segment_id}` }
+            : null,
+          reportDepartment: report.department_id
+            ? { id: report.department_id, name: departmentMap.get(report.department_id) ?? `#${report.department_id}` }
+            : null,
+          mismatchedDimensions: ['campus'],
+          reason: `${manager.full_name ?? `Employee #${manager.id}`} has no system login account so they have no system scope over ${report.full_name ?? `Employee #${report.id}`}.`,
+        });
+        continue;
+      }
+
+      const mgrInfo = await getManagerInfo(manager.user_id);
+      if (mgrInfo.isExempt) continue;
+
+      const mismatchedDimensions: ('campus' | 'segment' | 'department')[] = [];
+      const reasons: string[] = [];
+
+      if (
+        mgrInfo.scope.campuses.length > 0 &&
+        report.campus_id != null &&
+        !mgrInfo.scope.campuses.includes(report.campus_id)
+      ) {
+        mismatchedDimensions.push('campus');
+        reasons.push(`campus "${campusMap.get(report.campus_id) ?? report.campus_id}"`);
+      }
+
+      if (
+        mgrInfo.scope.segments.length > 0 &&
+        report.segment_id != null &&
+        !mgrInfo.scope.segments.includes(report.segment_id)
+      ) {
+        mismatchedDimensions.push('segment');
+        reasons.push(`segment "${segmentMap.get(report.segment_id) ?? report.segment_id}"`);
+      }
+
+      if (
+        mgrInfo.scope.departments.length > 0 &&
+        report.department_id != null &&
+        !mgrInfo.scope.departments.includes(report.department_id)
+      ) {
+        mismatchedDimensions.push('department');
+        reasons.push(`department "${departmentMap.get(report.department_id) ?? report.department_id}"`);
+      }
+
+      if (mismatchedDimensions.length > 0) {
+        managerReportMismatches.push({
+          managerId: manager.id,
+          managerName: manager.full_name ?? `Employee #${manager.id}`,
+          managerRole: mgrInfo.role,
+          reportId: report.id,
+          reportName: report.full_name ?? `Employee #${report.id}`,
+          reportCampus: report.campus_id
+            ? { id: report.campus_id, name: campusMap.get(report.campus_id) ?? `#${report.campus_id}` }
+            : null,
+          reportSegment: report.segment_id
+            ? { id: report.segment_id, name: segmentMap.get(report.segment_id) ?? `#${report.segment_id}` }
+            : null,
+          reportDepartment: report.department_id
+            ? { id: report.department_id, name: departmentMap.get(report.department_id) ?? `#${report.department_id}` }
+            : null,
+          mismatchedDimensions,
+          reason: `${report.full_name ?? `Employee #${report.id}`} is in ${reasons.join(' and ')}, which is outside ${manager.full_name ?? `Employee #${manager.id}`}'s assigned scope.`,
+        });
+      }
+    }
+
+    // 2. Desk members whose manager chain reaches no one covering that desk's campus
+    const deskMemberMismatches: DeskMemberMismatch[] = [];
+    const queueCampuses = new Map<number, Set<number>>();
+    for (const rule of rules) {
+      if (rule.target_queue_id != null && rule.campus_id != null) {
+        const set = queueCampuses.get(rule.target_queue_id) ?? new Set<number>();
+        set.add(rule.campus_id);
+        queueCampuses.set(rule.target_queue_id, set);
+      }
+    }
+
+    for (const queue of queues) {
+      const campusesForQueue = queueCampuses.get(queue.id);
+      if (!campusesForQueue || campusesForQueue.size === 0) continue;
+
+      const activeMembers = queue.members.filter((m) => m.user?.is_active && !m.user?.deleted_at);
+      for (const member of activeMembers) {
+        const emp = empByUserId.get(member.user_id);
+        const managerEmpIds = emp ? await this.hierarchy.above(member.user_id) : [];
+        const chainEmpIds = emp ? [emp.id, ...managerEmpIds] : [];
+
+        for (const campusId of campusesForQueue) {
+          let campusCovered = false;
+
+          // Check if member themselves or anyone in their manager chain covers campusId
+          for (const chainEmpId of chainEmpIds) {
+            const chainEmp = empById.get(chainEmpId);
+            if (!chainEmp?.user_id) continue;
+
+            const info = await getManagerInfo(chainEmp.user_id);
+            if (info.isExempt || info.scope.campuses.length === 0 || info.scope.campuses.includes(campusId)) {
+              campusCovered = true;
+              break;
+            }
+          }
+
+          if (!campusCovered) {
+            const campusName = campusMap.get(campusId) ?? `#${campusId}`;
+            deskMemberMismatches.push({
+              queueId: queue.id,
+              queueName: queue.name,
+              deskCampus: { id: campusId, name: campusName },
+              memberUserId: member.user_id,
+              memberEmployeeId: emp?.id ?? null,
+              memberName: member.user.full_name,
+              reason: `Desk "${queue.name}" receives tickets for ${campusName}, but neither ${member.user.full_name} nor any manager in their reporting chain has scope covering ${campusName}.`,
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      managerReportMismatches,
+      deskMemberMismatches,
+      totalMismatches: managerReportMismatches.length + deskMemberMismatches.length,
+    };
   }
 }

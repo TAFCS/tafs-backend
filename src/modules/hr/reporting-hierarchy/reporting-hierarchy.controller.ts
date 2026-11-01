@@ -22,6 +22,12 @@ export class ReportingHierarchyController {
     return createApiResponse(data, HttpStatus.OK, 'Reporting hierarchy retrieved successfully');
   }
 
+  @Get('mismatches')
+  async getMismatches(@CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.service.getMismatches(user);
+    return createApiResponse(data, HttpStatus.OK, 'Reporting hierarchy mismatches retrieved');
+  }
+
   @Put(':employeeId/managers')
   async setManagers(
     @Param('employeeId', ParseIntPipe) employeeId: number,

@@ -3,6 +3,7 @@ import { EmployeeStatus, ScopeDimension, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
+import { HierarchyService } from '../hierarchy/hierarchy.service';
 import {
   effectiveScopeOf,
   findSubordinates,
@@ -33,8 +34,14 @@ export const ENFORCE_REPORTING_HIERARCHY_KEY = 'enforce_reporting_hierarchy';
 export class ScopeService {
   private readonly logger = new Logger(ScopeService.name);
   private warnedPendingMigration = false;
+  private readonly hierarchy: HierarchyService;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    hierarchy?: HierarchyService,
+  ) {
+    this.hierarchy = hierarchy ?? new HierarchyService(this.prisma);
+  }
 
   /**
    * Reads a user's scope from the database. Called on every login and token
@@ -96,41 +103,12 @@ export class ScopeService {
   private enforceHierarchyCache: { value: boolean; expires: number } | null = null;
 
   async isHierarchyEnforced(): Promise<boolean> {
-    const now = Date.now();
-    if (this.enforceHierarchyCache && this.enforceHierarchyCache.expires > now) {
-      return this.enforceHierarchyCache.value;
-    }
-    if (!this.prisma?.app_config?.findUnique) {
-      return false;
-    }
-    const row = await readUntilMigrated(
-      () => this.prisma.app_config.findUnique({ where: { key: ENFORCE_REPORTING_HIERARCHY_KEY } }),
-      null,
-    );
-    const value = row?.value === 'true' || row?.value === '1';
-    this.enforceHierarchyCache = { value, expires: now + 30_000 };
-    return value;
+    const mode = await this.hierarchy.mode('attendance');
+    return mode === 'enforce';
   }
 
   async setHierarchyEnforced(enforced: boolean, updatedBy?: string): Promise<boolean> {
-    await readUntilMigrated(
-      () =>
-        this.prisma.app_config.upsert({
-          where: { key: ENFORCE_REPORTING_HIERARCHY_KEY },
-          create: {
-            key: ENFORCE_REPORTING_HIERARCHY_KEY,
-            value: enforced ? 'true' : 'false',
-            description: 'Enforce reporting hierarchy on employee actions and attendance (TAFSD-328)',
-            updated_by: updatedBy ?? 'system',
-          },
-          update: {
-            value: enforced ? 'true' : 'false',
-            updated_by: updatedBy ?? 'system',
-          },
-        }),
-      null,
-    );
-    this.enforceHierarchyCache = null;
+    await this.hierarchy.setMode('attendance', enforced ? 'enforce' : 'off', updatedBy);
     this.invalidateScopeCache();
     return enforced;
   }
@@ -143,33 +121,7 @@ export class ScopeService {
     const enforced = await this.isHierarchyEnforced();
     if (!enforced) return scope;
 
-    const caller = await readUntilMigrated(
-      () =>
-        this.prisma.employee_profiles.findUnique({
-          where: { user_id: userId },
-          select: { id: true, employment_status: true },
-        }),
-      null,
-    );
-
-    // If caller has no employee record or is inactive, they cannot act on anyone in the hierarchy.
-    if (!caller || caller.employment_status !== EmployeeStatus.ACTIVE) {
-      return { ...scope, subordinates: [NO_MATCH_ID] };
-    }
-
-    const lines = await readUntilMigrated(
-      () =>
-        this.prisma.employee_reporting_lines.findMany({
-          where: {
-            employee: { employment_status: EmployeeStatus.ACTIVE },
-            manager: { employment_status: EmployeeStatus.ACTIVE },
-          },
-          select: { employee_id: true, manager_id: true },
-        }),
-      [] as { employee_id: number; manager_id: number }[],
-    );
-
-    const subs = findSubordinates(caller.id, lines);
+    const subs = await this.hierarchy.below(userId);
     return {
       ...scope,
       subordinates: subs.length > 0 ? subs : [NO_MATCH_ID],
@@ -191,6 +143,7 @@ export class ScopeService {
   }
 
   invalidateScopeCache(userId?: string) {
+    this.hierarchy.invalidateCache();
     this.enforceHierarchyCache = null;
     if (userId) {
       this.effectiveScopeCache.delete(userId);
